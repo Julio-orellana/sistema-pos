@@ -1,0 +1,25 @@
+# Empaquetado de la aplicación de escritorio.
+# El artefacto final se entrega a Jimmy Cano como instalador; el módulo nativo
+# better-sqlite3 se recompila contra el ABI de Electron vía `npm run rebuild`.
+appId: gt.posagricola.desktop
+productName: POS Agricola
+copyright: Copyright (c) 2026
+directories:
+  buildResources: build
+  output: release/${version}
+files:
+  - dist/**
+  - dist-electron/**
+  - package.json
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+mac:
+  target:
+    - dmg
+  category: public.app-category.business
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
