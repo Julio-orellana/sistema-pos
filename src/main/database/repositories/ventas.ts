@@ -65,34 +65,36 @@ export class RepositorioDeVentas extends RepositorioBase {
     const id = nuevoId();
     const momento = ahora();
 
-    this.base
-      .prepare(
-        `INSERT INTO ventas (
-           id, caja_sesion_id, usuario_id, fecha, subtotal, descuento_tipo, descuento_valor,
-           descuento_autorizado_por, total, forma_pago, num_boleta, estado,
-           estado_sincronizacion, creado_en, actualizado_en
-         ) VALUES (
-           @id, @caja_sesion_id, @usuario_id, @fecha, @subtotal, @descuento_tipo, @descuento_valor,
-           @descuento_autorizado_por, @total, @forma_pago, @num_boleta, @estado,
-           'pendiente', @creado_en, @actualizado_en
-         )`,
-      )
-      .run({
-        id,
-        caja_sesion_id: datos.cajaSesionId,
-        usuario_id: datos.usuarioId,
-        fecha: datos.fecha ?? momento,
-        subtotal: aColumnaMonto(datos.subtotal),
-        descuento_tipo: datos.descuentoTipo ?? null,
-        descuento_valor: aColumnaDecimalNulable(datos.descuentoValor, 'monto'),
-        descuento_autorizado_por: datos.descuentoAutorizadoPor ?? null,
-        total: aColumnaMonto(datos.total),
-        forma_pago: datos.formaPago,
-        num_boleta: datos.numBoleta ?? null,
-        estado: datos.estado ?? 'completada',
-        creado_en: momento,
-        actualizado_en: momento,
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO ventas (
+             id, caja_sesion_id, usuario_id, fecha, subtotal, descuento_tipo, descuento_valor,
+             descuento_autorizado_por, total, forma_pago, num_boleta, estado,
+             estado_sincronizacion, creado_en, actualizado_en
+           ) VALUES (
+             @id, @caja_sesion_id, @usuario_id, @fecha, @subtotal, @descuento_tipo, @descuento_valor,
+             @descuento_autorizado_por, @total, @forma_pago, @num_boleta, @estado,
+             'pendiente', @creado_en, @actualizado_en
+           )`,
+        )
+        .run({
+          id,
+          caja_sesion_id: datos.cajaSesionId,
+          usuario_id: datos.usuarioId,
+          fecha: datos.fecha ?? momento,
+          subtotal: aColumnaMonto(datos.subtotal),
+          descuento_tipo: datos.descuentoTipo ?? null,
+          descuento_valor: aColumnaDecimalNulable(datos.descuentoValor, 'monto'),
+          descuento_autorizado_por: datos.descuentoAutorizadoPor ?? null,
+          total: aColumnaMonto(datos.total),
+          forma_pago: datos.formaPago,
+          num_boleta: datos.numBoleta ?? null,
+          estado: datos.estado ?? 'completada',
+          creado_en: momento,
+          actualizado_en: momento,
+        });
+    });
 
     const creada = this.obtenerPorId(id);
     if (creada === null) {
@@ -138,15 +140,19 @@ export class RepositorioDeVentas extends RepositorioBase {
 
   /** Anula una venta. Nunca se borra: el histórico no se reescribe. */
   public anular(id: string): void {
-    this.base
-      .prepare("UPDATE ventas SET estado = 'anulada', actualizado_en = ? WHERE id = ?")
-      .run(ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare("UPDATE ventas SET estado = 'anulada', actualizado_en = ? WHERE id = ?")
+        .run(ahora(), id);
+    });
   }
 
   public marcarSincronizacion(id: string, estado: EstadoSincronizacion): void {
-    this.base
-      .prepare('UPDATE ventas SET estado_sincronizacion = ?, actualizado_en = ? WHERE id = ?')
-      .run(estado, ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE ventas SET estado_sincronizacion = ?, actualizado_en = ? WHERE id = ?')
+        .run(estado, ahora(), id);
+    });
   }
 
   /** Suma de los totales de un turno, calculada con Decimal.js y no en SQL. */

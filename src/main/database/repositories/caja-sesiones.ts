@@ -44,22 +44,24 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
     const id = nuevoId();
     const momento = ahora();
 
-    this.base
-      .prepare(
-        `INSERT INTO caja_sesiones (
-           id, usuario_id, monto_inicial, abierta_en, estado, creado_en, actualizado_en
-         ) VALUES (
-           @id, @usuario_id, @monto_inicial, @abierta_en, 'abierta', @creado_en, @actualizado_en
-         )`,
-      )
-      .run({
-        id,
-        usuario_id: datos.usuarioId,
-        monto_inicial: aColumnaMonto(datos.montoInicial),
-        abierta_en: datos.abiertaEn ?? momento,
-        creado_en: momento,
-        actualizado_en: momento,
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO caja_sesiones (
+             id, usuario_id, monto_inicial, abierta_en, estado, creado_en, actualizado_en
+           ) VALUES (
+             @id, @usuario_id, @monto_inicial, @abierta_en, 'abierta', @creado_en, @actualizado_en
+           )`,
+        )
+        .run({
+          id,
+          usuario_id: datos.usuarioId,
+          monto_inicial: aColumnaMonto(datos.montoInicial),
+          abierta_en: datos.abiertaEn ?? momento,
+          creado_en: momento,
+          actualizado_en: momento,
+        });
+    });
 
     const abierta = this.obtenerPorId(id);
     if (abierta === null) {
@@ -75,25 +77,27 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
   public cerrar(id: string, corte: CierreDeCaja): CajaSesion {
     const momento = ahora();
 
-    this.base
-      .prepare(
-        `UPDATE caja_sesiones
-            SET estado = 'cerrada',
-                monto_esperado = @monto_esperado,
-                monto_real = @monto_real,
-                diferencia = @diferencia,
-                cerrada_en = @cerrada_en,
-                actualizado_en = @actualizado_en
-          WHERE id = @id AND estado = 'abierta'`,
-      )
-      .run({
-        id,
-        monto_esperado: aColumnaMonto(corte.montoEsperado),
-        monto_real: aColumnaMonto(corte.montoReal),
-        diferencia: aColumnaMonto(corte.diferencia),
-        cerrada_en: corte.cerradaEn ?? momento,
-        actualizado_en: momento,
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE caja_sesiones
+              SET estado = 'cerrada',
+                  monto_esperado = @monto_esperado,
+                  monto_real = @monto_real,
+                  diferencia = @diferencia,
+                  cerrada_en = @cerrada_en,
+                  actualizado_en = @actualizado_en
+            WHERE id = @id AND estado = 'abierta'`,
+        )
+        .run({
+          id,
+          monto_esperado: aColumnaMonto(corte.montoEsperado),
+          monto_real: aColumnaMonto(corte.montoReal),
+          diferencia: aColumnaMonto(corte.diferencia),
+          cerrada_en: corte.cerradaEn ?? momento,
+          actualizado_en: momento,
+        });
+    });
 
     const cerrada = this.obtenerPorId(id);
     if (cerrada === null) {

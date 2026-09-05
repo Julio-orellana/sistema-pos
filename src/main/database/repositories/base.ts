@@ -10,6 +10,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Database } from 'better-sqlite3';
 
+import { ejecutarTraduciendoErrores } from '../errores';
+
 /**
  * Genera el identificador de un registro nuevo.
  *
@@ -38,5 +40,19 @@ export abstract class RepositorioBase {
 
   public constructor(base: Database) {
     this.base = base;
+  }
+
+  /**
+   * Envoltorio obligatorio de TODA escritura contra la base.
+   *
+   * Traduce los errores de restricción a errores de negocio con mensaje en
+   * español: por ejemplo, el rechazo del piso de inventario se convierte en
+   * "Stock insuficiente para completar la venta" en vez de llegar crudo hasta
+   * la pantalla del cajero. Ver src/main/database/errores.ts.
+   *
+   * Si una escritura nueva no pasa por aquí, ese fallo llegará sin traducir.
+   */
+  protected ejecutar<T>(operacion: () => T): T {
+    return ejecutarTraduciendoErrores(operacion);
   }
 }

@@ -41,22 +41,24 @@ export class RepositorioDeSyncCola extends RepositorioBase {
   public encolar(datos: NuevoElementoSyncCola): ElementoSyncCola {
     const id = nuevoId();
 
-    this.base
-      .prepare(
-        `INSERT INTO sync_cola (
-           id, entidad_tipo, entidad_id, operacion, payload, creado_en
-         ) VALUES (
-           @id, @entidad_tipo, @entidad_id, @operacion, @payload, @creado_en
-         )`,
-      )
-      .run({
-        id,
-        entidad_tipo: datos.entidadTipo,
-        entidad_id: datos.entidadId,
-        operacion: datos.operacion,
-        payload: JSON.stringify(datos.payload),
-        creado_en: ahora(),
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO sync_cola (
+             id, entidad_tipo, entidad_id, operacion, payload, creado_en
+           ) VALUES (
+             @id, @entidad_tipo, @entidad_id, @operacion, @payload, @creado_en
+           )`,
+        )
+        .run({
+          id,
+          entidad_tipo: datos.entidadTipo,
+          entidad_id: datos.entidadId,
+          operacion: datos.operacion,
+          payload: JSON.stringify(datos.payload),
+          creado_en: ahora(),
+        });
+    });
 
     const encolado = this.obtenerPorId(id);
     if (encolado === null) {
@@ -81,19 +83,25 @@ export class RepositorioDeSyncCola extends RepositorioBase {
   }
 
   public marcarIntento(id: string): void {
-    this.base.prepare('UPDATE sync_cola SET intentado_en = ? WHERE id = ?').run(ahora(), id);
+    this.ejecutar(() => {
+      this.base.prepare('UPDATE sync_cola SET intentado_en = ? WHERE id = ?').run(ahora(), id);
+    });
   }
 
   public marcarSincronizado(id: string): void {
-    this.base
-      .prepare('UPDATE sync_cola SET sincronizado_en = ?, error = NULL WHERE id = ?')
-      .run(ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE sync_cola SET sincronizado_en = ?, error = NULL WHERE id = ?')
+        .run(ahora(), id);
+    });
   }
 
   public marcarError(id: string, error: string): void {
-    this.base
-      .prepare('UPDATE sync_cola SET intentado_en = ?, error = ? WHERE id = ?')
-      .run(ahora(), error, id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE sync_cola SET intentado_en = ?, error = ? WHERE id = ?')
+        .run(ahora(), error, id);
+    });
   }
 
   public contarPendientes(): number {

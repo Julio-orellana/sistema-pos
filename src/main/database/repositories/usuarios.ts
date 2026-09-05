@@ -33,20 +33,22 @@ export class RepositorioDeUsuarios extends RepositorioBase {
     const id = nuevoId();
     const momento = ahora();
 
-    this.base
-      .prepare(
-        `INSERT INTO usuarios (id, nombre, rol, pin_hash, activo, creado_en, actualizado_en)
-         VALUES (@id, @nombre, @rol, @pin_hash, @activo, @creado_en, @actualizado_en)`,
-      )
-      .run({
-        id,
-        nombre: datos.nombre,
-        rol: datos.rol,
-        pin_hash: datos.pinHash,
-        activo: aColumnaBooleana(datos.activo ?? true),
-        creado_en: momento,
-        actualizado_en: momento,
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO usuarios (id, nombre, rol, pin_hash, activo, creado_en, actualizado_en)
+           VALUES (@id, @nombre, @rol, @pin_hash, @activo, @creado_en, @actualizado_en)`,
+        )
+        .run({
+          id,
+          nombre: datos.nombre,
+          rol: datos.rol,
+          pin_hash: datos.pinHash,
+          activo: aColumnaBooleana(datos.activo ?? true),
+          creado_en: momento,
+          actualizado_en: momento,
+        });
+    });
 
     return this.obtenerPorIdOFallar(id);
   }
@@ -81,15 +83,19 @@ export class RepositorioDeUsuarios extends RepositorioBase {
 
   /** Baja lógica: nunca se borra un usuario, porque sus ventas lo referencian. */
   public desactivar(id: string): void {
-    this.base
-      .prepare('UPDATE usuarios SET activo = 0, actualizado_en = ? WHERE id = ?')
-      .run(ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE usuarios SET activo = 0, actualizado_en = ? WHERE id = ?')
+        .run(ahora(), id);
+    });
   }
 
   public actualizarPinHash(id: string, pinHash: string): void {
-    this.base
-      .prepare('UPDATE usuarios SET pin_hash = ?, actualizado_en = ? WHERE id = ?')
-      .run(pinHash, ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE usuarios SET pin_hash = ?, actualizado_en = ? WHERE id = ?')
+        .run(pinHash, ahora(), id);
+    });
   }
 
   private obtenerPorIdOFallar(id: string): Usuario {

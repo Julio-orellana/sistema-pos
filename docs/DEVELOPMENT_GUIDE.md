@@ -244,6 +244,11 @@ Antes de cada commit, en orden:
       `+ - * /` sobre montos.
 - [ ] Se respeta el **redondeo único al final**: ninguna función de cálculo
       nueva redondea resultados intermedios.
+- [ ] Toda escritura nueva de un repositorio pasa por `this.ejecutar()`, para
+      que un fallo de restricción llegue traducido a lenguaje de negocio y no
+      como el texto crudo de SQLite.
+- [ ] Ningún campo marcado **SIN PISO** en la sección 4.2 de `CLAUDE.md` recibió
+      un CHECK de no negatividad: están abiertos a propósito para devoluciones.
 - [ ] Los comentarios de la lógica de negocio no obvia están en español y
       explican el *por qué*.
 - [ ] Ningún nombre nuevo rompe la convención de idioma.

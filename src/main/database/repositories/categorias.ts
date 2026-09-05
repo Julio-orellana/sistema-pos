@@ -27,18 +27,20 @@ export class RepositorioDeCategorias extends RepositorioBase {
     const id = nuevoId();
     const momento = ahora();
 
-    this.base
-      .prepare(
-        `INSERT INTO categorias (id, nombre, orden, creado_en, actualizado_en)
-         VALUES (@id, @nombre, @orden, @creado_en, @actualizado_en)`,
-      )
-      .run({
-        id,
-        nombre: datos.nombre,
-        orden: datos.orden ?? 0,
-        creado_en: momento,
-        actualizado_en: momento,
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO categorias (id, nombre, orden, creado_en, actualizado_en)
+           VALUES (@id, @nombre, @orden, @creado_en, @actualizado_en)`,
+        )
+        .run({
+          id,
+          nombre: datos.nombre,
+          orden: datos.orden ?? 0,
+          creado_en: momento,
+          actualizado_en: momento,
+        });
+    });
 
     const creada = this.obtenerPorId(id);
     if (creada === null) {
@@ -63,8 +65,10 @@ export class RepositorioDeCategorias extends RepositorioBase {
   }
 
   public cambiarOrden(id: string, orden: number): void {
-    this.base
-      .prepare('UPDATE categorias SET orden = ?, actualizado_en = ? WHERE id = ?')
-      .run(orden, ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE categorias SET orden = ?, actualizado_en = ? WHERE id = ?')
+        .run(orden, ahora(), id);
+    });
   }
 }

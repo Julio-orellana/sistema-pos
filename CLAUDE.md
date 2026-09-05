@@ -150,6 +150,85 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
   Es **provisional**: cuando exista el módulo de usuarios, el PIN saldrá de la
   base de datos como hash y la auditoría podrá decir **quién** autorizó.
 
+### 4.2 Signos: qué campo puede ser negativo y cuál no
+
+Esta tabla es **normativa**. Está escrita con este nivel de detalle para que
+ninguna sesión futura "corrija" por error un campo que se dejó abierto a
+propósito.
+
+| Campo | Regla | Por qué |
+|---|---|---|
+| `productos.inventario_disponible` | **>= 0** | Piso obligatorio. Es la barrera que impide vender más de lo que hay. |
+| `productos.precio_base` | **>= 0** | Un producto no le paga al cliente por llevárselo. 0 se permite: muestras y regalos. |
+| `productos.cantidad_predefinida_icono` | **> 0** | Estrictamente mayor. Un ícono que agrega cero unidades es un botón que no hace nada. |
+| `precios_especiales.valor` | **>= 0** | Un descuento negativo sería un recargo encubierto que se saltaría el control de límites por rol. |
+| `limites_descuento.descuento_max_porcentaje` | **>= 0** | 0 es significativo: "este rol no puede dar descuento". |
+| `limites_descuento.descuento_max_monto_fijo` | **>= 0** | Igual que el porcentaje. |
+| `venta_detalle.precio_unitario_snap` | **>= 0** | Es la foto de `precio_base` y hereda su regla. |
+| `caja_sesiones.monto_inicial` | **>= 0** | El fondo con que se abre la caja no puede ser negativo. |
+| `caja_sesiones.monto_real` | **>= 0** | El efectivo contado físicamente no puede ser negativo. |
+| `ventas.subtotal` | **SIN PISO** | Reservado para devoluciones. |
+| `ventas.descuento_valor` | **SIN PISO** | Reservado para devoluciones. |
+| `ventas.total` | **SIN PISO** | Una devolución tendrá total negativo. |
+| `venta_detalle.cantidad` | **SIN PISO** | Una devolución llevará cantidad negativa. |
+| `venta_detalle.subtotal_exacto` | **SIN PISO** | Reservado para devoluciones. |
+| `venta_detalle.subtotal_impreso` | **SIN PISO** | Reservado para devoluciones. |
+| `caja_sesiones.monto_esperado` | **SIN PISO** | Con devoluciones, lo esperado podría ser negativo. |
+| `caja_sesiones.diferencia` | **SIN PISO** | Un faltante de caja **es** negativo. |
+
+Los campos marcados **SIN PISO** llevan un comentario explícito en ambos
+esquemas diciéndolo, y hay pruebas que verifican que **aceptan** negativos.
+Si alguna vez fallan, es porque alguien les agregó un piso por error.
+
+**El módulo de devoluciones todavía no se diseña ni se implementa.** Los campos
+abiertos son una preparación, no una funcionalidad.
+
+### 4.3 Cómo debe descontarse el inventario (para el futuro módulo de ventas)
+
+El piso `>= 0` solo protege de verdad si el descuento es **atómico**. Leer el
+saldo en la aplicación, restar y escribir después deja una ventana entre la
+lectura y la escritura en la que otra operación puede haber movido el saldo, y
+el CHECK se evalúa sobre un valor ya calculado a partir de datos viejos.
+
+**En Postgres** la forma correcta es la evidente, y hay que usarla:
+
+```sql
+UPDATE productos
+   SET inventario_disponible = inventario_disponible - :cantidad
+ WHERE id = :id;
+```
+
+**En SQLite NO se puede escribir así**, y conviene saber por qué antes de
+intentarlo: `inventario_disponible` es TEXT, así que `columna - :cantidad`
+obliga a SQLite a convertir ambos a REAL y hacer **aritmética de punto
+flotante** —justo lo que money.ts existe para evitar—, y el resultado (por
+ejemplo `58.5`) ni siquiera pasaría el CHECK de forma canónica, que exige tres
+decimales.
+
+La forma correcta en SQLite conserva la atomicidad sin romper la exactitud:
+
+1. Todo ocurre dentro de **una sola transacción de escritura** (`BEGIN
+   IMMEDIATE`), la misma que inserta la venta y su detalle.
+2. El saldo nuevo se calcula en la aplicación **con Decimal.js**.
+3. La escritura es un **comparar-y-cambiar**: solo actualiza si el saldo sigue
+   siendo el que se leyó.
+
+```sql
+UPDATE productos
+   SET inventario_disponible = :saldoNuevoCalculadoConDecimal,
+       actualizado_en = :ahora
+ WHERE id = :id
+   AND inventario_disponible = :saldoQueSeLeyo;
+```
+
+Si `changes === 0`, alguien movió el saldo entremedio y la venta debe abortar o
+reintentar. El CHECK con nombre sigue siendo la última red: si el saldo nuevo
+fuera negativo, la base lo rechaza igual.
+
+Ayuda además que la aplicación tenga **instancia única** y que better-sqlite3
+sea síncrono: dentro del proceso no hay concurrencia real. La regla existe
+igual, porque no queremos que la corrección dependa de eso.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -191,6 +270,11 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
 | **Migraciones numeradas con checksum registrado.** El migrador se niega a arrancar si una migración ya aplicada cambió de contenido. | Migraciones sin control de integridad; recrear el esquema en cada arranque | Editar una migración ya aplicada deja la base de la tienda y el código en estados distintos sin que nadie se entere. El checksum convierte eso en un error ruidoso al arrancar. | Prompt 5 — 2026-09-05 |
 | **La bitácora de auditoría es inmutable por trigger**, tanto en SQLite como en Postgres. | Confiar en que nadie la modifique; permitir correcciones | Un registro de auditoría que se puede editar no sirve como evidencia. La base rechaza cualquier UPDATE o DELETE sobre `auditoria_log`. | Prompt 5 — 2026-09-05 |
 | **En Supabase se activa RLS en todas las tablas, sin políticas (denegar por omisión).** | Dejar las tablas sin RLS | Supabase publica automáticamente las tablas de `public` por su API. Sin RLS, cualquiera con la llave anónima —que viaja dentro de la aplicación instalada— podría leer y escribir las ventas de la tienda. Las políticas concretas llegan con el módulo de sincronización, en su propia migración. | Prompt 5 — 2026-09-05 |
+| **Piso 0 explícito en `productos.inventario_disponible`.** Cualquier operación que lo dejaría por debajo de 0 falla en la base. | Validar solo en la aplicación; permitir negativos y corregir después | Validar solo en la aplicación deja la regla al alcance de cualquier error de programación. En la base, la venta que excede el stock es imposible, no improbable. La restricción lleva NOMBRE (`productos_inventario_no_negativo`) para poder traducir su error a un mensaje de negocio. | Prompt 6 — 2026-09-05 |
+| **En SQLite el piso se escribe `NOT col GLOB '-*'`, NO `col >= 0`.** | La forma literal `CHECK (col >= 0)` | Comprobado empíricamente: en SQLite el orden entre tipos es NULL < numéricos < TEXT, así que CUALQUIER texto resulta mayor que 0 y `CHECK (inventario_disponible >= 0)` **acepta** el valor `'-5.000'`. Como la forma canónica garantiza que el signo, si existe, es el primer carácter, "no empieza con menos" es una prueba exacta y sin punto flotante. En Postgres sí se usa `>= 0`, porque NUMERIC compara como número. | Prompt 6 — 2026-09-05 |
+| **Los campos transaccionales de `ventas` y `venta_detalle` quedan SIN piso, a propósito.** Ver la tabla completa en la sección 4.2. | Ponerles piso 0 "por prolijidad" | Se reservan para el futuro módulo de devoluciones, que necesitará cantidades y totales negativos. Llevan un comentario explícito en ambos esquemas y pruebas que verifican que **aceptan** negativos, para que ninguna sesión futura los "corrija". Los campos de precio y configuración sí tienen piso: un precio o un tope de descuento no cambia de signo por una devolución. | Prompt 6 — 2026-09-05 |
+| **Un único punto traduce los errores de restricción a errores de negocio** (`errores.ts`), y toda escritura de repositorio pasa por `RepositorioBase.ejecutar()`. | Dejar pasar el error crudo de SQLite; traducir en cada pantalla | "CHECK constraint failed: productos_inventario_no_negativo" no se le puede mostrar a un cajero con un cliente enfrente, y traducir en cada pantalla garantiza que alguna se olvide. El error se convierte en `STOCK_INSUFICIENTE` con el mensaje "Stock insuficiente para completar la venta", conservando la causa técnica para la bitácora. Un error que NO se reconoce pasa sin envolver, para no esconder fallos de programación detrás de un texto tranquilizador. | Prompt 6 — 2026-09-05 |
+| **El descuento de inventario debe ser atómico** (ver sección 4.3): en Postgres con `SET col = col - :cantidad`; en SQLite con comparar-y-cambiar dentro de una sola transacción de escritura, porque allí la resta en SQL sería de punto flotante. | Leer, restar en la aplicación y escribir después, en operaciones separadas | Entre la lectura y la escritura hay una ventana en la que otra operación puede mover el saldo, y entonces el CHECK se evalúa sobre datos viejos. | Prompt 6 — 2026-09-05 |
 | Salida controlada del kiosko con atajo + PIN de administrador | Dejar la app sin salida (matar el proceso); un botón de salir en la interfaz; salida sin PIN | Sin salida ordenada había que matar el proceso desde el Administrador de tareas, lo que deja el WAL de SQLite sin consolidar y no registra nada. Un botón visible sería una invitación para el cajero. El PIN convierte la salida en una acción de administrador auditable. | Prompt 2 — 2026-09-04 |
 | El atajo se captura con `before-input-event` y no con `globalShortcut` | `globalShortcut` de Electron | `globalShortcut` registra la combinación en todo el sistema operativo y se la roba a cualquier otra aplicación abierta, incluida la del desarrollador. El atajo solo debe existir mientras el POS tiene el foco. | Prompt 2 — 2026-09-04 |
 | Las combinaciones de teclas se identifican por tecla FÍSICA (`code`) y no por carácter (`key`) | Comparar `key === 'q'` | En el teclado latinoamericano de Windows, AltGr es Ctrl+Alt y cambia el carácter que produce cada tecla. Comparando por carácter, el atajo del administrador simplemente no funcionaría en la computadora de la tienda. | Prompt 2 — 2026-09-04 |
@@ -227,7 +311,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 5 | ¿El PIN de autorización es por usuario administrador o uno solo para la tienda? | Determina si el log de auditoría puede identificar **quién** autorizó. Hoy el PIN sale de `POS_PIN_ADMINISTRADOR` y el sistema sabe QUE alguien autorizó, pero no QUIÉN. Recomendación técnica: por usuario. | Abierto — implementación provisional en marcha |
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? | Define la matriz de permisos (RBAC). | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. | Abierto |
-| 8 | ¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir? | En una tienda a granel el saldo del sistema y el peso real se separan; bloquear la venta podría dejar a Jimmy sin poder cobrar algo que tiene físicamente. | Abierto |
+| 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |

@@ -42,44 +42,46 @@ export class RepositorioDeLimitesDescuento extends RepositorioBase {
     const existente = this.obtenerPorRol(datos.rol);
     const momento = ahora();
 
-    if (existente !== null) {
-      this.base
-        .prepare(
-          `UPDATE limites_descuento
-              SET descuento_max_porcentaje = @porcentaje,
-                  descuento_max_monto_fijo = @monto,
-                  editado_por = @editado_por,
-                  actualizado_en = @actualizado_en
-            WHERE rol = @rol`,
-        )
-        .run({
-          porcentaje: aColumnaMonto(datos.descuentoMaxPorcentaje),
-          monto: aColumnaMonto(datos.descuentoMaxMontoFijo),
-          editado_por: datos.editadoPor ?? null,
-          actualizado_en: momento,
-          rol: datos.rol,
-        });
-    } else {
-      this.base
-        .prepare(
-          `INSERT INTO limites_descuento (
-             id, rol, descuento_max_porcentaje, descuento_max_monto_fijo,
-             editado_por, creado_en, actualizado_en
-           ) VALUES (
-             @id, @rol, @porcentaje, @monto, @editado_por, @creado_en, @actualizado_en
-           )`,
-        )
-        .run({
-          id: nuevoId(),
-          rol: datos.rol,
-          porcentaje: aColumnaMonto(datos.descuentoMaxPorcentaje),
-          monto: aColumnaMonto(datos.descuentoMaxMontoFijo),
-          editado_por: datos.editadoPor ?? null,
-          creado_en: momento,
-          actualizado_en: momento,
-        });
-    }
+    this.ejecutar(() => {
+      if (existente !== null) {
+        this.base
+          .prepare(
+            `UPDATE limites_descuento
+                SET descuento_max_porcentaje = @porcentaje,
+                    descuento_max_monto_fijo = @monto,
+                    editado_por = @editado_por,
+                    actualizado_en = @actualizado_en
+              WHERE rol = @rol`,
+          )
+          .run({
+            porcentaje: aColumnaMonto(datos.descuentoMaxPorcentaje),
+            monto: aColumnaMonto(datos.descuentoMaxMontoFijo),
+            editado_por: datos.editadoPor ?? null,
+            actualizado_en: momento,
+            rol: datos.rol,
+          });
+      } else {
+        this.base
+          .prepare(
+            `INSERT INTO limites_descuento (
+               id, rol, descuento_max_porcentaje, descuento_max_monto_fijo,
+               editado_por, creado_en, actualizado_en
+             ) VALUES (
+               @id, @rol, @porcentaje, @monto, @editado_por, @creado_en, @actualizado_en
+             )`,
+          )
+          .run({
+            id: nuevoId(),
+            rol: datos.rol,
+            porcentaje: aColumnaMonto(datos.descuentoMaxPorcentaje),
+            monto: aColumnaMonto(datos.descuentoMaxMontoFijo),
+            editado_por: datos.editadoPor ?? null,
+            creado_en: momento,
+            actualizado_en: momento,
+          });
+      }
 
+    });
     const fijado = this.obtenerPorRol(datos.rol);
     if (fijado === null) {
       throw new Error(`No se encontró el límite de descuento del rol ${datos.rol}.`);

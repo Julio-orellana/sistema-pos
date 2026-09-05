@@ -36,25 +36,27 @@ export class RepositorioDePreciosEspeciales extends RepositorioBase {
     const id = nuevoId();
     const momento = ahora();
 
-    this.base
-      .prepare(
-        `INSERT INTO precios_especiales (
-           id, producto_id, tipo, valor, vigente_desde, vigente_hasta, activo, creado_en, actualizado_en
-         ) VALUES (
-           @id, @producto_id, @tipo, @valor, @vigente_desde, @vigente_hasta, @activo, @creado_en, @actualizado_en
-         )`,
-      )
-      .run({
-        id,
-        producto_id: datos.productoId,
-        tipo: datos.tipo,
-        valor: aColumnaMonto(datos.valor),
-        vigente_desde: datos.vigenteDesde,
-        vigente_hasta: datos.vigenteHasta ?? null,
-        activo: aColumnaBooleana(datos.activo ?? true),
-        creado_en: momento,
-        actualizado_en: momento,
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO precios_especiales (
+             id, producto_id, tipo, valor, vigente_desde, vigente_hasta, activo, creado_en, actualizado_en
+           ) VALUES (
+             @id, @producto_id, @tipo, @valor, @vigente_desde, @vigente_hasta, @activo, @creado_en, @actualizado_en
+           )`,
+        )
+        .run({
+          id,
+          producto_id: datos.productoId,
+          tipo: datos.tipo,
+          valor: aColumnaMonto(datos.valor),
+          vigente_desde: datos.vigenteDesde,
+          vigente_hasta: datos.vigenteHasta ?? null,
+          activo: aColumnaBooleana(datos.activo ?? true),
+          creado_en: momento,
+          actualizado_en: momento,
+        });
+    });
 
     const creado = this.obtenerPorId(id);
     if (creado === null) {
@@ -96,8 +98,10 @@ export class RepositorioDePreciosEspeciales extends RepositorioBase {
   }
 
   public desactivar(id: string): void {
-    this.base
-      .prepare('UPDATE precios_especiales SET activo = 0, actualizado_en = ? WHERE id = ?')
-      .run(ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE precios_especiales SET activo = 0, actualizado_en = ? WHERE id = ?')
+        .run(ahora(), id);
+    });
   }
 }

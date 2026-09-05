@@ -46,24 +46,26 @@ export class RepositorioDeAuditoria extends RepositorioBase {
   public registrar(datos: NuevoAsientoAuditoria): AsientoAuditoria {
     const id = nuevoId();
 
-    this.base
-      .prepare(
-        `INSERT INTO auditoria_log (
-           id, usuario_id, accion, entidad_tipo, entidad_id, valor_anterior, valor_nuevo, fecha
-         ) VALUES (
-           @id, @usuario_id, @accion, @entidad_tipo, @entidad_id, @valor_anterior, @valor_nuevo, @fecha
-         )`,
-      )
-      .run({
-        id,
-        usuario_id: datos.usuarioId ?? null,
-        accion: datos.accion,
-        entidad_tipo: datos.entidadTipo,
-        entidad_id: datos.entidadId ?? null,
-        valor_anterior: aJson(datos.valorAnterior),
-        valor_nuevo: aJson(datos.valorNuevo),
-        fecha: datos.fecha ?? ahora(),
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO auditoria_log (
+             id, usuario_id, accion, entidad_tipo, entidad_id, valor_anterior, valor_nuevo, fecha
+           ) VALUES (
+             @id, @usuario_id, @accion, @entidad_tipo, @entidad_id, @valor_anterior, @valor_nuevo, @fecha
+           )`,
+        )
+        .run({
+          id,
+          usuario_id: datos.usuarioId ?? null,
+          accion: datos.accion,
+          entidad_tipo: datos.entidadTipo,
+          entidad_id: datos.entidadId ?? null,
+          valor_anterior: aJson(datos.valorAnterior),
+          valor_nuevo: aJson(datos.valorNuevo),
+          fecha: datos.fecha ?? ahora(),
+        });
+    });
 
     const asiento = this.obtenerPorId(id);
     if (asiento === null) {

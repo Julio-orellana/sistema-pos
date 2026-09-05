@@ -58,32 +58,34 @@ export class RepositorioDeProductos extends RepositorioBase {
     const id = nuevoId();
     const momento = ahora();
 
-    this.base
-      .prepare(
-        `INSERT INTO productos (
-           id, nombre, categoria_id, foto_path, tipo_medida, unidad_peso,
-           cantidad_predefinida_icono, precio_base, inventario_disponible,
-           contador_ventas, activo, creado_en, actualizado_en
-         ) VALUES (
-           @id, @nombre, @categoria_id, @foto_path, @tipo_medida, @unidad_peso,
-           @cantidad_predefinida_icono, @precio_base, @inventario_disponible,
-           0, @activo, @creado_en, @actualizado_en
-         )`,
-      )
-      .run({
-        id,
-        nombre: datos.nombre,
-        categoria_id: datos.categoriaId,
-        foto_path: datos.fotoPath ?? null,
-        tipo_medida: datos.tipoMedida,
-        unidad_peso: datos.unidadPeso ?? null,
-        cantidad_predefinida_icono: aColumnaCantidad(datos.cantidadPredefinidaIcono),
-        precio_base: aColumnaMonto(datos.precioBase),
-        inventario_disponible: aColumnaCantidad(datos.inventarioDisponible),
-        activo: aColumnaBooleana(datos.activo ?? true),
-        creado_en: momento,
-        actualizado_en: momento,
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO productos (
+             id, nombre, categoria_id, foto_path, tipo_medida, unidad_peso,
+             cantidad_predefinida_icono, precio_base, inventario_disponible,
+             contador_ventas, activo, creado_en, actualizado_en
+           ) VALUES (
+             @id, @nombre, @categoria_id, @foto_path, @tipo_medida, @unidad_peso,
+             @cantidad_predefinida_icono, @precio_base, @inventario_disponible,
+             0, @activo, @creado_en, @actualizado_en
+           )`,
+        )
+        .run({
+          id,
+          nombre: datos.nombre,
+          categoria_id: datos.categoriaId,
+          foto_path: datos.fotoPath ?? null,
+          tipo_medida: datos.tipoMedida,
+          unidad_peso: datos.unidadPeso ?? null,
+          cantidad_predefinida_icono: aColumnaCantidad(datos.cantidadPredefinidaIcono),
+          precio_base: aColumnaMonto(datos.precioBase),
+          inventario_disponible: aColumnaCantidad(datos.inventarioDisponible),
+          activo: aColumnaBooleana(datos.activo ?? true),
+          creado_en: momento,
+          actualizado_en: momento,
+        });
+    });
 
     const creado = this.obtenerPorId(id);
     if (creado === null) {
@@ -132,15 +134,19 @@ export class RepositorioDeProductos extends RepositorioBase {
    * punto flotante y arruinaría la exactitud.
    */
   public fijarInventario(id: string, nuevoSaldo: Decimal | string): void {
-    this.base
-      .prepare('UPDATE productos SET inventario_disponible = ?, actualizado_en = ? WHERE id = ?')
-      .run(aColumnaCantidad(nuevoSaldo), ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE productos SET inventario_disponible = ?, actualizado_en = ? WHERE id = ?')
+        .run(aColumnaCantidad(nuevoSaldo), ahora(), id);
+    });
   }
 
   public actualizarPrecioBase(id: string, precio: Decimal | string): void {
-    this.base
-      .prepare('UPDATE productos SET precio_base = ?, actualizado_en = ? WHERE id = ?')
-      .run(aColumnaMonto(precio), ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE productos SET precio_base = ?, actualizado_en = ? WHERE id = ?')
+        .run(aColumnaMonto(precio), ahora(), id);
+    });
   }
 
   /**
@@ -152,17 +158,21 @@ export class RepositorioDeProductos extends RepositorioBase {
    * corresponder a lo que realmente se vendió.
    */
   public incrementarContadorVentas(id: string): void {
-    this.base
-      .prepare(
-        'UPDATE productos SET contador_ventas = contador_ventas + 1, actualizado_en = ? WHERE id = ?',
-      )
-      .run(ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          'UPDATE productos SET contador_ventas = contador_ventas + 1, actualizado_en = ? WHERE id = ?',
+        )
+        .run(ahora(), id);
+    });
   }
 
   /** Baja lógica: nunca se borra, porque las ventas históricas lo referencian. */
   public desactivar(id: string): void {
-    this.base
-      .prepare('UPDATE productos SET activo = 0, actualizado_en = ? WHERE id = ?')
-      .run(ahora(), id);
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE productos SET activo = 0, actualizado_en = ? WHERE id = ?')
+        .run(ahora(), id);
+    });
   }
 }

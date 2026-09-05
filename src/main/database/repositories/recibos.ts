@@ -29,19 +29,21 @@ export class RepositorioDeRecibos extends RepositorioBase {
   public crear(datos: NuevoRecibo): Recibo {
     const id = nuevoId();
 
-    this.base
-      .prepare(
-        `INSERT INTO recibos (id, venta_id, numero_recibo, pdf_path, impreso, creado_en)
-         VALUES (@id, @venta_id, @numero_recibo, @pdf_path, @impreso, @creado_en)`,
-      )
-      .run({
-        id,
-        venta_id: datos.ventaId,
-        numero_recibo: datos.numeroRecibo,
-        pdf_path: datos.pdfPath,
-        impreso: aColumnaBooleana(datos.impreso ?? false),
-        creado_en: ahora(),
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO recibos (id, venta_id, numero_recibo, pdf_path, impreso, creado_en)
+           VALUES (@id, @venta_id, @numero_recibo, @pdf_path, @impreso, @creado_en)`,
+        )
+        .run({
+          id,
+          venta_id: datos.ventaId,
+          numero_recibo: datos.numeroRecibo,
+          pdf_path: datos.pdfPath,
+          impreso: aColumnaBooleana(datos.impreso ?? false),
+          creado_en: ahora(),
+        });
+    });
 
     const creado = this.obtenerPorId(id);
     if (creado === null) {
@@ -80,6 +82,8 @@ export class RepositorioDeRecibos extends RepositorioBase {
   }
 
   public marcarImpreso(id: string): void {
-    this.base.prepare('UPDATE recibos SET impreso = 1 WHERE id = ?').run(id);
+    this.ejecutar(() => {
+      this.base.prepare('UPDATE recibos SET impreso = 1 WHERE id = ?').run(id);
+    });
   }
 }

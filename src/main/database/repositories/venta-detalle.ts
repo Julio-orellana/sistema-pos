@@ -50,29 +50,31 @@ export class RepositorioDeVentaDetalle extends RepositorioBase {
   public crear(datos: NuevaVentaDetalle): VentaDetalle {
     const id = nuevoId();
 
-    this.base
-      .prepare(
-        `INSERT INTO venta_detalle (
-           id, venta_id, producto_id, producto_nombre_snap, unidad_snap, cantidad,
-           precio_unitario_snap, subtotal_exacto, subtotal_impreso, orden_linea, creado_en
-         ) VALUES (
-           @id, @venta_id, @producto_id, @producto_nombre_snap, @unidad_snap, @cantidad,
-           @precio_unitario_snap, @subtotal_exacto, @subtotal_impreso, @orden_linea, @creado_en
-         )`,
-      )
-      .run({
-        id,
-        venta_id: datos.ventaId,
-        producto_id: datos.productoId,
-        producto_nombre_snap: datos.productoNombreSnap,
-        unidad_snap: datos.unidadSnap,
-        cantidad: aColumnaCantidad(datos.cantidad),
-        precio_unitario_snap: aColumnaMonto(datos.precioUnitarioSnap),
-        subtotal_exacto: aColumnaExacta(datos.subtotalExacto),
-        subtotal_impreso: aColumnaMonto(datos.subtotalImpreso),
-        orden_linea: datos.ordenLinea,
-        creado_en: ahora(),
-      });
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `INSERT INTO venta_detalle (
+             id, venta_id, producto_id, producto_nombre_snap, unidad_snap, cantidad,
+             precio_unitario_snap, subtotal_exacto, subtotal_impreso, orden_linea, creado_en
+           ) VALUES (
+             @id, @venta_id, @producto_id, @producto_nombre_snap, @unidad_snap, @cantidad,
+             @precio_unitario_snap, @subtotal_exacto, @subtotal_impreso, @orden_linea, @creado_en
+           )`,
+        )
+        .run({
+          id,
+          venta_id: datos.ventaId,
+          producto_id: datos.productoId,
+          producto_nombre_snap: datos.productoNombreSnap,
+          unidad_snap: datos.unidadSnap,
+          cantidad: aColumnaCantidad(datos.cantidad),
+          precio_unitario_snap: aColumnaMonto(datos.precioUnitarioSnap),
+          subtotal_exacto: aColumnaExacta(datos.subtotalExacto),
+          subtotal_impreso: aColumnaMonto(datos.subtotalImpreso),
+          orden_linea: datos.ordenLinea,
+          creado_en: ahora(),
+        });
+    });
 
     const creada = this.obtenerPorId(id);
     if (creada === null) {

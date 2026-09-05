@@ -35,6 +35,14 @@
 --
 --    Además se prohíben dos puntos decimales y un signo menos fuera del inicio.
 --
+--    PISO DE NO NEGATIVIDAD: se escribe como `NOT col GLOB '-*'` y NO como
+--    `col >= 0`. El motivo es que en SQLite el orden entre tipos es
+--    NULL < numéricos < TEXT, así que CUALQUIER texto resulta mayor que 0 y
+--    `CHECK (col >= 0)` aceptaría alegremente el valor '-5.000'. Comprobado.
+--    Como la forma canónica garantiza que el signo, si existe, es el primer
+--    carácter, "no empieza con menos" es una prueba exacta y sin punto flotante.
+--    (En Postgres sí se usa `>= 0`, porque NUMERIC compara como número.)
+--
 --    La única vía autorizada para escribir y leer estas columnas es
 --    src/main/database/decimal-columns.ts. Ninguna consulta del resto del
 --    proyecto debe tratar estos valores como número.
@@ -96,13 +104,20 @@ CREATE TABLE IF NOT EXISTS productos (
     CHECK (typeof(cantidad_predefinida_icono) = 'text'
            AND (cantidad_predefinida_icono GLOB '[0-9]*.[0-9][0-9][0-9]' OR cantidad_predefinida_icono GLOB '-[0-9]*.[0-9][0-9][0-9]')
            AND NOT cantidad_predefinida_icono GLOB '*.*.*'
-           AND NOT cantidad_predefinida_icono GLOB '?*-*'),
+           AND NOT cantidad_predefinida_icono GLOB '?*-*'
+           -- ESTRICTAMENTE mayor que 0, no solo no negativo: un ícono que agrega cero
+           -- unidades al carrito sería un botón que no hace nada.
+           AND NOT cantidad_predefinida_icono GLOB '-*'
+           AND cantidad_predefinida_icono GLOB '*[1-9]*'),
 
   precio_base                TEXT    NOT NULL
     CHECK (typeof(precio_base) = 'text'
            AND (precio_base GLOB '[0-9]*.[0-9][0-9]' OR precio_base GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT precio_base GLOB '*.*.*'
-           AND NOT precio_base GLOB '?*-*'),
+           AND NOT precio_base GLOB '?*-*'
+           -- Un precio no puede ser negativo: el producto no le paga al cliente por
+           -- llevárselo. Se permite 0, para muestras y regalos.
+           AND NOT precio_base GLOB '-*'),
 
   inventario_disponible      TEXT    NOT NULL
     CHECK (typeof(inventario_disponible) = 'text'
@@ -121,7 +136,22 @@ CREATE TABLE IF NOT EXISTS productos (
   CHECK (
     (tipo_medida = 'peso'   AND unidad_peso IS NOT NULL) OR
     (tipo_medida = 'unidad' AND unidad_peso IS NULL)
-  )
+  ),
+
+  -- PISO 0 DEL INVENTARIO. Es la barrera que impide vender más de lo que hay:
+  -- cualquier operación que dejaría el saldo por debajo de 0 falla aquí.
+  --
+  -- Lleva NOMBRE a propósito. Sin nombre, SQLite reporta apenas
+  -- "CHECK constraint failed: productos" y sería imposible distinguir un stock
+  -- agotado de un precio mal formateado; con nombre, la capa de acceso a datos
+  -- puede traducirlo a "Stock insuficiente para completar la venta".
+  -- Ver traducirErrorDeBaseDeDatos en src/main/database/errores.ts.
+  --
+  -- Se escribe como "no empieza con menos" y no como ">= 0" porque en SQLite el
+  -- orden entre tipos es NULL < numéricos < TEXT: cualquier texto resulta mayor
+  -- que 0, así que `inventario_disponible >= 0` aceptaría '-5.000'. Comprobado.
+  CONSTRAINT productos_inventario_no_negativo
+    CHECK (NOT inventario_disponible GLOB '-*')
 );
 
 CREATE INDEX IF NOT EXISTS idx_productos_categoria ON productos (categoria_id);
@@ -141,7 +171,10 @@ CREATE TABLE IF NOT EXISTS precios_especiales (
     CHECK (typeof(valor) = 'text'
            AND (valor GLOB '[0-9]*.[0-9][0-9]' OR valor GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT valor GLOB '*.*.*'
-           AND NOT valor GLOB '?*-*'),
+           AND NOT valor GLOB '?*-*'
+           -- Un descuento negativo sería un recargo encubierto que se saltaría el
+           -- control de límites por rol. Se permite 0 (equivale a "sin descuento").
+           AND NOT valor GLOB '-*'),
 
   vigente_desde  TEXT    NOT NULL CHECK (vigente_desde LIKE '____-__-__T__:__:__%Z'),
   vigente_hasta  TEXT    CHECK (vigente_hasta IS NULL OR vigente_hasta LIKE '____-__-__T__:__:__%Z'),
@@ -168,13 +201,18 @@ CREATE TABLE IF NOT EXISTS limites_descuento (
     CHECK (typeof(descuento_max_porcentaje) = 'text'
            AND (descuento_max_porcentaje GLOB '[0-9]*.[0-9][0-9]' OR descuento_max_porcentaje GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT descuento_max_porcentaje GLOB '*.*.*'
-           AND NOT descuento_max_porcentaje GLOB '?*-*'),
+           AND NOT descuento_max_porcentaje GLOB '?*-*'
+           -- Se permite 0 y es significativo: quiere decir que ese rol no puede
+           -- aplicar ningún descuento. Un tope negativo no significaría nada.
+           AND NOT descuento_max_porcentaje GLOB '-*'),
 
   descuento_max_monto_fijo TEXT NOT NULL
     CHECK (typeof(descuento_max_monto_fijo) = 'text'
            AND (descuento_max_monto_fijo GLOB '[0-9]*.[0-9][0-9]' OR descuento_max_monto_fijo GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT descuento_max_monto_fijo GLOB '*.*.*'
-           AND NOT descuento_max_monto_fijo GLOB '?*-*'),
+           AND NOT descuento_max_monto_fijo GLOB '?*-*'
+           -- Igual que el porcentaje: 0 es "este rol no da descuento".
+           AND NOT descuento_max_monto_fijo GLOB '-*'),
 
   -- Si se borra el usuario, el límite sobrevive pero pierde el autor.
   editado_por              TEXT REFERENCES usuarios (id) ON DELETE SET NULL,
@@ -193,7 +231,10 @@ CREATE TABLE IF NOT EXISTS caja_sesiones (
     CHECK (typeof(monto_inicial) = 'text'
            AND (monto_inicial GLOB '[0-9]*.[0-9][0-9]' OR monto_inicial GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT monto_inicial GLOB '*.*.*'
-           AND NOT monto_inicial GLOB '?*-*'),
+           AND NOT monto_inicial GLOB '?*-*'
+           -- AGREGADO MÁS ALLÁ DE LA LISTA PEDIDA: el fondo con que se abre la caja
+           -- no puede ser negativo. Se permite 0 (abrir sin fondo).
+           AND NOT monto_inicial GLOB '-*'),
 
   abierta_en     TEXT NOT NULL CHECK (abierta_en LIKE '____-__-__T__:__:__%Z'),
 
@@ -203,21 +244,30 @@ CREATE TABLE IF NOT EXISTS caja_sesiones (
              typeof(monto_esperado) = 'text'
              AND (monto_esperado GLOB '[0-9]*.[0-9][0-9]' OR monto_esperado GLOB '-[0-9]*.[0-9][0-9]')
              AND NOT monto_esperado GLOB '*.*.*'
-             AND NOT monto_esperado GLOB '?*-*')),
+             AND NOT monto_esperado GLOB '?*-*'
+             -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+             -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
+             )),
 
   monto_real     TEXT
     CHECK (monto_real IS NULL OR (
              typeof(monto_real) = 'text'
              AND (monto_real GLOB '[0-9]*.[0-9][0-9]' OR monto_real GLOB '-[0-9]*.[0-9][0-9]')
              AND NOT monto_real GLOB '*.*.*'
-             AND NOT monto_real GLOB '?*-*')),
+             AND NOT monto_real GLOB '?*-*'
+             -- AGREGADO MÁS ALLÁ DE LA LISTA PEDIDA: el efectivo contado físicamente
+             -- en la caja no puede ser negativo.
+             AND NOT monto_real GLOB '-*')),
 
   diferencia     TEXT
     CHECK (diferencia IS NULL OR (
              typeof(diferencia) = 'text'
              AND (diferencia GLOB '[0-9]*.[0-9][0-9]' OR diferencia GLOB '-[0-9]*.[0-9][0-9]')
              AND NOT diferencia GLOB '*.*.*'
-             AND NOT diferencia GLOB '?*-*')),
+             AND NOT diferencia GLOB '?*-*'
+             -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+             -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
+             )),
 
   cerrada_en     TEXT CHECK (cerrada_en IS NULL OR cerrada_en LIKE '____-__-__T__:__:__%Z'),
   estado         TEXT NOT NULL CHECK (estado IN ('abierta', 'cerrada')),
@@ -253,7 +303,10 @@ CREATE TABLE IF NOT EXISTS ventas (
     CHECK (typeof(subtotal) = 'text'
            AND (subtotal GLOB '[0-9]*.[0-9][0-9]' OR subtotal GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT subtotal GLOB '*.*.*'
-           AND NOT subtotal GLOB '?*-*'),
+           AND NOT subtotal GLOB '?*-*'
+           -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+           -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
+           ),
 
   descuento_tipo           TEXT CHECK (descuento_tipo IS NULL OR descuento_tipo IN ('porcentaje', 'monto_fijo')),
 
@@ -262,7 +315,10 @@ CREATE TABLE IF NOT EXISTS ventas (
              typeof(descuento_valor) = 'text'
              AND (descuento_valor GLOB '[0-9]*.[0-9][0-9]' OR descuento_valor GLOB '-[0-9]*.[0-9][0-9]')
              AND NOT descuento_valor GLOB '*.*.*'
-             AND NOT descuento_valor GLOB '?*-*')),
+             AND NOT descuento_valor GLOB '?*-*'
+             -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+             -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
+             )),
 
   -- Se llena SOLO si un administrador autorizó exceder el límite con su PIN.
   descuento_autorizado_por TEXT REFERENCES usuarios (id) ON DELETE SET NULL,
@@ -272,7 +328,10 @@ CREATE TABLE IF NOT EXISTS ventas (
     CHECK (typeof(total) = 'text'
            AND (total GLOB '[0-9]*.[0-9][0-9]' OR total GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT total GLOB '*.*.*'
-           AND NOT total GLOB '?*-*'),
+           AND NOT total GLOB '?*-*'
+           -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+           -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
+           ),
 
   forma_pago               TEXT NOT NULL CHECK (forma_pago IN ('efectivo', 'tarjeta')),
   num_boleta               TEXT,
@@ -316,13 +375,19 @@ CREATE TABLE IF NOT EXISTS venta_detalle (
     CHECK (typeof(cantidad) = 'text'
            AND (cantidad GLOB '[0-9]*.[0-9][0-9][0-9]' OR cantidad GLOB '-[0-9]*.[0-9][0-9][0-9]')
            AND NOT cantidad GLOB '*.*.*'
-           AND NOT cantidad GLOB '?*-*'),
+           AND NOT cantidad GLOB '?*-*'
+           -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+           -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
+           ),
 
   precio_unitario_snap TEXT    NOT NULL
     CHECK (typeof(precio_unitario_snap) = 'text'
            AND (precio_unitario_snap GLOB '[0-9]*.[0-9][0-9]' OR precio_unitario_snap GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT precio_unitario_snap GLOB '*.*.*'
-           AND NOT precio_unitario_snap GLOB '?*-*'),
+           AND NOT precio_unitario_snap GLOB '?*-*'
+           -- Es la foto de precio_base al momento de la venta, y hereda su regla:
+           -- nunca negativo, 0 permitido para una muestra o un regalo.
+           AND NOT precio_unitario_snap GLOB '-*'),
 
   -- Valor SIN redondear: es el que suma para calcular el total real.
   subtotal_exacto      TEXT    NOT NULL
@@ -331,6 +396,8 @@ CREATE TABLE IF NOT EXISTS venta_detalle (
            AND NOT subtotal_exacto GLOB '*[^0-9.-]*'
            AND NOT subtotal_exacto GLOB '*.*.*'
            AND NOT subtotal_exacto GLOB '?*-*'
+           -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+           -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
            AND NOT subtotal_exacto GLOB '*.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*'),
 
   -- Valor conciliado que aparece en el recibo. La suma de los subtotal_impreso
@@ -339,7 +406,10 @@ CREATE TABLE IF NOT EXISTS venta_detalle (
     CHECK (typeof(subtotal_impreso) = 'text'
            AND (subtotal_impreso GLOB '[0-9]*.[0-9][0-9]' OR subtotal_impreso GLOB '-[0-9]*.[0-9][0-9]')
            AND NOT subtotal_impreso GLOB '*.*.*'
-           AND NOT subtotal_impreso GLOB '?*-*'),
+           AND NOT subtotal_impreso GLOB '?*-*'
+           -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro
+           -- módulo de devoluciones. NO agregar aquí un CHECK de no negatividad.
+           ),
 
   -- El orden de captura decide el desempate del reparto de centavos, así que
   -- se preserva exactamente: sin él, reimprimir un recibo podría dar otro

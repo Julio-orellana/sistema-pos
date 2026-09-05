@@ -27,6 +27,14 @@
 -- la tienda, sin internet, y viaja tal cual a la nube; si el servidor generara
 -- uno propio, el mismo registro tendría dos identidades.
 --
+-- PISOS DE NO NEGATIVIDAD: aquí sí se escriben como `CHECK (col >= 0)`, porque
+-- NUMERIC compara como número. En SQLite hubo que escribirlos como
+-- `NOT col GLOB '-*'`: allí las columnas son TEXT y el orden entre tipos hace
+-- que cualquier texto resulte mayor que 0, con lo cual `>= 0` aceptaría '-5.000'.
+-- Los campos que quedan SIN piso lo dicen en un comentario, para que ninguna
+-- sesión futura los "corrija" por error: son los que el módulo de devoluciones
+-- necesitará en negativo.
+--
 -- Plan gratuito de Supabase: este script no usa ninguna característica de pago
 -- (sin particionado, sin réplicas, sin extensiones adicionales, sin PITR).
 -- ===========================================================================
@@ -71,9 +79,18 @@ CREATE TABLE IF NOT EXISTS public.productos (
   foto_path                  TEXT,
   tipo_medida                TEXT           NOT NULL CHECK (tipo_medida IN ('unidad', 'peso')),
   unidad_peso                TEXT           CHECK (unidad_peso IS NULL OR unidad_peso IN ('lb', 'kg')),
-  cantidad_predefinida_icono NUMERIC(14, 3) NOT NULL,
-  precio_base                NUMERIC(14, 2) NOT NULL,
-  inventario_disponible      NUMERIC(14, 3) NOT NULL,
+  -- ESTRICTAMENTE mayor que 0, no solo no negativo: un ícono que agrega cero
+  -- unidades al carrito sería un botón que no hace nada.
+  cantidad_predefinida_icono NUMERIC(14, 3) NOT NULL CHECK (cantidad_predefinida_icono > 0),
+  -- Un precio no puede ser negativo: el producto no le paga al cliente por
+  -- llevárselo. Se permite 0, para muestras y regalos.
+  precio_base                NUMERIC(14, 2) NOT NULL CHECK (precio_base >= 0),
+  -- PISO 0 DEL INVENTARIO: la barrera que impide vender más de lo que hay.
+  -- Lleva nombre para que la capa de acceso a datos pueda traducir el error a
+  -- "Stock insuficiente para completar la venta" en vez de dejar pasar el
+  -- error crudo de Postgres.
+  inventario_disponible      NUMERIC(14, 3) NOT NULL
+    CONSTRAINT productos_inventario_no_negativo CHECK (inventario_disponible >= 0),
   contador_ventas            INTEGER        NOT NULL DEFAULT 0 CHECK (contador_ventas >= 0),
   activo                     BOOLEAN        NOT NULL DEFAULT TRUE,
   creado_en                  TIMESTAMPTZ    NOT NULL,
@@ -96,7 +113,9 @@ CREATE TABLE IF NOT EXISTS public.precios_especiales (
   id             UUID           PRIMARY KEY,
   producto_id    UUID           NOT NULL REFERENCES public.productos (id) ON DELETE CASCADE,
   tipo           TEXT           NOT NULL CHECK (tipo IN ('porcentaje', 'monto_fijo')),
-  valor          NUMERIC(14, 2) NOT NULL,
+  -- Un descuento negativo sería un recargo encubierto que se saltaría el
+  -- control de límites por rol. Se permite 0 (equivale a "sin descuento").
+  valor          NUMERIC(14, 2) NOT NULL CHECK (valor >= 0),
   vigente_desde  TIMESTAMPTZ    NOT NULL,
   vigente_hasta  TIMESTAMPTZ,
   activo         BOOLEAN        NOT NULL DEFAULT TRUE,
@@ -117,8 +136,11 @@ CREATE INDEX IF NOT EXISTS idx_precios_especiales_vigencia
 CREATE TABLE IF NOT EXISTS public.limites_descuento (
   id                       UUID           PRIMARY KEY,
   rol                      TEXT           NOT NULL UNIQUE CHECK (rol IN ('venta', 'administrativo')),
-  descuento_max_porcentaje NUMERIC(14, 2) NOT NULL,
-  descuento_max_monto_fijo NUMERIC(14, 2) NOT NULL,
+  -- Se permite 0 y es significativo: quiere decir que ese rol no puede
+  -- aplicar ningún descuento. Un tope negativo no significaría nada.
+  descuento_max_porcentaje NUMERIC(14, 2) NOT NULL CHECK (descuento_max_porcentaje >= 0),
+  -- Igual que el porcentaje: 0 es "este rol no da descuento".
+  descuento_max_monto_fijo NUMERIC(14, 2) NOT NULL CHECK (descuento_max_monto_fijo >= 0),
   editado_por              UUID           REFERENCES public.usuarios (id) ON DELETE SET NULL,
   creado_en                TIMESTAMPTZ    NOT NULL,
   actualizado_en           TIMESTAMPTZ    NOT NULL
@@ -130,10 +152,17 @@ CREATE TABLE IF NOT EXISTS public.limites_descuento (
 CREATE TABLE IF NOT EXISTS public.caja_sesiones (
   id             UUID           PRIMARY KEY,
   usuario_id     UUID           NOT NULL REFERENCES public.usuarios (id) ON DELETE RESTRICT,
-  monto_inicial  NUMERIC(14, 2) NOT NULL,
+  -- AGREGADO MÁS ALLÁ DE LA LISTA PEDIDA: el fondo con que se abre la caja
+  -- no puede ser negativo. Se permite 0 (abrir sin fondo).
+  monto_inicial  NUMERIC(14, 2) NOT NULL CHECK (monto_inicial >= 0),
   abierta_en     TIMESTAMPTZ    NOT NULL,
+  -- SIN PISO A PROPÓSITO: con devoluciones, lo esperado en caja podría ser
+  -- negativo. NO agregar aquí un CHECK de no negatividad.
   monto_esperado NUMERIC(14, 2),
-  monto_real     NUMERIC(14, 2),
+  -- AGREGADO MÁS ALLÁ DE LA LISTA PEDIDA: el efectivo contado físicamente
+  -- en la caja no puede ser negativo.
+  monto_real     NUMERIC(14, 2) CHECK (monto_real IS NULL OR monto_real >= 0),
+  -- SIN PISO A PROPÓSITO: un faltante de caja ES negativo.
   diferencia     NUMERIC(14, 2),
   cerrada_en     TIMESTAMPTZ,
   estado         TEXT           NOT NULL CHECK (estado IN ('abierta', 'cerrada')),
@@ -163,10 +192,14 @@ CREATE TABLE IF NOT EXISTS public.ventas (
   caja_sesion_id           UUID           NOT NULL REFERENCES public.caja_sesiones (id) ON DELETE RESTRICT,
   usuario_id               UUID           NOT NULL REFERENCES public.usuarios (id) ON DELETE RESTRICT,
   fecha                    TIMESTAMPTZ    NOT NULL,
+  -- SIN PISO A PROPÓSITO: admite negativos, reservados para el futuro módulo
+  -- de devoluciones. NO agregar aquí un CHECK de no negatividad.
   subtotal                 NUMERIC(14, 2) NOT NULL,
   descuento_tipo           TEXT           CHECK (descuento_tipo IS NULL OR descuento_tipo IN ('porcentaje', 'monto_fijo')),
+  -- SIN PISO A PROPÓSITO: ver la nota de subtotal.
   descuento_valor          NUMERIC(14, 2),
   descuento_autorizado_por UUID           REFERENCES public.usuarios (id) ON DELETE SET NULL,
+  -- SIN PISO A PROPÓSITO: una devolución tendrá total negativo.
   total                    NUMERIC(14, 2) NOT NULL,
   forma_pago               TEXT           NOT NULL CHECK (forma_pago IN ('efectivo', 'tarjeta')),
   num_boleta               TEXT,
@@ -200,11 +233,16 @@ CREATE TABLE IF NOT EXISTS public.venta_detalle (
   producto_id          UUID           NOT NULL REFERENCES public.productos (id) ON DELETE RESTRICT,
   producto_nombre_snap TEXT           NOT NULL CHECK (length(btrim(producto_nombre_snap)) > 0),
   unidad_snap          TEXT           NOT NULL CHECK (length(btrim(unidad_snap)) > 0),
+  -- SIN PISO A PROPÓSITO: una devolución llevará cantidad negativa.
   cantidad             NUMERIC(14, 3) NOT NULL,
-  precio_unitario_snap NUMERIC(14, 2) NOT NULL,
+  -- Es la foto de precio_base al momento de la venta, y hereda su regla:
+  -- nunca negativo, 0 permitido para una muestra o un regalo.
+  precio_unitario_snap NUMERIC(14, 2) NOT NULL CHECK (precio_unitario_snap >= 0),
   -- Sin redondear: de aquí sale el total real.
+  -- SIN PISO A PROPÓSITO: ver la nota de cantidad.
   subtotal_exacto      NUMERIC(18, 6) NOT NULL,
   -- Conciliado: la suma de estos valores es exactamente ventas.total.
+  -- SIN PISO A PROPÓSITO: ver la nota de cantidad.
   subtotal_impreso     NUMERIC(14, 2) NOT NULL,
   -- El orden de captura decide el desempate del reparto de centavos.
   orden_linea          INTEGER        NOT NULL CHECK (orden_linea >= 0),

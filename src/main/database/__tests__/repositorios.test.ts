@@ -11,6 +11,7 @@ import Decimal from 'decimal.js';
 import type { Database } from 'better-sqlite3';
 
 import { crearRepositorios, type Repositorios } from '../repositories';
+import { ErrorDeNegocio } from '../errores';
 import { aCadena, montoACadena } from '@shared/money';
 import { crearBaseMigrada } from './ayuda-base-de-datos';
 
@@ -450,7 +451,10 @@ describe('Transacciones: una venta se guarda entera o no se guarda', () => {
       });
     });
 
-    expect(() => { registrarVentaRota(); }).toThrow(/FOREIGN KEY constraint failed/);
+    // El error llega ya traducido a lenguaje de negocio, no como el texto
+    // crudo de SQLite: de eso se encarga RepositorioBase.ejecutar().
+    expect(() => { registrarVentaRota(); }).toThrow(ErrorDeNegocio);
+    expect(() => { registrarVentaRota(); }).toThrow(/hace referencia a un registro que no existe/);
 
     const ventas = base.prepare('SELECT COUNT(*) AS total FROM ventas').get() as { total: number };
     expect(ventas.total).toBe(0);

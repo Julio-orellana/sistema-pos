@@ -63,9 +63,10 @@ describe('Ningún campo de dinero acepta algo que no sea el TEXT esperado', () =
     expect(() => { insertarPrecioBase('2.50'); }).not.toThrow();
   });
 
-  it('acepta un monto negativo en forma canónica', () => {
-    expect(() => { insertarPrecioBase('-2.50'); }).not.toThrow();
-  });
+  // NOTA: aquí ya no se prueba que un monto negativo sea aceptado, porque
+  // precio_base pasó a tener piso 0. Que el FORMATO admite el signo negativo se
+  // prueba en el bloque "Campos que SÍ admiten negativos, a propósito, para
+  // devoluciones", sobre los campos donde el negocio sí lo permite.
 
   it('RECHAZA un float de JavaScript ligado directamente', () => {
     // Este es el caso que motiva toda la regla: 0.1 + 0.2 en JavaScript da
@@ -167,6 +168,225 @@ describe('Ningún campo de dinero acepta algo que no sea el TEXT esperado', () =
     expect(() => { insertarLinea('3.345', 0); }).not.toThrow();
     // 0.30000000000000004 solo puede venir de un float.
     expect(() => { insertarLinea('0.30000000000000004', 1); }).toThrow(/CHECK constraint failed/);
+  });
+});
+
+// ===========================================================================
+describe('Pisos de no negatividad: qué NO puede ser negativo', () => {
+  beforeEach(() => {
+    sembrarCategoria(base);
+  });
+
+  /** Inserta un producto variando una sola columna decimal. */
+  function insertarProductoCon(columna: string, valor: string): void {
+    const valores: Record<string, string> = {
+      cantidad_predefinida_icono: '1.000',
+      precio_base: '2.50',
+      inventario_disponible: '10.000',
+    };
+    valores[columna] = valor;
+    base
+      .prepare(
+        `INSERT INTO productos (
+           id, nombre, categoria_id, tipo_medida, unidad_peso,
+           cantidad_predefinida_icono, precio_base, inventario_disponible,
+           contador_ventas, activo, creado_en, actualizado_en
+         ) VALUES (?, ?, ?, 'peso', 'lb', ?, ?, ?, 0, 1, ?, ?)`,
+      )
+      .run(
+        IDS_DE_PRUEBA.producto,
+        `Producto ${columna} ${valor}`,
+        IDS_DE_PRUEBA.categoria,
+        valores.cantidad_predefinida_icono,
+        valores.precio_base,
+        valores.inventario_disponible,
+        FECHA_DE_PRUEBA,
+        FECHA_DE_PRUEBA,
+      );
+  }
+
+  it('EL INVENTARIO NUNCA PUEDE SER NEGATIVO: su piso explícito es 0', () => {
+    expect(() => { insertarProductoCon('inventario_disponible', '-0.001'); })
+      .toThrow(/productos_inventario_no_negativo/);
+    expect(() => { insertarProductoCon('inventario_disponible', '-50.000'); })
+      .toThrow(/productos_inventario_no_negativo/);
+  });
+
+  it('el inventario SÍ puede ser exactamente 0: es el piso, no un valor prohibido', () => {
+    expect(() => { insertarProductoCon('inventario_disponible', '0.000'); }).not.toThrow();
+  });
+
+  it('la restricción del inventario tiene NOMBRE, para poder traducir el error', () => {
+    // Sin nombre, SQLite diría apenas "CHECK constraint failed: productos" y
+    // sería imposible distinguir un stock agotado de un precio mal formateado.
+    try {
+      insertarProductoCon('inventario_disponible', '-1.000');
+      expect.unreachable('Se esperaba que el inventario negativo fuera rechazado.');
+    } catch (error) {
+      expect((error as Error).message).toBe(
+        'CHECK constraint failed: productos_inventario_no_negativo',
+      );
+    }
+  });
+
+  it('DEJA CONSTANCIA de por qué el piso NO se escribe como ">= 0" en SQLite', () => {
+    // En SQLite el orden entre tipos es NULL < numéricos < TEXT, así que
+    // cualquier texto resulta mayor que cualquier número. Un CHECK escrito como
+    // `inventario_disponible >= 0` habría aceptado '-5.000' sin chistar.
+    const comparacion = base.prepare("SELECT ('-5.000' >= 0) AS resultado").get() as {
+      resultado: number;
+    };
+    expect(comparacion.resultado).toBe(1);
+
+    // La forma que sí funciona, y que es la que usa el esquema:
+    const conGlob = base.prepare("SELECT (NOT '-5.000' GLOB '-*') AS resultado").get() as {
+      resultado: number;
+    };
+    expect(conGlob.resultado).toBe(0);
+  });
+
+  it('un precio no puede ser negativo, pero sí puede ser 0 (muestras y regalos)', () => {
+    expect(() => { insertarProductoCon('precio_base', '-2.50'); }).toThrow(/CHECK constraint failed/);
+    expect(() => { insertarProductoCon('precio_base', '0.00'); }).not.toThrow();
+  });
+
+  it('la cantidad predefinida del ícono debe ser ESTRICTAMENTE mayor que 0', () => {
+    // Un ícono que agrega cero unidades al carrito es un botón que no hace nada.
+    expect(() => { insertarProductoCon('cantidad_predefinida_icono', '0.000'); })
+      .toThrow(/CHECK constraint failed/);
+    expect(() => { insertarProductoCon('cantidad_predefinida_icono', '-1.000'); })
+      .toThrow(/CHECK constraint failed/);
+    expect(() => { insertarProductoCon('cantidad_predefinida_icono', '0.500'); }).not.toThrow();
+  });
+
+  it('el valor de un precio especial no puede ser negativo', () => {
+    sembrarProducto(base);
+    const insertar = (valor: string): void => {
+      base
+        .prepare(
+          `INSERT INTO precios_especiales (
+             id, producto_id, tipo, valor, vigente_desde, activo, creado_en, actualizado_en
+           ) VALUES (?, ?, 'porcentaje', ?, ?, 1, ?, ?)`,
+        )
+        .run(
+          IDS_DE_PRUEBA.generico,
+          IDS_DE_PRUEBA.producto,
+          valor,
+          FECHA_DE_PRUEBA,
+          FECHA_DE_PRUEBA,
+          FECHA_DE_PRUEBA,
+        );
+    };
+
+    // Un descuento negativo sería un recargo encubierto.
+    expect(() => { insertar('-10.00'); }).toThrow(/CHECK constraint failed/);
+    expect(() => { insertar('10.00'); }).not.toThrow();
+  });
+
+  it('los topes de descuento no pueden ser negativos, y 0 es significativo', () => {
+    const insertar = (porcentaje: string, monto: string): void => {
+      base
+        .prepare(
+          `INSERT INTO limites_descuento (
+             id, rol, descuento_max_porcentaje, descuento_max_monto_fijo, creado_en, actualizado_en
+           ) VALUES (?, 'venta', ?, ?, ?, ?)`,
+        )
+        .run(IDS_DE_PRUEBA.generico, porcentaje, monto, FECHA_DE_PRUEBA, FECHA_DE_PRUEBA);
+    };
+
+    expect(() => { insertar('-10.00', '50.00'); }).toThrow(/CHECK constraint failed/);
+    expect(() => { insertar('10.00', '-50.00'); }).toThrow(/CHECK constraint failed/);
+    // 0 quiere decir "este rol no puede dar ningún descuento".
+    expect(() => { insertar('0.00', '0.00'); }).not.toThrow();
+  });
+
+  it('el fondo inicial y el efectivo contado de la caja no pueden ser negativos', () => {
+    sembrarUsuario(base);
+    expect(() => {
+      base
+        .prepare(
+          `INSERT INTO caja_sesiones (id, usuario_id, monto_inicial, abierta_en, estado, creado_en, actualizado_en)
+           VALUES (?, ?, '-500.00', ?, 'abierta', ?, ?)`,
+        )
+        .run(IDS_DE_PRUEBA.cajaSesion, IDS_DE_PRUEBA.usuario, FECHA_DE_PRUEBA, FECHA_DE_PRUEBA, FECHA_DE_PRUEBA);
+    }).toThrow(/CHECK constraint failed/);
+  });
+});
+
+// ===========================================================================
+describe('Campos que SÍ admiten negativos, a propósito, para devoluciones', () => {
+  // Estas pruebas existen para que ninguna sesión futura "corrija" por error
+  // estos campos agregándoles un piso de 0. El módulo de devoluciones los va a
+  // necesitar en negativo.
+
+  beforeEach(() => {
+    sembrarUsuario(base);
+    sembrarCategoria(base);
+    sembrarProducto(base);
+    sembrarCajaSesion(base);
+  });
+
+  /** Inserta una venta variando los importes. */
+  function insertarVenta(subtotal: string, total: string, descuentoValor: string | null): void {
+    base
+      .prepare(
+        `INSERT INTO ventas (
+           id, caja_sesion_id, usuario_id, fecha, subtotal, descuento_tipo, descuento_valor,
+           total, forma_pago, estado, estado_sincronizacion, creado_en, actualizado_en
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'efectivo', 'completada', 'pendiente', ?, ?)`,
+      )
+      .run(
+        IDS_DE_PRUEBA.venta,
+        IDS_DE_PRUEBA.cajaSesion,
+        IDS_DE_PRUEBA.usuario,
+        FECHA_DE_PRUEBA,
+        subtotal,
+        descuentoValor === null ? null : 'monto_fijo',
+        descuentoValor,
+        total,
+        FECHA_DE_PRUEBA,
+        FECHA_DE_PRUEBA,
+      );
+  }
+
+  it('ventas.subtotal y ventas.total aceptan negativos', () => {
+    expect(() => { insertarVenta('-16.80', '-16.80', null); }).not.toThrow();
+  });
+
+  it('ventas.descuento_valor acepta negativos', () => {
+    expect(() => { insertarVenta('-16.80', '-15.00', '-1.80'); }).not.toThrow();
+  });
+
+  it('venta_detalle acepta cantidad, subtotal exacto e impreso negativos', () => {
+    insertarVenta('-3.35', '-3.35', null);
+    expect(() => {
+      base
+        .prepare(
+          `INSERT INTO venta_detalle (
+             id, venta_id, producto_id, producto_nombre_snap, unidad_snap, cantidad,
+             precio_unitario_snap, subtotal_exacto, subtotal_impreso, orden_linea, creado_en
+           ) VALUES (?, ?, ?, 'Maíz', 'lb', '-1.500', '2.23', '-3.345', '-3.35', 0, ?)`,
+        )
+        .run(IDS_DE_PRUEBA.detalle, IDS_DE_PRUEBA.venta, IDS_DE_PRUEBA.producto, FECHA_DE_PRUEBA);
+    }).not.toThrow();
+  });
+
+  it('caja_sesiones.diferencia acepta negativos: un faltante de caja ES negativo', () => {
+    expect(() => {
+      base
+        .prepare(
+          `UPDATE caja_sesiones
+              SET estado = 'cerrada', monto_esperado = '1000.00', monto_real = '950.00',
+                  diferencia = '-50.00', cerrada_en = ?
+            WHERE id = ?`,
+        )
+        .run(FECHA_DE_PRUEBA, IDS_DE_PRUEBA.cajaSesion);
+    }).not.toThrow();
+
+    const fila = base
+      .prepare('SELECT diferencia FROM caja_sesiones WHERE id = ?')
+      .get(IDS_DE_PRUEBA.cajaSesion) as { diferencia: string };
+    expect(fila.diferencia).toBe('-50.00');
   });
 });
 
