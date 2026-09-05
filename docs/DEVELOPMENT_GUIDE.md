@@ -30,7 +30,7 @@ Entidades, campos, funciones de cálculo financiero, canales IPC, códigos de
 error y **todo** lo que el cliente o el auditor van a leer:
 
 ```ts
-producto, venta, lote, descuento, caja, comprobante, autorizacion
+producto, venta, inventario, descuento, caja, comprobante, autorizacion
 montoACadena(), redondearPeso(), porcentajeDe(), repartirMonto()
 'diagnostico:base-de-datos', 'ventas:registrar'
 'DIVISION_ENTRE_CERO', 'PAYLOAD_INVALIDO'
@@ -63,7 +63,7 @@ inglés, pero sus métodos actúan sobre entidades del dominio y van en español
 | Tipos e interfaces | `PascalCase` | `DiagnosticoBaseDeDatos` |
 | Funciones y variables | `camelCase` | `redondearMonto` |
 | Constantes de módulo | `MAYUSCULAS_CON_GUION_BAJO` | `DECIMALES_MONTO` |
-| Tablas y columnas SQL | `snake_case` en español | `lote_granel`, `peso_restante` |
+| Tablas y columnas SQL | `snake_case` en español | `venta_detalle`, `inventario_disponible` |
 
 ## 2. Cómo se agrega un módulo nuevo, paso a paso
 
@@ -113,10 +113,9 @@ Ejemplo: agregar el módulo **descuentos**.
   exactamente ese total. Cada pantalla o documento nuevo que muestre líneas y
   un total necesita su prueba de que ambas cosas cuadran centavo por centavo.
 - **Todas las reglas de negocio.** Límites de descuento por rol, autorización
-  por PIN, agotamiento de lotes, apertura obligatoria de lote nuevo, cuadre del
-  corte de caja.
-- **Las máquinas de estado.** Estados válidos de una venta, de un lote y de un
-  turno de caja, incluyendo las transiciones prohibidas.
+  por PIN, descuento de inventario al vender, cuadre del corte de caja.
+- **Las máquinas de estado.** Estados válidos de una venta y de un turno de
+  caja, incluyendo las transiciones prohibidas.
 - **La validación de payloads.** Que un DTO inválido sea rechazado con el
   código de error correcto.
 - **Los adaptadores por defecto.** Que se pueda cerrar una venta sin impresora y
@@ -252,7 +251,6 @@ Antes de cada commit, en orden:
       (ver [NEGOCIO_VS_NUCLEO.md](./NEGOCIO_VS_NUCLEO.md)).
 - [ ] Si el trabajo dependía de un punto sin confirmar, quedó un `TODO(...)` en
       el código y una línea en "Pendiente de confirmación" de `CLAUDE.md`.
-- [ ] **No** se implementó ninguna regla de selección automática de lote.
 - [ ] El commit es atómico, va a `develop`, con prefijo en inglés
       (`feat:`, `fix:`, `docs:`, `chore:`, `test:`, `refactor:`) y descripción
       en español.

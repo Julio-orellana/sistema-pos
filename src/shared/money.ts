@@ -291,7 +291,7 @@ export function multiplicar(...valores: readonly EntradaDecimal[]): Decimal {
 /**
  * Divide dos valores. Lanza `ErrorDeMonto` si el divisor es cero en vez de
  * devolver Infinity, porque en un POS una división entre cero siempre indica
- * un dato faltante (por ejemplo un lote con peso inicial 0).
+ * un dato faltante (por ejemplo un producto con precio 0).
  */
 export function dividir(dividendo: EntradaDecimal, divisor: EntradaDecimal): Decimal {
   const divisorDecimal = decimal(divisor);

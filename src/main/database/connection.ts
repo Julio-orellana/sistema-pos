@@ -4,47 +4,28 @@
  * REGLA DE ARQUITECTURA: este archivo solo puede importarse desde el proceso
  * principal. El renderer jamás abre la base de datos; pide datos por IPC.
  *
- * ALCANCE ACTUAL: únicamente la conexión y una tabla de prueba que demuestra
- * que se puede leer y escribir. El esquema real del negocio (productos,
- * ventas, lotes, descuentos, caja) se diseña en el siguiente prompt.
+ * No importa Electron a propósito (la ruta del archivo vive en db-path.ts),
+ * para que las pruebas puedan abrir bases reales sin arrancar la aplicación.
  */
 
-import { join } from 'node:path';
-import { app } from 'electron';
 import Database from 'better-sqlite3';
 
 import type { DiagnosticoBaseDeDatos, SolicitudDiagnostico } from '@shared/types/ipc';
-
-/** Nombre del archivo SQLite dentro de la carpeta de datos del usuario. */
-const NOMBRE_ARCHIVO_BASE_DE_DATOS = 'pos-agricola.db';
-
-/** Tabla temporal de verificación. Se elimina cuando llegue el esquema real. */
-export const TABLA_DE_PRUEBA = 'prueba_conexion';
+import {
+  aplicarMigraciones,
+  contarMigracionesAplicadas,
+  obtenerUltimaMigracion,
+  type ResultadoMigraciones,
+} from './migrator';
 
 /** Instancia única. SQLite con better-sqlite3 es síncrono y no necesita pool. */
 let conexion: Database.Database | null = null;
 
 /**
- * Devuelve la ruta del archivo de base de datos.
- * Vive en `userData` (Application Support en macOS, AppData en Windows) para
- * que sobreviva a las actualizaciones de la aplicación y no se pierda al
- * reinstalar: ahí están las ventas de Jimmy.
+ * Aplica la configuración obligatoria a una conexión recién abierta.
+ * Se expone aparte para que las pruebas configuren sus bases igual que la real.
  */
-export function obtenerRutaBaseDeDatos(): string {
-  return join(app.getPath('userData'), NOMBRE_ARCHIVO_BASE_DE_DATOS);
-}
-
-/**
- * Abre la base de datos y deja lista la tabla de prueba.
- * Es idempotente: llamarla dos veces devuelve la misma conexión.
- */
-export function abrirBaseDeDatos(): Database.Database {
-  if (conexion !== null) {
-    return conexion;
-  }
-
-  const base = new Database(obtenerRutaBaseDeDatos());
-
+export function configurarConexion(base: Database.Database): void {
   // WAL permite leer mientras se escribe: el cajero puede consultar un precio
   // mientras se está guardando una venta, sin bloqueos.
   base.pragma('journal_mode = WAL');
@@ -53,13 +34,43 @@ export function abrirBaseDeDatos(): Database.Database {
   // una escritura un poco más lenta a perder la última venta cobrada.
   base.pragma('synchronous = FULL');
 
-  // Las llaves foráneas vienen apagadas por defecto en SQLite. Se encienden
-  // desde ya para que el esquema real no pueda quedar con datos huérfanos.
+  // Las llaves foráneas vienen APAGADAS por defecto en SQLite. Sin esto, las
+  // referencias del esquema serían decorativas y se podrían dejar registros
+  // huérfanos: una venta apuntando a un usuario que ya no existe.
   base.pragma('foreign_keys = ON');
+}
 
-  crearTablaDePrueba(base);
-  conexion = base;
-  return conexion;
+/**
+ * Abre una base de datos en la ruta indicada, la configura y aplica las
+ * migraciones pendientes. Devuelve la conexión y el informe del migrador.
+ */
+export function abrirBaseDeDatosEn(ruta: string): {
+  base: Database.Database;
+  migraciones: ResultadoMigraciones;
+} {
+  const base = new Database(ruta);
+  configurarConexion(base);
+  const migraciones = aplicarMigraciones(base);
+  return { base, migraciones };
+}
+
+/**
+ * Abre la base de datos de la aplicación. Es idempotente: llamarla dos veces
+ * devuelve la misma conexión sin volver a migrar.
+ */
+export function abrirBaseDeDatos(ruta: string): ResultadoMigraciones {
+  if (conexion !== null) {
+    return {
+      aplicadasAhora: [],
+      yaAplicadas: [],
+      totalConocidas: contarMigracionesAplicadas(conexion),
+      ultimaAplicada: obtenerUltimaMigracion(conexion),
+    };
+  }
+
+  const abierta = abrirBaseDeDatosEn(ruta);
+  conexion = abierta.base;
+  return abierta.migraciones;
 }
 
 /** Devuelve la conexión abierta; falla ruidosamente si se usa antes de tiempo. */
@@ -132,64 +143,53 @@ export function cerrarBaseDeDatosOrdenadamente(): ResultadoCierreOrdenado {
   };
 }
 
-/**
- * Crea la tabla temporal de verificación.
- *
- * TODO(esquema): reemplazar por las migraciones reales del dominio en el
- * siguiente prompt. Esta tabla existe solo para probar que better-sqlite3
- * quedó correctamente compilado contra el ABI de Electron.
- */
-function crearTablaDePrueba(base: Database.Database): void {
-  base.exec(`
-    CREATE TABLE IF NOT EXISTS ${TABLA_DE_PRUEBA} (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      descripcion  TEXT    NOT NULL,
-      creado_en    TEXT    NOT NULL
-    );
-  `);
+/** Fila de una consulta que devuelve un solo valor de texto. */
+interface FilaTexto {
+  readonly valor: string;
 }
 
-/** Fila tal como la devuelve SQLite para la tabla de prueba. */
-interface FilaDePrueba {
-  readonly descripcion: string;
-}
-
-/** Fila del conteo de registros. */
+/** Fila de un conteo. */
 interface FilaConteo {
   readonly total: number;
 }
 
-/** Fila de una consulta PRAGMA que devuelve un solo valor. */
-interface FilaPragmaTexto {
-  readonly valor: string;
+/** Nombre de una tabla del esquema. */
+interface FilaNombreDeTabla {
+  readonly name: string;
 }
 
 /**
- * Ejecuta el diagnóstico completo de la base de datos: verifica la conexión,
- * lee la configuración efectiva y —si se pide— escribe un registro de prueba
- * para demostrar que la escritura también funciona.
+ * Diagnóstico de la base de datos: verifica la conexión, la configuración
+ * efectiva y el estado de las migraciones.
+ *
+ * Ya no escribe registros de prueba: desde que existe el esquema real, lo que
+ * hay que verificar es que las migraciones corrieron y que las restricciones
+ * están activas, no que se puede insertar en una tabla de juguete.
  */
 export function ejecutarDiagnostico(solicitud: SolicitudDiagnostico): DiagnosticoBaseDeDatos {
   const base = obtenerBaseDeDatos();
-  const verificadoEn = new Date().toISOString();
 
-  if (solicitud.descripcionDePrueba !== undefined) {
-    base
-      .prepare(`INSERT INTO ${TABLA_DE_PRUEBA} (descripcion, creado_en) VALUES (?, ?)`)
-      .run(solicitud.descripcionDePrueba, verificadoEn);
-  }
-
-  const versionSqlite = base.prepare('SELECT sqlite_version() AS valor').get() as FilaPragmaTexto;
+  const versionSqlite = base.prepare('SELECT sqlite_version() AS valor').get() as FilaTexto;
   const modoJournal = String(base.pragma('journal_mode', { simple: true }));
   const llavesForaneas = Number(base.pragma('foreign_keys', { simple: true }));
 
-  const registrosDePrueba = solicitud.incluirConteoDeRegistros
-    ? (base.prepare(`SELECT COUNT(*) AS total FROM ${TABLA_DE_PRUEBA}`).get() as FilaConteo).total
-    : null;
+  const tablas = base
+    .prepare(
+      `SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name`,
+    )
+    .all() as FilaNombreDeTabla[];
 
-  const ultimaFila = base
-    .prepare(`SELECT descripcion FROM ${TABLA_DE_PRUEBA} ORDER BY id DESC LIMIT 1`)
-    .get() as FilaDePrueba | undefined;
+  const conteoPorTabla: Record<string, number> = {};
+  if (solicitud.incluirConteoDeRegistros) {
+    for (const tabla of tablas) {
+      // El nombre viene de sqlite_master, no de la interfaz: no hay inyección
+      // posible, pero se entrecomilla igual por disciplina.
+      const fila = base.prepare(`SELECT COUNT(*) AS total FROM "${tabla.name}"`).get() as FilaConteo;
+      conteoPorTabla[tabla.name] = fila.total;
+    }
+  }
 
   return {
     conectada: base.open,
@@ -197,9 +197,10 @@ export function ejecutarDiagnostico(solicitud: SolicitudDiagnostico): Diagnostic
     versionSqlite: versionSqlite.valor,
     modoJournal,
     llavesForaneasActivas: llavesForaneas === 1,
-    tablaDePrueba: TABLA_DE_PRUEBA,
-    registrosDePrueba,
-    ultimoRegistro: ultimaFila?.descripcion ?? null,
-    verificadoEn,
+    tablas: tablas.map((tabla) => tabla.name),
+    migracionesAplicadas: contarMigracionesAplicadas(base),
+    ultimaMigracion: obtenerUltimaMigracion(base),
+    conteoPorTabla: solicitud.incluirConteoDeRegistros ? conteoPorTabla : null,
+    verificadoEn: new Date().toISOString(),
   };
 }

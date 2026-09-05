@@ -19,7 +19,7 @@ export type TipoComprobante = 'recibo' | 'proforma' | 'corte_de_caja';
  * Datos mínimos que el dominio entrega al adaptador para imprimir.
  *
  * Se mantiene deliberadamente pequeño: el diseño completo del comprobante
- * (líneas de venta, descuentos, lotes consumidos) pertenece al módulo de
+ * (líneas de venta, descuentos, inventario descontado) pertenece al módulo de
  * comprobantes y se agregará cuando ese módulo exista. Lo que este contrato
  * garantiza hoy es que la ruta del PDF siempre viaja, porque el PDF es el
  * respaldo obligatorio.

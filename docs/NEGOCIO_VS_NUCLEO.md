@@ -41,7 +41,7 @@ Nada de esto puede estar escrito dentro del código del núcleo.
 | Valores de los límites de descuento por rol | Configuración editable por el administrador | No implementado |
 | Nombres de los roles más allá de venta / administrativo | Base de datos | No implementado |
 | Usuarios, PIN y permisos | Base de datos | No implementado |
-| Peso estándar del saco (60 lb) y nomenclatura de lote (`maiz_6`) | Configuración por producto | No implementado |
+| Cantidad predefinida del ícono de cada producto (por ejemplo, 1 lb de maíz) | Campo del producto en la base de datos | Columna `cantidad_predefinida_icono` |
 | Factores de conversión entre unidades (libra, arroba, quintal, kg) | Tabla de configuración de unidades | No implementado — ver punto 2 de "Pendiente de confirmación" |
 | Formato y numeración del comprobante | Plantilla configurable | No implementado |
 | Modelo de impresora térmica | Variable de entorno + adaptador | Contrato listo, adaptador real pendiente |
@@ -60,7 +60,7 @@ Esto sirve tal cual para el próximo cliente.
 | **Cascarón de la aplicación** (`src/main/index.ts`, `windows/`) | Arranque, modo kiosko, instancia única, aislamiento del renderer. | Implementado |
 | **Capa de acceso a datos** (`src/main/database/`) | Conexión SQLite configurada, migraciones y repositorios. | Conexión implementada; esquema pendiente |
 | **Motor de ventas** | Armado de la venta, cálculo de líneas y totales, cobro y vuelto. | No implementado |
-| **Sistema de lotes a granel** | Lote con peso inicial y restante, descuento total o parcial, obligación de abrir lote nuevo al agotarse. | No implementado |
+| **Inventario acumulado** | Un saldo por producto que sube con los ingresos de mercadería y baja con las ventas, con la cantidad expresada en peso o en unidades. | Esquema implementado |
 | **Motor de descuentos** | Comparación contra límite por rol y flujo de autorización por PIN con registro en auditoría. | No implementado |
 | **Sincronización** | Cola de cambios, empuje, traída y resolución de conflictos, detrás de `SyncProvider`. | No implementado |
 | **Auditoría** | Registro inmutable de hechos sensibles. | No implementado |
@@ -76,8 +76,9 @@ Casos donde la frontera no es obvia y ya hay criterio acordado:
 |---|---|
 | Redondeo HALF_UP a dos decimales | **Núcleo**, pero con la cantidad de decimales y el modo declarados como constantes en `money.ts`. Si un cliente usa una moneda de tres decimales, se cambia la constante, no la lógica. |
 | Símbolo `Q` y separador de miles | **Núcleo por ahora, dato en cuanto haya un segundo país.** Ya está aislado en constantes de `money.ts` para que la migración sea de una línea. |
-| "Un saco son 60 libras" | **Dato.** El peso del lote es un campo del lote, nunca una constante del código. |
-| "Los lotes se llaman `maiz_6`" | **Dato.** El identificador lo genera una plantilla configurable por producto. |
+| "Un saco son 60 libras" | **Dato.** Es una cantidad que se suma al inventario del producto, nunca una constante del código. |
+| "El maíz se vende por libra" | **Dato.** `tipo_medida` y `unidad_peso` son columnas del producto. |
+| Factores de conversión entre libra, arroba y quintal | **Núcleo.** Son constantes universales, no configuración: viven como código en las utilidades compartidas y no tienen tabla. |
 | "El rol venta puede dar hasta 10%" | **Dato.** El mecanismo de límite y autorización es núcleo. |
 | Idioma español de la interfaz | **Núcleo por ahora.** Todos los clientes previstos son guatemaltecos. Si eso cambia, se agrega una capa de traducción; hasta entonces sería complejidad sin uso. |
 | Impuestos (IVA) | **Núcleo el mecanismo, dato la tasa y las reglas.** No se ha definido si Jimmy factura — ver "Pendiente de confirmación". |

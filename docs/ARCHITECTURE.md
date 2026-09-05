@@ -61,27 +61,28 @@ responsabilidad, una línea cada uno:
 |---|---|
 | **caja** | Abre y cierra el turno, registra el fondo inicial, cuenta el efectivo esperado contra el contado y produce el corte. |
 | **usuarios** | Identidad, roles (venta / administrativo), PIN de autorización y sesión activa en la caja. |
-| **inventario / lotes** | Existencias por producto, lotes a granel con peso inicial y restante, apertura y agotamiento de lotes, merma. |
+| **inventario** | Saldo acumulado por producto: ingresos de mercadería que lo suben, ventas que lo bajan, ajustes por merma. Sin lotes. |
 | **ventas** | Arma la venta, calcula líneas y totales, cobra, genera el comprobante y descuenta inventario en una sola transacción. |
 | **descuentos** | Límites por rol (porcentaje y monto fijo), evaluación de si un descuento excede el límite y flujo de autorización por PIN. |
 | **comprobantes** | Genera el PDF de recibo, proforma y corte de caja, los numera y los archiva; entrega al adaptador de impresión. |
 | **sincronización** | Encola los cambios locales, los empuja a la nube, trae los remotos y resuelve conflictos. |
-| **auditoría** | Registro inmutable de hechos sensibles: autorizaciones de descuento, anulaciones, aperturas de lote, cortes de caja, cambios de configuración. |
+| **auditoría** | Registro inmutable de hechos sensibles: autorizaciones de descuento, anulaciones, ingresos y ajustes de inventario, cortes de caja, cambios de configuración. |
 
 ## 3. Patrones de diseño y dónde se aplica cada uno
 
 ### 3.1 Repository — acceso a datos
 
 Todo acceso a SQLite pasa por un repositorio. El dominio pide
-`RepositorioDeLotes.buscarPorProducto(idProducto)` y no sabe si detrás hay SQL,
+`RepositorioDeProductos.obtenerPorId(idProducto)` y no sabe si detrás hay SQL,
 un archivo o una prueba en memoria.
 
 - **Dónde:** `src/main/database/repositories/` (se crea con el esquema real).
-- **Ejemplo concreto:** al registrar una venta de maíz, el módulo de ventas pide
-  al `RepositorioDeLotes` los lotes abiertos del producto y le entrega el peso a
+- **Ejemplo concreto:** al registrar una venta de maíz, el módulo de ventas le
+  pide al `RepositorioDeProductos` el saldo del producto y le entrega el peso a
   descontar. El módulo de ventas nunca escribe un `UPDATE`.
-- **Por qué:** permite probar la regla "no se puede vender de un lote agotado"
-  con un repositorio falso en memoria, sin base de datos y en milisegundos.
+- **Por qué:** permite probar la regla "no se puede vender más de lo que hay en
+  inventario" con un repositorio falso en memoria, sin base de datos y en
+  milisegundos.
 
 ### 3.2 Adapter / Strategy — impresora y sincronización
 
@@ -130,7 +131,7 @@ una venta.
 - **Dónde:** `src/main/events/` (se crea con el módulo de ventas).
 - **Ejemplo concreto:** al cerrar una venta se emite `VentaRegistrada`. Tres
   suscriptores independientes reaccionan:
-  1. **inventario** descuenta el peso de los lotes involucrados,
+  1. **inventario** descuenta la cantidad vendida del saldo del producto,
   2. **sincronización** encola el cambio para subirlo a la nube,
   3. **auditoría** escribe el asiento correspondiente.
 - **Por qué:** agregar mañana un cuarto suscriptor (por ejemplo, actualizar un
@@ -167,9 +168,8 @@ Cajero pesa 12.5 lb de maíz
   → servicio de aplicación abre una transacción SQLite
       → dominio.ventas calcula subtotal y total con money.ts (Decimal.js)
       → dominio.descuentos verifica el límite del rol; si excede, exige PIN
-      → dominio.inventario descuenta el peso del lote
-        (TODO(seleccion-de-lote): con varios lotes, el criterio NO está definido)
-      → repositorios persisten venta, líneas y movimientos de lote
+      → dominio.inventario descuenta la cantidad del saldo del producto
+      → repositorios persisten venta, líneas y el contador de ventas
   → commit
   → se emite VentaRegistrada
       → comprobantes genera el PDF  (SIEMPRE)

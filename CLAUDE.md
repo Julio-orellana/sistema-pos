@@ -84,10 +84,12 @@ Node requerido: **>= 22**.
    sistema lo bloquea, **pero** un administrador puede autorizar la excepción
    puntual ingresando su PIN en el momento, **sin tocar la configuración
    general**. Esa autorización queda en el log de auditoría.
-7. **Inventario a granel por lotes.** Un saco de 60 lb es un lote, identificado
-   por ejemplo como `maiz_6`. Cada lote tiene peso inicial y peso restante, se
-   descuenta total o parcialmente, y al llegar a 0 hay que abrir un lote nuevo
-   antes de poder seguir vendiendo ese producto.
+7. **Inventario acumulado por producto, SIN lotes.** Cada producto tiene un
+   único saldo, `inventario_disponible`, que sube con cada ingreso de
+   mercadería y baja con cada venta. Cuando llegan 50 sacos y ya había 10, el
+   inventario pasa a 60: no se distingue de qué saco sale cada venta.
+   **El concepto de "lote" fue eliminado del diseño** (ver la fila
+   correspondiente en el registro de decisiones).
 8. **El PDF del comprobante siempre se genera**, haya o no impresora térmica.
    La impresión física es una capa opcional encima, nunca un requisito para
    cerrar una venta.
@@ -95,7 +97,8 @@ Node requerido: **>= 22**.
    - Carpetas, funciones y utilidades **técnicas genéricas** → inglés
      (`connection.ts`, `register-handlers.ts`, `main-window.ts`).
    - Entidades y campos del **dominio de negocio** → español (`producto`,
-     `venta`, `lote`, `descuento`, `caja`, `montoACadena`, `redondearPeso`).
+     `venta`, `inventario`, `descuento`, `caja`, `montoACadena`,
+     `redondearPeso`).
    - Comentarios y JSDoc de lógica de negocio no trivial → **siempre español**.
    - Ante la duda sobre en qué categoría cae un nombre: **elegí español**.
      Nunca inventes un término técnico en inglés que nadie en el proyecto
@@ -164,8 +167,9 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
 | Redondeo comercial HALF_UP | Redondeo bancario HALF_EVEN; truncar | `0.125 → 0.13` es lo que el cliente y el auditor esperan. El redondeo bancario da resultados que un cajero no puede explicarle a un comprador parado frente al mostrador. | Prompt 1 — 2026-09-04 |
 | Prorrateo por residuo mayor (`repartirMonto`) | Redondear cada línea por separado | Redondear línea por línea deja centavos sueltos y el total impreso no coincide con la suma de las líneas. El residuo mayor garantiza que la suma sea exactamente el total y es un criterio explicable en auditoría. | Prompt 1 — 2026-09-04 |
 | PIN de administrador para excepciones de descuento | Subir el límite global; bloqueo duro sin excepción | Subir el límite global deja al vendedor con más poder de forma permanente; el bloqueo duro paraliza la venta. El PIN autoriza **una** excepción, deja rastro en auditoría y no cambia la configuración. | Prompt 1 — 2026-09-04 |
-| Inventario a granel por lotes con peso inicial y restante | Un único saldo de peso por producto | Con un solo saldo no se sabe de qué saco salió el producto ni cuánta merma tuvo cada uno, y no se puede exigir abrir un lote nuevo al agotarse el anterior. | Prompt 1 — 2026-09-04 |
-| **No** implementar todavía ninguna regla de selección automática de lote | FIFO por antigüedad; selección manual; por vencimiento | El criterio **no está confirmado con el cliente**. Asumir uno por cuenta propia produciría un inventario que no refleja cómo trabaja Jimmy. Ver "Pendiente de confirmación". | Prompt 1 — 2026-09-04 |
+| ~~Inventario a granel por lotes con peso inicial y restante~~ **REVERTIDA en el Prompt 5.** | Un único saldo de peso por producto | Se asumió que hacía falta trazar de qué saco salía cada venta. Ver la fila de reemplazo. | Prompt 1 — 2026-09-04 |
+| ~~**No** implementar todavía ninguna regla de selección automática de lote~~ **SIN EFECTO desde el Prompt 5:** ya no hay lotes que seleccionar. | FIFO por antigüedad; selección manual; por vencimiento | El criterio nunca se confirmó porque la pregunta dejó de existir al eliminarse los lotes. | Prompt 1 — 2026-09-04 |
+| **ELIMINACIÓN DEL CONCEPTO DE LOTE. Inventario acumulado: un único saldo por producto.** `productos.inventario_disponible` sube con cada ingreso de mercadería y baja con cada venta. | Mantener lotes por saco con peso inicial y restante; lotes solo para productos a granel | **No es un olvido: es una simplificación deliberada basada en cómo opera el negocio real.** Jimmy explicó que cuando llega mercadería nueva la suma directamente al inventario existente del mismo producto —tenía 10 sacos, llegan 50, el total es 60— sin distinguir de qué saco sale cada venta. Para su negocio no hay diferencia de costo, de vencimiento ni de trazabilidad entre sacos del mismo producto, así que los lotes habrían sido complejidad pura: una tabla, una regla de selección, un flujo de apertura y una pantalla, todo para modelar una distinción que el negocio no hace. Se elimina también la pregunta bloqueante sobre el criterio de consumo de lote, que queda sin objeto. | Prompt 5 — 2026-09-05 |
 | El PDF del comprobante siempre se genera; la impresión física es un adaptador opcional | Exigir impresora térmica configurada para cerrar la venta | Si la impresora falla, la tienda tiene que poder seguir vendiendo. El PDF es el respaldo obligatorio; el papel es un extra. | Prompt 1 — 2026-09-04 |
 | Adaptadores (`ReceiptPrinterProvider`, `SyncProvider`) con implementación segura por defecto | Integrar Supabase y ESC/POS directamente en el dominio | Permite desarrollar y probar todo sin impresora y sin consumir la cuota gratuita de Supabase. Activar lo real es cambiar configuración, no lógica de negocio. | Prompt 1 — 2026-09-04 |
 | Zod para validar todo payload que cruza IPC | Confiar en los tipos de TypeScript | Los tipos de TypeScript desaparecen al compilar: en tiempo de ejecución no validan nada. El renderer se trata como entrada no confiable por principio. | Prompt 1 — 2026-09-04 |
@@ -177,6 +181,16 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
 | **Política de redondeo: REDONDEO ÚNICO AL FINAL.** Toda la cadena de cálculo se mantiene exacta y el redondeo ocurre una sola vez, al persistir, mostrar o imprimir. Nunca se redondea un resultado intermedio. | Redondear cada línea o cada paso intermedio; truncar en cada operación | Tres pesadas de 0.5 lb a Q0.67/lb valen Q0.335 cada una: redondeando al final el total es Q1.01, redondeando línea por línea da Q1.02 y se le cobra de más al cliente. La política está enunciada en el encabezado de `money.ts` y **verificada** por el grupo de pruebas "Política de redondeo del sistema", que falla si alguien agrega un redondeo intermedio. Única excepción controlada: `repartirMonto`, que debe redondear para prorratear, con la garantía verificable de que la suma de las partes es exactamente el total. | Prompt 2 — 2026-09-04 |
 | **Comprobante impreso: "EL TOTAL MANDA".** El total se calcula exacto y se redondea una sola vez; los importes de línea que se imprimen se derivan de ese total para que sumen exactamente el total impreso, repartiendo la diferencia por residuo mayor. | Que las líneas manden y el total sea su suma; que la diferencia la absorba la última línea; que la absorba la línea de mayor monto | Con la política de redondeo único al final, la suma de las líneas impresas puede diferir del total impreso: tres líneas de 3.345, 10.275 y 3.175 dan un total correcto de Q16.80 pero suman Q16.81 redondeadas por separado, y un recibo así no se defiende en una auditoría. Que manden las líneas le cobraría de más al cliente. Concentrar el residuo en una sola línea la desvía varios centavos con muchas líneas: con diez pesadas de Q0.335, la última tendría que imprimir Q0.29 en vez de Q0.34. El residuo mayor garantiza que cada línea impresa sea el piso o el techo en centavos de su propio valor, nunca más de un centavo de diferencia. Implementado en `conciliarSubtotalesConTotal` y verificado por el grupo de pruebas "El comprobante impreso cuadra". | Prompt 3 — 2026-09-05 |
 | **Regla de desempate del reparto de centavos: gana la línea que aparece PRIMERO.** Cuando dos o más líneas tienen exactamente el mismo residuo, el centavo se le da a la de posición menor en el comprobante; la que se queda sin él es la última de las empatadas. El criterio es la posición, nunca el monto de la línea ni el producto. Rige por igual en `conciliarSubtotalesConTotal` y en `repartirMonto`. | Dárselo a la línea de mayor monto; a la última; elegir al azar; dejarlo al orden que devuelva el `sort` del motor | Hacía falta una regla explícita porque el empate es el caso NORMAL, no el raro: tres pesadas iguales empatan siempre. El comparador desempata por índice y por eso nunca devuelve 0 para dos líneas distintas, lo que define un orden total y hace que el resultado **no dependa de si el `sort` de JavaScript es estable**. El reparto es determinista: la misma venta, en el mismo orden, coloca siempre el centavo en la misma línea, y por lo tanto el mismo recibo reimpreso sale idéntico. Cambiar el orden de captura sí mueve el centavo, pero nunca cambia el total. Verificado por el grupo de pruebas "Regla de desempate: quién se queda sin el centavo", que incluye 200 repeticiones de la misma venta y un caso de 50 líneas empatadas. | Prompt 4 — 2026-09-05 |
+| **Claves primarias UUID generadas EN EL CLIENTE**, nunca AUTOINCREMENT. | Enteros autoincrementales; UUID generado por el servidor con `gen_random_uuid()` | La tienda vende sin internet y sincroniza después. Con autoincrementales, dos ventas creadas offline en máquinas distintas tendrían el mismo id y colisionarían al subir a Supabase. Que el servidor genere el id tampoco sirve: el registro nace en la máquina de la tienda y tendría dos identidades. | Prompt 5 — 2026-09-05 |
+| **Dinero, peso y cantidad se guardan como TEXT en SQLite, jamás como REAL.** | REAL; INTEGER de centavos | SQLite REAL es punto flotante de 64 bits: exactamente lo que money.ts existe para evitar. Un total de Q16.80 puede volver de la base como 16.799999999999997 y descuadrar el corte de caja. Los centavos como entero resolvían el dinero pero no el peso de tres decimales. | Prompt 5 — 2026-09-05 |
+| **El CHECK de las columnas decimales exige la FORMA CANÓNICA exacta, no solo `typeof = 'text'`.** Montos con exactamente 2 decimales, pesos y cantidades con 3, valores exactos con hasta 10. | Solo `typeof(col) = 'text'`; sin restricción, confiando en el código | Se comprobó empíricamente que `typeof` NO alcanza: una columna declarada TEXT tiene afinidad TEXT y SQLite convierte por su cuenta un número a texto antes de guardarlo, así que ligar `0.1 + 0.2` guardaba `'0.30000000000000004'` y el `typeof` pasaba igual. Con la forma canónica exacta, ese valor y cualquier float ligado por descuido se rechazan en la base. Verificado en la prueba "RECHAZA un float de JavaScript ligado directamente". | Prompt 5 — 2026-09-05 |
+| **Un único módulo, `decimal-columns.ts`, es la única vía para leer y escribir columnas decimales.** | Que cada repositorio convierta por su cuenta | Con la conversión repartida, basta que un repositorio use `Number(fila.total)` para reintroducir el punto flotante en silencio. Centralizada, hay un solo lugar que auditar, y además rechaza ruidosamente cualquier valor que la base devuelva como número. | Prompt 5 — 2026-09-05 |
+| **En Postgres los mismos campos son NUMERIC, no TEXT.** | Repetir el patrón TEXT del lado de la nube | NUMERIC de Postgres es un tipo decimal exacto nativo de precisión arbitraria: no tiene la limitación que obliga al TEXT en SQLite. Copiar el patrón sería arrastrar una solución sin el problema que la justificaba, y además impediría sumar y hacer reportes en SQL del lado del servidor. | Prompt 5 — 2026-09-05 |
+| **`venta_detalle` guarda una FOTO del nombre, la unidad y el precio al momento de la venta**, no una referencia viva al producto. | Leer el nombre y el precio del producto al reimprimir el recibo | Un producto puede cambiar de precio, de nombre o desactivarse después de la venta. Con referencias vivas, reimprimir un recibo de hace tres meses mostraría el precio de hoy y el documento histórico cambiaría retroactivamente: exactamente lo que una auditoría no puede tolerar. | Prompt 5 — 2026-09-05 |
+| **`venta_detalle` guarda `subtotal_exacto` y `subtotal_impreso` por separado.** | Guardar solo uno de los dos | Son dos cosas distintas: del exacto (sin redondear) se deriva el total real, y el impreso es el valor conciliado que salió en el papel. Guardando solo el impreso se pierde la trazabilidad del cálculo; guardando solo el exacto no se puede reproducir el recibo tal como se entregó. | Prompt 5 — 2026-09-05 |
+| **Migraciones numeradas con checksum registrado.** El migrador se niega a arrancar si una migración ya aplicada cambió de contenido. | Migraciones sin control de integridad; recrear el esquema en cada arranque | Editar una migración ya aplicada deja la base de la tienda y el código en estados distintos sin que nadie se entere. El checksum convierte eso en un error ruidoso al arrancar. | Prompt 5 — 2026-09-05 |
+| **La bitácora de auditoría es inmutable por trigger**, tanto en SQLite como en Postgres. | Confiar en que nadie la modifique; permitir correcciones | Un registro de auditoría que se puede editar no sirve como evidencia. La base rechaza cualquier UPDATE o DELETE sobre `auditoria_log`. | Prompt 5 — 2026-09-05 |
+| **En Supabase se activa RLS en todas las tablas, sin políticas (denegar por omisión).** | Dejar las tablas sin RLS | Supabase publica automáticamente las tablas de `public` por su API. Sin RLS, cualquiera con la llave anónima —que viaja dentro de la aplicación instalada— podría leer y escribir las ventas de la tienda. Las políticas concretas llegan con el módulo de sincronización, en su propia migración. | Prompt 5 — 2026-09-05 |
 | Salida controlada del kiosko con atajo + PIN de administrador | Dejar la app sin salida (matar el proceso); un botón de salir en la interfaz; salida sin PIN | Sin salida ordenada había que matar el proceso desde el Administrador de tareas, lo que deja el WAL de SQLite sin consolidar y no registra nada. Un botón visible sería una invitación para el cajero. El PIN convierte la salida en una acción de administrador auditable. | Prompt 2 — 2026-09-04 |
 | El atajo se captura con `before-input-event` y no con `globalShortcut` | `globalShortcut` de Electron | `globalShortcut` registra la combinación en todo el sistema operativo y se la roba a cualquier otra aplicación abierta, incluida la del desarrollador. El atajo solo debe existir mientras el POS tiene el foco. | Prompt 2 — 2026-09-04 |
 | Las combinaciones de teclas se identifican por tecla FÍSICA (`code`) y no por carácter (`key`) | Comparar `key === 'q'` | En el teclado latinoamericano de Windows, AltGr es Ctrl+Alt y cambia el carácter que produce cada tecla. Comparando por carácter, el atajo del administrador simplemente no funcionaría en la computadora de la tienda. | Prompt 2 — 2026-09-04 |
@@ -191,16 +205,16 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
 > resuelve preguntando. Mientras no esté confirmado, dejá un `TODO` en el
 > código señalando la dependencia y seguí con el resto.
 
-### 6.1 BLOQUEANTE — Criterio de selección de lote
+### 6.1 CERRADO — Criterio de selección de lote
 
-Cuando hay **más de un lote disponible del mismo producto**, ¿cuál se consume
-primero? ¿Por antigüedad (el más viejo primero), manual (el cajero elige),
-por el que tenga menos peso restante, u otro criterio?
+**Ya no aplica.** Era el punto bloqueante del proyecto: con varios lotes del
+mismo producto, ¿cuál se consumía primero? La pregunta quedó sin objeto en el
+Prompt 5, cuando Jimmy explicó que no maneja lotes: la mercadería nueva se suma
+al inventario existente del mismo producto y no se distingue de qué saco sale
+cada venta.
 
-**Instrucción explícita de Julio:** *no implementar ninguna regla automática de
-selección de lote en este prompt ni en los siguientes hasta confirmación
-explícita.* Si un diseño depende de esto, dejar `TODO(seleccion-de-lote)` en el
-código, documentarlo aquí y continuar con lo demás. **No asumir una regla.**
+Se conserva anotado aquí, y no se borra, para que quede constancia de que se
+cerró preguntándole al cliente y no asumiendo un criterio.
 
 ### 6.2 Otros puntos abiertos
 
@@ -212,8 +226,8 @@ código, documentarlo aquí y continuar con lo demás. **No asumir una regla.**
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
 | 5 | ¿El PIN de autorización es por usuario administrador o uno solo para la tienda? | Determina si el log de auditoría puede identificar **quién** autorizó. Hoy el PIN sale de `POS_PIN_ADMINISTRADOR` y el sistema sabe QUE alguien autorizó, pero no QUIÉN. Recomendación técnica: por usuario. | Abierto — implementación provisional en marcha |
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? | Define la matriz de permisos (RBAC). | Abierto |
-| 7 | ¿Qué se hace con la merma (diferencia entre el peso inicial de un lote y la suma de lo vendido)? | Sin regla, el inventario nunca cuadrará contra la realidad física. | Abierto |
-| 8 | ¿Qué pasa si un lote se agota **a mitad** de una pesada? ¿Se parte la línea en dos lotes o se rechaza? | Depende también del punto 6.1. | Abierto |
+| 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. | Abierto |
+| 8 | ¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir? | En una tienda a granel el saldo del sistema y el peso real se separan; bloquear la venta podría dejar a Jimmy sin poder cobrar algo que tiene físicamente. | Abierto |
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
@@ -221,13 +235,18 @@ código, documentarlo aquí y continuar con lo demás. **No asumir una regla.**
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
-Al cierre del Prompt 1 el repositorio tiene **andamiaje**, no negocio:
+Al cierre del Prompt 5 hay andamiaje y **base de datos**, pero todavía no hay
+negocio:
 
 - No hay pantallas de negocio. `src/renderer/src/App.tsx` es una pantalla de
   verificación técnica y se reemplaza cuando lleguen los módulos reales.
-- No hay esquema de base de datos del dominio. Solo existe la tabla
-  `prueba_conexion`, que se elimina cuando lleguen las migraciones reales.
-- No hay lógica de ventas, lotes, descuentos, caja, usuarios ni auditoría. La
+- **El esquema de la base de datos SÍ existe** (11 tablas locales, su espejo en
+  Postgres y la capa de repositorios), pero está vacío: no hay datos semilla,
+  ni catálogo, ni usuarios.
+- Los repositorios solo leen y escriben. No contienen ninguna regla de
+  negocio: eso llega módulo por módulo en los prompts siguientes.
+- No hay lógica de ventas, inventario, descuentos, caja, usuarios ni
+  auditoría. La
   única excepción es el verificador de PIN de administrador
   (`src/main/security/admin-pin.ts`), que existe porque la salida controlada lo
   necesitaba; es provisional y lo reemplazará el módulo de usuarios.
@@ -252,9 +271,14 @@ npm run verify:arranque  # arranca la app, imprime un informe de verificación y
 
 ```
 src/main/       proceso principal de Electron: ventana, SQLite, IPC
-  database/     conexión a SQLite (nadie más la abre)
+  database/          conexión a SQLite (nadie más la abre)
+    migrations/      migraciones .sql numeradas del esquema local
+    repositories/    una clase por tabla; la única puerta hacia los datos
+    decimal-columns.ts  única vía para leer/escribir dinero, peso y cantidad
+    migrator.ts      aplica las migraciones y verifica sus checksums
   ipc/          manejadores IPC, con validación Zod de cada payload
   preload/      único puente hacia el renderer (expone window.pos)
+  security/     verificación del PIN de administrador
   windows/      creación y bloqueos de la ventana kiosko
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
 src/shared/     código compartido main <-> renderer
@@ -262,6 +286,7 @@ src/shared/     código compartido main <-> renderer
   types/        contrato IPC y DTOs con Zod
   money.ts      aritmética exacta con Decimal.js
   __tests__/    pruebas automatizadas
+supabase/       espejo del esquema en Postgres (migraciones para la nube)
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
 ```
 
