@@ -10,6 +10,12 @@
 import { join } from 'node:path';
 import { BrowserWindow, Menu, shell, type BrowserWindowConstructorOptions } from 'electron';
 
+import {
+  esAtajoDeHerramientasDeDesarrollo,
+  esAtajoDeRecarga,
+  esAtajoDeZoomPorTeclado,
+} from '@shared/kiosk-input';
+
 /** Ancho mínimo pensado para la pantalla del mostrador. */
 const ANCHO_MINIMO = 1024;
 
@@ -122,25 +128,17 @@ function aplicarBloqueosDeKiosko(ventana: BrowserWindow): void {
     evento.preventDefault();
   });
 
-  // Bloqueo de atajos de zoom y de recarga en producción.
+  // Bloqueo de atajos de zoom y, en producción, de recarga y herramientas.
+  // Las reglas viven en src/shared/kiosk-input.ts, que se prueba con Vitest;
+  // aquí solo queda la parte mecánica de cancelar el evento.
   webContents.on('before-input-event', (evento, entrada) => {
-    const conModificador = entrada.control || entrada.meta;
-    const teclaDeZoom = ['+', '-', '=', '0'].includes(entrada.key);
-
-    if (conModificador && teclaDeZoom) {
+    if (esAtajoDeZoomPorTeclado(entrada)) {
       evento.preventDefault();
       return;
     }
 
-    if (!enDesarrollo) {
-      const esRecarga = entrada.key === 'F5' || (conModificador && entrada.key.toLowerCase() === 'r');
-      const esHerramientas =
-        entrada.key === 'F12' ||
-        (conModificador && entrada.shift && entrada.key.toLowerCase() === 'i');
-
-      if (esRecarga || esHerramientas) {
-        evento.preventDefault();
-      }
+    if (!enDesarrollo && (esAtajoDeRecarga(entrada) || esAtajoDeHerramientasDeDesarrollo(entrada))) {
+      evento.preventDefault();
     }
   });
 }
