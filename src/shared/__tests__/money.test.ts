@@ -90,6 +90,159 @@ describe('El problema que este módulo existe para resolver: punto flotante', ()
 });
 
 // ===========================================================================
+describe('Política de redondeo del sistema: redondeo único al final', () => {
+  // Este grupo es el que hace VINCULANTE la política descrita en el encabezado
+  // de money.ts. Si alguien agrega un redondeo intermedio a cualquier función
+  // de cálculo, alguna de estas pruebas falla.
+
+  // Valor con más decimales de los que cualquier redondeo del sistema conserva.
+  const MUCHOS_DECIMALES = '1.23456789';
+
+  describe('Las operaciones de cálculo NO redondean', () => {
+    it('sumar conserva todos los decimales', () => {
+      expect(aCadena(sumar(MUCHOS_DECIMALES, '0'))).toBe('1.23456789');
+    });
+
+    it('sumarLista conserva todos los decimales', () => {
+      expect(aCadena(sumarLista([MUCHOS_DECIMALES, '0']))).toBe('1.23456789');
+    });
+
+    it('restar conserva todos los decimales', () => {
+      expect(aCadena(restar('2', '0.76543211'))).toBe('1.23456789');
+    });
+
+    it('multiplicar conserva todos los decimales', () => {
+      expect(aCadena(multiplicar('0.001', '0.002'))).toBe('0.000002');
+    });
+
+    it('dividir conserva la precisión y no recorta a dos decimales', () => {
+      // Un tercio no es representable de forma finita: debe conservar la
+      // precisión interna de Decimal.js, no truncarse a 0.33.
+      const unTercio = aCadena(dividir('1', '3'));
+      expect(unTercio.startsWith('0.3333333333')).toBe(true);
+      expect(unTercio.length).toBeGreaterThan('0.33'.length);
+    });
+
+    it('negar y absoluto conservan todos los decimales', () => {
+      expect(aCadena(negar(MUCHOS_DECIMALES))).toBe('-1.23456789');
+      expect(aCadena(absoluto(`-${MUCHOS_DECIMALES}`))).toBe('1.23456789');
+    });
+
+    it('porcentajeDe conserva todos los decimales', () => {
+      expect(aCadena(porcentajeDe('133.33', '7.5'))).toBe('9.99975');
+    });
+
+    it('restarPorcentaje conserva todos los decimales', () => {
+      expect(aCadena(restarPorcentaje('99.99', '5'))).toBe('94.9905');
+    });
+
+    it('porcentajeQueRepresenta conserva todos los decimales', () => {
+      const porcentaje = aCadena(porcentajeQueRepresenta('1', '3'));
+      expect(porcentaje.startsWith('33.3333333333')).toBe(true);
+    });
+
+    it('minimo, maximo y limitarARango devuelven el valor sin tocarlo', () => {
+      expect(aCadena(minimo(MUCHOS_DECIMALES, '9'))).toBe('1.23456789');
+      expect(aCadena(maximo(MUCHOS_DECIMALES, '0'))).toBe('1.23456789');
+      expect(aCadena(limitarARango(MUCHOS_DECIMALES, '0', '9'))).toBe('1.23456789');
+    });
+
+    it('aCadena serializa sin redondear', () => {
+      expect(aCadena(MUCHOS_DECIMALES)).toBe('1.23456789');
+    });
+  });
+
+  describe('Solo las funciones de salida redondean', () => {
+    it('redondearMonto, redondearPeso y redondearCantidad redondean a sus decimales', () => {
+      expect(aCadena(redondearMonto(MUCHOS_DECIMALES))).toBe('1.23');
+      expect(aCadena(redondearPeso(MUCHOS_DECIMALES))).toBe('1.235');
+      expect(aCadena(redondearCantidad(MUCHOS_DECIMALES))).toBe('1.235');
+    });
+
+    it('las funciones de serialización redondean una sola vez, al escribir', () => {
+      expect(montoACadena(MUCHOS_DECIMALES)).toBe('1.23');
+      expect(pesoACadena(MUCHOS_DECIMALES)).toBe('1.235');
+      expect(cantidadACadena(MUCHOS_DECIMALES)).toBe('1.235');
+    });
+
+    it('las funciones de formato redondean una sola vez, al mostrar', () => {
+      expect(formatearQuetzales(MUCHOS_DECIMALES)).toBe('Q1.23');
+      expect(formatearPeso(MUCHOS_DECIMALES, 'lb')).toBe('1.235 lb');
+    });
+  });
+
+  describe('Una cadena larga de operaciones solo se redondea al final', () => {
+    it('cinco operaciones encadenadas mantienen la precisión hasta el último paso', () => {
+      // Peso x precio, menos 7%, mas 3 centavos, entre 3, por 3: si alguna
+      // función redondeara en medio, el resultado exacto no coincidiría.
+      const PRECIO_POR_LIBRA = '3.33';
+      const LIBRAS = '7.77';
+      const PORCENTAJE = '7';
+      const AJUSTE = '0.03';
+      const PARTES = '3';
+
+      const paso1 = multiplicar(LIBRAS, PRECIO_POR_LIBRA);
+      const paso2 = restarPorcentaje(paso1, PORCENTAJE);
+      const paso3 = sumar(paso2, AJUSTE);
+      const paso4 = dividir(paso3, PARTES);
+      const paso5 = multiplicar(paso4, PARTES);
+
+      expect(aCadena(paso1)).toBe('25.8741');
+      expect(aCadena(paso2)).toBe('24.062913');
+      expect(aCadena(paso3)).toBe('24.092913');
+      // El valor exacto sobrevive el viaje de ida y vuelta por la división.
+      expect(esIgual(paso5, paso3)).toBe(true);
+      // Y recién aquí, una sola vez, se redondea.
+      expect(montoACadena(paso5)).toBe('24.09');
+    });
+
+    it('redondear en cada paso da un resultado distinto: por eso está prohibido', () => {
+      const PRECIO_POR_LIBRA = '0.67';
+      const LIBRAS_POR_PESADA = '0.5';
+      const linea = multiplicar(LIBRAS_POR_PESADA, PRECIO_POR_LIBRA);
+
+      const politicaDelSistema = montoACadena(sumar(linea, linea, linea));
+      const politicaProhibida = montoACadena(
+        sumar(redondearMonto(linea), redondearMonto(linea), redondearMonto(linea)),
+      );
+
+      expect(politicaDelSistema).toBe('1.01');
+      expect(politicaProhibida).toBe('1.02');
+      expect(politicaDelSistema).not.toBe(politicaProhibida);
+    });
+  });
+
+  describe('repartirMonto es la única excepción, y está acotada', () => {
+    it('redondea porque un centavo no se puede partir, pero la suma cuadra exacta', () => {
+      const TOTAL = '7.77';
+      const partes = repartirMonto(TOTAL, ['1', '1', '1', '1', '1', '1', '1']);
+
+      // Cada parte quedó redondeada a centavos...
+      for (const parte of partes) {
+        expect(aCadena(parte)).toBe(montoACadena(parte));
+      }
+      // ...y aun así la suma es exactamente el total, sin centavos perdidos.
+      expect(esIgual(sumarLista(partes), TOTAL)).toBe(true);
+    });
+
+    it('la garantía se sostiene con montos y ponderaciones difíciles', () => {
+      const casos: readonly { readonly total: string; readonly pesos: readonly string[] }[] = [
+        { total: '0.01', pesos: ['1', '1', '1'] },
+        { total: '100', pesos: ['1', '2', '3', '7'] },
+        { total: '9.99', pesos: ['0.333', '0.333', '0.334'] },
+        { total: '-0.07', pesos: ['5', '3'] },
+        { total: '1234.56', pesos: ['1'] },
+      ];
+
+      for (const caso of casos) {
+        const partes = repartirMonto(caso.total, caso.pesos);
+        expect(montoACadena(sumarLista(partes))).toBe(montoACadena(caso.total));
+      }
+    });
+  });
+});
+
+// ===========================================================================
 describe('Construcción y validación de valores decimales', () => {
   it('acepta una cadena y conserva su valor exacto', () => {
     expect(aCadena(decimal('1234.5678'))).toBe('1234.5678');

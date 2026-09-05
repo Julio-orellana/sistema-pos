@@ -17,6 +17,44 @@
  * ("125.50"), nunca como `number`. Un `number` de JavaScript no puede
  * representar exactamente todos los decimales; una cadena sí. Convertir a
  * `number` se permite únicamente para mostrar en pantalla o graficar.
+ *
+ * ==========================================================================
+ * POLÍTICA DE REDONDEO DEL SISTEMA: "REDONDEO ÚNICO AL FINAL"
+ * ==========================================================================
+ * Es la regla real y vinculante de todo el POS, no solo de un caso de prueba.
+ * Se enuncia así:
+ *
+ *   Toda la cadena de cálculo se mantiene EXACTA, con la precisión completa de
+ *   Decimal.js. El redondeo ocurre UNA SOLA VEZ, en el punto de salida: cuando
+ *   el valor se persiste, se muestra en pantalla o se imprime en un
+ *   comprobante. Nunca se redondea un resultado intermedio.
+ *
+ * Consecuencias, y cómo se refleja en este archivo:
+ *
+ *   - Las operaciones aritméticas y de porcentaje NO redondean:
+ *     `sumar`, `sumarLista`, `restar`, `multiplicar`, `dividir`, `negar`,
+ *     `absoluto`, `porcentajeDe`, `restarPorcentaje`,
+ *     `porcentajeQueRepresenta`, `minimo`, `maximo`, `limitarARango`,
+ *     `aCadena`.
+ *   - Redondean SOLO las funciones de salida, y por eso llevan el redondeo en
+ *     el nombre o son de presentación/persistencia:
+ *     `redondearA`, `redondearMonto`, `redondearPeso`, `redondearCantidad`,
+ *     `montoACadena`, `pesoACadena`, `cantidadACadena`, `formatearQuetzales`,
+ *     `formatearPeso`.
+ *   - ÚNICA EXCEPCIÓN CONTROLADA: `repartirMonto`. Prorratear obliga a
+ *     redondear, porque un centavo no se puede partir. La excepción está
+ *     acotada por una garantía verificable: la suma de las partes es
+ *     exactamente el total redondeado, nunca un centavo más ni uno menos.
+ *
+ * Por qué esta política y no "redondear cada línea": tres pesadas de 0.5 lb a
+ * Q0.67/lb valen Q0.335 cada una. Redondeando al final el total es Q1.01;
+ * redondeando línea por línea da Q1.02. El primero es el importe correcto y el
+ * segundo le cobra de más al cliente. La política está verificada por el grupo
+ * de pruebas "Política de redondeo del sistema" en money.test.ts, que falla si
+ * alguien agrega un redondeo intermedio a cualquiera de las funciones de
+ * cálculo.
+ *
+ * El MODO de redondeo, cuando se aplica, es siempre HALF_UP (ver MODO_REDONDEO).
  */
 
 import Decimal from 'decimal.js';
