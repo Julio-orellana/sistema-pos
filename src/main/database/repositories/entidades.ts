@@ -1,0 +1,343 @@
+/**
+ * Entidades del dominio tal como las devuelven los repositorios.
+ *
+ * Los campos decimales son `Decimal`, no `number` ni `string`: el repositorio
+ * ya hizo la conversión desde el TEXT de la base usando decimal-columns.ts, y
+ * quien recibe la entidad trabaja con aritmética exacta desde el primer
+ * momento. Un `number` en cualquiera de estos campos sería un defecto.
+ *
+ * Los identificadores son UUID en cadena, generados en el cliente.
+ * Las fechas son cadenas ISO-8601 en UTC.
+ *
+ * Viven junto a los repositorios y no en src/shared porque el renderer nunca
+ * ve estas entidades: recibe DTO serializables por IPC, con los decimales ya
+ * convertidos a cadena.
+ */
+
+import type Decimal from 'decimal.js';
+
+/** Roles del sistema. */
+export type Rol = 'venta' | 'administrativo';
+
+/** Cómo se mide un producto. */
+export type TipoMedida = 'unidad' | 'peso';
+
+/** Unidades de peso admitidas. */
+export type UnidadPeso = 'lb' | 'kg';
+
+/** Naturaleza de un descuento o precio especial. */
+export type TipoValor = 'porcentaje' | 'monto_fijo';
+
+/** Estado de un turno de caja. */
+export type EstadoCaja = 'abierta' | 'cerrada';
+
+/** Estado de una venta. */
+export type EstadoVenta = 'completada' | 'anulada';
+
+/** Formas de pago aceptadas. */
+export type FormaPago = 'efectivo' | 'tarjeta';
+
+/** Estado de sincronización de un registro con la nube. */
+export type EstadoSincronizacion = 'pendiente' | 'sincronizado' | 'error';
+
+/** Operación replicable hacia la nube. */
+export type OperacionSync = 'insertar' | 'actualizar' | 'eliminar';
+
+// ---------------------------------------------------------------------------
+
+/** Usuario del sistema. El PIN nunca sale de la base en claro. */
+export interface Usuario {
+  readonly id: string;
+  readonly nombre: string;
+  readonly rol: Rol;
+  readonly pinHash: string;
+  readonly activo: boolean;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Datos para crear un usuario. El id y las fechas los pone el repositorio. */
+export interface NuevoUsuario {
+  readonly nombre: string;
+  readonly rol: Rol;
+  readonly pinHash: string;
+  readonly activo?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Categoría de productos, para agrupar los íconos de la pantalla de venta. */
+export interface Categoria {
+  readonly id: string;
+  readonly nombre: string;
+  readonly orden: number;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Datos para crear una categoría. */
+export interface NuevaCategoria {
+  readonly nombre: string;
+  readonly orden?: number;
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Producto del catálogo.
+ *
+ * `inventarioDisponible` es un ÚNICO saldo acumulado: sube con cada ingreso de
+ * mercadería y baja con cada venta. No hay lotes.
+ */
+export interface Producto {
+  readonly id: string;
+  readonly nombre: string;
+  readonly categoriaId: string;
+  readonly fotoPath: string | null;
+  readonly tipoMedida: TipoMedida;
+  readonly unidadPeso: UnidadPeso | null;
+  readonly cantidadPredefinidaIcono: Decimal;
+  readonly precioBase: Decimal;
+  readonly inventarioDisponible: Decimal;
+  readonly contadorVentas: number;
+  readonly activo: boolean;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Datos para crear un producto. */
+export interface NuevoProducto {
+  readonly nombre: string;
+  readonly categoriaId: string;
+  readonly fotoPath?: string | null;
+  readonly tipoMedida: TipoMedida;
+  readonly unidadPeso?: UnidadPeso | null;
+  readonly cantidadPredefinidaIcono: Decimal | string;
+  readonly precioBase: Decimal | string;
+  readonly inventarioDisponible: Decimal | string;
+  readonly activo?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Precio especial vigente para un producto durante una ventana de tiempo. */
+export interface PrecioEspecial {
+  readonly id: string;
+  readonly productoId: string;
+  readonly tipo: TipoValor;
+  readonly valor: Decimal;
+  readonly vigenteDesde: string;
+  readonly vigenteHasta: string | null;
+  readonly activo: boolean;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Datos para crear un precio especial. */
+export interface NuevoPrecioEspecial {
+  readonly productoId: string;
+  readonly tipo: TipoValor;
+  readonly valor: Decimal | string;
+  readonly vigenteDesde: string;
+  readonly vigenteHasta?: string | null;
+  readonly activo?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Tope de descuento que un rol puede aplicar sin autorización. */
+export interface LimiteDescuento {
+  readonly id: string;
+  readonly rol: Rol;
+  readonly descuentoMaxPorcentaje: Decimal;
+  readonly descuentoMaxMontoFijo: Decimal;
+  readonly editadoPor: string | null;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Datos para fijar el límite de un rol. */
+export interface NuevoLimiteDescuento {
+  readonly rol: Rol;
+  readonly descuentoMaxPorcentaje: Decimal | string;
+  readonly descuentoMaxMontoFijo: Decimal | string;
+  readonly editadoPor?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Turno de caja. Los montos del cierre son nulos hasta que se cierra. */
+export interface CajaSesion {
+  readonly id: string;
+  readonly usuarioId: string;
+  readonly montoInicial: Decimal;
+  readonly abiertaEn: string;
+  readonly montoEsperado: Decimal | null;
+  readonly montoReal: Decimal | null;
+  readonly diferencia: Decimal | null;
+  readonly cerradaEn: string | null;
+  readonly estado: EstadoCaja;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Datos para abrir un turno de caja. */
+export interface NuevaCajaSesion {
+  readonly usuarioId: string;
+  readonly montoInicial: Decimal | string;
+  readonly abiertaEn?: string;
+}
+
+/** Datos del corte con que se cierra un turno. */
+export interface CierreDeCaja {
+  readonly montoEsperado: Decimal | string;
+  readonly montoReal: Decimal | string;
+  readonly diferencia: Decimal | string;
+  readonly cerradaEn?: string;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Cabecera de una venta. */
+export interface Venta {
+  readonly id: string;
+  readonly cajaSesionId: string;
+  readonly usuarioId: string;
+  readonly fecha: string;
+  readonly subtotal: Decimal;
+  readonly descuentoTipo: TipoValor | null;
+  readonly descuentoValor: Decimal | null;
+  readonly descuentoAutorizadoPor: string | null;
+  readonly total: Decimal;
+  readonly formaPago: FormaPago;
+  readonly numBoleta: string | null;
+  readonly estado: EstadoVenta;
+  readonly estadoSincronizacion: EstadoSincronizacion;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Datos para registrar una venta. */
+export interface NuevaVenta {
+  readonly cajaSesionId: string;
+  readonly usuarioId: string;
+  readonly fecha?: string;
+  readonly subtotal: Decimal | string;
+  readonly descuentoTipo?: TipoValor | null;
+  readonly descuentoValor?: Decimal | string | null;
+  readonly descuentoAutorizadoPor?: string | null;
+  readonly total: Decimal | string;
+  readonly formaPago: FormaPago;
+  readonly numBoleta?: string | null;
+  readonly estado?: EstadoVenta;
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Línea de una venta.
+ *
+ * Los campos `*Snap` son COPIAS del dato al momento de la venta, no
+ * referencias vivas: si el producto cambia de nombre o de precio mañana, el
+ * recibo histórico no cambia.
+ */
+export interface VentaDetalle {
+  readonly id: string;
+  readonly ventaId: string;
+  readonly productoId: string;
+  readonly productoNombreSnap: string;
+  readonly unidadSnap: string;
+  readonly cantidad: Decimal;
+  readonly precioUnitarioSnap: Decimal;
+  /** Valor sin redondear, del que se deriva el total real. */
+  readonly subtotalExacto: Decimal;
+  /** Valor conciliado que aparece impreso en el recibo. */
+  readonly subtotalImpreso: Decimal;
+  /** Orden de captura. Decide el desempate del reparto de centavos. */
+  readonly ordenLinea: number;
+  readonly creadoEn: string;
+}
+
+/** Datos para agregar una línea a una venta. */
+export interface NuevaVentaDetalle {
+  readonly ventaId: string;
+  readonly productoId: string;
+  readonly productoNombreSnap: string;
+  readonly unidadSnap: string;
+  readonly cantidad: Decimal | string;
+  readonly precioUnitarioSnap: Decimal | string;
+  readonly subtotalExacto: Decimal | string;
+  readonly subtotalImpreso: Decimal | string;
+  readonly ordenLinea: number;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Comprobante emitido por una venta. El PDF siempre existe. */
+export interface Recibo {
+  readonly id: string;
+  readonly ventaId: string;
+  readonly numeroRecibo: number;
+  readonly pdfPath: string;
+  readonly impreso: boolean;
+  readonly creadoEn: string;
+}
+
+/** Datos para registrar un recibo. */
+export interface NuevoRecibo {
+  readonly ventaId: string;
+  readonly numeroRecibo: number;
+  readonly pdfPath: string;
+  readonly impreso?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Asiento de la bitácora de auditoría. Es inmutable una vez escrito. */
+export interface AsientoAuditoria {
+  readonly id: string;
+  readonly usuarioId: string | null;
+  readonly accion: string;
+  readonly entidadTipo: string;
+  readonly entidadId: string | null;
+  readonly valorAnterior: string | null;
+  readonly valorNuevo: string | null;
+  readonly fecha: string;
+}
+
+/** Datos para escribir un asiento de auditoría. */
+export interface NuevoAsientoAuditoria {
+  readonly usuarioId?: string | null;
+  readonly accion: string;
+  readonly entidadTipo: string;
+  readonly entidadId?: string | null;
+  /** Se serializa a JSON automáticamente. */
+  readonly valorAnterior?: unknown;
+  /** Se serializa a JSON automáticamente. */
+  readonly valorNuevo?: unknown;
+  readonly fecha?: string;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Elemento de la cola local de sincronización. */
+export interface ElementoSyncCola {
+  readonly id: string;
+  readonly entidadTipo: string;
+  readonly entidadId: string;
+  readonly operacion: OperacionSync;
+  readonly payload: string;
+  readonly intentadoEn: string | null;
+  readonly sincronizadoEn: string | null;
+  readonly error: string | null;
+  readonly creadoEn: string;
+}
+
+/** Datos para encolar un cambio. */
+export interface NuevoElementoSyncCola {
+  readonly entidadTipo: string;
+  readonly entidadId: string;
+  readonly operacion: OperacionSync;
+  /** Se serializa a JSON automáticamente. */
+  readonly payload: unknown;
+}
