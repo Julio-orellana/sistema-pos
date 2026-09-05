@@ -1,0 +1,127 @@
+/* Estilos del andamiaje. La identidad visual de la tienda de Jimmy llega con
+   el módulo de interfaz; nada de esto es definitivo. */
+
+:root {
+  --fondo: #0f172a;
+  --superficie: #1e293b;
+  --borde: #334155;
+  --texto: #e2e8f0;
+  --texto-tenue: #94a3b8;
+  --acento: #22c55e;
+  --alerta: #f87171;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  /* En un kiosko nada debe poder seleccionarse ni arrastrarse por accidente. */
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+.pantalla {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 48px;
+}
+
+.encabezado h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+}
+
+.subtitulo {
+  margin: 4px 0 24px;
+  color: var(--texto-tenue);
+}
+
+.tarjeta {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.tarjeta h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--texto-tenue);
+}
+
+.dato {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 4%);
+}
+
+.dato:last-child {
+  border-bottom: none;
+}
+
+.dato__etiqueta {
+  color: var(--texto-tenue);
+}
+
+.dato__valor {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.alerta {
+  background: rgb(248 113 113 / 12%);
+  border: 1px solid var(--alerta);
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: var(--alerta);
+}
+
+.pendiente {
+  color: var(--texto-tenue);
+  margin: 0;
+}
+
+.pie {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+button {
+  background: var(--acento);
+  color: #052e16;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.nota {
+  margin: 0;
+  color: var(--texto-tenue);
+  font-size: 13px;
+}
