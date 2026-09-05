@@ -62,6 +62,12 @@ Node requerido: **>= 22**.
    TypeScript estricto. Nunca `any` implícito.
 2. **Ventana en modo kiosko:** pantalla completa, sin menú, sin barra de
    título, sin zoom con Ctrl+rueda, sin menú de clic derecho.
+   **Salida controlada:** el atajo `Ctrl + Shift + Alt + Q` (en macOS,
+   `Ctrl + Shift + Option + Q`) le pide el PIN al administrador y, solo si el
+   PIN es correcto, cierra la aplicación de forma ordenada. Es una salida de
+   emergencia para el administrador: **no** se le muestra ni se le documenta al
+   usuario de venta, y no existe ningún botón ni menú que la active. Ver la
+   sección 4.1.
 3. **SQLite solo desde el proceso principal.** El renderer **nunca** accede a
    la base de datos: todo pasa por canales IPC explícitos y tipados. Hay una
    regla de ESLint que hace fallar el lint si alguien lo intenta.
@@ -100,6 +106,38 @@ Node requerido: **>= 22**.
     por tarea.** Commits atómicos y bien descritos, con prefijo en inglés
     (Conventional Commits) y descripción en español.
 
+### 4.1 Salida controlada del modo kiosko
+
+Sin esta pieza, el modo kiosko no dejaba ninguna forma ordenada de cerrar la
+aplicación y había que matar el proceso desde el Administrador de tareas, lo
+que deja la base de datos sin consolidar y no registra nada en la auditoría.
+
+- **Atajo:** `Ctrl + Shift + Alt + Q` (macOS: `Ctrl + Shift + Option + Q`).
+  Vive en una sola constante, `ATAJO_SALIDA_CONTROLADA` en
+  `src/shared/kiosk-input.ts`. Cambiarlo es editar esa constante.
+- **Se identifica por la tecla FÍSICA** (`code === 'KeyQ'`), nunca por el
+  carácter. En un teclado latinoamericano de Windows, AltGr equivale a Ctrl+Alt
+  y produce caracteres distintos; comparando por carácter el atajo no
+  funcionaría en la máquina de la tienda.
+- **Se captura con `before-input-event`, no con `globalShortcut`**: un atajo
+  global se registra en todo el sistema operativo y le robaría la combinación
+  a cualquier otra aplicación abierta.
+- **Requiere PIN de administrador.** El PIN se verifica en el proceso
+  principal, nunca en la interfaz. Tres intentos fallidos bloquean el atajo 30
+  segundos.
+- **No se puede saltar el atajo:** el proceso principal solo acepta un PIN si
+  hay una solicitud viva (menos de dos minutos desde la pulsación). Sin eso, la
+  interfaz podría usarse para adivinar el PIN a fuerza de intentos.
+- **Cierre ordenado** significa, en concreto: se quitan los canales IPC, se
+  consolida el WAL de SQLite en el archivo principal
+  (`wal_checkpoint(TRUNCATE)`) y recién entonces se cierra la conexión y la
+  aplicación.
+- **Origen del PIN, hoy:** variable de entorno `POS_PIN_ADMINISTRADOR`. En
+  desarrollo, si no está configurada se usa `0000` con una advertencia en
+  consola; en producción, sin PIN configurado la salida queda deshabilitada.
+  Es **provisional**: cuando exista el módulo de usuarios, el PIN saldrá de la
+  base de datos como hash y la auditoría podrá decir **quién** autorizó.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -127,6 +165,14 @@ Node requerido: **>= 22**.
 | Idioma mixto: técnico en inglés, dominio en español | Todo en inglés; todo en español | El inglés es el estándar de la industria para lo genérico; el español es el vocabulario que el cliente y el auditor usan y hace la auditoría más rápida. | Prompt 1 — 2026-09-04 |
 | Solo dos ramas: `main` y `develop` | git-flow con rama por tarea | Un solo desarrollador y un auditor. Las ramas por tarea agregan ceremonia sin agregar control. | Prompt 1 — 2026-09-04 |
 | Verificación de arranque no interactiva (`npm run verify:arranque`) | Verificar abriendo la app y mirando la pantalla | Le da al auditor un informe comparable (resultado esperado vs. real) sin depender de que alguien mire la pantalla y opine. | Prompt 1 — 2026-09-04 |
+| **Política de redondeo: REDONDEO ÚNICO AL FINAL.** Toda la cadena de cálculo se mantiene exacta y el redondeo ocurre una sola vez, al persistir, mostrar o imprimir. Nunca se redondea un resultado intermedio. | Redondear cada línea o cada paso intermedio; truncar en cada operación | Tres pesadas de 0.5 lb a Q0.67/lb valen Q0.335 cada una: redondeando al final el total es Q1.01, redondeando línea por línea da Q1.02 y se le cobra de más al cliente. La política está enunciada en el encabezado de `money.ts` y **verificada** por el grupo de pruebas "Política de redondeo del sistema", que falla si alguien agrega un redondeo intermedio. Única excepción controlada: `repartirMonto`, que debe redondear para prorratear, con la garantía verificable de que la suma de las partes es exactamente el total. | Prompt 2 — 2026-09-04 |
+| Salida controlada del kiosko con atajo + PIN de administrador | Dejar la app sin salida (matar el proceso); un botón de salir en la interfaz; salida sin PIN | Sin salida ordenada había que matar el proceso desde el Administrador de tareas, lo que deja el WAL de SQLite sin consolidar y no registra nada. Un botón visible sería una invitación para el cajero. El PIN convierte la salida en una acción de administrador auditable. | Prompt 2 — 2026-09-04 |
+| El atajo se captura con `before-input-event` y no con `globalShortcut` | `globalShortcut` de Electron | `globalShortcut` registra la combinación en todo el sistema operativo y se la roba a cualquier otra aplicación abierta, incluida la del desarrollador. El atajo solo debe existir mientras el POS tiene el foco. | Prompt 2 — 2026-09-04 |
+| Las combinaciones de teclas se identifican por tecla FÍSICA (`code`) y no por carácter (`key`) | Comparar `key === 'q'` | En el teclado latinoamericano de Windows, AltGr es Ctrl+Alt y cambia el carácter que produce cada tecla. Comparando por carácter, el atajo del administrador simplemente no funcionaría en la computadora de la tienda. | Prompt 2 — 2026-09-04 |
+| PIN de administrador provisional desde variable de entorno, con respaldo solo en desarrollo | Dejarlo fijo en el código; no pedir PIN; esperar al módulo de usuarios para tener salida | Un PIN fijo en el código es específico del cliente y no puede versionarse (ver NEGOCIO_VS_NUCLEO.md). Sin respaldo en desarrollo, cada sesión terminaría matando el proceso. En producción, sin PIN configurado la salida queda deshabilitada en vez de aceptar uno adivinable. | Prompt 2 — 2026-09-04 |
+| Limitador de intentos del PIN: 3 intentos y 30 segundos de bloqueo | Sin límite de intentos | Un PIN de cuatro dígitos sin límite se adivina por fuerza bruta en minutos, y hoy el PIN es lo único que separa a un cajero de cerrar el punto de venta. Un PIN con formato inválido no consume intentos, para que nadie se autobloquee por un error de tecleo. | Prompt 2 — 2026-09-04 |
+| Solo se acepta un PIN si hay una solicitud de salida viva (2 minutos) | Aceptar el PIN en cualquier momento | Sin esa ventana, una interfaz comprometida podría usar el canal IPC como oráculo para adivinar el PIN sin que nadie toque el teclado. | Prompt 2 — 2026-09-04 |
+| El cierre ordenado consolida el WAL con `wal_checkpoint(TRUNCATE)` | Cerrar la conexión sin consolidar | Con WAL, las escrituras recientes viven en un archivo `-wal` aparte. Cerrar sin consolidar deja la base correcta pero repartida en dos archivos, lo que complica los respaldos y la revisión del archivo por parte del auditor. | Prompt 2 — 2026-09-04 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -153,13 +199,14 @@ código, documentarlo aquí y continuar con lo demás. **No asumir una regla.**
 | 2 | ¿La tienda emite factura fiscal (FEL/SAT) o solo recibo y proforma internos? | Cambia por completo el módulo de comprobantes y las obligaciones legales. | Abierto |
 | 3 | ¿El precio de mayoreo se activa por cantidad comprada, por tipo de cliente, o ambos? | Define el modelo de precios del catálogo. | Abierto |
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
-| 5 | ¿El PIN de autorización es por usuario administrador o uno solo para la tienda? | Determina si el log de auditoría puede identificar **quién** autorizó. Recomendación técnica: por usuario. | Abierto |
+| 5 | ¿El PIN de autorización es por usuario administrador o uno solo para la tienda? | Determina si el log de auditoría puede identificar **quién** autorizó. Hoy el PIN sale de `POS_PIN_ADMINISTRADOR` y el sistema sabe QUE alguien autorizó, pero no QUIÉN. Recomendación técnica: por usuario. | Abierto — implementación provisional en marcha |
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? | Define la matriz de permisos (RBAC). | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre el peso inicial de un lote y la suma de lo vendido)? | Sin regla, el inventario nunca cuadrará contra la realidad física. | Abierto |
 | 8 | ¿Qué pasa si un lote se agota **a mitad** de una pesada? ¿Se parte la línea en dos lotes o se rechaza? | Depende también del punto 6.1. | Abierto |
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
+| 12 | Falta probar el atajo de salida en una máquina Windows real con teclado latinoamericano. | El atajo está verificado en macOS de extremo a extremo y cubierto por pruebas que simulan la entrada de Windows, pero nadie lo ha presionado todavía en la computadora del mostrador. | Abierto — pendiente de acceso a una máquina Windows |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
@@ -169,7 +216,12 @@ Al cierre del Prompt 1 el repositorio tiene **andamiaje**, no negocio:
   verificación técnica y se reemplaza cuando lleguen los módulos reales.
 - No hay esquema de base de datos del dominio. Solo existe la tabla
   `prueba_conexion`, que se elimina cuando lleguen las migraciones reales.
-- No hay lógica de ventas, lotes, descuentos, caja, usuarios ni auditoría.
+- No hay lógica de ventas, lotes, descuentos, caja, usuarios ni auditoría. La
+  única excepción es el verificador de PIN de administrador
+  (`src/main/security/admin-pin.ts`), que existe porque la salida controlada lo
+  necesitaba; es provisional y lo reemplazará el módulo de usuarios.
+- No hay log de auditoría: los puntos donde debería escribirse ya están
+  marcados con `TODO(auditoria)` en el controlador de salida.
 - No hay adaptador real de impresora ni de Supabase: solo los contratos y las
   implementaciones seguras por defecto.
 

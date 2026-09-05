@@ -194,4 +194,10 @@ Cajero pesa 12.5 lb de maíz
   aplicación.
 - **Modo kiosko:** pantalla completa, sin marco, sin menú de aplicación, sin
   zoom (bloqueado en el proceso principal **y** en el DOM desde el preload) y
-  sin menú de clic derecho.
+  sin menú de clic derecho. Las reglas de qué se bloquea viven como funciones
+  puras en `src/shared/kiosk-input.ts`, separadas de la parte mecánica, para
+  poder probarlas con Vitest en vez de revisarlas a ojo.
+- **Salida controlada:** el atajo del administrador más su PIN son la única
+  forma ordenada de cerrar. El PIN se verifica en el proceso principal
+  (`src/main/security/admin-pin.ts`) y el flujo lo coordina
+  `src/main/windows/controlled-exit.ts`. Ver la sección 4.1 de `CLAUDE.md`.

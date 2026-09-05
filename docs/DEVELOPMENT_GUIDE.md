@@ -100,6 +100,12 @@ Ejemplo: agregar el módulo **descuentos**.
 
 - **Todo lo que use Decimal.js.** Cálculo de líneas, totales, descuentos,
   vueltos, conversiones de unidad, prorrateos. Con casos borde de redondeo.
+- **La política de redondeo del sistema.** La regla es **redondeo único al
+  final**: la cadena de cálculo se mantiene exacta y se redondea una sola vez,
+  al persistir, mostrar o imprimir. Cualquier función de cálculo nueva debe
+  sumarse al grupo de pruebas "Política de redondeo del sistema" de
+  `money.test.ts`, que existe justamente para que la política no dependa de
+  que alguien la recuerde.
 - **Todas las reglas de negocio.** Límites de descuento por rol, autorización
   por PIN, agotamiento de lotes, apertura obligatoria de lote nuevo, cuadre del
   corte de caja.
@@ -143,7 +149,65 @@ Reglas:
 - Un caso borde por prueba. Si una prueba falla, debe quedar claro **qué** regla
   se rompió.
 
-## 4. Reglas de código que hace cumplir el lint
+## 4. Cómo cerrar la aplicación (y no matar el proceso)
+
+La ventana corre en modo kiosko: no tiene barra de título, ni botón de cerrar,
+ni menú. Esto es deliberado, pero significa que hay que conocer la salida.
+
+### 4.1 La salida controlada (la que hay que usar)
+
+Presionar **`Ctrl + Shift + Alt + Q`** — en macOS, **`Ctrl + Shift + Option + Q`**.
+Aparece un diálogo que pide el **PIN de administrador**. Con el PIN correcto la
+aplicación se cierra de forma ordenada.
+
+> Este atajo es una salida de emergencia del administrador. **No se documenta
+> ni se le muestra al usuario de venta**, y no debe existir ningún botón, menú
+> ni pista visual que lo revele. Si algún día aparece uno, es un defecto.
+
+**El PIN en desarrollo:** si no hay `POS_PIN_ADMINISTRADOR` en el `.env`, en
+desarrollo se usa **`0000`** y la consola lo avisa al arrancar. Para trabajar
+con un PIN propio:
+
+```bash
+echo "POS_PIN_ADMINISTRADOR=1234" >> .env
+```
+
+En producción **no hay PIN de respaldo**: si la instalación no tiene uno
+configurado, la salida controlada queda deshabilitada y el diálogo lo dice.
+
+### 4.2 Qué significa "cierre ordenado"
+
+No es solo `app.quit()`. En orden:
+
+1. Se quitan los canales IPC, para que no entre trabajo nuevo.
+2. Se consolida el WAL de SQLite en el archivo principal
+   (`wal_checkpoint(TRUNCATE)`), de modo que el `.db` quede completo y
+   respaldable, sin un `-wal` suelto al lado.
+3. Se cierra la conexión y recién entonces la aplicación.
+
+Matar el proceso desde el Administrador de tareas o con `kill -9` se salta los
+tres pasos.
+
+### 4.3 Otras salidas, y por qué no alcanzan
+
+| Vía | Sirve | Comentario |
+|---|---|---|
+| `Ctrl + Shift + Alt + Q` + PIN | Sí | La única que cierra de forma ordenada. Es la que hay que usar. |
+| `Cmd + Q` (macOS) | Parcial | Electron cierra la app y la red de seguridad de `will-quit` libera la base, pero **sin** consolidar el WAL. |
+| `Ctrl + C` en la terminal de `npm run dev` | Parcial | Mata el proceso de Electron. Sirve para salir de un apuro en desarrollo, no consolida nada. |
+| Administrador de tareas / `kill -9` | Último recurso | Deja el WAL sin consolidar. Es exactamente lo que la salida controlada vino a evitar. |
+
+### 4.4 Verificar la salida sin abrir la ventana
+
+```bash
+npm run verify:arranque
+```
+
+Ese comando ejercita el camino completo dentro de la aplicación real —atajo,
+PIN incorrecto rechazado, PIN correcto autorizado, cierre ordenado— e imprime
+un informe en JSON con lo que encontró.
+
+## 5. Reglas de código que hace cumplir el lint
 
 `npm run lint` no es cosmético: bloquea errores de arquitectura.
 
@@ -155,8 +219,9 @@ Reglas:
 | `@typescript-eslint/no-explicit-any` y familia `no-unsafe-*` | Que se pierda el tipado en la frontera con librerías externas. |
 | `explicit-function-return-type` | Funciones cuyo tipo de retorno haya que adivinar. |
 | `no-floating-promises` | Un `await` olvidado — en una venta, eso es una venta perdida en silencio. |
+| `no-restricted-imports` en `src/shared` | Que el código compartido dependa de Electron, SQLite o el SDK de Supabase. |
 
-## 5. Checklist de "listo para commit"
+## 6. Checklist de "listo para commit"
 
 Antes de cada commit, en orden:
 
@@ -165,6 +230,8 @@ Antes de cada commit, en orden:
 - [ ] `npm test` pasa, y las pruebas nuevas tienen nombres en español legibles.
 - [ ] Todo cálculo de dinero, peso o cantidad usa `money.ts`. **Cero** operadores
       `+ - * /` sobre montos.
+- [ ] Se respeta el **redondeo único al final**: ninguna función de cálculo
+      nueva redondea resultados intermedios.
 - [ ] Los comentarios de la lógica de negocio no obvia están en español y
       explican el *por qué*.
 - [ ] Ningún nombre nuevo rompe la convención de idioma.
@@ -179,7 +246,7 @@ Antes de cada commit, en orden:
 
 Atajo: `npm run verify` corre lint, tipos y pruebas de un solo tirón.
 
-## 6. Trabajo con Git
+## 7. Trabajo con Git
 
 - Solo dos ramas: `main` y `develop`.
 - Todo el trabajo ocurre en `develop`.
