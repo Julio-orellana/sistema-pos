@@ -276,6 +276,37 @@ dónde salió el segundo escritor. Probablemente signifique que se abrió el pun
 pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
 un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
 
+### 4.4 Estado del proyecto en Supabase
+
+El esquema espejo **ya está aplicado** contra el proyecto real.
+
+| Dato | Valor |
+|---|---|
+| Proyecto | `pos-jimmy-cano` |
+| Referencia | `zgsdaelmbxufgcsideep` |
+| Región | us-east-2 |
+| Postgres | 17 |
+| Migración aplicada | `20260905143642_esquema_inicial` |
+| Aplicada el | 2026-09-05 |
+| Plan | gratuito |
+
+Estado verificado contra el proyecto, no contra el script: **10 tablas**, 0 filas,
+RLS activo en las 10 sin políticas (deniega todo), 21 índices propios, 11 llaves
+foráneas, 37 restricciones CHECK y el trigger `auditoria_log_prohibir_cambios`.
+`sync_cola` **no** existe allí, como corresponde.
+
+Pendiente en la nube, para el prompt del módulo de sincronización:
+
+- Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave anónima
+  no puede leer ni escribir nada. La sincronización usará una llave de
+  servicio, que ignora RLS por diseño.
+- Resolver la advertencia `function_search_path_mutable` sobre la función
+  `auditoria_log_es_inmutable`, agregándole `SET search_path = ''`.
+
+**No tocar** la función `public.rls_auto_enable()`: es un disparador de eventos
+preexistente del proyecto, ajeno a este esquema. Tiene dos advertencias de
+seguridad propias que le corresponde revisar a Julio.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
