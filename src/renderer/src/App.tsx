@@ -43,10 +43,7 @@ export function App(): React.JSX.Element {
     const consultar = async (): Promise<void> => {
       const [respuestaAplicacion, respuestaBase] = await Promise.all([
         window.pos.diagnostico.aplicacion(),
-        window.pos.diagnostico.baseDeDatos({
-          incluirConteoDeRegistros: true,
-          descripcionDePrueba: `Verificación de arranque ${new Date().toISOString()}`,
-        }),
+        window.pos.diagnostico.baseDeDatos({ incluirConteoDeRegistros: true }),
       ]);
 
       if (!vigente) {
@@ -117,11 +114,11 @@ export function App(): React.JSX.Element {
               etiqueta="Llaves foráneas"
               valor={baseDeDatos.llavesForaneasActivas ? 'Activas' : 'Inactivas'}
             />
-            <Dato etiqueta="Tabla de prueba" valor={baseDeDatos.tablaDePrueba} />
             <Dato
-              etiqueta="Registros escritos"
-              valor={baseDeDatos.registrosDePrueba === null ? 'No contados' : String(baseDeDatos.registrosDePrueba)}
+              etiqueta="Migraciones aplicadas"
+              valor={`${String(baseDeDatos.migracionesAplicadas)} (${baseDeDatos.ultimaMigracion ?? 'ninguna'})`}
             />
+            <Dato etiqueta="Tablas del esquema" valor={String(baseDeDatos.tablas.length)} />
             <Dato etiqueta="Archivo" valor={baseDeDatos.rutaArchivo} />
           </>
         )}

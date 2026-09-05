@@ -11,9 +11,6 @@
 
 import { z } from 'zod';
 
-/** Largo máximo del texto de prueba que puede escribirse en la tabla de diagnóstico. */
-const LARGO_MAXIMO_DESCRIPCION_PRUEBA = 200;
-
 // ---------------------------------------------------------------------------
 // Canales
 // ---------------------------------------------------------------------------
@@ -85,10 +82,8 @@ export function respuestaFallida<T>(codigo: string, mensaje: string, detalle?: s
  * hoy lo escribamos nosotros, se trata como entrada no confiable por principio.
  */
 export const esquemaSolicitudDiagnostico = z.object({
-  /** Si es `true`, el diagnóstico cuenta los registros de la tabla de prueba. */
+  /** Si es `true`, el diagnóstico cuenta los registros de cada tabla. */
   incluirConteoDeRegistros: z.boolean().default(true),
-  /** Texto opcional que se inserta como registro de prueba para verificar escritura. */
-  descripcionDePrueba: z.string().min(1).max(LARGO_MAXIMO_DESCRIPCION_PRUEBA).optional(),
 });
 
 /** Solicitud de diagnóstico ya validada. */
@@ -104,12 +99,14 @@ export interface DiagnosticoBaseDeDatos {
   readonly modoJournal: string;
   /** Si las llaves foráneas están activas (se espera `true`). */
   readonly llavesForaneasActivas: boolean;
-  /** Nombre de la tabla de prueba usada para verificar lectura y escritura. */
-  readonly tablaDePrueba: string;
-  /** Cuántos registros tiene la tabla de prueba, o `null` si no se pidió contar. */
-  readonly registrosDePrueba: number | null;
-  /** Última descripción escrita en la tabla de prueba, si hay alguna. */
-  readonly ultimoRegistro: string | null;
+  /** Tablas que existen en el esquema, en orden alfabético. */
+  readonly tablas: readonly string[];
+  /** Cuántas migraciones se aplicaron. */
+  readonly migracionesAplicadas: number;
+  /** Nombre de la última migración aplicada, o `null` si la base está virgen. */
+  readonly ultimaMigracion: string | null;
+  /** Registros por tabla, o `null` si no se pidió contar. */
+  readonly conteoPorTabla: Readonly<Record<string, number>> | null;
   /** Marca de tiempo ISO-8601 UTC del diagnóstico. */
   readonly verificadoEn: string;
 }

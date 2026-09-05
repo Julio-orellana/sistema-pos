@@ -19,6 +19,7 @@ import {
   ejecutarDiagnostico,
   type ResultadoCierreOrdenado,
 } from '@main/database/connection';
+import { obtenerRutaBaseDeDatos } from '@main/database/db-path';
 import { quitarManejadoresIpc, registrarManejadoresIpc } from '@main/ipc/register-handlers';
 import { PIN_POR_DEFECTO_EN_DESARROLLO, crearVerificadorDePin } from '@main/security/admin-pin';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
@@ -95,12 +96,15 @@ app.on('second-instance', () => {
 app.whenReady().then(
   () => {
     try {
-      abrirBaseDeDatos();
+      const migraciones = abrirBaseDeDatos(obtenerRutaBaseDeDatos());
+      if (migraciones.aplicadasAhora.length > 0) {
+        console.info(`[base-de-datos] Migraciones aplicadas: ${migraciones.aplicadasAhora.join(', ')}`);
+      }
     } catch (error) {
       const detalle = error instanceof Error ? error.message : String(error);
       dialog.showErrorBox(
         'No se pudo abrir la base de datos',
-        `El punto de venta no puede iniciar sin su base de datos local.\n\nDetalle: ${detalle}`,
+        `El punto de venta no puede iniciar sin su base de datos local ni sin sus migraciones aplicadas.\n\nDetalle: ${detalle}`,
       );
       app.quit();
       return;
@@ -224,10 +228,7 @@ async function ejecutarVerificacionDeArranque(
   const conPinIncorrecto = controladorDeSalida.confirmarSalida('999999');
 
   // El diagnóstico de la base se toma ANTES del cierre, mientras sigue abierta.
-  const baseDeDatos = ejecutarDiagnostico({
-    incluirConteoDeRegistros: true,
-    descripcionDePrueba: 'Verificación automatizada de arranque',
-  });
+  const baseDeDatos = ejecutarDiagnostico({ incluirConteoDeRegistros: true });
 
   // Camino completo: el PIN correcto autoriza y dispara el cierre ordenado.
   // Es la misma ruta que recorrerá el administrador en la tienda.
