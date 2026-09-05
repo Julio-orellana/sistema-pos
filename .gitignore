@@ -15,7 +15,6 @@ dist/
 dist-electron/
 dist-ssr/
 out/
-build/
 .vite/
 
 # --- Empaquetado de electron-builder ------------------------------------
@@ -34,6 +33,9 @@ app-builds/
 *.zip.blockmap
 
 # --- Binarios nativos compilados (better-sqlite3 y cualquier .node) -----
+# Ojo: NO se ignora la carpeta "build/" completa, porque electron-builder.yml
+# la declara como buildResources (ahí van los iconos del instalador, que sí se
+# versionan). Solo se ignoran los artefactos de compilación que hay dentro.
 # better-sqlite3 se recompila contra el ABI de Electron en cada máquina;
 # su binario NUNCA se versiona.
 *.node
@@ -83,7 +85,6 @@ lerna-debug.log*
 coverage/
 .nyc_output/
 test-results/
-html/
 
 # --- Sistema operativo ---------------------------------------------------
 .DS_Store
