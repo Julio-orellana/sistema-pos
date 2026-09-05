@@ -229,6 +229,53 @@ Ayuda además que la aplicación tenga **instancia única** y que better-sqlite3
 sea síncrono: dentro del proceso no hay concurrencia real. La regla existe
 igual, porque no queremos que la corrección dependa de eso.
 
+#### Qué pasa cuando el comparar-y-cambiar falla
+
+Falla cuando el `UPDATE` condicional afecta **cero filas**: el saldo ya no era
+el que se había leído. La política es esta, y no se improvisa:
+
+**CERO REINTENTOS AUTOMÁTICOS. La transacción se revierte entera y decide el
+cajero.**
+
+En concreto:
+
+| Pregunta | Respuesta |
+|---|---|
+| ¿Reintenta solo? | **No.** Ninguna vez. |
+| ¿Cuánto espera entre intentos? | No aplica: no hay intentos. |
+| ¿Qué se revierte? | **Toda** la transacción: la venta, su detalle, el descuento de inventario y el contador de ventas. No queda nada a medias. |
+| ¿Hay que rehacer la venta desde cero? | **No.** Se revierte la transacción de base, no el carrito de la pantalla. El cajero vuelve a pulsar Cobrar; no vuelve a capturar los productos. |
+| ¿Qué ve el cajero? | `CONFLICTO_DE_INVENTARIO`: *"El inventario de {producto} cambió mientras se cobraba. No se registró la venta. Revisá la cantidad y volvé a cobrar."* El código y el mensaje ya existen en `errores.ts` (`errorDeConflictoDeInventario`). |
+| ¿Queda registrado? | **Sí**, un asiento de auditoría. En esta arquitectura no debería ocurrir nunca, así que cada ocurrencia es evidencia de que algo hay que investigar. |
+
+**Por qué cero reintentos, y no uno o tres con espera:**
+
+1. **En esta arquitectura, un conflicto no debería poder ocurrir.** La
+   aplicación tiene instancia única, better-sqlite3 es síncrono y el
+   comparar-y-cambiar corre dentro de una transacción `BEGIN IMMEDIATE`, que
+   toma el bloqueo de escritura antes de leer. No hay ventana. Si aun así
+   falla, la premisa se rompió: hay un segundo escritor sobre el archivo, o el
+   saldo se leyó fuera de la transacción, que es exactamente el error que este
+   patrón existe para atrapar. **Reintentar taparía el defecto.**
+2. **Un reintento silencioso podría cobrar algo distinto de lo que el cajero
+   vio.** Al releer el saldo, la venta se recalcularía contra un inventario que
+   nadie revisó, con un cliente esperando. Preferimos un mensaje claro.
+3. **Un bucle de reintentos con esperas es peor experiencia que un aviso
+   inmediato** en un mostrador: la caja parecería colgada.
+
+**No confundir con `SQLITE_BUSY`, que es otra cosa.** Si el archivo está
+bloqueado por otra conexión, eso **sí** se reintenta automáticamente, pero lo
+hace el propio controlador: better-sqlite3 espera hasta su `timeout`, que por
+omisión es de **5000 ms** (verificado en `node_modules/better-sqlite3/lib/database.js`).
+Eso es contención de bloqueo, no un conflicto de datos, y no lo maneja nuestro
+código. Si vence ese tiempo, la venta falla igual y el cajero reintenta.
+
+**Cuándo revisar esta decisión:** si un conflicto de inventario llega a
+ocurrir en la tienda, la respuesta NO es agregar reintentos, sino averiguar de
+dónde salió el segundo escritor. Probablemente signifique que se abrió el punto
+pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
+un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -275,6 +322,7 @@ igual, porque no queremos que la corrección dependa de eso.
 | **Los campos transaccionales de `ventas` y `venta_detalle` quedan SIN piso, a propósito.** Ver la tabla completa en la sección 4.2. | Ponerles piso 0 "por prolijidad" | Se reservan para el futuro módulo de devoluciones, que necesitará cantidades y totales negativos. Llevan un comentario explícito en ambos esquemas y pruebas que verifican que **aceptan** negativos, para que ninguna sesión futura los "corrija". Los campos de precio y configuración sí tienen piso: un precio o un tope de descuento no cambia de signo por una devolución. | Prompt 6 — 2026-09-05 |
 | **Un único punto traduce los errores de restricción a errores de negocio** (`errores.ts`), y toda escritura de repositorio pasa por `RepositorioBase.ejecutar()`. | Dejar pasar el error crudo de SQLite; traducir en cada pantalla | "CHECK constraint failed: productos_inventario_no_negativo" no se le puede mostrar a un cajero con un cliente enfrente, y traducir en cada pantalla garantiza que alguna se olvide. El error se convierte en `STOCK_INSUFICIENTE` con el mensaje "Stock insuficiente para completar la venta", conservando la causa técnica para la bitácora. Un error que NO se reconoce pasa sin envolver, para no esconder fallos de programación detrás de un texto tranquilizador. | Prompt 6 — 2026-09-05 |
 | **El descuento de inventario debe ser atómico** (ver sección 4.3): en Postgres con `SET col = col - :cantidad`; en SQLite con comparar-y-cambiar dentro de una sola transacción de escritura, porque allí la resta en SQL sería de punto flotante. | Leer, restar en la aplicación y escribir después, en operaciones separadas | Entre la lectura y la escritura hay una ventana en la que otra operación puede mover el saldo, y entonces el CHECK se evalúa sobre datos viejos. | Prompt 6 — 2026-09-05 |
+| **Ante un conflicto de inventario (el comparar-y-cambiar afecta 0 filas): CERO reintentos automáticos.** Se revierte toda la transacción, el carrito de la pantalla se conserva y el cajero vuelve a cobrar. Queda un asiento de auditoría. | Reintentar N veces con espera; reintentar una sola vez; recalcular en silencio contra el saldo nuevo | En esta arquitectura el conflicto no debería poder ocurrir: instancia única, better-sqlite3 síncrono y `BEGIN IMMEDIATE` toma el bloqueo antes de leer. Si ocurre, la premisa se rompió —hay un segundo escritor, o el saldo se leyó fuera de la transacción— y reintentar taparía el defecto. Además, un reintento silencioso podría cobrar contra un inventario que nadie revisó, con el cliente enfrente. No confundir con `SQLITE_BUSY`, que sí se reintenta, pero lo hace el controlador con su timeout de 5000 ms. Ver la sección 4.3. | Prompt 7 — 2026-09-05 |
 | Salida controlada del kiosko con atajo + PIN de administrador | Dejar la app sin salida (matar el proceso); un botón de salir en la interfaz; salida sin PIN | Sin salida ordenada había que matar el proceso desde el Administrador de tareas, lo que deja el WAL de SQLite sin consolidar y no registra nada. Un botón visible sería una invitación para el cajero. El PIN convierte la salida en una acción de administrador auditable. | Prompt 2 — 2026-09-04 |
 | El atajo se captura con `before-input-event` y no con `globalShortcut` | `globalShortcut` de Electron | `globalShortcut` registra la combinación en todo el sistema operativo y se la roba a cualquier otra aplicación abierta, incluida la del desarrollador. El atajo solo debe existir mientras el POS tiene el foco. | Prompt 2 — 2026-09-04 |
 | Las combinaciones de teclas se identifican por tecla FÍSICA (`code`) y no por carácter (`key`) | Comparar `key === 'q'` | En el teclado latinoamericano de Windows, AltGr es Ctrl+Alt y cambia el carácter que produce cada tecla. Comparando por carácter, el atajo del administrador simplemente no funcionaría en la computadora de la tienda. | Prompt 2 — 2026-09-04 |

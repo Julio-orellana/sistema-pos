@@ -20,6 +20,7 @@
 /** Situaciones de negocio que la base puede detectar por su cuenta. */
 export type CodigoErrorDeNegocio =
   | 'STOCK_INSUFICIENTE'
+  | 'CONFLICTO_DE_INVENTARIO'
   | 'CAJA_YA_ABIERTA'
   | 'NUMERO_DE_RECIBO_DUPLICADO'
   | 'REGISTRO_DUPLICADO'
@@ -169,6 +170,30 @@ export function traducirErrorDeBaseDeDatos(error: unknown): unknown {
   }
 
   return new ErrorDeNegocio(regla.codigo, regla.mensaje, error.message);
+}
+
+/**
+ * Error de conflicto de inventario: el saldo del producto cambió entre que se
+ * leyó y que se quiso escribir, así que el comparar-y-cambiar no encontró el
+ * valor esperado y no actualizó ninguna fila.
+ *
+ * NO nace de una restricción de la base, sino de que el UPDATE condicional
+ * afectó cero filas. Se declara aquí igual para que el futuro módulo de ventas
+ * use este código y este mensaje exactos, y no improvise los suyos.
+ *
+ * POLÍTICA: cero reintentos automáticos. La transacción se revierte entera y el
+ * cajero decide. El porqué está en la sección 4.3 de CLAUDE.md.
+ */
+export function errorDeConflictoDeInventario(
+  nombreDelProducto: string,
+  causaTecnica = 'El UPDATE condicional de inventario afectó 0 filas.',
+): ErrorDeNegocio {
+  return new ErrorDeNegocio(
+    'CONFLICTO_DE_INVENTARIO',
+    `El inventario de ${nombreDelProducto} cambió mientras se cobraba. ` +
+      'No se registró la venta. Revisá la cantidad y volvé a cobrar.',
+    causaTecnica,
+  );
 }
 
 /**

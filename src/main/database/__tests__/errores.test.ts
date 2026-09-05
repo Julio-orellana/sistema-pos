@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
 
-import { ErrorDeNegocio, traducirErrorDeBaseDeDatos } from '../errores';
+import { ErrorDeNegocio, errorDeConflictoDeInventario, traducirErrorDeBaseDeDatos } from '../errores';
 import { crearRepositorios, type Repositorios } from '../repositories';
 import { crearBaseMigrada } from './ayuda-base-de-datos';
 
@@ -163,6 +163,40 @@ describe('Otras reglas que la base hace cumplir, traducidas', () => {
     } catch (error) {
       expect((error as ErrorDeNegocio).codigo).toBe('REGISTRO_DUPLICADO');
     }
+  });
+});
+
+// ===========================================================================
+describe('Conflicto de inventario: el contrato del comparar-y-cambiar', () => {
+  // El módulo de ventas todavía no existe; lo que se fija aquí es el código y
+  // el mensaje exactos que deberá usar, para que no se improvisen después.
+
+  it('nombra el producto y deja claro que la venta NO se registró', () => {
+    const error = errorDeConflictoDeInventario('Maíz');
+
+    expect(error).toBeInstanceOf(ErrorDeNegocio);
+    expect(error.codigo).toBe('CONFLICTO_DE_INVENTARIO');
+    expect(error.mensajeParaElUsuario).toContain('Maíz');
+    expect(error.mensajeParaElUsuario).toContain('No se registró la venta');
+    expect(error.mensajeParaElUsuario).toContain('volvé a cobrar');
+  });
+
+  it('el mensaje NO le pide al cajero rehacer la venta desde cero', () => {
+    // La transacción se revierte, pero el carrito de la pantalla se conserva:
+    // el cajero vuelve a cobrar, no vuelve a capturar todo.
+    const mensaje = errorDeConflictoDeInventario('Azúcar').mensajeParaElUsuario;
+    expect(mensaje).not.toContain('desde cero');
+    expect(mensaje).not.toContain('nuevamente todos');
+  });
+
+  it('conserva la causa técnica para la bitácora', () => {
+    const error = errorDeConflictoDeInventario('Frijol');
+    expect(error.causaTecnica).toContain('0 filas');
+  });
+
+  it('es distinto de STOCK_INSUFICIENTE: son dos situaciones diferentes', () => {
+    // Stock insuficiente = no alcanza. Conflicto = alguien lo movió entremedio.
+    expect(errorDeConflictoDeInventario('Maíz').codigo).not.toBe('STOCK_INSUFICIENTE');
   });
 });
 
