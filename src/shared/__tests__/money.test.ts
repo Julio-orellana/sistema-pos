@@ -21,6 +21,7 @@ import {
   absoluto,
   cantidadACadena,
   comparar,
+  conciliarSubtotalesConTotal,
   decimal,
   dividir,
   esCero,
@@ -212,7 +213,7 @@ describe('Política de redondeo del sistema: redondeo único al final', () => {
     });
   });
 
-  describe('repartirMonto es la única excepción, y está acotada', () => {
+  describe('repartirMonto es una excepción controlada, y está acotada', () => {
     it('redondea porque un centavo no se puede partir, pero la suma cuadra exacta', () => {
       const TOTAL = '7.77';
       const partes = repartirMonto(TOTAL, ['1', '1', '1', '1', '1', '1', '1']);
@@ -532,6 +533,185 @@ describe('Reparto proporcional de un monto (prorrateo de descuento global)', () 
     } catch (error) {
       expect((error as ErrorDeMonto).codigo).toBe('REPARTO_INVALIDO');
     }
+  });
+});
+
+// ===========================================================================
+describe('El comprobante impreso cuadra: las líneas suman exactamente el total', () => {
+  /**
+   * Imprime un comprobante tal como saldría en papel y devuelve las cadenas.
+   * Trabaja con las MISMAS funciones que usará el módulo de comprobantes.
+   */
+  function imprimirComprobante(
+    lineas: readonly { readonly producto: string; readonly libras: string; readonly precioPorLibra: string }[],
+  ): { renglones: string[]; sumaDeLineasImpresas: string; totalImpreso: string } {
+    const valoresExactos = lineas.map((linea) => multiplicar(linea.libras, linea.precioPorLibra));
+    const comprobante = conciliarSubtotalesConTotal(valoresExactos);
+
+    const renglones = lineas.map((linea, indice) => {
+      const importe = montoACadena(comprobante.lineas[indice] ?? '0');
+      return `${linea.producto} ${linea.libras} lb x Q${linea.precioPorLibra} = Q${importe}`;
+    });
+
+    return {
+      renglones,
+      sumaDeLineasImpresas: montoACadena(sumarLista(comprobante.lineas)),
+      totalImpreso: montoACadena(comprobante.total),
+    };
+  }
+
+  it('CASO CONCRETO DE TRES LÍNEAS donde el redondeo por línea SÍ difiere del total', () => {
+    // Maíz 1.5 lb x Q2.23  = 3.345 exacto
+    // Azúcar 2.5 lb x Q4.11 = 10.275 exacto
+    // Frijol 0.5 lb x Q6.35 = 3.175 exacto
+    // Suma exacta = 16.795  ->  total correcto Q16.80
+    // Redondeando cada línea por su cuenta: 3.35 + 10.28 + 3.18 = Q16.81  (un centavo de más)
+    const venta = [
+      { producto: 'Maíz', libras: '1.5', precioPorLibra: '2.23' },
+      { producto: 'Azúcar', libras: '2.5', precioPorLibra: '4.11' },
+      { producto: 'Frijol', libras: '0.5', precioPorLibra: '6.35' },
+    ];
+
+    const valoresExactos = venta.map((linea) => multiplicar(linea.libras, linea.precioPorLibra));
+    expect(valoresExactos.map(aCadena)).toEqual(['3.345', '10.275', '3.175']);
+
+    // Así se vería el problema si cada línea se redondeara por su cuenta.
+    const sumaIngenua = montoACadena(sumarLista(valoresExactos.map(redondearMonto)));
+    expect(sumaIngenua).toBe('16.81');
+    expect(montoACadena(sumarLista(valoresExactos))).toBe('16.80');
+
+    // Y así queda el comprobante con la política del sistema.
+    const comprobante = imprimirComprobante(venta);
+
+    expect(comprobante.renglones).toEqual([
+      'Maíz 1.5 lb x Q2.23 = Q3.35',
+      'Azúcar 2.5 lb x Q4.11 = Q10.28',
+      'Frijol 0.5 lb x Q6.35 = Q3.17',
+    ]);
+    expect(comprobante.totalImpreso).toBe('16.80');
+    expect(comprobante.sumaDeLineasImpresas).toBe('16.80');
+    expect(comprobante.sumaDeLineasImpresas).toBe(comprobante.totalImpreso);
+  });
+
+  it('el caso de las tres pesadas de 0.5 lb a Q0.67 también cuadra en el papel', () => {
+    const venta = [
+      { producto: 'Maíz', libras: '0.5', precioPorLibra: '0.67' },
+      { producto: 'Maíz', libras: '0.5', precioPorLibra: '0.67' },
+      { producto: 'Maíz', libras: '0.5', precioPorLibra: '0.67' },
+    ];
+
+    const comprobante = imprimirComprobante(venta);
+
+    expect(comprobante.renglones).toEqual([
+      'Maíz 0.5 lb x Q0.67 = Q0.34',
+      'Maíz 0.5 lb x Q0.67 = Q0.34',
+      'Maíz 0.5 lb x Q0.67 = Q0.33',
+    ]);
+    expect(comprobante.totalImpreso).toBe('1.01');
+    expect(comprobante.sumaDeLineasImpresas).toBe('1.01');
+  });
+
+  it('el total impreso es el importe correcto, no la suma de líneas redondeadas', () => {
+    const valoresExactos = ['3.345', '10.275', '3.175'];
+    const comprobante = conciliarSubtotalesConTotal(valoresExactos);
+
+    expect(aCadena(comprobante.totalExacto)).toBe('16.795');
+    expect(montoACadena(comprobante.total)).toBe('16.80');
+    expect(comprobante.centavosReconciliados).toBe(2);
+  });
+
+  it('ninguna línea impresa se desvía más de un centavo de su valor real', () => {
+    const valoresExactos = ['3.345', '10.275', '3.175', '0.004', '99.999'];
+    const comprobante = conciliarSubtotalesConTotal(valoresExactos);
+    const UN_CENTAVO = '0.01';
+
+    comprobante.lineas.forEach((impresa, indice) => {
+      const exacta = valoresExactos[indice] ?? '0';
+      expect(esMenorOIgualQue(absoluto(restar(impresa, exacta)), UN_CENTAVO)).toBe(true);
+    });
+  });
+
+  it('con una sola línea, la línea impresa ES el total impreso', () => {
+    const comprobante = conciliarSubtotalesConTotal(['12.345']);
+    expect(montoACadena(comprobante.lineas[0] ?? '0')).toBe('12.35');
+    expect(montoACadena(comprobante.total)).toBe('12.35');
+  });
+
+  it('cuadra también cuando ninguna línea necesita ajuste', () => {
+    const comprobante = conciliarSubtotalesConTotal(['10.00', '5.50', '2.25']);
+    expect(comprobante.centavosReconciliados).toBe(0);
+    expect(comprobante.lineas.map(montoACadena)).toEqual(['10.00', '5.50', '2.25']);
+    expect(montoACadena(comprobante.total)).toBe('17.75');
+  });
+
+  it('cuadra en una devolución, donde los importes son negativos', () => {
+    const comprobante = conciliarSubtotalesConTotal(['-3.345', '-10.275', '-3.175']);
+    expect(montoACadena(comprobante.total)).toBe('-16.80');
+    expect(montoACadena(sumarLista(comprobante.lineas))).toBe('-16.80');
+  });
+
+  it('cuadra en una lista larga de pesadas incómodas', () => {
+    const CANTIDAD_DE_PESADAS = 17;
+    const valoresExactos = Array.from({ length: CANTIDAD_DE_PESADAS }, (_, indice) =>
+      multiplicar(`0.${String(indice + 1).padStart(2, '0')}5`, '7.77'),
+    );
+
+    const comprobante = conciliarSubtotalesConTotal(valoresExactos);
+    expect(montoACadena(sumarLista(comprobante.lineas))).toBe(montoACadena(comprobante.total));
+  });
+
+  it('cuadra en una batería de comprobantes distintos, sin excepción', () => {
+    const comprobantes: readonly (readonly string[])[] = [
+      ['0.005', '0.005'],
+      ['0.005', '0.005', '0.005'],
+      ['1.115', '2.225', '3.335', '4.445'],
+      ['0.001', '0.001', '0.001', '0.001', '0.001'],
+      ['33.333', '33.333', '33.334'],
+      ['0.5', '0.25', '0.125', '0.0625'],
+      ['-1.115', '2.225', '-3.335'],
+      ['999.995', '0.004'],
+    ];
+
+    for (const lineas of comprobantes) {
+      const comprobante = conciliarSubtotalesConTotal(lineas);
+      expect(montoACadena(sumarLista(comprobante.lineas))).toBe(montoACadena(comprobante.total));
+    }
+  });
+
+  it('rechaza conciliar un comprobante sin líneas', () => {
+    expect(() => conciliarSubtotalesConTotal([])).toThrow(ErrorDeMonto);
+  });
+
+  describe('Por qué el residuo mayor y no "que lo absorba la última línea"', () => {
+    it('con diez pesadas iguales, el residuo mayor deja cada línea a medio centavo de su valor', () => {
+      const CANTIDAD = 10;
+      const valorExacto = '0.335';
+      const comprobante = conciliarSubtotalesConTotal(Array.from({ length: CANTIDAD }, () => valorExacto));
+
+      const impresas = comprobante.lineas.map(montoACadena);
+      expect(impresas.filter((importe) => importe === '0.34')).toHaveLength(5);
+      expect(impresas.filter((importe) => importe === '0.33')).toHaveLength(5);
+      expect(montoACadena(comprobante.total)).toBe('3.35');
+      expect(montoACadena(sumarLista(comprobante.lineas))).toBe('3.35');
+    });
+
+    it('la alternativa descartada dejaría la última línea con Q0.29 en vez de Q0.34', () => {
+      // Reconstrucción del criterio "que la diferencia la absorba la última
+      // línea", para dejar por escrito por qué se descartó.
+      const CANTIDAD = 10;
+      const valorExacto = '0.335';
+      const exactos = Array.from({ length: CANTIDAD }, () => valorExacto);
+
+      const total = redondearMonto(sumarLista(exactos));
+      const redondeadasPorLinea = exactos.map(redondearMonto);
+      const sumaDeLasPrimeras = sumarLista(redondeadasPorLinea.slice(0, CANTIDAD - 1));
+      const ultimaLineaAbsorbente = restar(total, sumaDeLasPrimeras);
+
+      expect(montoACadena(ultimaLineaAbsorbente)).toBe('0.29');
+      // Q0.29 impreso para una pesada que vale Q0.335: cinco centavos de
+      // desviación en una sola línea, que en el mostrador se lee como un error.
+      expect(esMayorQue(absoluto(restar(ultimaLineaAbsorbente, valorExacto)), '0.04')).toBe(true);
+    });
   });
 });
 

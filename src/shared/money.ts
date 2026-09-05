@@ -41,10 +41,39 @@
  *     `redondearA`, `redondearMonto`, `redondearPeso`, `redondearCantidad`,
  *     `montoACadena`, `pesoACadena`, `cantidadACadena`, `formatearQuetzales`,
  *     `formatearPeso`.
- *   - ÚNICA EXCEPCIÓN CONTROLADA: `repartirMonto`. Prorratear obliga a
- *     redondear, porque un centavo no se puede partir. La excepción está
- *     acotada por una garantía verificable: la suma de las partes es
+ *   - EXCEPCIONES CONTROLADAS: `repartirMonto` y `conciliarSubtotalesConTotal`.
+ *     Ambas redondean porque un centavo no se puede partir, y ambas están
+ *     acotadas por la misma garantía verificable: la suma de las partes es
  *     exactamente el total redondeado, nunca un centavo más ni uno menos.
+ *
+ * ==========================================================================
+ * POLÍTICA DEL COMPROBANTE IMPRESO: "EL TOTAL MANDA"
+ * ==========================================================================
+ * De la política anterior se desprende un problema visible en el papel: si
+ * cada línea se imprime redondeada por su cuenta, la suma de las líneas
+ * impresas puede diferir en uno o más centavos del total impreso. Con tres
+ * líneas de 3.345, 10.275 y 3.175 el total correcto es Q16.80, pero las líneas
+ * redondeadas suman Q16.81. Un recibo así no se puede defender en una
+ * auditoría ni explicar en el mostrador.
+ *
+ * La regla es:
+ *
+ *   El TOTAL manda. Se calcula exacto y se redondea una sola vez: eso es lo
+ *   que el cliente paga. Los importes de línea que se IMPRIMEN se derivan de
+ *   ese total, de modo que sumen exactamente el total impreso.
+ *
+ * El reparto usa el método del residuo mayor, el mismo de `repartirMonto`, y
+ * garantiza que cada línea impresa sea el piso o el techo en centavos de su
+ * propio valor exacto: nunca se desvía más de un centavo, y el centavo se
+ * coloca en las líneas que estaban más cerca de subir.
+ *
+ * Se descartaron dos alternativas comunes: "que la diferencia la absorba la
+ * última línea" y "que la absorba la línea de mayor monto". Ambas concentran
+ * TODO el residuo en una sola línea, que con muchas líneas puede desviarse
+ * varios centavos de su valor real y verse como un error de captura. Con diez
+ * pesadas de Q0.335, la última línea tendría que imprimir Q0.29 en lugar de
+ * Q0.34; con el residuo mayor, cinco líneas imprimen Q0.34 y cinco Q0.33, y
+ * ninguna se desvía más de medio centavo.
  *
  * Por qué esta política y no "redondear cada línea": tres pesadas de 0.5 lb a
  * Q0.67/lb valen Q0.335 cada una. Redondeando al final el total es Q1.01;
@@ -146,7 +175,9 @@ export type CodigoErrorDeMonto =
   | 'VALOR_NO_FINITO'
   | 'DIVISION_ENTRE_CERO'
   | 'DECIMALES_INVALIDOS'
-  | 'REPARTO_INVALIDO';
+  | 'REPARTO_INVALIDO'
+  | 'CONCILIACION_INVALIDA'
+  | 'CONCILIACION_INCONSISTENTE';
 
 /**
  * Error de aritmética monetaria. Se usa una clase propia (en vez de `Error`
@@ -480,6 +511,102 @@ export function repartirMonto(
   }
 
   return resultado;
+}
+
+// ---------------------------------------------------------------------------
+// Conciliación de un comprobante impreso
+// ---------------------------------------------------------------------------
+
+/** Resultado de conciliar las líneas de un comprobante con su total. */
+export interface SubtotalesConciliados {
+  /** Importes que se IMPRIMEN en cada línea, en el mismo orden que se recibieron. */
+  readonly lineas: readonly Decimal[];
+  /** Total que se IMPRIME. Es la suma exacta de `lineas`. */
+  readonly total: Decimal;
+  /** Suma exacta sin redondear, para la bitácora y la auditoría. */
+  readonly totalExacto: Decimal;
+  /** Cuántos centavos hubo que mover para que las líneas cuadraran con el total. */
+  readonly centavosReconciliados: number;
+}
+
+/**
+ * Concilia los importes de línea de un comprobante con su total impreso.
+ *
+ * Resuelve el problema descrito en la sección "POLÍTICA DEL COMPROBANTE
+ * IMPRESO" del encabezado: que la suma de las líneas tal como se imprimen sea
+ * SIEMPRE, centavo por centavo, el total impreso.
+ *
+ * Garantías, todas verificadas en las pruebas:
+ *   1. `sumarLista(lineas)` es exactamente igual a `total`.
+ *   2. `total` es el valor exacto de la venta redondeado una sola vez, así que
+ *      el cliente paga el importe correcto.
+ *   3. Cada línea impresa es el piso o el techo en centavos de su propio valor
+ *      exacto: jamás se desvía más de un centavo de lo que realmente vale.
+ *
+ * @param subtotalesExactos Valor EXACTO de cada línea, sin redondear.
+ * @param decimales Decimales del comprobante; por omisión, centavos.
+ */
+export function conciliarSubtotalesConTotal(
+  subtotalesExactos: readonly EntradaDecimal[],
+  decimales: number = DECIMALES_MONTO,
+): SubtotalesConciliados {
+  if (subtotalesExactos.length === 0) {
+    throw new ErrorDeMonto(
+      'CONCILIACION_INVALIDA',
+      'No se puede conciliar un comprobante sin líneas.',
+      subtotalesExactos,
+    );
+  }
+
+  const exactos = subtotalesExactos.map(decimal);
+  const totalExacto = exactos.reduce<Decimal>((acumulado, valor) => acumulado.plus(valor), CERO);
+  const total = redondearA(totalExacto, decimales);
+  const unidadMinima = new Decimal(1).dividedBy(new Decimal(BASE_DECIMAL).pow(decimales));
+
+  // Piso de cada línea: el mayor múltiplo de un centavo que no la supera. Se
+  // usa ROUND_FLOOR y no ROUND_DOWN para que la garantía "piso o techo" valga
+  // igual con importes negativos, como los de una devolución.
+  const pisos = exactos.map((valor) => valor.toDecimalPlaces(decimales, Decimal.ROUND_FLOOR));
+  const sumaDePisos = pisos.reduce<Decimal>((acumulado, piso) => acumulado.plus(piso), CERO);
+
+  // Centavos que faltan repartir. Por construcción está entre 0 y la cantidad
+  // de líneas, así que ninguna línea recibe más de un centavo.
+  const centavosReconciliados = total
+    .minus(sumaDePisos)
+    .dividedBy(unidadMinima)
+    .toDecimalPlaces(0, MODO_REDONDEO)
+    .toNumber();
+
+  // Prioridad: la línea cuyo residuo estaba más cerca de subir; a igual
+  // residuo, la que viene primero en el comprobante.
+  const ordenPorResiduo = exactos
+    .map((valor, indice) => ({ indice, residuo: valor.minus(pisos[indice] ?? CERO) }))
+    .sort((a, b) => {
+      const comparacion = b.residuo.comparedTo(a.residuo);
+      return comparacion === 0 ? a.indice - b.indice : comparacion;
+    });
+
+  const lineas = [...pisos];
+  for (let repartidos = 0; repartidos < centavosReconciliados; repartidos += 1) {
+    const objetivo = ordenPorResiduo[repartidos];
+    if (objetivo === undefined) {
+      break;
+    }
+    lineas[objetivo.indice] = (lineas[objetivo.indice] ?? CERO).plus(unidadMinima);
+  }
+
+  // Autocomprobación: si alguna vez esto fallara, imprimir el comprobante sería
+  // peor que negarse a hacerlo. Es la garantía número 1 verificada en caliente.
+  const sumaImpresa = lineas.reduce<Decimal>((acumulado, linea) => acumulado.plus(linea), CERO);
+  if (!sumaImpresa.equals(total)) {
+    throw new ErrorDeMonto(
+      'CONCILIACION_INCONSISTENTE',
+      `Las líneas del comprobante suman ${sumaImpresa.toFixed(decimales)} pero el total es ${total.toFixed(decimales)}.`,
+      { lineas: lineas.map((linea) => linea.toFixed(decimales)), total: total.toFixed(decimales) },
+    );
+  }
+
+  return { lineas, total, totalExacto, centavosReconciliados };
 }
 
 // ---------------------------------------------------------------------------
