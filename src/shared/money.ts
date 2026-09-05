@@ -67,6 +67,13 @@
  * propio valor exacto: nunca se desvía más de un centavo, y el centavo se
  * coloca en las líneas que estaban más cerca de subir.
  *
+ * REGLA DE DESEMPATE: cuando dos o más líneas tienen exactamente el mismo
+ * residuo —el caso de las tres pesadas iguales, donde las tres quedan en medio
+ * centavo—, el centavo se le da a la línea que aparece PRIMERO en el
+ * comprobante. Dicho al revés: la que se queda sin el centavo es la ÚLTIMA de
+ * las empatadas. El criterio es la posición en el comprobante, no el monto de
+ * la línea ni el nombre del producto.
+ *
  * Se descartaron dos alternativas comunes: "que la diferencia la absorba la
  * última línea" y "que la absorba la línea de mayor monto". Ambas concentran
  * TODO el residuo en una sola línea, que con muchas líneas puede desviarse
@@ -487,7 +494,10 @@ export function repartirMonto(
   const faltante = totalDecimal.toDecimalPlaces(decimales, MODO_REDONDEO).minus(sumaTruncada);
   const unidadesPendientes = faltante.dividedBy(unidadMinima).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
 
-  // Orden de prioridad: residuo mayor primero; a igual residuo, el índice menor.
+  // Orden de prioridad: residuo mayor primero; a igual residuo, el índice menor
+  // (la misma regla de desempate que `conciliarSubtotalesConTotal`). El
+  // comparador define un orden total, así que el reparto es determinista y no
+  // depende de la estabilidad del `sort` del motor.
   const ordenPorResiduo = partesExactas
     .map((parteExacta, indice) => ({
       indice,
@@ -542,6 +552,8 @@ export interface SubtotalesConciliados {
  *      el cliente paga el importe correcto.
  *   3. Cada línea impresa es el piso o el techo en centavos de su propio valor
  *      exacto: jamás se desvía más de un centavo de lo que realmente vale.
+ *   4. Es DETERMINISTA: las mismas líneas, en el mismo orden, reparten siempre
+ *      el mismo centavo en la misma línea. Ver la regla de desempate abajo.
  *
  * @param subtotalesExactos Valor EXACTO de cada línea, sin redondear.
  * @param decimales Decimales del comprobante; por omisión, centavos.
@@ -578,7 +590,13 @@ export function conciliarSubtotalesConTotal(
     .toNumber();
 
   // Prioridad: la línea cuyo residuo estaba más cerca de subir; a igual
-  // residuo, la que viene primero en el comprobante.
+  // residuo, la que viene PRIMERO en el comprobante (índice menor). La última
+  // de las líneas empatadas es la que se queda sin el centavo.
+  //
+  // El comparador nunca devuelve 0 para dos líneas distintas, porque el índice
+  // las desempata siempre. Eso define un orden total y hace que el resultado
+  // NO dependa de si el `sort` del motor de JavaScript es estable: la misma
+  // venta, en el mismo orden, reparte siempre el centavo en la misma línea.
   const ordenPorResiduo = exactos
     .map((valor, indice) => ({ indice, residuo: valor.minus(pisos[indice] ?? CERO) }))
     .sort((a, b) => {

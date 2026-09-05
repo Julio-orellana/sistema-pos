@@ -682,6 +682,88 @@ describe('El comprobante impreso cuadra: las líneas suman exactamente el total'
     expect(() => conciliarSubtotalesConTotal([])).toThrow(ErrorDeMonto);
   });
 
+  describe('Regla de desempate: quién se queda sin el centavo', () => {
+    it('con tres líneas empatadas en medio centavo, el centavo va a las PRIMERAS y la ÚLTIMA se queda sin él', () => {
+      // Las tres líneas tienen exactamente el mismo residuo (0.005).
+      const comprobante = conciliarSubtotalesConTotal(['3.345', '10.275', '3.175']);
+
+      expect(comprobante.centavosReconciliados).toBe(2);
+      // Líneas 1 y 2 (las primeras) reciben el centavo; la 3 se queda sin él.
+      expect(comprobante.lineas.map(montoACadena)).toEqual(['3.35', '10.28', '3.17']);
+    });
+
+    it('el desempate mira la POSICIÓN, no el monto: la línea más grande no tiene prioridad', () => {
+      // Tres líneas empatadas en residuo, pero de montos muy distintos, y solo
+      // un centavo para repartir. Si el criterio fuera el monto, se lo llevaría
+      // la de Q99; como el criterio es la posición, se lo lleva la primera.
+      const comprobante = conciliarSubtotalesConTotal(['0.005', '99.005', '50.005']);
+
+      expect(comprobante.centavosReconciliados).toBe(2);
+      expect(comprobante.lineas.map(montoACadena)).toEqual(['0.01', '99.01', '50.00']);
+    });
+
+    it('cuando hay menos centavos que líneas empatadas, los reciben las primeras en orden', () => {
+      // Cuatro líneas empatadas, un solo centavo para repartir.
+      const comprobante = conciliarSubtotalesConTotal(['0.0025', '0.0025', '0.0025', '0.0025']);
+
+      expect(comprobante.centavosReconciliados).toBe(1);
+      expect(comprobante.lineas.map(montoACadena)).toEqual(['0.01', '0.00', '0.00', '0.00']);
+      expect(montoACadena(comprobante.total)).toBe('0.01');
+    });
+
+    it('un residuo mayor le gana a la posición: el orden solo decide entre empatados', () => {
+      // La segunda línea tiene el residuo más grande (0.009 contra 0.001),
+      // así que se lleva el único centavo aunque no sea la primera.
+      const comprobante = conciliarSubtotalesConTotal(['1.001', '1.009']);
+
+      expect(comprobante.centavosReconciliados).toBe(1);
+      expect(comprobante.lineas.map(montoACadena)).toEqual(['1.00', '1.01']);
+    });
+
+    it('cambiar el ORDEN de las líneas mueve el centavo, y lo mueve de forma predecible', () => {
+      const enUnOrden = conciliarSubtotalesConTotal(['3.345', '10.275', '3.175']);
+      const enOtroOrden = conciliarSubtotalesConTotal(['3.175', '3.345', '10.275']);
+
+      expect(enUnOrden.lineas.map(montoACadena)).toEqual(['3.35', '10.28', '3.17']);
+      expect(enOtroOrden.lineas.map(montoACadena)).toEqual(['3.18', '3.35', '10.27']);
+
+      // El total no cambia nunca, sea cual sea el orden de captura.
+      expect(montoACadena(enUnOrden.total)).toBe('16.80');
+      expect(montoACadena(enOtroOrden.total)).toBe('16.80');
+    });
+
+    it('ES DETERMINISTA: la misma venta, en el mismo orden, reparte siempre igual', () => {
+      const VECES = 200;
+      const venta = ['3.345', '10.275', '3.175', '0.005', '7.005', '0.005'];
+      const esperado = conciliarSubtotalesConTotal(venta).lineas.map(montoACadena);
+
+      for (let intento = 0; intento < VECES; intento += 1) {
+        const repeticion = conciliarSubtotalesConTotal(venta);
+        expect(repeticion.lineas.map(montoACadena)).toEqual(esperado);
+      }
+    });
+
+    it('es determinista también con muchas líneas empatadas, donde un sort inestable se notaría', () => {
+      const CANTIDAD = 50;
+      const venta = Array.from({ length: CANTIDAD }, () => '0.005');
+      const primera = conciliarSubtotalesConTotal(venta).lineas.map(montoACadena);
+      const segunda = conciliarSubtotalesConTotal(venta).lineas.map(montoACadena);
+
+      expect(segunda).toEqual(primera);
+      // 50 líneas de medio centavo: total exacto 0.25, y el centavo va a las
+      // 25 primeras. Es la consecuencia visible de la regla de desempate.
+      expect(primera.slice(0, 25).every((importe) => importe === '0.01')).toBe(true);
+      expect(primera.slice(25).every((importe) => importe === '0.00')).toBe(true);
+    });
+
+    it('repartirMonto usa exactamente la misma regla de desempate', () => {
+      // Tres ponderaciones iguales: el residuo empata y los centavos sobrantes
+      // van a las primeras partes, igual que en el comprobante.
+      const partes = repartirMonto('10', ['1', '1', '1']).map(montoACadena);
+      expect(partes).toEqual(['3.34', '3.33', '3.33']);
+    });
+  });
+
   describe('Por qué el residuo mayor y no "que lo absorba la última línea"', () => {
     it('con diez pesadas iguales, el residuo mayor deja cada línea a medio centavo de su valor', () => {
       const CANTIDAD = 10;
