@@ -106,6 +106,12 @@ Ejemplo: agregar el módulo **descuentos**.
   sumarse al grupo de pruebas "Política de redondeo del sistema" de
   `money.test.ts`, que existe justamente para que la política no dependa de
   que alguien la recuerde.
+- **Que el comprobante cuadre.** Todo comprobante con líneas debe armarse con
+  `conciliarSubtotalesConTotal`, nunca redondeando cada línea por su cuenta.
+  La regla es **el total manda**: el total se calcula exacto y se redondea una
+  sola vez, y los importes de línea impresos se derivan de él para que sumen
+  exactamente ese total. Cada pantalla o documento nuevo que muestre líneas y
+  un total necesita su prueba de que ambas cosas cuadran centavo por centavo.
 - **Todas las reglas de negocio.** Límites de descuento por rol, autorización
   por PIN, agotamiento de lotes, apertura obligatoria de lote nuevo, cuadre del
   corte de caja.
@@ -163,6 +169,13 @@ aplicación se cierra de forma ordenada.
 > Este atajo es una salida de emergencia del administrador. **No se documenta
 > ni se le muestra al usuario de venta**, y no debe existir ningún botón, menú
 > ni pista visual que lo revele. Si algún día aparece uno, es un defecto.
+
+**Intentos:** un PIN completo pero equivocado consume uno de los tres intentos
+disponibles; tres fallos seguidos bloquean el atajo 30 segundos. Una entrada
+que ni siquiera es un PIN posible (vacía, de menos de cuatro dígitos, de más de
+doce caracteres o con algo que no sea un dígito) y cancelar el diálogo **no**
+consumen intento, para que un error de tecleo no deje al administrador
+bloqueado.
 
 **El PIN en desarrollo:** si no hay `POS_PIN_ADMINISTRADOR` en el `.env`, en
 desarrollo se usa **`0000`** y la consola lo avisa al arrancar. Para trabajar
