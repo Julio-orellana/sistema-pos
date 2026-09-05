@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { esquemaConfirmacionDeSalida } from '@shared/types/ipc';
 import {
   LARGO_MAXIMO_PIN,
   LARGO_MINIMO_PIN,
@@ -108,6 +109,113 @@ describe('Rechazo del PIN incorrecto', () => {
 
     expect(resultado.codigo).toBe('FORMATO_INVALIDO');
     expect(verificador.intentosRestantes()).toBe(INTENTOS_MAXIMOS);
+  });
+});
+
+// ===========================================================================
+describe('Qué consume un intento y qué no (respuesta al caso concreto)', () => {
+  // El PIN real de este escenario es 5678 y alguien teclea 1234.
+  const PIN_REAL = '5678';
+  const PIN_COMPLETO_PERO_EQUIVOCADO = '1234';
+
+  function verificadorDelEscenario(): VerificadorDePinPorConfiguracion {
+    return new VerificadorDePinPorConfiguracion({
+      pinConfigurado: PIN_REAL,
+      intentosMaximos: INTENTOS_MAXIMOS,
+    });
+  }
+
+  it('SÍ consume intento: cuatro dígitos completos pero equivocados ("1234" cuando el PIN es "5678")', () => {
+    const verificador = verificadorDelEscenario();
+
+    const resultado = verificador.verificar(PIN_COMPLETO_PERO_EQUIVOCADO);
+
+    expect(resultado.autorizado).toBe(false);
+    expect(resultado.codigo).toBe('PIN_INCORRECTO');
+    expect(resultado.intentosRestantes).toBe(2);
+    expect(verificador.intentosRestantes()).toBe(2);
+  });
+
+  it('SÍ consume intento: tres PIN completos y equivocados agotan los intentos y bloquean', () => {
+    const verificador = verificadorDelEscenario();
+
+    expect(verificador.verificar('1234').intentosRestantes).toBe(2);
+    expect(verificador.verificar('0000').intentosRestantes).toBe(1);
+    const tercero = verificador.verificar('9999');
+
+    expect(tercero.codigo).toBe('DEMASIADOS_INTENTOS');
+    expect(verificador.intentosRestantes()).toBe(0);
+  });
+
+  it('NO consume intento: una entrada incompleta de tres dígitos ("123")', () => {
+    const verificador = verificadorDelEscenario();
+
+    const resultado = verificador.verificar('123');
+
+    expect(resultado.codigo).toBe('FORMATO_INVALIDO');
+    expect(verificador.intentosRestantes()).toBe(INTENTOS_MAXIMOS);
+  });
+
+  it('NO consume intento: una entrada con algo que no es un dígito ("12a4")', () => {
+    const verificador = verificadorDelEscenario();
+
+    const resultado = verificador.verificar('12a4');
+
+    expect(resultado.codigo).toBe('FORMATO_INVALIDO');
+    expect(verificador.intentosRestantes()).toBe(INTENTOS_MAXIMOS);
+  });
+
+  it('NO consume intento: una entrada vacía', () => {
+    const verificador = verificadorDelEscenario();
+
+    verificador.verificar('');
+
+    expect(verificador.intentosRestantes()).toBe(INTENTOS_MAXIMOS);
+  });
+
+  it('NO consume intento: cancelar el diálogo, porque nunca llega nada al verificador', () => {
+    const verificador = verificadorDelEscenario();
+
+    // Cancelar no produce ninguna llamada: el estado queda intacto.
+    expect(verificador.intentosRestantes()).toBe(INTENTOS_MAXIMOS);
+  });
+
+  it('mezclar entradas inválidas no protege al que sí está adivinando', () => {
+    const verificador = verificadorDelEscenario();
+
+    verificador.verificar('12');    // inválido, no cuenta
+    verificador.verificar('1234');  // cuenta
+    verificador.verificar('abcd');  // inválido, no cuenta
+    verificador.verificar('5679');  // cuenta
+
+    expect(verificador.intentosRestantes()).toBe(1);
+  });
+
+  it('el PIN correcto sigue funcionando después de entradas inválidas', () => {
+    const verificador = verificadorDelEscenario();
+
+    verificador.verificar('12');
+    verificador.verificar('xyz');
+
+    expect(verificador.verificar(PIN_REAL).autorizado).toBe(true);
+  });
+});
+
+// ===========================================================================
+describe('Qué frena la frontera IPC antes de llegar al verificador', () => {
+  // Un PIN demasiado corto o demasiado largo se rechaza en la frontera y ni
+  // siquiera llega al verificador, así que tampoco consume intento.
+
+  it('un PIN de tres dígitos se rechaza en la frontera IPC', () => {
+    expect(esquemaConfirmacionDeSalida.safeParse({ pin: '123' }).success).toBe(false);
+  });
+
+  it('un PIN de más de doce caracteres se rechaza en la frontera IPC', () => {
+    expect(esquemaConfirmacionDeSalida.safeParse({ pin: '1'.repeat(13) }).success).toBe(false);
+  });
+
+  it('un PIN de cuatro dígitos sí cruza la frontera y llega al verificador', () => {
+    expect(esquemaConfirmacionDeSalida.safeParse({ pin: '1234' }).success).toBe(true);
   });
 });
 
