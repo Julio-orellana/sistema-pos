@@ -286,8 +286,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migración aplicada | `20260905143642_esquema_inicial` |
-| Aplicada el | 2026-09-05 |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable` |
+| Aplicadas el | 2026-09-05 |
 | Plan | gratuito |
 
 Estado verificado contra el proyecto, no contra el script: **10 tablas**, 0 filas,
@@ -295,17 +295,22 @@ RLS activo en las 10 sin políticas (deniega todo), 21 índices propios, 11 llav
 foráneas, 37 restricciones CHECK y el trigger `auditoria_log_prohibir_cambios`.
 `sync_cola` **no** existe allí, como corresponde.
 
+La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
+SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
+ella.
+
 Pendiente en la nube, para el prompt del módulo de sincronización:
 
 - Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave anónima
   no puede leer ni escribir nada. La sincronización usará una llave de
-  servicio, que ignora RLS por diseño.
-- Resolver la advertencia `function_search_path_mutable` sobre la función
-  `auditoria_log_es_inmutable`, agregándole `SET search_path = ''`.
+  servicio, que ignora RLS por diseño. Mientras tanto, los 10 avisos
+  `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
+  problema.
 
-**No tocar** la función `public.rls_auto_enable()`: es un disparador de eventos
-preexistente del proyecto, ajeno a este esquema. Tiene dos advertencias de
-seguridad propias que le corresponde revisar a Julio.
+**No tocar** la función `public.rls_auto_enable()` ni su disparador de eventos
+`ensure_rls`: son preexistentes del proyecto y ajenos a este esquema. Tienen dos
+advertencias de seguridad propias (`SECURITY DEFINER` ejecutable por los roles
+`anon` y `authenticated` vía RPC) que le corresponde revisar a Julio.
 
 ## 5. Registro de decisiones técnicas
 
