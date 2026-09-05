@@ -80,6 +80,58 @@ export function cerrarBaseDeDatos(): void {
   }
 }
 
+/** Informe del cierre ordenado, para el log y para la verificación de arranque. */
+export interface ResultadoCierreOrdenado {
+  readonly cerrada: boolean;
+  readonly puntoDeControlAplicado: boolean;
+  readonly mensaje: string;
+}
+
+/**
+ * Cierra la base de datos de forma ordenada.
+ *
+ * La diferencia con `cerrarBaseDeDatos` es el punto de control (checkpoint) del
+ * WAL. Con `journal_mode = WAL`, las escrituras recientes viven en un archivo
+ * aparte (`-wal`) hasta que se consolidan en el archivo principal. Cerrar sin
+ * consolidar deja la base correcta pero repartida en dos archivos, lo que
+ * complica los respaldos y la revisión del archivo por parte del auditor.
+ *
+ * `TRUNCATE` vuelca todo al archivo principal y vacía el WAL, de modo que
+ * después de una salida controlada el archivo .db contiene absolutamente todo.
+ *
+ * Nunca lanza: un fallo al consolidar no puede impedir que la aplicación
+ * cierre, porque entonces habría que volver a matar el proceso a la fuerza.
+ */
+export function cerrarBaseDeDatosOrdenadamente(): ResultadoCierreOrdenado {
+  if (conexion === null) {
+    return {
+      cerrada: false,
+      puntoDeControlAplicado: false,
+      mensaje: 'No había ninguna conexión abierta que cerrar.',
+    };
+  }
+
+  let puntoDeControlAplicado = false;
+  try {
+    conexion.pragma('wal_checkpoint(TRUNCATE)');
+    puntoDeControlAplicado = true;
+  } catch (error) {
+    const detalle = error instanceof Error ? error.message : String(error);
+    console.warn(`[base-de-datos] No se pudo consolidar el WAL antes de cerrar: ${detalle}`);
+  }
+
+  conexion.close();
+  conexion = null;
+
+  return {
+    cerrada: true,
+    puntoDeControlAplicado,
+    mensaje: puntoDeControlAplicado
+      ? 'Base de datos consolidada y cerrada correctamente.'
+      : 'Base de datos cerrada, pero el WAL no se pudo consolidar.',
+  };
+}
+
 /**
  * Crea la tabla temporal de verificación.
  *

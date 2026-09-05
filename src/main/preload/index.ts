@@ -15,8 +15,10 @@ import {
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
   type RespuestaIpc,
+  type ResultadoIntentoDeSalida,
   type SolicitudDiagnostico,
 } from '@shared/types/ipc';
+import { instalarBloqueosDeKioskoEnDom } from './kiosk-dom-guards';
 
 /** Implementación concreta de la API que ve React. */
 const apiPos: ApiPos = {
@@ -33,54 +35,32 @@ const apiPos: ApiPos = {
         RespuestaIpc<DiagnosticoAplicacion>
       >,
   },
+
+  kiosko: {
+    /**
+     * El proceso principal avisa que se presionó el atajo del administrador.
+     * Se entrega un callback sin datos a propósito: el renderer solo necesita
+     * saber que hay que pedir el PIN, nada más.
+     */
+    alSolicitarSalida: (alRecibir: () => void): (() => void) => {
+      const manejador = (): void => {
+        alRecibir();
+      };
+      ipcRenderer.on(CANALES_IPC.solicitudDeSalidaControlada, manejador);
+      return (): void => {
+        ipcRenderer.removeListener(CANALES_IPC.solicitudDeSalidaControlada, manejador);
+      };
+    },
+
+    confirmarSalida: (pin: string): Promise<RespuestaIpc<ResultadoIntentoDeSalida>> =>
+      ipcRenderer.invoke(CANALES_IPC.confirmarSalidaControlada, { pin }) as Promise<
+        RespuestaIpc<ResultadoIntentoDeSalida>
+      >,
+  },
 };
 
 contextBridge.exposeInMainWorld('pos', apiPos);
 
-// ---------------------------------------------------------------------------
-// Refuerzo del modo kiosko del lado del DOM
-// ---------------------------------------------------------------------------
-// El proceso principal ya bloquea zoom y menú contextual. Se repite aquí
-// porque son dos rutas distintas (gestos del sistema vs. eventos del DOM) y en
-// una caja registradora conviene que ninguna funcione.
-
-/** Teclas que, con Ctrl o Cmd, cambiarían el zoom del navegador. */
-const TECLAS_DE_ZOOM: readonly string[] = ['+', '-', '=', '0'];
-
-window.addEventListener(
-  'contextmenu',
-  (evento: MouseEvent) => {
-    evento.preventDefault();
-  },
-  { capture: true },
-);
-
-window.addEventListener(
-  'wheel',
-  (evento: WheelEvent) => {
-    // Ctrl+rueda (o Cmd+rueda) es el gesto de zoom del navegador.
-    if (evento.ctrlKey || evento.metaKey) {
-      evento.preventDefault();
-    }
-  },
-  { capture: true, passive: false },
-);
-
-window.addEventListener(
-  'keydown',
-  (evento: KeyboardEvent) => {
-    if ((evento.ctrlKey || evento.metaKey) && TECLAS_DE_ZOOM.includes(evento.key)) {
-      evento.preventDefault();
-    }
-  },
-  { capture: true },
-);
-
-// Bloquea el zoom por pellizco en pantallas táctiles del mostrador.
-window.addEventListener(
-  'gesturestart',
-  (evento: Event) => {
-    evento.preventDefault();
-  },
-  { capture: true },
-);
+// Refuerzo del modo kiosko del lado del DOM. Las reglas y su prueba están en
+// ./kiosk-dom-guards.ts, que se verifica con un navegador simulado.
+instalarBloqueosDeKioskoEnDom(window);

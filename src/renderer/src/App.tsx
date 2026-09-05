@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 
 import type { DiagnosticoAplicacion, DiagnosticoBaseDeDatos } from '@shared/types/ipc';
 import { formatearQuetzales, montoACadena, sumar } from '@shared/money';
+import { ModalDeSalida } from './components/ModalDeSalida';
 
 /** Fila de la tabla de resultados. */
 function Dato({ etiqueta, valor }: { readonly etiqueta: string; readonly valor: string }): React.JSX.Element {
@@ -87,6 +88,9 @@ export function App(): React.JSX.Element {
 
   return (
     <main className="pantalla">
+      {/* Invisible hasta que el administrador presiona su atajo. */}
+      <ModalDeSalida />
+
       <header className="encabezado">
         <h1>POS Agrícola</h1>
         <p className="subtitulo">Verificación técnica del andamiaje · Cliente: Jimmy Cano</p>

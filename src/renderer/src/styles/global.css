@@ -125,3 +125,71 @@ button:disabled {
   color: var(--texto-tenue);
   font-size: 13px;
 }
+
+/* --- Diálogo de salida controlada -------------------------------------- */
+/* No tiene disparador visible: solo aparece con el atajo del administrador. */
+
+.capa-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 65%);
+  z-index: 100;
+}
+
+.modal {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+  padding: 24px;
+  width: min(420px, 90vw);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 45%);
+}
+
+.modal h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.modal__texto {
+  margin: 0 0 16px;
+  color: var(--texto-tenue);
+}
+
+.modal__pin {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 24px;
+  letter-spacing: 0.4em;
+  text-align: center;
+  background: var(--fondo);
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  color: var(--texto);
+}
+
+.modal__pin:focus {
+  outline: 2px solid var(--acento);
+  outline-offset: 1px;
+}
+
+.modal__error {
+  margin: 12px 0 0;
+  color: var(--alerta);
+  font-size: 14px;
+}
+
+.modal__acciones {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.boton--secundario {
+  background: transparent;
+  color: var(--texto-tenue);
+  border: 1px solid var(--borde);
+}

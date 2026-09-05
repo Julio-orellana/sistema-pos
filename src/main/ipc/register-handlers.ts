@@ -15,12 +15,14 @@ import { z } from 'zod';
 
 import {
   CANALES_IPC,
+  esquemaConfirmacionDeSalida,
   esquemaSolicitudDiagnostico,
   respuestaExitosa,
   respuestaFallida,
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
   type RespuestaIpc,
+  type ResultadoIntentoDeSalida,
 } from '@shared/types/ipc';
 import {
   crearReceiptPrinterProvider,
@@ -28,6 +30,7 @@ import {
   leerConfiguracionAdaptadoresDelEntorno,
 } from '@shared/adapters';
 import { ejecutarDiagnostico } from '@main/database/connection';
+import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 
 /** Convierte cualquier error capturado en un mensaje legible para la bitácora. */
 function describirError(error: unknown): string {
@@ -60,8 +63,14 @@ async function ejecutarConRespuesta<T>(
   }
 }
 
+/** Dependencias que los manejadores necesitan del resto del proceso principal. */
+export interface DependenciasDeIpc {
+  /** Coordina la salida controlada del modo kiosko. */
+  readonly controladorDeSalida: ControladorDeSalidaControlada;
+}
+
 /** Registra todos los manejadores IPC de la aplicación. */
-export function registrarManejadoresIpc(): void {
+export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,
     async (_evento, payload: unknown): Promise<RespuestaIpc<DiagnosticoBaseDeDatos>> =>
@@ -93,6 +102,17 @@ export function registrarManejadoresIpc(): void {
           sincronizacionSimulada: estadoSincronizacion.simulado,
         };
         return diagnostico;
+      }),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.confirmarSalidaControlada,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoIntentoDeSalida>> =>
+      ejecutarConRespuesta('SALIDA_CONTROLADA_FALLIDA', () => {
+        // El PIN se valida en la frontera antes de llegar a la comparación
+        // criptográfica: un payload deforme no debe consumir un intento.
+        const confirmacion = esquemaConfirmacionDeSalida.parse(payload);
+        return dependencias.controladorDeSalida.confirmarSalida(confirmacion.pin);
       }),
   );
 }

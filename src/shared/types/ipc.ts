@@ -28,6 +28,13 @@ export const CANALES_IPC = {
   diagnosticoBaseDeDatos: 'diagnostico:base-de-datos',
   /** Datos de la aplicación y de los adaptadores activos. */
   diagnosticoAplicacion: 'diagnostico:aplicacion',
+  /**
+   * Proceso principal -> renderer. Avisa que se presionó el atajo de salida
+   * controlada y que hay que pedirle el PIN al administrador.
+   */
+  solicitudDeSalidaControlada: 'kiosko:solicitud-de-salida',
+  /** Renderer -> proceso principal. Envía el PIN para autorizar la salida. */
+  confirmarSalidaControlada: 'kiosko:confirmar-salida',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -129,6 +136,44 @@ export interface DiagnosticoAplicacion {
 }
 
 // ---------------------------------------------------------------------------
+// DTO: salida controlada del modo kiosko
+// ---------------------------------------------------------------------------
+
+/** Largo mínimo del PIN aceptado en la frontera IPC. */
+const LARGO_MINIMO_PIN_IPC = 4;
+
+/** Largo máximo del PIN aceptado en la frontera IPC. */
+const LARGO_MAXIMO_PIN_IPC = 12;
+
+/**
+ * Esquema del payload que autoriza la salida.
+ *
+ * El PIN se valida también aquí, en la frontera, y no solo en el verificador:
+ * un payload con un PIN de 5000 caracteres no debería siquiera llegar a la
+ * comparación criptográfica.
+ */
+export const esquemaConfirmacionDeSalida = z.object({
+  pin: z.string().min(LARGO_MINIMO_PIN_IPC).max(LARGO_MAXIMO_PIN_IPC),
+});
+
+/** Confirmación de salida ya validada. */
+export type ConfirmacionDeSalida = z.infer<typeof esquemaConfirmacionDeSalida>;
+
+/** Resultado de un intento de salida controlada. */
+export interface ResultadoIntentoDeSalida {
+  /** `true` solo si el PIN fue correcto y la aplicación va a cerrarse. */
+  readonly autorizado: boolean;
+  /** Código del resultado, para el log de auditoría. */
+  readonly codigo: string;
+  /** Mensaje que se le muestra a quien intentó salir. */
+  readonly mensaje: string;
+  /** Intentos que quedan antes del bloqueo temporal. */
+  readonly intentosRestantes: number;
+  /** Momento (ISO-8601 UTC) hasta el cual está bloqueado, o `null`. */
+  readonly bloqueadoHasta: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Superficie que el preload expone al renderer
 // ---------------------------------------------------------------------------
 
@@ -142,5 +187,21 @@ export interface ApiPos {
     baseDeDatos(solicitud?: Partial<SolicitudDiagnostico>): Promise<RespuestaIpc<DiagnosticoBaseDeDatos>>;
     /** Devuelve versiones y adaptadores activos. */
     aplicacion(): Promise<RespuestaIpc<DiagnosticoAplicacion>>;
+  };
+
+  /**
+   * Salida controlada del modo kiosko.
+   *
+   * No es una función de la interfaz de venta y no debe tener ningún botón,
+   * menú ni pista visual. Solo se activa con el atajo del administrador.
+   */
+  readonly kiosko: {
+    /**
+     * Se suscribe al aviso de que se presionó el atajo de salida.
+     * Devuelve la función para darse de baja.
+     */
+    alSolicitarSalida(alRecibir: () => void): () => void;
+    /** Envía el PIN al proceso principal para autorizar la salida. */
+    confirmarSalida(pin: string): Promise<RespuestaIpc<ResultadoIntentoDeSalida>>;
   };
 }
