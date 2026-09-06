@@ -14,6 +14,7 @@ import { crearBaseVacia, migrar } from './ayuda-base-de-datos';
 /** Las once tablas del esquema, más la de control del migrador. */
 const TABLAS_ESPERADAS = [
   'auditoria_log',
+  'bloqueos_de_autorizacion',
   'caja_sesiones',
   'categorias',
   'limites_descuento',

@@ -10,9 +10,16 @@
  *
  *   1. El PIN se compara contra el hash guardado del usuario, con scrypt.
  *      Nunca hay un PIN en claro en la base ni un PIN por defecto en el código.
- *   2. Tres intentos fallidos bloquean al usuario 30 segundos. El bloqueo es
- *      POR USUARIO y se persiste en la base: reiniciar la aplicación no lo
- *      borra.
+ *   2. DOS CANDADOS SEPARADOS, uno por superficie de uso:
+ *        · Ingreso a la aplicación -> candado POR USUARIO
+ *          (`usuarios.intentos_fallidos`).
+ *        · Diálogo de autorización -> candado POR SUPERFICIE
+ *          (`bloqueos_de_autorizacion`), porque allí nadie eligió usuario y no
+ *          hay a quién imputarle el intento.
+ *      Los dos son de tres intentos y 30 segundos, y los dos se persisten:
+ *      reiniciar la aplicación no los borra. Un error en el diálogo de
+ *      autorización NO deja a nadie sin poder iniciar sesión. Ver la sección
+ *      4.8 de CLAUDE.md.
  *   3. Solo cuenta como intento fallido un PIN con FORMATO VÁLIDO pero
  *      contenido equivocado. Una entrada incompleta o con algo que no sea un
  *      dígito es un error de tecleo y no consume intentos, para que nadie se
@@ -27,6 +34,10 @@ import { tieneFormatoDePinValido } from '@shared/pin';
 import type { Usuario } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
+import type {
+  RepositorioDeBloqueosDeAutorizacion,
+  SuperficieDeAutorizacion,
+} from '@main/database/repositories/bloqueos-de-autorizacion';
 
 /** Intentos fallidos permitidos antes del bloqueo. */
 export const INTENTOS_MAXIMOS = 3;
@@ -45,7 +56,9 @@ export type CodigoDeAutenticacion =
   | 'USUARIO_BLOQUEADO'
   | 'USUARIO_INEXISTENTE'
   | 'USUARIO_INACTIVO'
-  | 'SIN_ADMINISTRADORES';
+  | 'SIN_ADMINISTRADORES'
+  /** El diálogo de autorización está bloqueado. NO implica que un usuario lo esté. */
+  | 'AUTORIZACION_BLOQUEADA';
 
 /** Nombres de acción que se escriben en la bitácora de auditoría. */
 export const ACCIONES_DE_AUDITORIA = {
@@ -67,6 +80,8 @@ export const ACCIONES_DE_AUDITORIA = {
   salidaRechazada: 'salida_controlada_rechazada',
   /** Creación del primer administrador en el primer arranque. */
   primerAdministradorCreado: 'primer_administrador_creado',
+  /** El diálogo de autorización quedó bloqueado por agotar los intentos. */
+  autorizacionBloqueada: 'autorizacion_bloqueada',
 } as const;
 
 /** Resultado de un intento de autenticación. */
@@ -91,6 +106,8 @@ export interface ResultadoDeAutenticacion {
 export interface DependenciasDeAutenticacion {
   readonly usuarios: RepositorioDeUsuarios;
   readonly auditoria: RepositorioDeAuditoria;
+  /** Candado por superficie del diálogo de autorización. */
+  readonly bloqueosDeAutorizacion: RepositorioDeBloqueosDeAutorizacion;
   /** Reloj inyectable: las pruebas lo reemplazan para no esperar 30 segundos. */
   readonly ahora?: () => number;
 }
@@ -101,11 +118,13 @@ export type OrigenDeSalida = 'atajo_de_teclado' | 'cierre_del_sistema' | 'boton_
 export class ServicioDeAutenticacion {
   private readonly usuarios: RepositorioDeUsuarios;
   private readonly auditoria: RepositorioDeAuditoria;
+  private readonly bloqueos: RepositorioDeBloqueosDeAutorizacion;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeAutenticacion) {
     this.usuarios = dependencias.usuarios;
     this.auditoria = dependencias.auditoria;
+    this.bloqueos = dependencias.bloqueosDeAutorizacion;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
 
@@ -176,7 +195,10 @@ export class ServicioDeAutenticacion {
    * fallido se le cuenta a todos los administradores contra los que se probó,
    * lo que hace que la fuerza bruta bloquee la cuenta en tres intentos igual.
    */
-  public autorizarComoAdministrador(pin: string): ResultadoDeAutenticacion {
+  public autorizarComoAdministrador(
+    pin: string,
+    superficie: SuperficieDeAutorizacion = 'salida_controlada',
+  ): ResultadoDeAutenticacion {
     const administradores = this.usuarios.listarPorRol('administrativo');
 
     if (administradores.length === 0) {
@@ -189,46 +211,76 @@ export class ServicioDeAutenticacion {
       );
     }
 
+    // El candado es de la SUPERFICIE, no de los usuarios: un error acá no deja
+    // a nadie sin poder iniciar sesión. Ver la sección 4.8 de CLAUDE.md.
+    const candado = this.bloqueos.obtener(superficie);
+    const segundosRestantes = this.segundosRestantes(candado.bloqueadoHasta);
+    if (segundosRestantes !== null) {
+      return this.resultado(
+        false,
+        'AUTORIZACION_BLOQUEADA',
+        `Autorización bloqueada temporalmente. Volvé a intentar en ${String(segundosRestantes)} segundos.`,
+        null,
+        segundosRestantes,
+      );
+    }
+
+    // Una entrada que ni siquiera es un PIN posible no consume intentos.
     if (!tieneFormatoDePinValido(pin)) {
       return this.resultado(false, 'FORMATO_INVALIDO', 'El PIN debe tener cuatro dígitos.', null, null);
     }
 
-    // Si TODOS los administradores están bloqueados, se informa el bloqueo con
-    // el tiempo más corto: es cuándo se podrá volver a intentar.
-    const disponibles = administradores.filter((admin) => this.segundosDeBloqueoRestantes(admin) === null);
-    if (disponibles.length === 0) {
-      const esperas = administradores
-        .map((admin) => this.segundosDeBloqueoRestantes(admin))
-        .filter((segundos): segundos is number => segundos !== null);
-      const menorEspera = Math.min(...esperas);
-      return this.resultado(
-        false,
-        'USUARIO_BLOQUEADO',
-        `Autorización bloqueada temporalmente. Volvé a intentar en ${String(menorEspera)} segundos.`,
-        null,
-        menorEspera,
-      );
-    }
-
-    for (const administrador of disponibles) {
+    for (const administrador of administradores) {
       if (verificarPin(pin, administrador.pinHash)) {
-        return this.registrarIngresoCorrecto(administrador);
+        // Acierto: se libera el candado de la superficie. NO se toca el
+        // contador de ingreso del usuario: son dos superficies distintas.
+        this.bloqueos.fijar(superficie, 0, null);
+        return this.resultado(
+          true,
+          'INGRESO_CORRECTO',
+          'Autorización correcta.',
+          administrador,
+          null,
+        );
       }
     }
 
-    // Ninguno coincidió: se le cuenta el fallo a cada administrador que estaba
-    // disponible, para que la fuerza bruta agote los intentos igual.
-    let ultimoResultado = this.resultado(
-      false,
-      'PIN_INCORRECTO',
-      'PIN incorrecto.',
-      null,
-      null,
-    );
-    for (const administrador of disponibles) {
-      ultimoResultado = this.registrarIngresoFallido(administrador);
+    return this.registrarFalloDeAutorizacion(superficie, candado.intentosFallidos);
+  }
+
+  /** Suma un intento al candado de la superficie y lo bloquea si se agotaron. */
+  private registrarFalloDeAutorizacion(
+    superficie: SuperficieDeAutorizacion,
+    intentosPrevios: number,
+  ): ResultadoDeAutenticacion {
+    // UN intento por PIN equivocado, no uno por administrador: el intento es de
+    // la superficie, no de cada persona contra la que se comparó.
+    const intentos = intentosPrevios + 1;
+    const seBloquea = intentos >= INTENTOS_MAXIMOS;
+    const bloqueadoHasta = seBloquea
+      ? new Date(this.ahora() + SEGUNDOS_DE_BLOQUEO * MILISEGUNDOS_POR_SEGUNDO).toISOString()
+      : null;
+
+    this.bloqueos.fijar(superficie, seBloquea ? 0 : intentos, bloqueadoHasta);
+
+    if (seBloquea) {
+      this.auditoria.registrar({
+        accion: ACCIONES_DE_AUDITORIA.autorizacionBloqueada,
+        entidadTipo: 'autorizacion',
+        entidadId: null,
+        valorNuevo: { superficie, bloqueadoHasta },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+      return this.resultado(
+        false,
+        'AUTORIZACION_BLOQUEADA',
+        `Demasiados intentos. Autorización bloqueada ${String(SEGUNDOS_DE_BLOQUEO)} segundos.`,
+        null,
+        SEGUNDOS_DE_BLOQUEO,
+      );
     }
-    return ultimoResultado;
+
+    return this.resultado(false, 'PIN_INCORRECTO', 'PIN incorrecto.', null, null);
   }
 
   /**
@@ -277,12 +329,17 @@ export class ServicioDeAutenticacion {
     });
   }
 
-  /** Segundos que faltan para que se levante el bloqueo, o `null` si no hay. */
+  /** Segundos que faltan para que se levante el bloqueo de un usuario. */
   private segundosDeBloqueoRestantes(usuario: Usuario): number | null {
-    if (usuario.bloqueadoHasta === null) {
+    return this.segundosRestantes(usuario.bloqueadoHasta);
+  }
+
+  /** Segundos que faltan hasta una fecha de desbloqueo, o `null` si ya pasó. */
+  private segundosRestantes(bloqueadoHasta: string | null): number | null {
+    if (bloqueadoHasta === null) {
       return null;
     }
-    const restanteMs = Date.parse(usuario.bloqueadoHasta) - this.ahora();
+    const restanteMs = Date.parse(bloqueadoHasta) - this.ahora();
     if (restanteMs <= 0) {
       return null;
     }

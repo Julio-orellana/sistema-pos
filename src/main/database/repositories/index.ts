@@ -10,6 +10,7 @@
 import type { Database } from 'better-sqlite3';
 
 import { RepositorioDeAuditoria } from './auditoria-log';
+import { RepositorioDeBloqueosDeAutorizacion } from './bloqueos-de-autorizacion';
 import { RepositorioDeCajaSesiones } from './caja-sesiones';
 import { RepositorioDeCategorias } from './categorias';
 import { RepositorioDeLimitesDescuento } from './limites-descuento';
@@ -24,6 +25,11 @@ import { RepositorioDeVentas } from './ventas';
 export * from './entidades';
 export { RepositorioBase, ahora, nuevoId } from './base';
 export { RepositorioDeAuditoria } from './auditoria-log';
+export {
+  RepositorioDeBloqueosDeAutorizacion,
+  type BloqueoDeAutorizacion,
+  type SuperficieDeAutorizacion,
+} from './bloqueos-de-autorizacion';
 export { RepositorioDeCajaSesiones } from './caja-sesiones';
 export { RepositorioDeCategorias } from './categorias';
 export { RepositorioDeLimitesDescuento } from './limites-descuento';
@@ -47,6 +53,7 @@ export interface Repositorios {
   readonly ventaDetalle: RepositorioDeVentaDetalle;
   readonly recibos: RepositorioDeRecibos;
   readonly auditoria: RepositorioDeAuditoria;
+  readonly bloqueosDeAutorizacion: RepositorioDeBloqueosDeAutorizacion;
   readonly syncCola: RepositorioDeSyncCola;
 }
 
@@ -63,6 +70,7 @@ export function crearRepositorios(base: Database): Repositorios {
     ventaDetalle: new RepositorioDeVentaDetalle(base),
     recibos: new RepositorioDeRecibos(base),
     auditoria: new RepositorioDeAuditoria(base),
+    bloqueosDeAutorizacion: new RepositorioDeBloqueosDeAutorizacion(base),
     syncCola: new RepositorioDeSyncCola(base),
   };
 }

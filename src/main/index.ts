@@ -143,6 +143,7 @@ app.whenReady().then(
     const autenticacion = new ServicioDeAutenticacion({
       usuarios: repositorios.usuarios,
       auditoria: repositorios.auditoria,
+      bloqueosDeAutorizacion: repositorios.bloqueosDeAutorizacion,
     });
     const sesion = new SesionActual();
 

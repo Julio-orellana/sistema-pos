@@ -51,6 +51,7 @@ beforeEach(() => {
   servicio = new ServicioDeAutenticacion({
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
+    bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
     ahora: (): number => instante,
   });
 
@@ -206,6 +207,7 @@ describe('Bloqueo por intentos, POR USUARIO y persistido en la base', () => {
     const servicioReiniciado = new ServicioDeAutenticacion({
       usuarios: repos.usuarios,
       auditoria: repos.auditoria,
+      bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
       ahora: (): number => instante,
     });
 
@@ -252,12 +254,12 @@ describe('Autorización administrativa (la que usa la salida controlada)', () =>
     expect(repos.usuarios.obtenerPorId(idJimmy)?.intentosFallidos).toBe(0);
   });
 
-  it('tres intentos equivocados bloquean al administrador', () => {
+  it('tres intentos equivocados bloquean el DIÁLOGO, no a los administradores', () => {
     servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
     servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
     const tercero = servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
 
-    expect(tercero.codigo).toBe('USUARIO_BLOQUEADO');
+    expect(tercero.codigo).toBe('AUTORIZACION_BLOQUEADA');
     expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY).autenticado).toBe(false);
   });
 
@@ -267,6 +269,7 @@ describe('Autorización administrativa (la que usa la salida controlada)', () =>
     const sinAdmins = new ServicioDeAutenticacion({
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
+      bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
     });
 
     expect(sinAdmins.autorizarComoAdministrador('1234').codigo).toBe('SIN_ADMINISTRADORES');
@@ -286,6 +289,7 @@ describe('Primer arranque', () => {
     const recienInstalado = new ServicioDeAutenticacion({
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
+      bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
     });
 
     expect(recienInstalado.requiereConfiguracionInicial()).toBe(true);
@@ -298,6 +302,7 @@ describe('Primer arranque', () => {
     const recienInstalado = new ServicioDeAutenticacion({
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
+      bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
     });
 
     const creado = recienInstalado.crearPrimerAdministrador('Jimmy', generarHashDePin('4321'));
@@ -319,5 +324,100 @@ describe('Primer arranque', () => {
     expect(() => servicio.crearPrimerAdministrador('Intruso', generarHashDePin('0000'))).toThrow(
       /instalación vacía/,
     );
+  });
+});
+
+
+// ===========================================================================
+describe('LOS DOS CANDADOS ESTÁN SEPARADOS (ingreso vs. diálogo de autorización)', () => {
+  // Antes compartían usuarios.intentos_fallidos: tres errores en el diálogo de
+  // salida dejaban a TODOS los administradores sin poder iniciar sesión, lo que
+  // convertía una función de administrador en una negación de servicio al
+  // alcance de cualquier cajero.
+
+  it('fallar en el DIÁLOGO no suma intentos a ningún usuario', () => {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.intentosFallidos).toBe(0);
+    expect(repos.usuarios.obtenerPorId(idCajera)?.intentosFallidos).toBe(0);
+  });
+
+  it('bloquear el DIÁLOGO no impide iniciar sesión: es el caso que motivó la separación', () => {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+
+    expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY).codigo).toBe('AUTORIZACION_BLOQUEADA');
+    // Y sin embargo Jimmy puede entrar a trabajar con normalidad.
+    expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+  });
+
+  it('bloquear a un USUARIO no bloquea el diálogo de autorización', () => {
+    servicio.autenticar(idJimmy, PIN_EQUIVOCADO);
+    servicio.autenticar(idJimmy, PIN_EQUIVOCADO);
+    servicio.autenticar(idJimmy, PIN_EQUIVOCADO);
+
+    expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).codigo).toBe('USUARIO_BLOQUEADO');
+    // El diálogo sigue aceptando su PIN: es otra superficie.
+    expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY).autenticado).toBe(true);
+  });
+
+  it('un PIN equivocado cuenta UNA vez, no una por cada administrador', () => {
+    // Con dos administradores, dos errores no deben agotar los tres intentos.
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+
+    expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').intentosFallidos).toBe(2);
+    // El tercero sí bloquea.
+    expect(servicio.autorizarComoAdministrador(PIN_EQUIVOCADO).codigo).toBe('AUTORIZACION_BLOQUEADA');
+  });
+
+  it('el candado del diálogo se persiste: sobrevive a un reinicio', () => {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+
+    const reiniciado = new ServicioDeAutenticacion({
+      usuarios: repos.usuarios,
+      auditoria: repos.auditoria,
+      bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+      ahora: (): number => instante,
+    });
+
+    expect(reiniciado.autorizarComoAdministrador(PIN_DE_JIMMY).codigo).toBe('AUTORIZACION_BLOQUEADA');
+  });
+
+  it('el bloqueo del diálogo se levanta solo al cumplirse el tiempo', () => {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+
+    avanzarSegundos(SEGUNDOS_DE_BLOQUEO + 1);
+    expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY).autenticado).toBe(true);
+  });
+
+  it('una autorización correcta libera el candado del diálogo', () => {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_DE_JIMMY);
+
+    expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').intentosFallidos).toBe(0);
+  });
+
+  it('una autorización correcta NO toca el contador de ingreso del usuario', () => {
+    // Son independientes en las dos direcciones.
+    servicio.autenticar(idJimmy, PIN_EQUIVOCADO);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.intentosFallidos).toBe(1);
+
+    servicio.autorizarComoAdministrador(PIN_DE_JIMMY);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.intentosFallidos).toBe(1);
+  });
+
+  it('el bloqueo del diálogo queda en la bitácora de auditoría', () => {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
+
+    expect(accionesDeAuditoria()).toContain('autorizacion_bloqueada');
   });
 });

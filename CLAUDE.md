@@ -337,7 +337,8 @@ un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
 
 #### Bloqueo por intentos
 
-Mismo criterio que la salida controlada, pero **por usuario y persistido**:
+Hay **dos candados separados**, uno por superficie de uso; el detalle y la
+razón están en la sección 4.8. El del ingreso es **por usuario y persistido**:
 `usuarios.intentos_fallidos` y `usuarios.bloqueado_hasta`. Se persiste a
 propósito: si viviera en memoria, bastaría con reiniciar la aplicación para
 reiniciar el contador y seguir adivinando.
@@ -391,6 +392,53 @@ Si el usuario en sesión no cumple, lanza `ErrorDeNegocio` con código
 interfaz ya traducido. Nunca falla en silencio ni deja pasar la acción.
 `requiereSesion(sesion, operacion)` es la variante que solo exige que haya
 alguien autenticado, sin importar el rol.
+
+### 4.8 Dos candados separados: ingreso y autorización
+
+El sistema tiene **dos superficies distintas** donde alguien teclea un PIN, y
+**cada una tiene su propio candado**. No comparten contador.
+
+| | Ingreso a la aplicación | Diálogo de autorización |
+|---|---|---|
+| Dónde | Pantalla de ingreso | Salida controlada (y, en el futuro, autorización de descuentos) |
+| Ámbito del candado | **Por usuario** | **Por superficie** |
+| Dónde se guarda | `usuarios.intentos_fallidos` / `bloqueado_hasta` | `bloqueos_de_autorizacion` |
+| Código al bloquear | `USUARIO_BLOQUEADO` | `AUTORIZACION_BLOQUEADA` |
+| Límite | 3 intentos, 30 s | 3 intentos, 30 s |
+
+**Por qué están separados.** Al principio compartían el candado del usuario, y
+la consecuencia se comprobó con una prueba: un cajero que tocara el botón de
+salida y tecleara tres PIN al azar dejaba a **todos** los administradores sin
+poder iniciar sesión, porque el fallo se le imputaba a cada uno de ellos. Eso
+convertía una función de administrador en una **negación de servicio al alcance
+de cualquier cajero**: repitiéndolo, nadie podía abrir la caja.
+
+Separarlos duplica el presupuesto de fuerza bruta contra el mismo PIN (3
+intentos por superficie cada 30 segundos en vez de 3 en total). No importa: a
+ese ritmo recorrer los 10 000 PIN posibles lleva más de medio día en cualquiera
+de los dos casos, así que el ataque en línea es inviable igual. Lo que sí
+cambia es que un error de tecleo deja de poder paralizar la tienda.
+
+**Por qué el candado del diálogo NO es por usuario.** Cuando aparece el diálogo
+nadie eligió un usuario todavía: se teclean cuatro dígitos y el sistema prueba
+contra los administradores activos. No hay a quién imputarle el intento. Por
+eso un PIN equivocado cuenta **una vez**, no una por cada administrador contra
+el que se comparó.
+
+**Por qué se persiste** (tabla, no memoria): un candado en memoria se reinicia
+matando el proceso desde el sistema operativo, algo que esta aplicación permite
+a propósito (sección 4.5). Es el mismo argumento por el que el candado del
+ingreso está en la base.
+
+**Las dos direcciones son independientes**, y hay pruebas de ambas: bloquear el
+diálogo no impide iniciar sesión, y bloquear a un usuario no bloquea el
+diálogo. Una autorización correcta libera el candado del diálogo y **no** toca
+el contador de ingreso del usuario.
+
+**Al agregar una superficie nueva** (por ejemplo, la autorización de descuentos
+de la decisión 6) hay que ampliar el `CHECK` de `bloqueos_de_autorizacion` con
+una migración nueva. Es deliberado: así el conjunto de superficies protegidas
+queda siempre a la vista y auditable.
 
 ### 4.4 Estado del proyecto en Supabase
 
@@ -652,6 +700,7 @@ nunca mecanismos de escape del sistema.
 | **RESUELTO: las tres rutas de salida controlada verifican contra usuarios reales, con UNA sola función.** Se elimina `POS_PIN_ADMINISTRADOR` y su valor de desarrollo. | Mantener el PIN de entorno; una verificación por ruta | El PIN de entorno no sabía QUIÉN autorizaba, y tres implementaciones paralelas se desincronizan. Ahora el atajo, la intercepción de `Cmd+Q`/`Alt+F4` y el botón llaman los tres a `solicitarPin(ventana, origen)` y a `confirmarSalida(pin)`, que invoca una única vez `autorizarComoAdministrador`. La auditoría registra el `usuario_id` real y **un solo nombre de acción** para las tres, con el origen como dato del asiento. | Prompt 10 — 2026-09-06 |
 | **La sesión vive en memoria y no se persiste.** | Recordar la sesión entre arranques | Es una terminal compartida: si la sesión sobreviviera al reinicio, el primero que encienda la máquina por la mañana actuaría con la identidad de quien la apagó anoche y la auditoría le atribuiría sus ventas a otra persona. | Prompt 10 — 2026-09-06 |
 | **Los permisos se comprueban con un guard que envuelve la operación** (`requiereRol`), nunca con un `if` dentro de cada manejador. | Comprobar el rol a mano en cada canal | Envuelto, es imposible olvidarlo o escribirlo distinto en cada módulo, y la operación protegida no llega a ejecutarse. Suelto, basta que un módulo futuro se distraiga. | Prompt 10 — 2026-09-06 |
+| **El diálogo de autorización tiene su PROPIO candado, separado del candado de ingreso.** Por superficie (`bloqueos_de_autorizacion`), no por usuario. | Compartir `usuarios.intentos_fallidos` entre ambas superficies (lo que hacía la primera versión); un candado por usuario también en el diálogo | Compartido, un cajero que tocara el botón de salida y tecleara tres PIN al azar dejaba a **todos** los administradores sin poder iniciar sesión: una negación de servicio al alcance de cualquiera, comprobada con una prueba. Separarlos duplica el presupuesto de fuerza bruta (3+3 intentos cada 30 s en vez de 3), pero recorrer los 10 000 PIN sigue llevando más de medio día en ambos casos, así que no cambia nada práctico; lo que cambia es que un error de tecleo deja de paralizar la tienda. El candado del diálogo no es por usuario porque allí nadie eligió usuario: el intento es de la superficie, y un PIN equivocado cuenta **una vez** y no una por administrador. | Prompt 11 — 2026-09-06 |
 | **Nunca se informan los intentos restantes, solo el tiempo para reintentar.** | Mostrar "te quedan 2 intentos" | Los intentos restantes son información útil para quien está adivinando, y para quien mira por encima del hombro la pantalla de otro. El tiempo de espera no ayuda a adivinar. | Prompt 10 — 2026-09-06 |
 | **PLATAFORMA OBJETIVO: Windows manda.** Es la plataforma de producción y el criterio de aceptación final para todo lo dependiente de plataforma. macOS es solo el entorno de desarrollo. Ante un conflicto, gana Windows. | Tratar las dos plataformas como equivalentes; optimizar para macOS porque es donde se desarrolla | La tienda de Jimmy corre Windows; macOS es la máquina de Julio. Que algo funcione en macOS es una señal útil, nunca una verificación. El incidente del modo kiosko mostró el costo de no tener esto escrito: se dio por bueno un comportamiento medido en macOS sin distinguir qué parte aplicaba a Windows. | Prompt 9 — 2026-09-06 |
 | **Prohibido bloquear el Administrador de tareas de Windows por cualquier vía administrativa** (directiva de grupo, `DisableTaskMgr`, Assigned Access, Shell Launcher). | Usar el modo kiosco soportado de Windows para un bloqueo "de verdad" | En Windows, una aplicación común no puede bloquear `Ctrl+Alt+Supr` (Secure Attention Sequence, protegida por el núcleo) ni `Ctrl+Shift+Esc` de forma fiable, así que el riesgo no viene de Electron. Viene de que alguien intente "mejorar" el kiosko con una función administrativa y deje al dueño encerrado fuera de su computadora. Ver la sección 4.6. | Prompt 9 — 2026-09-06 |

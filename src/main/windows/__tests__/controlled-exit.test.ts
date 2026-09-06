@@ -100,6 +100,7 @@ function crearEscenario(): {
   const autenticacion = new ServicioDeAutenticacion({
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
+    bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
     ahora: (): number => instante,
   });
 
@@ -347,6 +348,7 @@ describe('Instalación sin ningún administrador', () => {
       autenticacion: new ServicioDeAutenticacion({
         usuarios: repos.usuarios,
         auditoria: repos.auditoria,
+        bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
       }),
       cerrarAplicacion,
     });
