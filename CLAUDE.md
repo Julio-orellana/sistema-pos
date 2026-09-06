@@ -58,6 +58,27 @@ Node requerido: **>= 22**.
 
 ## 4. Decisiones ya tomadas (no volver a discutirlas)
 
+> ### PLATAFORMA OBJETIVO
+>
+> **Windows es la plataforma de producción real y el criterio de aceptación
+> final para cualquier comportamiento específico de plataforma (atajos de
+> teclado, ventana, impresión, touch). macOS es únicamente el entorno de
+> desarrollo de quien construye este proyecto — que algo funcione en macOS es
+> una señal útil durante el desarrollo, pero NUNCA sustituye la verificación en
+> Windows. Cuando exista un conflicto o una decisión de diseño que favorezca a
+> una plataforma sobre la otra, Windows gana siempre.**
+>
+> Consecuencias prácticas, para que el principio no quede en el papel:
+>
+> - Al reportar cualquier verificación de algo dependiente de plataforma, decir
+>   **explícitamente en cuál se probó**. "Verificado en macOS" no es
+>   "verificado".
+> - Lo probado solo en macOS se anota como **pendiente de confirmar en
+>   Windows**, no como terminado (ver el punto 12 de la sección 6.2).
+> - Ante un conflicto de diseño, se elige lo que funcione en Windows aunque
+>   empeore la experiencia de desarrollo en macOS.
+> - Qué se puede y qué jamás se puede bloquear en cada sistema: sección 4.6.
+
 1. **Es una app de escritorio, no una web.** Electron + React + Vite +
    TypeScript estricto. Nunca `any` implícito.
 2. **Ventana en modo kiosko:** pantalla completa, sin menú, sin barra de
@@ -279,6 +300,42 @@ dónde salió el segundo escritor. Probablemente signifique que se abrió el pun
 pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
 un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
 
+### 4.4 Estado del proyecto en Supabase
+
+El esquema espejo **ya está aplicado** contra el proyecto real.
+
+| Dato | Valor |
+|---|---|
+| Proyecto | `pos-jimmy-cano` |
+| Referencia | `zgsdaelmbxufgcsideep` |
+| Región | us-east-2 |
+| Postgres | 17 |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable` |
+| Aplicadas el | 2026-09-05 |
+| Plan | gratuito |
+
+Estado verificado contra el proyecto, no contra el script: **10 tablas**, 0 filas,
+RLS activo en las 10 sin políticas (deniega todo), 21 índices propios, 11 llaves
+foráneas, 37 restricciones CHECK y el trigger `auditoria_log_prohibir_cambios`.
+`sync_cola` **no** existe allí, como corresponde.
+
+La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
+SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
+ella.
+
+Pendiente en la nube, para el prompt del módulo de sincronización:
+
+- Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave anónima
+  no puede leer ni escribir nada. La sincronización usará una llave de
+  servicio, que ignora RLS por diseño. Mientras tanto, los 10 avisos
+  `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
+  problema.
+
+**No tocar** la función `public.rls_auto_enable()` ni su disparador de eventos
+`ensure_rls`: son preexistentes del proyecto y ajenos a este esquema. Tienen dos
+advertencias de seguridad propias (`SECURITY DEFINER` ejecutable por los roles
+`anon` y `authenticated` vía RPC) que le corresponde revisar a Julio.
+
 ### 4.5 REGLA DE DISEÑO DEL MODO KIOSKO (leer antes de tocar la ventana)
 
 Esta sección existe porque el proyecto ya cometió este error una vez y encerró
@@ -340,7 +397,7 @@ que contarla como un bloqueo que se haya prevenido allí.
 
 Esto es razonamiento sobre las APIs de cada sistema, no una medición: la sonda
 de Presentation Options solo existe en macOS y no hay una máquina Windows para
-comprobarlo.
+comprobarlo. El detalle investigado, con fuentes, está en la sección 4.6.
 
 Cómo volver a comprobarlo en cualquier momento:
 
@@ -401,41 +458,54 @@ izquierda**. Razones, para cuando se construya la pantalla de ventas real:
 
 La barrera real sigue siendo el PIN; la ubicación solo evita el accidente.
 
-### 4.4 Estado del proyecto en Supabase
+### 4.6 Qué se puede bloquear en cada plataforma, y qué jamás
 
-El esquema espejo **ya está aplicado** contra el proyecto real.
+Investigado en el Prompt 9 a raíz del incidente del modo kiosko. Es la
+referencia para no volver a asumir que las dos plataformas se comportan igual.
 
-| Dato | Valor |
-|---|---|
-| Proyecto | `pos-jimmy-cano` |
-| Referencia | `zgsdaelmbxufgcsideep` |
-| Región | us-east-2 |
-| Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable` |
-| Aplicadas el | 2026-09-05 |
-| Plan | gratuito |
+| Mecanismo de escape | macOS | Windows |
+|---|---|---|
+| Forzar Salida (`Cmd+Option+Esc`) | **Una app SÍ puede apagarlo** con `NSApplicationPresentationOptions` (`disableForceQuit`). Es lo que hacía `kiosk: true`. **Prohibido en este proyecto.** | No aplica |
+| Cambio de aplicación (`Cmd+Tab` / `Alt+Tab`) | **Una app SÍ puede apagarlo** (`disableProcessSwitching`). **Prohibido.** | Una app común no puede apagarlo de forma fiable. El modo kiosko de Electron **no lo apaga**. |
+| `Ctrl+Alt+Supr` | No aplica | **Imposible para cualquier app de usuario.** Ver abajo. |
+| `Ctrl+Shift+Esc` (Administrador de tareas) | No aplica | **No se puede bloquear de forma fiable** desde una app común. Solo con funciones administrativas del sistema, que este proyecto tiene prohibido usar. |
 
-Estado verificado contra el proyecto, no contra el script: **10 tablas**, 0 filas,
-RLS activo en las 10 sin políticas (deniega todo), 21 índices propios, 11 llaves
-foráneas, 37 restricciones CHECK y el trigger `auditoria_log_prohibir_cambios`.
-`sync_cola` **no** existe allí, como corresponde.
+#### Ctrl+Alt+Supr: confirmado, ninguna aplicación puede interceptarlo
 
-La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
-SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
-ella.
+El entendimiento de Julio es **correcto**. Windows lo protege con la Secure
+Attention Sequence: el subsistema Win32k abre canales exclusivos con los
+dispositivos de entrada **antes** de que arranque cualquier aplicación, de modo
+que ningún programa puede vigilar ni interceptar la combinación; el propio
+núcleo detecta la secuencia y suspende los programas antes de iniciar el
+procesamiento de inicio de sesión confiable. Ni siquiera un gancho de teclado
+de bajo nivel (`WH_KEYBOARD_LL`) la ve. El diseño existe justamente para que un
+programa no pueda falsificar la pantalla de inicio de sesión.
 
-Pendiente en la nube, para el prompt del módulo de sincronización:
+#### Ctrl+Shift+Esc: tampoco, y esto es lo que hay que vigilar
 
-- Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave anónima
-  no puede leer ni escribir nada. La sincronización usará una llave de
-  servicio, que ignora RLS por diseño. Mientras tanto, los 10 avisos
-  `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
-  problema.
+`WH_KEYBOARD_LL` puede tragarse muchas combinaciones del sistema, pero el
+Administrador de tareas es de las que **no se bloquean de forma fiable** por esa
+vía. Para un bloqueo real haría falta una función administrativa del sistema
+operativo: directiva de grupo (*Remove Task Manager*), la clave de registro
+`DisableTaskMgr`, o el modo kiosco soportado de Windows (*Assigned Access* /
+*Shell Launcher*).
 
-**No tocar** la función `public.rls_auto_enable()` ni su disparador de eventos
-`ensure_rls`: son preexistentes del proyecto y ajenos a este esquema. Tienen dos
-advertencias de seguridad propias (`SECURITY DEFINER` ejecutable por los roles
-`anon` y `authenticated` vía RPC) que le corresponde revisar a Julio.
+**REGLA: este proyecto tiene prohibido usar cualquiera de esas vías.** El
+riesgo en Windows no es Electron —el modo kiosko de Electron ni siquiera apaga
+las teclas del sistema, y hay reportes de que tampoco impide que el
+Administrador de tareas se ponga delante—. El riesgo es que una sesión futura
+intente "mejorar" el kiosko con una directiva de grupo o con Assigned Access y
+deje al dueño de la tienda encerrado fuera de su propia computadora. Vale la
+misma regla de la sección 4.5: se suprimen conveniencias de la aplicación,
+nunca mecanismos de escape del sistema.
+
+#### Fuentes
+
+- [Secure attention key — Wikipedia](https://en.wikipedia.org/wiki/Secure_attention_key)
+- [PWLX_USE_CTRL_ALT_DEL callback (winwlx.h) — Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/winwlx/nc-winwlx-pwlx_use_ctrl_alt_del)
+- [Kiosk mode with multiple monitors — electron/electron#2272](https://github.com/electron/electron/issues/2272)
+- [Kiosk mode con teclas deshabilitadas — electron/electron#7597](https://github.com/electron/electron/issues/7597)
+- [Task Manager (Windows) — Wikipedia](https://en.wikipedia.org/wiki/Task_Manager_(Windows))
 
 ## 5. Registro de decisiones técnicas
 
@@ -484,6 +554,8 @@ advertencias de seguridad propias (`SECURITY DEFINER` ejecutable por los roles
 | **Un único punto traduce los errores de restricción a errores de negocio** (`errores.ts`), y toda escritura de repositorio pasa por `RepositorioBase.ejecutar()`. | Dejar pasar el error crudo de SQLite; traducir en cada pantalla | "CHECK constraint failed: productos_inventario_no_negativo" no se le puede mostrar a un cajero con un cliente enfrente, y traducir en cada pantalla garantiza que alguna se olvide. El error se convierte en `STOCK_INSUFICIENTE` con el mensaje "Stock insuficiente para completar la venta", conservando la causa técnica para la bitácora. Un error que NO se reconoce pasa sin envolver, para no esconder fallos de programación detrás de un texto tranquilizador. | Prompt 6 — 2026-09-05 |
 | **El descuento de inventario debe ser atómico** (ver sección 4.3): en Postgres con `SET col = col - :cantidad`; en SQLite con comparar-y-cambiar dentro de una sola transacción de escritura, porque allí la resta en SQL sería de punto flotante. | Leer, restar en la aplicación y escribir después, en operaciones separadas | Entre la lectura y la escritura hay una ventana en la que otra operación puede mover el saldo, y entonces el CHECK se evalúa sobre datos viejos. | Prompt 6 — 2026-09-05 |
 | **Ante un conflicto de inventario (el comparar-y-cambiar afecta 0 filas): CERO reintentos automáticos.** Se revierte toda la transacción, el carrito de la pantalla se conserva y el cajero vuelve a cobrar. Queda un asiento de auditoría. | Reintentar N veces con espera; reintentar una sola vez; recalcular en silencio contra el saldo nuevo | En esta arquitectura el conflicto no debería poder ocurrir: instancia única, better-sqlite3 síncrono y `BEGIN IMMEDIATE` toma el bloqueo antes de leer. Si ocurre, la premisa se rompió —hay un segundo escritor, o el saldo se leyó fuera de la transacción— y reintentar taparía el defecto. Además, un reintento silencioso podría cobrar contra un inventario que nadie revisó, con el cliente enfrente. No confundir con `SQLITE_BUSY`, que sí se reintenta, pero lo hace el controlador con su timeout de 5000 ms. Ver la sección 4.3. | Prompt 7 — 2026-09-05 |
+| **PLATAFORMA OBJETIVO: Windows manda.** Es la plataforma de producción y el criterio de aceptación final para todo lo dependiente de plataforma. macOS es solo el entorno de desarrollo. Ante un conflicto, gana Windows. | Tratar las dos plataformas como equivalentes; optimizar para macOS porque es donde se desarrolla | La tienda de Jimmy corre Windows; macOS es la máquina de Julio. Que algo funcione en macOS es una señal útil, nunca una verificación. El incidente del modo kiosko mostró el costo de no tener esto escrito: se dio por bueno un comportamiento medido en macOS sin distinguir qué parte aplicaba a Windows. | Prompt 9 — 2026-09-06 |
+| **Prohibido bloquear el Administrador de tareas de Windows por cualquier vía administrativa** (directiva de grupo, `DisableTaskMgr`, Assigned Access, Shell Launcher). | Usar el modo kiosco soportado de Windows para un bloqueo "de verdad" | En Windows, una aplicación común no puede bloquear `Ctrl+Alt+Supr` (Secure Attention Sequence, protegida por el núcleo) ni `Ctrl+Shift+Esc` de forma fiable, así que el riesgo no viene de Electron. Viene de que alguien intente "mejorar" el kiosko con una función administrativa y deje al dueño encerrado fuera de su computadora. Ver la sección 4.6. | Prompt 9 — 2026-09-06 |
 | **PROHIBIDO `kiosk: true` de Electron.** La pantalla completa se consigue con `fullscreen` + `frame: false`. | Usar `kiosk: true`; usarlo solo en producción; usarlo solo en Windows | En macOS, `kiosk: true` le impone al sistema operativo Presentation Options que apagan **Forzar Salida** (`disableForceQuit`) y **Cmd+Tab** (`disableProcessSwitching`). Medido: con kiosk, `currentSystemPresentationOptions = 506`; sin kiosk, `0`, y la ventana sigue igual de completa. Esto es una terminal de punto de venta, no un kiosco público: si la app se cuelga, el dueño tiene que poder matarla desde el sistema. Reproducible con `npm run diagnostico:kiosko-macos`. Ver la sección 4.5. | Prompt 8 — 2026-09-06 |
 | **Todo atajo estándar de "salir" del sistema operativo se intercepta y se redirige al flujo con PIN**: `Cmd+Q`, `Alt+F4`, el botón de cerrar, el menú del Dock y cualquier `app.quit()` ajeno. | Dejar pasar `Cmd+Q`; bloquearlo sin ofrecer alternativa | `Cmd+Q` cerraba el punto de venta de inmediato, sin PIN, sin auditoría y sin consolidar la base de datos: una puerta trasera al alcance de cualquier cajero, y además una vía por la que se perdía el cierre ordenado. La intercepción vive en el proceso principal (`before-quit` y `close`), no en la interfaz, así que aplica a toda pantalla futura sin trabajo adicional. | Prompt 8 — 2026-09-06 |
 | **Un único control visible de salida, en la barra de estado, esquina inferior izquierda**, que dispara el mismo flujo de PIN que el atajo. | Sin botón, solo atajo; un botón en la pantalla de ventas; un botón que cierre directo | Sin botón, un administrador que no conozca el atajo queda sin salida. En la pantalla de ventas, cualquier cajero lo vería y lo tocaría. La esquina izquierda lo aleja del botón de cobrar, que por convención va abajo a la derecha. El botón no cierra nada: le pide al proceso principal que inicie la salida, de modo que haya una sola vía auditable. | Prompt 8 — 2026-09-06 |
@@ -527,7 +599,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
-| 12 | Falta probar el atajo de salida en una máquina Windows real con teclado latinoamericano. | El atajo está verificado en macOS de extremo a extremo y cubierto por pruebas que simulan la entrada de Windows, pero nadie lo ha presionado todavía en la computadora del mostrador. | Abierto — pendiente de acceso a una máquina Windows |
+| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
