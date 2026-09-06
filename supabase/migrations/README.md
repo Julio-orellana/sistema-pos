@@ -45,9 +45,12 @@ hueco en la numeración significa que **esa migración local no tiene espejo**.
 | `001_esquema_inicial` | `0001_esquema_inicial.sql` | Datos de negocio |
 | `002_bloqueo_de_usuarios` | **(ninguno, a propósito)** | Estado por identidad, local por ahora |
 | `003_bloqueos_de_autorizacion` | **(ninguno, a propósito)** | Estado por superficie, local siempre |
+| `004_denominaciones_y_desglose` | `0004_denominaciones_y_desglose.sql` | Datos de negocio: el arqueo del corte |
+| `005_pin_remoto` | `0005_pin_remoto.sql` | Columna de `usuarios`, que ya se sincroniza entera |
+| `006_superficie_cierre_con_diferencia` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja |
+| `007_autorizacion_de_diferencia` | `0007_autorizacion_de_diferencia.sql` | Parte del corte de caja |
 
-La próxima migración local que sí sea dato de negocio —supongamos `004`— se
-espeja como `0004_...`, conservando el hueco. **No renumerar** para "tapar" los
+Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
 
 Los dos casos omitidos **no son equivalentes**, aunque hoy tomen la misma
@@ -72,9 +75,14 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | `0001_esquema_inicial.sql` | Sí — `20260905143642` |
 | *(fijar search_path de la función de auditoría)* | Sí — `20260905171724` |
 | *(no hay 0002 ni 0003: ver la sección anterior)* | — |
+| `0004_denominaciones_y_desglose.sql` | **No — pendiente de aplicar** |
+| `0005_pin_remoto.sql` | **No — pendiente de aplicar** |
+| *(no hay 0006: ver la sección anterior)* | — |
+| `0007_autorizacion_de_diferencia.sql` | **No — pendiente de aplicar** |
 
-**No hay ninguna migración pendiente de aplicar en la nube.** Las migraciones
-locales 002 y 003 no tienen espejo a propósito.
+**Hay tres migraciones pendientes de aplicar en la nube** (0004, 0005 y 0007).
+Se aplican solo con la aprobación explícita de Julio, mostrándole antes el SQL
+exacto.
 
 ## Al agregar una migración local nueva
 

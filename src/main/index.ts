@@ -28,6 +28,7 @@ import { obtenerBaseDeDatos } from '@main/database/connection';
 import { crearRepositorios } from '@main/database/repositories';
 import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { SesionActual } from '@main/domain/usuarios/sesion';
+import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { generarHashDePin } from '@shared/auth';
 import { quitarManejadoresIpc, registrarManejadoresIpc } from '@main/ipc/register-handlers';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
@@ -146,6 +147,12 @@ app.whenReady().then(
       bloqueosDeAutorizacion: repositorios.bloqueosDeAutorizacion,
     });
     const sesion = new SesionActual();
+    const caja = new ServicioDeCaja({
+      cajaSesiones: repositorios.cajaSesiones,
+      denominaciones: repositorios.denominaciones,
+      desglose: repositorios.desgloseDeCaja,
+      auditoria: repositorios.auditoria,
+    });
 
     const controladorDeSalida = new ControladorDeSalidaControlada({
       autenticacion,
@@ -158,6 +165,7 @@ app.whenReady().then(
       autenticacion,
       sesion,
       usuarios: repositorios.usuarios,
+      caja,
     });
 
     const ventana = crearVentanaPrincipal(RUTA_PRELOAD, !enVerificacionDeArranque);

@@ -15,8 +15,10 @@ import { crearBaseVacia, migrar } from './ayuda-base-de-datos';
 const TABLAS_ESPERADAS = [
   'auditoria_log',
   'bloqueos_de_autorizacion',
+  'caja_sesion_denominaciones',
   'caja_sesiones',
   'categorias',
+  'denominaciones',
   'limites_descuento',
   'migraciones_aplicadas',
   'precios_especiales',
@@ -46,7 +48,7 @@ function tablasDe(base: Parameters<typeof migrar>[0]): string[] {
 }
 
 describe('Las migraciones corren limpias desde una base vacía', () => {
-  it('una base vacía queda con las once tablas del esquema más la de control', () => {
+  it('una base vacía queda con todas las tablas del esquema más la de control', () => {
     const prueba = crearBaseVacia();
     limpiar = prueba.limpiar;
 

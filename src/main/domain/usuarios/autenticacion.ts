@@ -29,9 +29,10 @@
  *   5. Todo ingreso, correcto o fallido, queda en la bitácora de auditoría.
  */
 
-import { verificarPin } from '@shared/auth';
+import { generarHashDePin, verificarPin } from '@shared/auth';
+import { ErrorDeNegocio } from '@main/database/errores';
 import { tieneFormatoDePinValido } from '@shared/pin';
-import type { Usuario } from '@main/database/repositories/entidades';
+import type { Usuario, ViaDeAutorizacion } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import type {
@@ -82,6 +83,8 @@ export const ACCIONES_DE_AUDITORIA = {
   primerAdministradorCreado: 'primer_administrador_creado',
   /** El diálogo de autorización quedó bloqueado por agotar los intentos. */
   autorizacionBloqueada: 'autorizacion_bloqueada',
+  /** Un administrador configuró o cambió su PIN de autorización remota. */
+  pinRemotoConfigurado: 'pin_remoto_configurado',
 } as const;
 
 /** Resultado de un intento de autenticación. */
@@ -100,6 +103,15 @@ export interface ResultadoDeAutenticacion {
    * bloqueo de otra persona.
    */
   readonly segundosParaReintentar: number | null;
+  /**
+   * Con cuál de los dos PIN coincidió, en una autorización administrativa.
+   *
+   * `'presencial'` = su PIN normal, o sea que estaba ahí. `'remoto'` = su PIN
+   * de autorización a distancia, dictado por teléfono. `null` cuando no aplica.
+   * Lo determina el sistema según cuál hash coincidió: nunca se le pregunta al
+   * cajero cuál está usando.
+   */
+  readonly viaDeAutorizacion: ViaDeAutorizacion | null;
 }
 
 /** Dependencias del servicio. Se inyectan para poder probarlo entero. */
@@ -112,7 +124,12 @@ export interface DependenciasDeAutenticacion {
   readonly ahora?: () => number;
 }
 
-/** Por cuál de las tres rutas llegó una solicitud de salida controlada. */
+/**
+ * Por cuál de las tres rutas llegó una solicitud de salida controlada.
+ *
+ * Es un DATO del asiento de auditoría, no una acción distinta: por las tres
+ * ocurre el mismo hecho de negocio.
+ */
 export type OrigenDeSalida = 'atajo_de_teclado' | 'cierre_del_sistema' | 'boton_de_interfaz';
 
 export class ServicioDeAutenticacion {
@@ -198,7 +215,9 @@ export class ServicioDeAutenticacion {
   public autorizarComoAdministrador(
     pin: string,
     superficie: SuperficieDeAutorizacion = 'salida_controlada',
+    opciones: { readonly aceptaPinRemoto?: boolean } = {},
   ): ResultadoDeAutenticacion {
+    const aceptaPinRemoto = opciones.aceptaPinRemoto ?? false;
     const administradores = this.usuarios.listarPorRol('administrativo');
 
     if (administradores.length === 0) {
@@ -230,22 +249,46 @@ export class ServicioDeAutenticacion {
       return this.resultado(false, 'FORMATO_INVALIDO', 'El PIN debe tener cuatro dígitos.', null, null);
     }
 
+    // Dos pasadas, y el orden importa: primero TODOS los PIN normales y
+    // después los remotos. Así, si por casualidad el PIN remoto de alguien
+    // coincidiera con el PIN normal de otro, gana la lectura presencial, que
+    // es la más conservadora de las dos para la auditoría.
     for (const administrador of administradores) {
       if (verificarPin(pin, administrador.pinHash)) {
-        // Acierto: se libera el candado de la superficie. NO se toca el
-        // contador de ingreso del usuario: son dos superficies distintas.
-        this.bloqueos.fijar(superficie, 0, null);
-        return this.resultado(
-          true,
-          'INGRESO_CORRECTO',
-          'Autorización correcta.',
-          administrador,
-          null,
-        );
+        return this.autorizacionConcedida(superficie, administrador, 'presencial');
+      }
+    }
+
+    if (aceptaPinRemoto) {
+      for (const administrador of administradores) {
+        if (
+          administrador.pinRemotoHash !== null &&
+          verificarPin(pin, administrador.pinRemotoHash)
+        ) {
+          return this.autorizacionConcedida(superficie, administrador, 'remoto');
+        }
       }
     }
 
     return this.registrarFalloDeAutorizacion(superficie, candado.intentosFallidos);
+  }
+
+  /** Acierto: libera el candado de la superficie y reporta por cuál vía fue. */
+  private autorizacionConcedida(
+    superficie: SuperficieDeAutorizacion,
+    administrador: Usuario,
+    via: ViaDeAutorizacion,
+  ): ResultadoDeAutenticacion {
+    // NO se toca el contador de ingreso del usuario: son superficies distintas.
+    this.bloqueos.fijar(superficie, 0, null);
+    return this.resultado(
+      true,
+      'INGRESO_CORRECTO',
+      via === 'remoto' ? 'Autorización remota correcta.' : 'Autorización correcta.',
+      administrador,
+      null,
+      via,
+    );
   }
 
   /** Suma un intento al candado de la superficie y lo bloquea si se agotaron. */
@@ -307,6 +350,59 @@ export class ServicioDeAutenticacion {
       fecha: new Date(this.ahora()).toISOString(),
     });
     return creado;
+  }
+
+  /**
+   * Configura el PIN de autorización remota de un usuario.
+   *
+   * REGLA: debe ser DISTINTO de su PIN normal. Este código se dicta por
+   * teléfono; si fuera el mismo, dictarlo entregaría también el acceso a su
+   * sesión y la separación entera que este PIN existe para lograr quedaría
+   * anulada. Se comprueba acá y no en la interfaz: una validación que vive en
+   * la pantalla se salta llamando al canal directamente.
+   */
+  public configurarPinRemoto(usuarioId: string, pin: string): void {
+    const usuario = this.usuarios.obtenerPorId(usuarioId);
+    if (usuario === null) {
+      throw new ErrorDeNegocio(
+        'REFERENCIA_INEXISTENTE',
+        'No se encontró el usuario.',
+        `usuario_id inexistente: ${usuarioId}`,
+      );
+    }
+    if (usuario.rol !== 'administrativo') {
+      throw new ErrorDeNegocio(
+        'PERMISO_DENEGADO',
+        'Solo un administrador puede tener PIN de autorización remota.',
+        `El usuario ${usuarioId} tiene rol ${usuario.rol}.`,
+      );
+    }
+    if (!tieneFormatoDePinValido(pin)) {
+      throw new ErrorDeNegocio(
+        'DATO_INVALIDO',
+        'El PIN remoto debe tener cuatro dígitos.',
+        `Formato inválido para el PIN remoto del usuario ${usuarioId}.`,
+      );
+    }
+    if (verificarPin(pin, usuario.pinHash)) {
+      throw new ErrorDeNegocio(
+        'DATO_INVALIDO',
+        'El PIN remoto debe ser DISTINTO de tu PIN normal. Este se dicta por teléfono: ' +
+          'si fuera el mismo, estarías entregando también el acceso a tu sesión.',
+        'Se intentó fijar un pin_remoto_hash igual al pin_hash del propio usuario.',
+      );
+    }
+
+    this.usuarios.actualizarPinRemotoHash(usuarioId, generarHashDePin(pin));
+    this.auditoria.registrar({
+      usuarioId,
+      accion: ACCIONES_DE_AUDITORIA.pinRemotoConfigurado,
+      entidadTipo: 'usuarios',
+      entidadId: usuarioId,
+      // Nunca se registra el PIN ni su hash, solo que se configuró.
+      valorNuevo: { configurado: true },
+      fecha: new Date(this.ahora()).toISOString(),
+    });
   }
 
   /** Registra en auditoría una salida controlada, con su origen. */
@@ -403,7 +499,8 @@ export class ServicioDeAutenticacion {
     mensaje: string,
     usuario: Usuario | null,
     segundosParaReintentar: number | null,
+    viaDeAutorizacion: ViaDeAutorizacion | null = null,
   ): ResultadoDeAutenticacion {
-    return { autenticado, codigo, mensaje, usuario, segundosParaReintentar };
+    return { autenticado, codigo, mensaje, usuario, segundosParaReintentar, viaDeAutorizacion };
   }
 }

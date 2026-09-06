@@ -37,6 +37,15 @@ export type EstadoVenta = 'completada' | 'anulada';
 /** Formas de pago aceptadas. */
 export type FormaPago = 'efectivo' | 'tarjeta';
 
+/** Naturaleza de una denominación de efectivo. */
+export type TipoDeDenominacion = 'billete' | 'moneda';
+
+/** En qué momento del turno se contó el efectivo. */
+export type MomentoDeArqueo = 'apertura' | 'cierre';
+
+/** Cómo autorizó un administrador un cierre descuadrado. */
+export type ViaDeAutorizacion = 'presencial' | 'remoto';
+
 /** Estado de sincronización de un registro con la nube. */
 export type EstadoSincronizacion = 'pendiente' | 'sincronizado' | 'error';
 
@@ -51,6 +60,13 @@ export interface Usuario {
   readonly nombre: string;
   readonly rol: Rol;
   readonly pinHash: string;
+  /**
+   * Hash del PIN de autorización REMOTA, o `null` si no lo configuró.
+   *
+   * Es un segundo PIN, distinto del normal, pensado para dictarse por
+   * teléfono. Ver la migración 005 y CLAUDE.md §4.9.
+   */
+  readonly pinRemotoHash: string | null;
   readonly activo: boolean;
   /** Intentos de PIN fallidos consecutivos. Se reinicia al ingresar bien. */
   readonly intentosFallidos: number;
@@ -186,6 +202,10 @@ export interface CajaSesion {
   readonly diferencia: Decimal | null;
   readonly cerradaEn: string | null;
   readonly estado: EstadoCaja;
+  /** Administrador que autorizó cerrar con diferencia, o `null`. */
+  readonly diferenciaAutorizadaPor: string | null;
+  /** Por cuál vía autorizó. Va siempre junto con el autorizante. */
+  readonly diferenciaAutorizadaVia: ViaDeAutorizacion | null;
   readonly creadoEn: string;
   readonly actualizadoEn: string;
 }
@@ -203,6 +223,39 @@ export interface CierreDeCaja {
   readonly montoReal: Decimal | string;
   readonly diferencia: Decimal | string;
   readonly cerradaEn?: string;
+  /** Administrador que autorizó la diferencia, si hubo. */
+  readonly autorizadaPor?: string | null;
+  /** Vía por la que autorizó. Va siempre junto con el autorizante. */
+  readonly autorizadaVia?: ViaDeAutorizacion | null;
+}
+
+// ---------------------------------------------------------------------------
+
+/** Una denominación de efectivo del quetzal. */
+export interface Denominacion {
+  readonly id: string;
+  readonly valor: Decimal;
+  readonly tipo: TipoDeDenominacion;
+  readonly orden: number;
+  readonly activo: boolean;
+  readonly creadoEn: string;
+  readonly actualizadoEn: string;
+}
+
+/** Cuántas piezas de una denominación se contaron. */
+export interface LineaDeDesglose {
+  readonly denominacionId: string;
+  readonly cantidad: number;
+}
+
+/** Una fila del desglose ya guardada. */
+export interface DesgloseDeCaja {
+  readonly id: string;
+  readonly cajaSesionId: string;
+  readonly denominacionId: string;
+  readonly momento: MomentoDeArqueo;
+  readonly cantidad: number;
+  readonly creadoEn: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,12 @@
 /** Acceso a datos de los turnos de caja. */
 
-import type { CajaSesion, CierreDeCaja, EstadoCaja, NuevaCajaSesion } from './entidades';
+import type {
+  CajaSesion,
+  CierreDeCaja,
+  EstadoCaja,
+  NuevaCajaSesion,
+  ViaDeAutorizacion,
+} from './entidades';
 import { RepositorioBase, ahora, nuevoId } from './base';
 import { aColumnaMonto, desdeColumnaDecimal, desdeColumnaDecimalNulable } from '../decimal-columns';
 
@@ -15,6 +21,8 @@ interface FilaCajaSesion {
   readonly diferencia: string | null;
   readonly cerrada_en: string | null;
   readonly estado: EstadoCaja;
+  readonly diferencia_autorizada_por: string | null;
+  readonly diferencia_autorizada_via: ViaDeAutorizacion | null;
   readonly creado_en: string;
   readonly actualizado_en: string;
 }
@@ -30,6 +38,8 @@ function aEntidad(fila: FilaCajaSesion): CajaSesion {
     diferencia: desdeColumnaDecimalNulable(fila.diferencia, 'caja_sesiones.diferencia'),
     cerradaEn: fila.cerrada_en,
     estado: fila.estado,
+    diferenciaAutorizadaPor: fila.diferencia_autorizada_por,
+    diferenciaAutorizadaVia: fila.diferencia_autorizada_via,
     creadoEn: fila.creado_en,
     actualizadoEn: fila.actualizado_en,
   };
@@ -86,6 +96,8 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
                   monto_real = @monto_real,
                   diferencia = @diferencia,
                   cerrada_en = @cerrada_en,
+                  diferencia_autorizada_por = @autorizada_por,
+                  diferencia_autorizada_via = @autorizada_via,
                   actualizado_en = @actualizado_en
             WHERE id = @id AND estado = 'abierta'`,
         )
@@ -95,6 +107,8 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
           monto_real: aColumnaMonto(corte.montoReal),
           diferencia: aColumnaMonto(corte.diferencia),
           cerrada_en: corte.cerradaEn ?? momento,
+          autorizada_por: corte.autorizadaPor ?? null,
+          autorizada_via: corte.autorizadaVia ?? null,
           actualizado_en: momento,
         });
     });

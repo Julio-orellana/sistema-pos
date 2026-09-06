@@ -10,6 +10,7 @@ interface FilaUsuario {
   readonly nombre: string;
   readonly rol: Rol;
   readonly pin_hash: string;
+  readonly pin_remoto_hash: string | null;
   readonly activo: number;
   readonly intentos_fallidos: number;
   readonly bloqueado_hasta: string | null;
@@ -24,6 +25,7 @@ function aEntidad(fila: FilaUsuario): Usuario {
     nombre: fila.nombre,
     rol: fila.rol,
     pinHash: fila.pin_hash,
+    pinRemotoHash: fila.pin_remoto_hash,
     activo: desdeColumnaBooleana(fila.activo, 'usuarios.activo'),
     intentosFallidos: fila.intentos_fallidos,
     bloqueadoHasta: fila.bloqueado_hasta,
@@ -91,6 +93,18 @@ export class RepositorioDeUsuarios extends RepositorioBase {
       this.base
         .prepare('UPDATE usuarios SET activo = 0, actualizado_en = ? WHERE id = ?')
         .run(ahora(), id);
+    });
+  }
+
+  /**
+   * Fija el hash del PIN de autorización remota. `null` lo desconfigura.
+   * Es una columna aparte de `pin_hash` a propósito: ver CLAUDE.md §4.9.
+   */
+  public actualizarPinRemotoHash(id: string, pinRemotoHash: string | null): void {
+    this.ejecutar(() => {
+      this.base
+        .prepare('UPDATE usuarios SET pin_remoto_hash = ?, actualizado_en = ? WHERE id = ?')
+        .run(pinRemotoHash, ahora(), id);
     });
   }
 

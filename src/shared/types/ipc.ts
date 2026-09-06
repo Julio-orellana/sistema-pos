@@ -51,6 +51,16 @@ export const CANALES_IPC = {
   cerrarSesion: 'sesion:cerrar',
   /** Creación del primer administrador, solo en una instalación vacía. */
   crearPrimerAdministrador: 'sesion:crear-primer-administrador',
+  /** Un administrador configura o cambia su propio PIN de autorización remota. */
+  configurarPinRemoto: 'sesion:configurar-pin-remoto',
+
+  // --- Caja ---------------------------------------------------------------
+  /** Turno abierto del usuario en sesión y denominaciones para contar. */
+  estadoDeCaja: 'caja:estado',
+  /** Abre un turno para el usuario en sesión. */
+  abrirCaja: 'caja:abrir',
+  /** Intenta cerrar el turno; con diferencia, exige PIN de autorización. */
+  cerrarCaja: 'caja:cerrar',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -267,6 +277,92 @@ export interface ResultadoDeIngreso {
 }
 
 // ---------------------------------------------------------------------------
+// DTO: caja
+// ---------------------------------------------------------------------------
+
+/** Cantidad máxima de líneas de desglose que se aceptan en un arqueo. */
+const MAXIMO_DE_LINEAS_DE_DESGLOSE = 60;
+
+/** Largo máximo del texto de un monto escrito a mano. */
+const LARGO_MAXIMO_DE_MONTO = 20;
+
+/**
+ * Efectivo declarado, en uno de los dos modos.
+ *
+ * Es una unión discriminada a propósito: hace IMPOSIBLE mandar los dos modos a
+ * la vez desde la interfaz, en vez de tener que validarlo a mano.
+ */
+export const esquemaEfectivoDeclarado = z.discriminatedUnion('modo', [
+  z.object({
+    modo: z.literal('simple'),
+    monto: z.string().min(1).max(LARGO_MAXIMO_DE_MONTO),
+  }),
+  z.object({
+    modo: z.literal('detallado'),
+    lineas: z
+      .array(
+        z.object({
+          denominacionId: z.string().min(1),
+          cantidad: z.number().int().min(0),
+        }),
+      )
+      .max(MAXIMO_DE_LINEAS_DE_DESGLOSE),
+  }),
+]);
+
+/** Efectivo declarado ya validado. */
+export type EfectivoDeclaradoIpc = z.infer<typeof esquemaEfectivoDeclarado>;
+
+/** Payload de apertura de caja. El usuario sale de la sesión, nunca del payload. */
+export const esquemaAperturaDeCaja = z.object({ efectivo: esquemaEfectivoDeclarado });
+
+/** Payload de cierre de caja. El PIN solo viaja si hubo diferencia que autorizar. */
+export const esquemaCierreDeCaja = z.object({
+  efectivo: esquemaEfectivoDeclarado,
+  pin: z.string().length(LARGO_DEL_PIN_IPC).optional(),
+});
+
+/** Payload de configuración del PIN remoto. */
+export const esquemaPinRemoto = z.object({ pin: z.string().length(LARGO_DEL_PIN_IPC) });
+
+/** Una denominación tal como la muestra la pantalla de conteo. */
+export interface DenominacionParaContar {
+  readonly id: string;
+  /** Valor facial como cadena canónica de dos decimales. */
+  readonly valor: string;
+  readonly tipo: 'billete' | 'moneda';
+  readonly orden: number;
+}
+
+/** Turno de caja abierto del usuario en sesión. */
+export interface TurnoAbierto {
+  readonly id: string;
+  readonly montoInicial: string;
+  readonly abiertaEn: string;
+}
+
+/** Lo que la pantalla de caja necesita para dibujarse. */
+export interface EstadoDeCaja {
+  readonly turnoAbierto: TurnoAbierto | null;
+  readonly denominaciones: readonly DenominacionParaContar[];
+}
+
+/** Resultado de intentar cerrar un turno. */
+export interface ResultadoDeCierreIpc {
+  readonly cerrada: boolean;
+  readonly codigo: string;
+  readonly mensaje: string;
+  /** Diferencia como cadena canónica, con signo. Negativa es faltante. */
+  readonly diferencia: string;
+  readonly montoEsperado: string;
+  readonly montoReal: string;
+  /** Con cuál PIN se autorizó, si hubo autorización. */
+  readonly autorizadaVia: 'presencial' | 'remoto' | null;
+  /** Segundos para reintentar si el diálogo de autorización quedó bloqueado. */
+  readonly segundosParaReintentar: number | null;
+}
+
+// ---------------------------------------------------------------------------
 // Superficie que el preload expone al renderer
 // ---------------------------------------------------------------------------
 
@@ -297,6 +393,25 @@ export interface ApiPos {
       nombre: string,
       pin: string,
     ): Promise<RespuestaIpc<SesionIniciada>>;
+    /** Configura el PIN de autorización remota del administrador en sesión. */
+    configurarPinRemoto(pin: string): Promise<RespuestaIpc<boolean>>;
+  };
+
+  /** Apertura y cierre del turno de caja. */
+  readonly caja: {
+    /** Turno abierto del usuario en sesión y denominaciones para contar. */
+    estado(): Promise<RespuestaIpc<EstadoDeCaja>>;
+    /** Abre un turno para el usuario en sesión. */
+    abrir(efectivo: EfectivoDeclaradoIpc): Promise<RespuestaIpc<TurnoAbierto>>;
+    /**
+     * Intenta cerrar. Sin `pin`, si hay diferencia devuelve
+     * `REQUIERE_AUTORIZACION` con el monto exacto para mostrarlo antes de
+     * pedir el código.
+     */
+    cerrar(
+      efectivo: EfectivoDeclaradoIpc,
+      pin?: string,
+    ): Promise<RespuestaIpc<ResultadoDeCierreIpc>>;
   };
 
   /**

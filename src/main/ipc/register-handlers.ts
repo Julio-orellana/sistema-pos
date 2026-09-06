@@ -16,15 +16,21 @@ import { z } from 'zod';
 import {
   CANALES_IPC,
   esquemaConfirmacionDeSalida,
+  esquemaAperturaDeCaja,
+  esquemaCierreDeCaja,
   esquemaIntentoDeIngreso,
+  esquemaPinRemoto,
   esquemaPrimerAdministrador,
   esquemaSolicitudDiagnostico,
   respuestaExitosa,
   respuestaFallida,
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
+  type EstadoDeCaja,
   type EstadoDeSesion,
   type RespuestaIpc,
+  type ResultadoDeCierreIpc,
+  type TurnoAbierto,
   type ResultadoDeIngreso,
   type ResultadoIntentoDeSalida,
   type SesionIniciada,
@@ -36,11 +42,14 @@ import {
   leerConfiguracionAdaptadoresDelEntorno,
 } from '@shared/adapters';
 import { ejecutarDiagnostico } from '@main/database/connection';
+import { ErrorDeNegocio } from '@main/database/errores';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
-import type { SesionActual } from '@main/domain/usuarios/sesion';
+import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
+import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import { generarHashDePin } from '@shared/auth';
+import { montoACadena } from '@shared/money';
 
 /** Convierte cualquier error capturado en un mensaje legible para la bitácora. */
 function describirError(error: unknown): string {
@@ -83,6 +92,8 @@ export interface DependenciasDeIpc {
   readonly sesion: SesionActual;
   /** Acceso a los usuarios, para la pantalla de ingreso. */
   readonly usuarios: RepositorioDeUsuarios;
+  /** Apertura y cierre del turno de caja. */
+  readonly caja: ServicioDeCaja;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -235,6 +246,145 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
         );
         return dependencias.sesion.iniciar(creado);
       }),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.configurarPinRemoto,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<boolean>> =>
+      ejecutarConRespuesta('CONFIGURACION_DE_PIN_REMOTO_FALLIDA', () =>
+        // Solo un administrador, y solo sobre SU PROPIO PIN: el id sale de la
+        // sesión, nunca del payload.
+        requiereRol(dependencias.sesion, 'administrativo', () => {
+          const datos = esquemaPinRemoto.parse(payload);
+          const enSesion = dependencias.sesion.obtener();
+          if (enSesion === null) {
+            throw new Error('No hay sesión iniciada.');
+          }
+          // Solo sobre SU PROPIO PIN: el id sale de la sesión, nunca del
+          // payload. La regla de que debe diferir del PIN normal vive en el
+          // servicio, no aquí: una validación en la frontera se saltaría
+          // llamando al servicio desde otro lugar.
+          dependencias.autenticacion.configurarPinRemoto(enSesion.id, datos.pin);
+          return true;
+        }),
+      ),
+  );
+
+  // -------------------------------------------------------------------------
+  // Caja
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle(
+    CANALES_IPC.estadoDeCaja,
+    async (): Promise<RespuestaIpc<EstadoDeCaja>> =>
+      ejecutarConRespuesta('ESTADO_DE_CAJA_FALLIDO', () =>
+        requiereSesion(dependencias.sesion, () => {
+          const enSesion = dependencias.sesion.obtener();
+          const turno = enSesion === null ? null : dependencias.caja.sesionAbiertaDe(enSesion.id);
+
+          const estado: EstadoDeCaja = {
+            turnoAbierto:
+              turno === null
+                ? null
+                : {
+                    id: turno.id,
+                    montoInicial: montoACadena(turno.montoInicial),
+                    abiertaEn: turno.abiertaEn,
+                  },
+            denominaciones: dependencias.caja.listarDenominaciones().map((d) => ({
+              id: d.id,
+              valor: montoACadena(d.valor),
+              tipo: d.tipo,
+              orden: d.orden,
+            })),
+          };
+          return estado;
+        }),
+      ),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.abrirCaja,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<TurnoAbierto>> =>
+      ejecutarConRespuesta('APERTURA_DE_CAJA_FALLIDA', () =>
+        // Cualquier rol puede abrir SU turno. El id sale de la sesión: nadie
+        // abre caja en nombre de otro.
+        requiereSesion(dependencias.sesion, () => {
+          const datos = esquemaAperturaDeCaja.parse(payload);
+          const enSesion = dependencias.sesion.obtener();
+          if (enSesion === null) {
+            throw new Error('No hay sesión iniciada.');
+          }
+          const turno = dependencias.caja.abrir(enSesion.id, datos.efectivo);
+          return {
+            id: turno.id,
+            montoInicial: montoACadena(turno.montoInicial),
+            abiertaEn: turno.abiertaEn,
+          };
+        }),
+      ),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.cerrarCaja,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeCierreIpc>> =>
+      ejecutarConRespuesta('CIERRE_DE_CAJA_FALLIDO', () =>
+        requiereSesion(dependencias.sesion, () => {
+          const datos = esquemaCierreDeCaja.parse(payload);
+          const enSesion = dependencias.sesion.obtener();
+          if (enSesion === null) {
+            throw new Error('No hay sesión iniciada.');
+          }
+          const turno = dependencias.caja.sesionAbiertaDe(enSesion.id);
+          if (turno === null) {
+            throw new ErrorDeNegocio(
+              'DATO_INVALIDO',
+              'No tenés ningún turno de caja abierto.',
+              `El usuario ${enSesion.id} no tiene sesión de caja abierta.`,
+            );
+          }
+
+          // Primer paso: sin PIN, solo se calcula. Si hay diferencia, no cierra
+          // y devuelve el monto para que la interfaz lo muestre antes de pedir
+          // el código a quien va a autorizar.
+          const tentativo = dependencias.caja.intentarCerrar(turno.id, datos.efectivo);
+          if (tentativo.cerrada || datos.pin === undefined) {
+            return {
+              ...tentativo,
+              autorizadaVia: null,
+              segundosParaReintentar: null,
+            };
+          }
+
+          // Segundo paso: con PIN. Acepta el PIN normal (presencial) o el
+          // remoto (por teléfono), y el sistema determina cuál fue.
+          const autorizacion = dependencias.autenticacion.autorizarComoAdministrador(
+            datos.pin,
+            'cierre_con_diferencia',
+            { aceptaPinRemoto: true },
+          );
+
+          if (!autorizacion.autenticado || autorizacion.usuario === null) {
+            return {
+              cerrada: false,
+              codigo: autorizacion.codigo,
+              mensaje: autorizacion.mensaje,
+              diferencia: tentativo.diferencia,
+              montoEsperado: tentativo.montoEsperado,
+              montoReal: tentativo.montoReal,
+              autorizadaVia: null,
+              segundosParaReintentar: autorizacion.segundosParaReintentar,
+            };
+          }
+
+          const via = autorizacion.viaDeAutorizacion ?? 'presencial';
+          const cerrado = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
+            autorizadaPor: autorizacion.usuario.id,
+            via,
+          });
+          return { ...cerrado, autorizadaVia: via, segundosParaReintentar: null };
+        }),
+      ),
   );
 }
 

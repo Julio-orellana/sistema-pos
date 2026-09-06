@@ -391,3 +391,125 @@ button:disabled {
   color: var(--texto);
   margin-bottom: 16px;
 }
+
+/* --- Caja, conteo de efectivo y autorización ----------------------------- */
+
+.menu {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.captura__modos {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.captura__modo {
+  flex: 1;
+  min-height: 48px;
+  background: var(--superficie);
+  color: var(--texto-tenue);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.captura__modo--activo {
+  background: var(--acento);
+  color: #052e16;
+  border-color: var(--acento);
+  font-weight: 600;
+}
+
+.contador__fila {
+  display: grid;
+  grid-template-columns: 1fr auto 100px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 4%);
+}
+
+.contador__valor {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-variant-numeric: tabular-nums;
+}
+
+.contador__tipo {
+  font-size: 11px;
+  color: var(--texto-tenue);
+}
+
+.contador__controles {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contador__controles button {
+  width: 44px;
+  height: 44px;
+  font-size: 22px;
+  background: var(--superficie);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+}
+
+.contador__cantidad {
+  min-width: 40px;
+  text-align: center;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.contador__subtotal {
+  text-align: right;
+  color: var(--texto-tenue);
+  font-variant-numeric: tabular-nums;
+}
+
+.contador__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 2px solid var(--borde);
+  font-size: 18px;
+}
+
+.autorizacion__resumen {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 16px 0;
+  text-align: left;
+}
+
+.autorizacion__diferencia {
+  color: var(--alerta);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.advertencia {
+  background: rgb(250 204 21 / 10%);
+  border: 1px solid rgb(250 204 21 / 45%);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  text-align: left;
+  font-size: 14px;
+}
+
+.advertencia p {
+  margin: 8px 0 0;
+  color: var(--texto-tenue);
+}

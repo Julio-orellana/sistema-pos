@@ -18,6 +18,10 @@ import type { Database } from 'better-sqlite3';
 import sqlEsquemaInicial from './migrations/001_esquema_inicial.sql?raw';
 import sqlBloqueoDeUsuarios from './migrations/002_bloqueo_de_usuarios.sql?raw';
 import sqlBloqueosDeAutorizacion from './migrations/003_bloqueos_de_autorizacion.sql?raw';
+import sqlDenominaciones from './migrations/004_denominaciones_y_desglose.sql?raw';
+import sqlPinRemoto from './migrations/005_pin_remoto.sql?raw';
+import sqlSuperficieCierre from './migrations/006_superficie_cierre_con_diferencia.sql?raw';
+import sqlAutorizacionDeDiferencia from './migrations/007_autorizacion_de_diferencia.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -40,6 +44,10 @@ export const MIGRACIONES: readonly Migracion[] = [
   { orden: 1, nombre: '001_esquema_inicial', sql: sqlEsquemaInicial },
   { orden: 2, nombre: '002_bloqueo_de_usuarios', sql: sqlBloqueoDeUsuarios },
   { orden: 3, nombre: '003_bloqueos_de_autorizacion', sql: sqlBloqueosDeAutorizacion },
+  { orden: 4, nombre: '004_denominaciones_y_desglose', sql: sqlDenominaciones },
+  { orden: 5, nombre: '005_pin_remoto', sql: sqlPinRemoto },
+  { orden: 6, nombre: '006_superficie_cierre_con_diferencia', sql: sqlSuperficieCierre },
+  { orden: 7, nombre: '007_autorizacion_de_diferencia', sql: sqlAutorizacionDeDiferencia },
 ];
 
 /** Tabla de control. La crea el propio migrador antes que nada. */

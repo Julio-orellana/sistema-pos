@@ -14,8 +14,12 @@ import {
   type ApiPos,
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
+  type EfectivoDeclaradoIpc,
+  type EstadoDeCaja,
   type EstadoDeSesion,
   type RespuestaIpc,
+  type ResultadoDeCierreIpc,
+  type TurnoAbierto,
   type ResultadoDeIngreso,
   type ResultadoIntentoDeSalida,
   type SesionIniciada,
@@ -63,6 +67,29 @@ const apiPos: ApiPos = {
     ): Promise<RespuestaIpc<SesionIniciada>> =>
       ipcRenderer.invoke(CANALES_IPC.crearPrimerAdministrador, { nombre, pin }) as Promise<
         RespuestaIpc<SesionIniciada>
+      >,
+
+    configurarPinRemoto: (pin: string): Promise<RespuestaIpc<boolean>> =>
+      ipcRenderer.invoke(CANALES_IPC.configurarPinRemoto, { pin }) as Promise<
+        RespuestaIpc<boolean>
+      >,
+  },
+
+  caja: {
+    estado: (): Promise<RespuestaIpc<EstadoDeCaja>> =>
+      ipcRenderer.invoke(CANALES_IPC.estadoDeCaja) as Promise<RespuestaIpc<EstadoDeCaja>>,
+
+    abrir: (efectivo: EfectivoDeclaradoIpc): Promise<RespuestaIpc<TurnoAbierto>> =>
+      ipcRenderer.invoke(CANALES_IPC.abrirCaja, { efectivo }) as Promise<
+        RespuestaIpc<TurnoAbierto>
+      >,
+
+    cerrar: (
+      efectivo: EfectivoDeclaradoIpc,
+      pin?: string,
+    ): Promise<RespuestaIpc<ResultadoDeCierreIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.cerrarCaja, { efectivo, pin }) as Promise<
+        RespuestaIpc<ResultadoDeCierreIpc>
       >,
   },
 

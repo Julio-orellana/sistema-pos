@@ -8,8 +8,14 @@
 
 import { RepositorioBase, ahora } from './base';
 
-/** Superficies de autorización que tienen candado propio. */
-export type SuperficieDeAutorizacion = 'salida_controlada';
+/**
+ * Superficies de autorización que tienen candado propio.
+ *
+ * Debe coincidir con el CHECK de la columna `superficie`. Agregar una exige
+ * una migración que amplíe ese CHECK (ver la 006), a propósito: así el
+ * conjunto de superficies protegidas queda siempre a la vista.
+ */
+export type SuperficieDeAutorizacion = 'salida_controlada' | 'cierre_con_diferencia';
 
 /** Estado del candado de una superficie. */
 export interface BloqueoDeAutorizacion {

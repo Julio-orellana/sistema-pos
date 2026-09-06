@@ -13,6 +13,10 @@ import { RepositorioDeAuditoria } from './auditoria-log';
 import { RepositorioDeBloqueosDeAutorizacion } from './bloqueos-de-autorizacion';
 import { RepositorioDeCajaSesiones } from './caja-sesiones';
 import { RepositorioDeCategorias } from './categorias';
+import {
+  RepositorioDeDenominaciones,
+  RepositorioDeDesgloseDeCaja,
+} from './denominaciones';
 import { RepositorioDeLimitesDescuento } from './limites-descuento';
 import { RepositorioDePreciosEspeciales } from './precios-especiales';
 import { RepositorioDeProductos } from './productos';
@@ -32,6 +36,7 @@ export {
 } from './bloqueos-de-autorizacion';
 export { RepositorioDeCajaSesiones } from './caja-sesiones';
 export { RepositorioDeCategorias } from './categorias';
+export { RepositorioDeDenominaciones, RepositorioDeDesgloseDeCaja } from './denominaciones';
 export { RepositorioDeLimitesDescuento } from './limites-descuento';
 export { RepositorioDePreciosEspeciales } from './precios-especiales';
 export { RepositorioDeProductos } from './productos';
@@ -49,6 +54,8 @@ export interface Repositorios {
   readonly preciosEspeciales: RepositorioDePreciosEspeciales;
   readonly limitesDescuento: RepositorioDeLimitesDescuento;
   readonly cajaSesiones: RepositorioDeCajaSesiones;
+  readonly denominaciones: RepositorioDeDenominaciones;
+  readonly desgloseDeCaja: RepositorioDeDesgloseDeCaja;
   readonly ventas: RepositorioDeVentas;
   readonly ventaDetalle: RepositorioDeVentaDetalle;
   readonly recibos: RepositorioDeRecibos;
@@ -66,6 +73,8 @@ export function crearRepositorios(base: Database): Repositorios {
     preciosEspeciales: new RepositorioDePreciosEspeciales(base),
     limitesDescuento: new RepositorioDeLimitesDescuento(base),
     cajaSesiones: new RepositorioDeCajaSesiones(base),
+    denominaciones: new RepositorioDeDenominaciones(base),
+    desgloseDeCaja: new RepositorioDeDesgloseDeCaja(base),
     ventas: new RepositorioDeVentas(base),
     ventaDetalle: new RepositorioDeVentaDetalle(base),
     recibos: new RepositorioDeRecibos(base),

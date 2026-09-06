@@ -18,6 +18,7 @@ function usuario(rol: 'venta' | 'administrativo', nombre = 'Alguien'): Usuario {
     nombre,
     rol,
     pinHash: 'hash',
+    pinRemotoHash: null,
     activo: true,
     intentosFallidos: 0,
     bloqueadoHasta: null,

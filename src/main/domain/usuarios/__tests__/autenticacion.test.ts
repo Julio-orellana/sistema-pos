@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
 
 import { generarHashDePin } from '@shared/auth';
+import { type ErrorDeNegocio } from '@main/database/errores';
 import { crearRepositorios, type Repositorios } from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import {
@@ -419,5 +420,133 @@ describe('LOS DOS CANDADOS ESTÁN SEPARADOS (ingreso vs. diálogo de autorizaci�
     servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
 
     expect(accionesDeAuditoria()).toContain('autorizacion_bloqueada');
+  });
+});
+
+// ===========================================================================
+describe('PIN de autorización remota', () => {
+  const PIN_REMOTO = '8642';
+
+  it('un administrador puede configurar su PIN remoto', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).not.toBeNull();
+  });
+
+  it('SE RECHAZA un PIN remoto igual al PIN normal, y el mensaje explica por qué', () => {
+    try {
+      servicio.configurarPinRemoto(idJimmy, PIN_DE_JIMMY);
+      expect.unreachable('Se esperaba que un PIN remoto igual al normal fuera rechazado.');
+    } catch (error) {
+      const negocio = error as ErrorDeNegocio;
+      expect(negocio.codigo).toBe('DATO_INVALIDO');
+      expect(negocio.mensajeParaElUsuario).toContain('DISTINTO');
+      expect(negocio.mensajeParaElUsuario).toContain('teléfono');
+    }
+    // Y no quedó configurado.
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).toBeNull();
+  });
+
+  it('un usuario de VENTA no puede tener PIN remoto', () => {
+    expect(() => { servicio.configurarPinRemoto(idCajera, PIN_REMOTO); }).toThrow(/administrador/);
+  });
+
+  it('rechaza un PIN remoto con formato inválido', () => {
+    expect(() => { servicio.configurarPinRemoto(idJimmy, '123'); }).toThrow(/cuatro dígitos/);
+  });
+
+  it('el PIN remoto NO sirve para iniciar sesión: es solo para autorizar', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    expect(servicio.autenticar(idJimmy, PIN_REMOTO).autenticado).toBe(false);
+    expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+  });
+
+  it('el PIN remoto NO autoriza donde no se acepta (salida controlada)', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    // La salida controlada es una acción física: se exige presencia.
+    expect(servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada').autenticado).toBe(
+      false,
+    );
+  });
+
+  it('el PIN normal autoriza como PRESENCIAL y el remoto como REMOTO', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    const opciones = { aceptaPinRemoto: true };
+
+    const presencial = servicio.autorizarComoAdministrador(
+      PIN_DE_JIMMY,
+      'cierre_con_diferencia',
+      opciones,
+    );
+    expect(presencial.viaDeAutorizacion).toBe('presencial');
+
+    const remoto = servicio.autorizarComoAdministrador(
+      PIN_REMOTO,
+      'cierre_con_diferencia',
+      opciones,
+    );
+    expect(remoto.viaDeAutorizacion).toBe('remoto');
+    expect(remoto.usuario?.id).toBe(idJimmy);
+  });
+
+  it('configurar el PIN remoto queda en auditoría, sin guardar el código', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+
+    const asiento = base
+      .prepare("SELECT valor_nuevo FROM auditoria_log WHERE accion = 'pin_remoto_configurado'")
+      .get() as { valor_nuevo: string };
+
+    expect(JSON.parse(asiento.valor_nuevo)).toEqual({ configurado: true });
+    expect(asiento.valor_nuevo).not.toContain(PIN_REMOTO);
+  });
+});
+
+// ===========================================================================
+describe('Las superficies de autorización tienen candados INDEPENDIENTES entre sí', () => {
+  const PIN_EQUIVOCADO_2 = '0000';
+
+  /** Agota los tres intentos de una superficie. */
+  function bloquear(superficie: 'salida_controlada' | 'cierre_con_diferencia'): void {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, superficie);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, superficie);
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, superficie);
+  }
+
+  it('bloquear el CIERRE CON DIFERENCIA no bloquea la SALIDA CONTROLADA', () => {
+    bloquear('cierre_con_diferencia');
+
+    expect(
+      servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'cierre_con_diferencia').codigo,
+    ).toBe('AUTORIZACION_BLOQUEADA');
+    expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'salida_controlada').autenticado).toBe(
+      true,
+    );
+  });
+
+  it('bloquear la SALIDA CONTROLADA no bloquea el CIERRE CON DIFERENCIA', () => {
+    bloquear('salida_controlada');
+
+    expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'salida_controlada').codigo).toBe(
+      'AUTORIZACION_BLOQUEADA',
+    );
+    expect(
+      servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'cierre_con_diferencia').autenticado,
+    ).toBe(true);
+  });
+
+  it('bloquear CUALQUIERA de las dos no impide iniciar sesión', () => {
+    bloquear('cierre_con_diferencia');
+    bloquear('salida_controlada');
+
+    expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.intentosFallidos).toBe(0);
+  });
+
+  it('cada superficie lleva su propio contador en la base', () => {
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, 'cierre_con_diferencia');
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, 'cierre_con_diferencia');
+    servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, 'salida_controlada');
+
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').intentosFallidos).toBe(2);
+    expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').intentosFallidos).toBe(1);
   });
 });

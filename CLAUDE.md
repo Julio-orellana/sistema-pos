@@ -310,144 +310,6 @@ dónde salió el segundo escritor. Probablemente signifique que se abrió el pun
 pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
 un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
 
-### 4.7 Usuarios, sesión y permisos
-
-#### El PIN
-
-- **Exactamente 4 dígitos.** La defensa no es el largo sino el bloqueo por
-  intentos: tres fallos y 30 segundos de espera hacen inviable recorrer los
-  10 000 valores posibles.
-- **Se guarda con scrypt**, nunca en claro y nunca con SHA-256. Formato del
-  campo `pin_hash`, documentado en `src/shared/auth.ts`:
-
-  ```
-  scrypt$1$16384$8$1$<sal-base64>$<clave-base64>
-  └────┘ │ └───┘ │ │ └──────────┘ └────────────┘
-  algo   │  N    r p     sal          clave
-         └ versión del formato
-  ```
-
-- **Sal aleatoria distinta por usuario.** Dos personas con el mismo PIN tienen
-  hashes distintos, así que nadie deduce mirando la tabla que lo comparten.
-- **Comparación en tiempo constante** con `timingSafeEqual`.
-- **`src/shared/auth.ts` NO puede importarse desde el renderer** (usa
-  `node:crypto`). Hay una regla de ESLint y una exclusión en `tsconfig.web.json`
-  que lo impiden. La interfaz manda el PIN por IPC; nunca verifica nada.
-  Para el formato del PIN, el renderer usa `src/shared/pin.ts`, que es puro.
-
-#### Bloqueo por intentos
-
-Hay **dos candados separados**, uno por superficie de uso; el detalle y la
-razón están en la sección 4.8. El del ingreso es **por usuario y persistido**:
-`usuarios.intentos_fallidos` y `usuarios.bloqueado_hasta`. Se persiste a
-propósito: si viviera en memoria, bastaría con reiniciar la aplicación para
-reiniciar el contador y seguir adivinando.
-
-- Solo cuenta como intento un PIN **con formato válido pero equivocado**.
-- Al tercer fallo, bloqueo de 30 segundos. Un ingreso correcto reinicia todo.
-- Un usuario bloqueado no entra **aunque acierte el PIN**.
-- **Nunca se informan los intentos restantes**, solo cuánto falta para
-  reintentar: los intentos restantes son información útil para quien adivina y
-  para quien mira la pantalla de otro.
-
-#### Primer arranque
-
-Si la tabla `usuarios` está **completamente vacía**, la única pantalla
-accesible es la de configuración inicial, que obliga a crear el primer
-administrador con su nombre y un PIN elegido en ese momento. **No hay ningún
-PIN por defecto en el código**, ni siquiera "temporal". El canal
-`sesion:crear-primer-administrador` vuelve a comprobar que la instalación esté
-vacía: sin esa condición sería una puerta para crearse un administrador desde
-la interfaz en cualquier momento.
-
-#### Sesión
-
-Vive **en memoria del proceso principal** (`SesionActual`) y **no se
-persiste**. Esta es una terminal compartida: si la sesión sobreviviera al
-reinicio, el primero que encienda la computadora por la mañana quedaría
-actuando con la identidad de quien la apagó anoche, y la auditoría atribuiría
-sus ventas a otra persona.
-
-#### CÓMO USAR EL GUARD DE PERMISOS EN UN MÓDULO FUTURO
-
-Se envuelve la operación del manejador IPC. **Nunca** se comprueba el rol a
-mano dentro de la operación: así la comprobación es imposible de olvidar y de
-escribir distinto en cada módulo.
-
-```ts
-import { requiereRol } from '@main/domain/usuarios/sesion';
-
-ipcMain.handle(CANALES_IPC.cajaAbrir, async (_evento, payload) =>
-  ejecutarConRespuesta('CAJA_APERTURA_FALLIDA', () =>
-    requiereRol(dependencias.sesion, 'administrativo', () => {
-      const datos = esquemaAperturaDeCaja.parse(payload);
-      return servicioDeCaja.abrir(datos);
-    }),
-  ),
-);
-```
-
-Si el usuario en sesión no cumple, lanza `ErrorDeNegocio` con código
-`PERMISO_DENEGADO`, la operación **no se ejecuta**, y el mensaje llega a la
-interfaz ya traducido. Nunca falla en silencio ni deja pasar la acción.
-`requiereSesion(sesion, operacion)` es la variante que solo exige que haya
-alguien autenticado, sin importar el rol.
-
-### 4.8 Dos candados separados: ingreso y autorización
-
-El sistema tiene **dos superficies distintas** donde alguien teclea un PIN, y
-**cada una tiene su propio candado**. No comparten contador.
-
-| | Ingreso a la aplicación | Diálogo de autorización |
-|---|---|---|
-| Dónde | Pantalla de ingreso | Salida controlada (y, en el futuro, autorización de descuentos) |
-| Ámbito del candado | **Por usuario** | **Por superficie** |
-| Dónde se guarda | `usuarios.intentos_fallidos` / `bloqueado_hasta` | `bloqueos_de_autorizacion` |
-| Código al bloquear | `USUARIO_BLOQUEADO` | `AUTORIZACION_BLOQUEADA` |
-| Límite | 3 intentos, 30 s | 3 intentos, 30 s |
-
-**Por qué están separados.** Al principio compartían el candado del usuario, y
-la consecuencia se comprobó con una prueba: un cajero que tocara el botón de
-salida y tecleara tres PIN al azar dejaba a **todos** los administradores sin
-poder iniciar sesión, porque el fallo se le imputaba a cada uno de ellos. Eso
-convertía una función de administrador en una **negación de servicio al alcance
-de cualquier cajero**: repitiéndolo, nadie podía abrir la caja.
-
-Separarlos duplica el presupuesto de fuerza bruta contra el mismo PIN (3
-intentos por superficie cada 30 segundos en vez de 3 en total). No importa: a
-ese ritmo recorrer los 10 000 PIN posibles lleva más de medio día en cualquiera
-de los dos casos, así que el ataque en línea es inviable igual. Lo que sí
-cambia es que un error de tecleo deja de poder paralizar la tienda.
-
-**Por qué el candado del diálogo NO es por usuario.** Cuando aparece el diálogo
-nadie eligió un usuario todavía: se teclean cuatro dígitos y el sistema prueba
-contra los administradores activos. No hay a quién imputarle el intento. Por
-eso un PIN equivocado cuenta **una vez**, no una por cada administrador contra
-el que se comparó.
-
-**Por qué se persiste** (tabla, no memoria): un candado en memoria se reinicia
-matando el proceso desde el sistema operativo, algo que esta aplicación permite
-a propósito (sección 4.5). Es el mismo argumento por el que el candado del
-ingreso está en la base.
-
-**Las dos direcciones son independientes**, y hay pruebas de ambas: bloquear el
-diálogo no impide iniciar sesión, y bloquear a un usuario no bloquea el
-diálogo. Una autorización correcta libera el candado del diálogo y **no** toca
-el contador de ingreso del usuario.
-
-**Los dos candados son LOCALES y no se sincronizan a la nube.** Son estado
-operativo de una terminal, válido durante 30 segundos, no datos de negocio. Lo
-que sí viaja es el hecho auditable: `usuario_bloqueado` y
-`autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada.
-Sincronizar el candado sería dañino con más de una terminal: el bloqueo de una
-caja dejaría bloqueada la otra, que es la negación de servicio que esta
-separación vino a eliminar.
-
-**Al agregar una superficie nueva** (por ejemplo, la autorización de descuentos
-de la decisión 6) hay que ampliar el `CHECK` de `bloqueos_de_autorizacion` con
-una migración nueva. Es deliberado: así el conjunto de superficies protegidas
-queda siempre a la vista y auditable.
-
 ### 4.4 Estado del proyecto en Supabase
 
 El esquema espejo **ya está aplicado** contra el proyecto real.
@@ -695,6 +557,225 @@ nunca mecanismos de escape del sistema.
 - [Kiosk mode con teclas deshabilitadas — electron/electron#7597](https://github.com/electron/electron/issues/7597)
 - [Task Manager (Windows) — Wikipedia](https://en.wikipedia.org/wiki/Task_Manager_(Windows))
 
+### 4.7 Usuarios, sesión y permisos
+
+#### El PIN
+
+- **Exactamente 4 dígitos.** La defensa no es el largo sino el bloqueo por
+  intentos: tres fallos y 30 segundos de espera hacen inviable recorrer los
+  10 000 valores posibles.
+- **Se guarda con scrypt**, nunca en claro y nunca con SHA-256. Formato del
+  campo `pin_hash`, documentado en `src/shared/auth.ts`:
+
+  ```
+  scrypt$1$16384$8$1$<sal-base64>$<clave-base64>
+  └────┘ │ └───┘ │ │ └──────────┘ └────────────┘
+  algo   │  N    r p     sal          clave
+         └ versión del formato
+  ```
+
+- **Sal aleatoria distinta por usuario.** Dos personas con el mismo PIN tienen
+  hashes distintos, así que nadie deduce mirando la tabla que lo comparten.
+- **Comparación en tiempo constante** con `timingSafeEqual`.
+- **`src/shared/auth.ts` NO puede importarse desde el renderer** (usa
+  `node:crypto`). Hay una regla de ESLint y una exclusión en `tsconfig.web.json`
+  que lo impiden. La interfaz manda el PIN por IPC; nunca verifica nada.
+  Para el formato del PIN, el renderer usa `src/shared/pin.ts`, que es puro.
+
+#### Bloqueo por intentos
+
+Hay **dos candados separados**, uno por superficie de uso; el detalle y la
+razón están en la sección 4.8. El del ingreso es **por usuario y persistido**:
+`usuarios.intentos_fallidos` y `usuarios.bloqueado_hasta`. Se persiste a
+propósito: si viviera en memoria, bastaría con reiniciar la aplicación para
+reiniciar el contador y seguir adivinando.
+
+- Solo cuenta como intento un PIN **con formato válido pero equivocado**.
+- Al tercer fallo, bloqueo de 30 segundos. Un ingreso correcto reinicia todo.
+- Un usuario bloqueado no entra **aunque acierte el PIN**.
+- **Nunca se informan los intentos restantes**, solo cuánto falta para
+  reintentar: los intentos restantes son información útil para quien adivina y
+  para quien mira la pantalla de otro.
+
+#### Primer arranque
+
+Si la tabla `usuarios` está **completamente vacía**, la única pantalla
+accesible es la de configuración inicial, que obliga a crear el primer
+administrador con su nombre y un PIN elegido en ese momento. **No hay ningún
+PIN por defecto en el código**, ni siquiera "temporal". El canal
+`sesion:crear-primer-administrador` vuelve a comprobar que la instalación esté
+vacía: sin esa condición sería una puerta para crearse un administrador desde
+la interfaz en cualquier momento.
+
+#### Sesión
+
+Vive **en memoria del proceso principal** (`SesionActual`) y **no se
+persiste**. Esta es una terminal compartida: si la sesión sobreviviera al
+reinicio, el primero que encienda la computadora por la mañana quedaría
+actuando con la identidad de quien la apagó anoche, y la auditoría atribuiría
+sus ventas a otra persona.
+
+#### CÓMO USAR EL GUARD DE PERMISOS EN UN MÓDULO FUTURO
+
+Se envuelve la operación del manejador IPC. **Nunca** se comprueba el rol a
+mano dentro de la operación: así la comprobación es imposible de olvidar y de
+escribir distinto en cada módulo.
+
+```ts
+import { requiereRol } from '@main/domain/usuarios/sesion';
+
+ipcMain.handle(CANALES_IPC.cajaAbrir, async (_evento, payload) =>
+  ejecutarConRespuesta('CAJA_APERTURA_FALLIDA', () =>
+    requiereRol(dependencias.sesion, 'administrativo', () => {
+      const datos = esquemaAperturaDeCaja.parse(payload);
+      return servicioDeCaja.abrir(datos);
+    }),
+  ),
+);
+```
+
+Si el usuario en sesión no cumple, lanza `ErrorDeNegocio` con código
+`PERMISO_DENEGADO`, la operación **no se ejecuta**, y el mensaje llega a la
+interfaz ya traducido. Nunca falla en silencio ni deja pasar la acción.
+`requiereSesion(sesion, operacion)` es la variante que solo exige que haya
+alguien autenticado, sin importar el rol.
+
+### 4.8 Dos candados separados: ingreso y autorización
+
+El sistema tiene **dos superficies distintas** donde alguien teclea un PIN, y
+**cada una tiene su propio candado**. No comparten contador.
+
+| | Ingreso a la aplicación | Diálogo de autorización |
+|---|---|---|
+| Dónde | Pantalla de ingreso | Salida controlada (y, en el futuro, autorización de descuentos) |
+| Ámbito del candado | **Por usuario** | **Por superficie** |
+| Dónde se guarda | `usuarios.intentos_fallidos` / `bloqueado_hasta` | `bloqueos_de_autorizacion` |
+| Código al bloquear | `USUARIO_BLOQUEADO` | `AUTORIZACION_BLOQUEADA` |
+| Límite | 3 intentos, 30 s | 3 intentos, 30 s |
+
+**Por qué están separados.** Al principio compartían el candado del usuario, y
+la consecuencia se comprobó con una prueba: un cajero que tocara el botón de
+salida y tecleara tres PIN al azar dejaba a **todos** los administradores sin
+poder iniciar sesión, porque el fallo se le imputaba a cada uno de ellos. Eso
+convertía una función de administrador en una **negación de servicio al alcance
+de cualquier cajero**: repitiéndolo, nadie podía abrir la caja.
+
+Separarlos duplica el presupuesto de fuerza bruta contra el mismo PIN (3
+intentos por superficie cada 30 segundos en vez de 3 en total). No importa: a
+ese ritmo recorrer los 10 000 PIN posibles lleva más de medio día en cualquiera
+de los dos casos, así que el ataque en línea es inviable igual. Lo que sí
+cambia es que un error de tecleo deja de poder paralizar la tienda.
+
+**Por qué el candado del diálogo NO es por usuario.** Cuando aparece el diálogo
+nadie eligió un usuario todavía: se teclean cuatro dígitos y el sistema prueba
+contra los administradores activos. No hay a quién imputarle el intento. Por
+eso un PIN equivocado cuenta **una vez**, no una por cada administrador contra
+el que se comparó.
+
+**Por qué se persiste** (tabla, no memoria): un candado en memoria se reinicia
+matando el proceso desde el sistema operativo, algo que esta aplicación permite
+a propósito (sección 4.5). Es el mismo argumento por el que el candado del
+ingreso está en la base.
+
+**Las dos direcciones son independientes**, y hay pruebas de ambas: bloquear el
+diálogo no impide iniciar sesión, y bloquear a un usuario no bloquea el
+diálogo. Una autorización correcta libera el candado del diálogo y **no** toca
+el contador de ingreso del usuario.
+
+**Los dos candados son LOCALES y no se sincronizan a la nube.** Son estado
+operativo de una terminal, válido durante 30 segundos, no datos de negocio. Lo
+que sí viaja es el hecho auditable: `usuario_bloqueado` y
+`autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada.
+Sincronizar el candado sería dañino con más de una terminal: el bloqueo de una
+caja dejaría bloqueada la otra, que es la negación de servicio que esta
+separación vino a eliminar.
+
+**Al agregar una superficie nueva** (por ejemplo, la autorización de descuentos
+de la decisión 6) hay que ampliar el `CHECK` de `bloqueos_de_autorizacion` con
+una migración nueva. Es deliberado: así el conjunto de superficies protegidas
+queda siempre a la vista y auditable.
+
+### 4.9 Caja: dos modos de contar efectivo y autorización dual
+
+#### Dos modos, nunca los dos a la vez
+
+| Modo | Qué hace el cajero | Qué hace el sistema |
+|---|---|---|
+| **Simple** | Escribe el total | Lo guarda tal cual |
+| **Detallado** | Cuenta piezas por denominación | **Suma** con Decimal.js y guarda el desglose |
+
+En modo detallado **nunca se le pide además el total**. Si se le pidieran las
+dos cosas, tarde o temprano no coincidirían y habría que decidir a cuál
+creerle. El tipo `EfectivoDeclarado` es una unión discriminada, así que un
+valor con los dos modos a la vez es **imposible de construir**, no algo que
+haya que validar a mano.
+
+El desglose se guarda en `caja_sesion_denominaciones` con `momento` `'apertura'`
+o `'cierre'`. Un `UNIQUE (caja_sesion_id, denominacion_id, momento)` impide
+contar dos veces la misma denominación y duplicar el arqueo sin que nadie lo
+note.
+
+#### Un cajero, un turno
+
+La regla la hacen cumplir **dos capas**: el índice único parcial de la base y
+una comprobación en el servicio. La de la base es la garantía; la del servicio
+existe para poder decir *"ya tenés un turno abierto, cerralo antes de abrir
+otro"* en vez de dejar salir un error de restricción.
+
+#### PIN normal y PIN remoto: por qué son dos
+
+| | PIN normal (`pin_hash`) | PIN remoto (`pin_remoto_hash`) |
+|---|---|---|
+| Sirve para | Iniciar sesión **y** autorizar estando presente | **Solo** autorizar a distancia |
+| Se registra como | `presencial` | `remoto` |
+| ¿Abre sesión? | Sí | **No** |
+
+El PIN normal abre la sesión del administrador en la caja. **Dictarlo por
+teléfono se lo entrega a quien escucha, para siempre y para todo.** Con un PIN
+separado, lo que se cede al dictarlo es únicamente la capacidad de autorizar a
+distancia; no sirve para entrar al sistema, y la auditoría distingue una
+autorización remota de una presencial.
+
+**El sistema determina solo cuál se usó**, según cuál hash coincidió: nunca se
+le pregunta al cajero. Se prueban primero todos los PIN normales y después los
+remotos, de modo que ante una coincidencia improbable gane la lectura
+presencial, que es la más conservadora para la auditoría.
+
+**Un administrador no puede poner el mismo código en los dos.** La regla vive
+en `ServicioDeAutenticacion.configurarPinRemoto`, no en la pantalla: una
+validación que vive en la interfaz se salta llamando al canal directamente.
+
+**La salida controlada NO acepta el PIN remoto**, solo el cierre con
+diferencia. Cerrar la aplicación es una acción física y se exige presencia. Es
+un parámetro por llamada (`aceptaPinRemoto`), así que revisarlo más adelante es
+cambiar un argumento.
+
+#### Autorización del cierre descuadrado
+
+Si `diferencia == 0`, cierra directo. Si no, **no cierra**: primero calcula y
+**muestra el monto exacto** —y si es faltante o sobrante— y recién después pide
+el código. Quien autoriza, esté presente o al teléfono, tiene que ver qué está
+aprobando.
+
+El candado de intentos usa `superficie = 'cierre_con_diferencia'`, **separado**
+del de `'salida_controlada'` y del de ingreso. Un error de tecleo al autorizar
+un descuadre no bloquea el login de nadie ni la salida de la aplicación. Ver la
+sección 4.8.
+
+### 4.10 PENDIENTE: `monto_esperado` todavía no suma ventas
+
+`ServicioDeCaja.montoEsperadoDe` devuelve **el monto inicial**, que equivale a
+asumir cero ventas en efectivo. Es correcto solo mientras no exista el módulo
+de ventas.
+
+> **EN CUANTO EXISTA EL MÓDULO DE VENTAS, ESTO DEBE PASAR A SER:**
+> `monto_inicial + suma de las ventas en efectivo de esta sesión`.
+
+No se inventó una lógica de ventas parcial para rellenarlo: quedaría enterrada
+y nadie la encontraría después. Hay un `TODO(ventas)` en el método y una prueba
+que documenta el comportamiento actual, para que cambiarlo obligue a tocar
+ambos.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -748,6 +829,11 @@ nunca mecanismos de escape del sistema.
 | **RESUELTO: las tres rutas de salida controlada verifican contra usuarios reales, con UNA sola función.** Se elimina `POS_PIN_ADMINISTRADOR` y su valor de desarrollo. | Mantener el PIN de entorno; una verificación por ruta | El PIN de entorno no sabía QUIÉN autorizaba, y tres implementaciones paralelas se desincronizan. Ahora el atajo, la intercepción de `Cmd+Q`/`Alt+F4` y el botón llaman los tres a `solicitarPin(ventana, origen)` y a `confirmarSalida(pin)`, que invoca una única vez `autorizarComoAdministrador`. La auditoría registra el `usuario_id` real y **un solo nombre de acción** para las tres, con el origen como dato del asiento. | Prompt 10 — 2026-09-06 |
 | **La sesión vive en memoria y no se persiste.** | Recordar la sesión entre arranques | Es una terminal compartida: si la sesión sobreviviera al reinicio, el primero que encienda la máquina por la mañana actuaría con la identidad de quien la apagó anoche y la auditoría le atribuiría sus ventas a otra persona. | Prompt 10 — 2026-09-06 |
 | **Los permisos se comprueban con un guard que envuelve la operación** (`requiereRol`), nunca con un `if` dentro de cada manejador. | Comprobar el rol a mano en cada canal | Envuelto, es imposible olvidarlo o escribirlo distinto en cada módulo, y la operación protegida no llega a ejecutarse. Suelto, basta que un módulo futuro se distraiga. | Prompt 10 — 2026-09-06 |
+| **Dos modos de capturar efectivo, mutuamente excluyentes por construcción.** En modo detallado el sistema suma; nunca se pide además el total. | Pedir siempre el total; pedir el total y el desglose y compararlos | Si se piden las dos cosas, tarde o temprano no coinciden y hay que decidir a cuál creerle, con un cliente esperando. El tipo es una unión discriminada, así que un valor con los dos modos a la vez no se puede ni construir: no es una validación que se pueda olvidar. | Prompt 13 — 2026-09-06 |
+| **PIN de autorización remota separado del PIN normal**, en la columna `pin_remoto_hash`. | Un solo PIN para todo; una contraseña aparte más larga | El PIN normal abre la sesión del administrador. Dictarlo por teléfono se lo entrega a quien escucha, para siempre y para todo. Con uno separado, lo que se cede al dictarlo es solo la capacidad de autorizar a distancia: no sirve para entrar, y la auditoría distingue `remoto` de `presencial`. El sistema deduce cuál se usó según cuál hash coincidió, sin preguntarle al cajero. Se rechaza configurarlo igual al PIN normal, porque eso anularía toda la separación. | Prompt 13 — 2026-09-06 |
+| **El candado por superficie se reutiliza, no se duplica**, para `cierre_con_diferencia`. | Un limitador nuevo para el cierre; compartir el de la salida controlada | El mecanismo ya era genérico salvo por el tipo de la superficie; se amplió el `CHECK` y el tipo, y se le pasa la superficie por parámetro. Cada superficie mantiene su propio contador, así que un error al autorizar un descuadre no bloquea la salida de la aplicación ni el login de nadie. | Prompt 13 — 2026-09-06 |
+| **`monto_esperado` es hoy el monto inicial, con un TODO explícito.** | Inventar una suma de ventas parcial para que "quede completo" | Todavía no existe el módulo de ventas. Una lógica de ventas a medias, escrita para rellenar un hueco, quedaría enterrada y nadie la encontraría al construir el módulo real. Queda marcado en el código y en la sección 4.10, y hay una prueba que documenta el comportamiento actual para que cambiarlo obligue a tocar ambos. | Prompt 13 — 2026-09-06 |
+| **Los UUID de las denominaciones son fijos en la migración**, no generados en el cliente. | Sortearlos por instalación, como el resto de los id | Es la excepción correcta a la regla de UUID en el cliente: las denominaciones del quetzal son las mismas en toda instalación. Si cada terminal sorteara los suyos, el mismo billete de Q20 tendría identidades distintas y la sincronización los duplicaría. | Prompt 13 — 2026-09-06 |
 | **El estado de bloqueo NO se espeja en Supabase.** Ni la tabla `bloqueos_de_autorizacion` ni las columnas `usuarios.intentos_fallidos` / `bloqueado_hasta`. La nube lleva datos de negocio; el estado operativo de una terminal se queda en SQLite. | Espejar todo el esquema por simetría, que fue el reflejo inicial | Un candado deja de significar nada 30 segundos después de escribirse: con sincronización diferida llegaría vencido. Nadie lo consultaría desde la nube, y el hecho auditable sí viaja, porque `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada. Con más de una terminal, sincronizarlo sería activamente dañino: el bloqueo de una caja dejaría bloqueada la otra. Y unas columnas que existieran en Postgres sin sincronizarse nunca mostrarían `0` para todos y harían creer al auditor que nadie falló jamás un ingreso. Mismo criterio que ya se había aplicado a `sync_cola`. Ver `supabase/migrations/README.md`. | Prompt 12 — 2026-09-06 |
 | **El diálogo de autorización tiene su PROPIO candado, separado del candado de ingreso.** Por superficie (`bloqueos_de_autorizacion`), no por usuario. | Compartir `usuarios.intentos_fallidos` entre ambas superficies (lo que hacía la primera versión); un candado por usuario también en el diálogo | Compartido, un cajero que tocara el botón de salida y tecleara tres PIN al azar dejaba a **todos** los administradores sin poder iniciar sesión: una negación de servicio al alcance de cualquiera, comprobada con una prueba. Separarlos duplica el presupuesto de fuerza bruta (3+3 intentos cada 30 s en vez de 3), pero recorrer los 10 000 PIN sigue llevando más de medio día en ambos casos, así que no cambia nada práctico; lo que cambia es que un error de tecleo deja de paralizar la tienda. El candado del diálogo no es por usuario porque allí nadie eligió usuario: el intento es de la superficie, y un PIN equivocado cuenta **una vez** y no una por administrador. | Prompt 11 — 2026-09-06 |
 | **Nunca se informan los intentos restantes, solo el tiempo para reintentar.** | Mostrar "te quedan 2 intentos" | Los intentos restantes son información útil para quien está adivinando, y para quien mira por encima del hombro la pantalla de otro. El tiempo de espera no ayuda a adivinar. | Prompt 10 — 2026-09-06 |
@@ -813,8 +899,12 @@ negocio:
 - **Sí existe** el módulo de usuarios: autenticación con PIN, bloqueo por
   intentos, sesión en memoria, guard de permisos, primer arranque y pantalla de
   ingreso. Ver la sección 4.7.
-- No existe apertura ni cierre de caja, pantalla de ventas, ni ninguna pantalla
-  administrativa más allá de la creación del primer usuario.
+- **Sí existe** el módulo de caja: apertura y cierre con los dos modos de
+  captura, arqueo por denominaciones y autorización dual del descuadre. Ver la
+  sección 4.9.
+- No existe la pantalla de ventas, ni el cálculo real de `monto_esperado` (ver
+  la sección 4.10), ni ninguna pantalla administrativa más allá de la creación
+  del primer usuario y la configuración del PIN remoto.
 - No hay lógica de ventas, inventario, descuentos, caja, usuarios ni
   auditoría. La
   única excepción es el verificador de PIN de administrador
@@ -850,6 +940,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
   preload/      único puente hacia el renderer (expone window.pos)
   domain/       módulos de dominio
     usuarios/   autenticación, bloqueo por intentos, sesión y permisos
+    caja/       apertura y cierre del turno, arqueo por denominaciones
   windows/      creación y bloqueos de la ventana kiosko
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
 src/shared/     código compartido main <-> renderer
