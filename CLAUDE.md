@@ -324,6 +324,24 @@ La pantalla completa sin marco se consigue con `fullscreen: true` y
 `frame: false`, que no tocan nada del sistema. **No agregar `kiosk` nunca**, ni
 siquiera "solo en producción" ni "solo en Windows".
 
+**Precisión sobre Windows, para no exagerar el alcance del arreglo:** la opción
+era **una sola línea sin ramas por plataforma** (verificado en el historial:
+`main-window.ts` nunca tuvo un `process.platform`), así que quitarla la quitó
+para los dos sistemas. Pero el daño **no era simétrico**. macOS es el caso
+excepcional porque ofrece `NSApplicationPresentationOptions`, una API con la que
+una aplicación común puede apagar Forzar Salida y el cambio de aplicación.
+Windows no tiene equivalente: `Ctrl+Alt+Supr` lo atiende winlogon y ninguna
+aplicación lo intercepta, y `Ctrl+Shift+Esc` solo se puede deshabilitar por
+directiva de grupo o registro, no con una opción de ventana. En Windows,
+`kiosk: true` se traduce esencialmente a pantalla completa. Es decir: en Windows
+el Administrador de tareas **nunca estuvo bloqueado**, y la regla vale igual
+—porque impide que alguien la reintroduzca creyendo que es inocua—, pero no hay
+que contarla como un bloqueo que se haya prevenido allí.
+
+Esto es razonamiento sobre las APIs de cada sistema, no una medición: la sonda
+de Presentation Options solo existe en macOS y no hay una máquina Windows para
+comprobarlo.
+
 Cómo volver a comprobarlo en cualquier momento:
 
 ```bash
