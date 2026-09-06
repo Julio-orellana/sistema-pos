@@ -26,7 +26,7 @@ type EscuchadorDeEntrada = (
 ) => void;
 
 /** Ventana falsa que registra lo que el controlador le pide hacer. */
-function crearVentanaFalsa(): {
+function crearVentanaFalsa(estado: { destruida?: boolean; rendererCaido?: boolean } = {}): {
   ventana: BrowserWindow;
   canalesEnviados: string[];
   dispararEntrada: (entrada: Record<string, unknown>) => boolean;
@@ -35,7 +35,9 @@ function crearVentanaFalsa(): {
   let escuchador: EscuchadorDeEntrada | null = null;
 
   const ventanaFalsa = {
+    isDestroyed: (): boolean => estado.destruida ?? false,
     webContents: {
+      isCrashed: (): boolean => estado.rendererCaido ?? false,
       on: (evento: string, manejador: EscuchadorDeEntrada): void => {
         if (evento === 'before-input-event') {
           escuchador = manejador;
@@ -167,6 +169,94 @@ describe('Solo el PIN correcto cierra la aplicación', () => {
     expect(segundoIntento.autorizado).toBe(false);
     expect(segundoIntento.codigo).toBe('SIN_SOLICITUD_VIGENTE');
     expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ===========================================================================
+describe('Ninguna vía cierra la aplicación sin PIN', () => {
+  // Cubre lo que hace Cmd+Q en macOS, Alt+F4 en Windows, el menú del Dock y
+  // cualquier app.quit() ajeno: todos desembocan en evaluarIntentoDeCierre.
+
+  it('un intento de cierre sin autorización se bloquea y pide el PIN', () => {
+    const { controlador, cerrarAplicacion } = crearEscenario();
+    const { ventana, canalesEnviados } = crearVentanaFalsa();
+
+    const decision = controlador.evaluarIntentoDeCierre(ventana);
+
+    expect(decision).toBe('pedir-pin');
+    expect(canalesEnviados).toEqual([CANALES_IPC.solicitudDeSalidaControlada]);
+    expect(cerrarAplicacion).not.toHaveBeenCalled();
+  });
+
+  it('el intento de cierre deja una solicitud viva, así que el PIN correcto sirve enseguida', () => {
+    const { controlador, cerrarAplicacion } = crearEscenario();
+    const { ventana } = crearVentanaFalsa();
+
+    controlador.evaluarIntentoDeCierre(ventana);
+    const resultado = controlador.confirmarSalida(PIN_CORRECTO);
+
+    expect(resultado.autorizado).toBe(true);
+    expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
+  });
+
+  it('después de autorizar con el PIN, el cierre ya no se bloquea', () => {
+    const { controlador } = crearEscenario();
+    const { ventana } = crearVentanaFalsa();
+
+    controlador.evaluarIntentoDeCierre(ventana);
+    controlador.confirmarSalida(PIN_CORRECTO);
+
+    expect(controlador.cierreEstaAutorizado()).toBe(true);
+    expect(controlador.evaluarIntentoDeCierre(ventana)).toBe('permitir');
+  });
+
+  it('un PIN incorrecto NO desbloquea el cierre', () => {
+    const { controlador, cerrarAplicacion } = crearEscenario();
+    const { ventana } = crearVentanaFalsa();
+
+    controlador.evaluarIntentoDeCierre(ventana);
+    controlador.confirmarSalida(PIN_EQUIVOCADO);
+
+    expect(controlador.cierreEstaAutorizado()).toBe(false);
+    expect(controlador.evaluarIntentoDeCierre(ventana)).toBe('pedir-pin');
+    expect(cerrarAplicacion).not.toHaveBeenCalled();
+  });
+
+  it('insistir con el cierre vuelve a pedir el PIN, no lo deja pasar por cansancio', () => {
+    const { controlador } = crearEscenario();
+    const { ventana, canalesEnviados } = crearVentanaFalsa();
+
+    controlador.evaluarIntentoDeCierre(ventana);
+    controlador.evaluarIntentoDeCierre(ventana);
+    controlador.evaluarIntentoDeCierre(ventana);
+
+    expect(canalesEnviados).toHaveLength(3);
+    expect(controlador.cierreEstaAutorizado()).toBe(false);
+  });
+
+  it('el cierre ordenado del propio proceso se autoriza a sí mismo y no queda atrapado', () => {
+    const { controlador } = crearEscenario();
+    const { ventana } = crearVentanaFalsa();
+
+    controlador.autorizarCierre();
+
+    expect(controlador.evaluarIntentoDeCierre(ventana)).toBe('permitir');
+  });
+
+  describe('Escape deliberado cuando no hay dónde pedir el PIN', () => {
+    it('si la ventana ya fue destruida, se permite cerrar', () => {
+      const { controlador } = crearEscenario();
+      const { ventana } = crearVentanaFalsa({ destruida: true });
+
+      expect(controlador.evaluarIntentoDeCierre(ventana)).toBe('permitir');
+    });
+
+    it('si el renderer se cayó, se permite cerrar en vez de dejar el proceso zombi', () => {
+      const { controlador } = crearEscenario();
+      const { ventana } = crearVentanaFalsa({ rendererCaido: true });
+
+      expect(controlador.evaluarIntentoDeCierre(ventana)).toBe('permitir');
+    });
   });
 });
 

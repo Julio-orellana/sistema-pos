@@ -32,6 +32,13 @@ export const CANALES_IPC = {
   solicitudDeSalidaControlada: 'kiosko:solicitud-de-salida',
   /** Renderer -> proceso principal. Envía el PIN para autorizar la salida. */
   confirmarSalidaControlada: 'kiosko:confirmar-salida',
+  /**
+   * Renderer -> proceso principal. Pide iniciar la salida controlada desde el
+   * botón de la interfaz. Deliberadamente NO abre el diálogo por su cuenta: le
+   * pide al proceso principal que lo solicite, para que recorra exactamente el
+   * mismo camino que el atajo de teclado y quede una única vía auditable.
+   */
+  solicitarSalidaControlada: 'kiosko:solicitar-salida',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -198,6 +205,11 @@ export interface ApiPos {
      * Devuelve la función para darse de baja.
      */
     alSolicitarSalida(alRecibir: () => void): () => void;
+    /**
+     * Pide iniciar la salida controlada. El proceso principal responde
+     * emitiendo la misma solicitud de PIN que dispara el atajo de teclado.
+     */
+    solicitarSalida(): Promise<RespuestaIpc<boolean>>;
     /** Envía el PIN al proceso principal para autorizar la salida. */
     confirmarSalida(pin: string): Promise<RespuestaIpc<ResultadoIntentoDeSalida>>;
   };

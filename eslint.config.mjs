@@ -30,6 +30,10 @@ export default defineConfig(
     'coverage/**',
     'eslint.config.mjs',
     '*.config.js',
+    // Guiones de diagnóstico que se ejecutan a mano con `npx electron`. No
+    // pertenecen a ningún tsconfig, así que las reglas con información de
+    // tipos no pueden analizarlos.
+    'scripts/*.cjs',
   ]),
 
   js.configs.recommended,

@@ -53,6 +53,13 @@ let cierreEnCurso = false;
 let ultimoCierre: ResultadoCierreOrdenado | null = null;
 
 /**
+ * Controlador de salida activo. Se guarda a nivel de módulo para que el cierre
+ * ordenado pueda autorizarse a sí mismo y no quede atrapado por la
+ * intercepción de cierres que él mismo instala.
+ */
+let controladorDeSalidaActivo: ControladorDeSalidaControlada | null = null;
+
+/**
  * Cierra la aplicación de forma ordenada.
  *
  * "Ordenada" significa, en concreto: se quitan los canales IPC para que no
@@ -65,6 +72,9 @@ function cerrarAplicacionOrdenadamente(): void {
     return;
   }
   cierreEnCurso = true;
+  // El cierre ordenado se autoriza a sí mismo: si no, el `app.quit()` de abajo
+  // volvería a caer en la intercepción y la aplicación no cerraría nunca.
+  controladorDeSalidaActivo?.autorizarCierre();
 
   // TODO(caja): cuando exista el módulo de caja, avisarle aquí para que
   // persista el turno abierto antes de cerrar.
@@ -114,11 +124,13 @@ app.whenReady().then(
       verificador: crearVerificadorDePin(process.env, app.isPackaged),
       cerrarAplicacion: cerrarAplicacionOrdenadamente,
     });
+    controladorDeSalidaActivo = controladorDeSalida;
 
     registrarManejadoresIpc({ controladorDeSalida });
 
     const ventana = crearVentanaPrincipal(RUTA_PRELOAD, !enVerificacionDeArranque);
     controladorDeSalida.conectarVentana(ventana);
+    interceptarCierresDelSistema(ventana, controladorDeSalida);
     cargarInterfaz(ventana, DIRECTORIO_RENDERER);
 
     if (enVerificacionDeArranque) {
@@ -134,6 +146,7 @@ app.whenReady().then(
       if (BrowserWindow.getAllWindows().length === 0) {
         const nuevaVentana = crearVentanaPrincipal(RUTA_PRELOAD);
         controladorDeSalida.conectarVentana(nuevaVentana);
+        interceptarCierresDelSistema(nuevaVentana, controladorDeSalida);
         cargarInterfaz(nuevaVentana, DIRECTORIO_RENDERER);
       }
     });
@@ -182,6 +195,41 @@ async function medirBloqueosEnLaVentana(
   return (await ventana.webContents.executeJavaScript(guion)) as BloqueosMedidosEnLaVentana;
 }
 
+/**
+ * Intercepta TODA vía de cierre que no sea el flujo con PIN.
+ *
+ * Cubre los atajos estándar del sistema operativo que macOS y Windows
+ * reconocen como "salir": Cmd+Q, Alt+F4, el menú del Dock, el botón de cerrar
+ * de la ventana y cualquier `app.quit()` de terceros. Todos terminan pidiendo
+ * el PIN, igual que el atajo del administrador.
+ *
+ * Antes de esto, Cmd+Q cerraba el punto de venta de inmediato: sin PIN, sin
+ * registro de auditoría y sin consolidar la base de datos.
+ *
+ * OJO: interceptar el cierre de la APLICACIÓN es legítimo. Lo que jamás se
+ * hace es deshabilitar los mecanismos de escape del SISTEMA OPERATIVO —Forzar
+ * Salida y Cmd+Tab—, que siguen funcionando siempre. Ver la sección 4.5 de
+ * CLAUDE.md.
+ */
+function interceptarCierresDelSistema(
+  ventana: BrowserWindow,
+  controladorDeSalida: ControladorDeSalidaControlada,
+): void {
+  // Cmd+Q en macOS, el menú del Dock y cualquier app.quit() ajeno.
+  app.on('before-quit', (evento) => {
+    if (controladorDeSalida.evaluarIntentoDeCierre(ventana) === 'pedir-pin') {
+      evento.preventDefault();
+    }
+  });
+
+  // Alt+F4 en Windows y el cierre de la ventana por cualquier otra vía.
+  ventana.on('close', (evento) => {
+    if (controladorDeSalida.evaluarIntentoDeCierre(ventana) === 'pedir-pin') {
+      evento.preventDefault();
+    }
+  });
+}
+
 /** Milisegundos que se espera a que el atajo sintético llegue de vuelta. */
 const ESPERA_MAXIMA_DEL_ATAJO_MS = 3000;
 
@@ -202,6 +250,21 @@ async function esperarHasta(condicion: () => boolean, limiteMs: number): Promise
     await new Promise((continuar) => setTimeout(continuar, INTERVALO_DE_ESPERA_MS));
   }
   return condicion();
+}
+
+/** Espera a que el diálogo de PIN exista en el DOM de la ventana real. */
+async function esperarDialogoDeSalida(ventana: BrowserWindow): Promise<boolean> {
+  const limite = Date.now() + ESPERA_MAXIMA_DEL_ATAJO_MS;
+  while (Date.now() < limite) {
+    const visible = (await ventana.webContents.executeJavaScript(
+      `document.querySelector('[data-prueba="dialogo-salida"]') !== null`,
+    )) as boolean;
+    if (visible) {
+      return true;
+    }
+    await new Promise((continuar) => setTimeout(continuar, INTERVALO_DE_ESPERA_MS));
+  }
+  return false;
 }
 
 /** Arma e imprime el informe de verificación y cierra la aplicación. */
@@ -227,6 +290,35 @@ async function ejecutarVerificacionDeArranque(
   // Un PIN equivocado NO debe cerrar nada. La solicitud sigue viva después.
   const conPinIncorrecto = controladorDeSalida.confirmarSalida('999999');
 
+  // --- El BOTÓN de la barra de estado dispara el mismo flujo que el atajo ---
+  const solicitudesAntesDelBoton = controladorDeSalida.solicitudesRecibidas();
+  const botonEncontrado = (await ventana.webContents.executeJavaScript(`(() => {
+    const boton = document.querySelector('[data-prueba="boton-salida"]');
+    if (boton === null) { return false; }
+    boton.click();
+    return true;
+  })()`)) as boolean;
+
+  const botonPidioLaSalida = await esperarHasta(
+    () => controladorDeSalida.solicitudesRecibidas() > solicitudesAntesDelBoton,
+    ESPERA_MAXIMA_DEL_ATAJO_MS,
+  );
+
+  // Y el diálogo de PIN aparece de verdad en el DOM, no solo en el proceso
+  // principal: se consulta el documento de la ventana real hasta que React lo
+  // dibuja o se agota el tiempo.
+  const dialogoVisible = await esperarDialogoDeSalida(ventana);
+
+  // --- Un cierre directo (lo que hace Cmd+Q) queda interceptado ---
+  const solicitudesAntesDelCierre = controladorDeSalida.solicitudesRecibidas();
+  app.quit();
+  const cierreDirectoInterceptado = await esperarHasta(
+    () => controladorDeSalida.solicitudesRecibidas() > solicitudesAntesDelCierre,
+    ESPERA_MAXIMA_DEL_ATAJO_MS,
+  );
+  // Si llegamos a esta línea, el app.quit() de arriba no cerró la aplicación.
+  const siguiaViva = !controladorDeSalida.cierreEstaAutorizado();
+
   // El diagnóstico de la base se toma ANTES del cierre, mientras sigue abierta.
   const baseDeDatos = ejecutarDiagnostico({ incluirConteoDeRegistros: true });
 
@@ -246,6 +338,16 @@ async function ejecutarVerificacionDeArranque(
       salidaConPinIncorrectoRechazada: !conPinIncorrecto.autorizado,
       motivoDelRechazo: conPinIncorrecto.codigo,
       salidaConPinCorrectoAutorizada: conPinCorrecto.autorizado,
+    },
+    botonDeSalidaEnLaInterfaz: {
+      botonEncontrado,
+      botonPidioLaSalida,
+      dialogoDePinVisible: dialogoVisible,
+    },
+    cierreSinPin: {
+      // Es la ruta por la que pasa Cmd+Q en macOS y Alt+F4 en Windows.
+      cierreDirectoInterceptado,
+      aplicacionSiguioViva: siguiaViva,
     },
     cierreOrdenado: ultimoCierre,
     baseDeDatos,

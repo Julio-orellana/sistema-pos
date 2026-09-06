@@ -27,6 +27,7 @@
     "rebuild": "electron-builder install-app-deps",
     "verify": "npm run lint && npm run typecheck && npm run test",
     "verify:arranque": "npm run build && POS_VERIFICACION_ARRANQUE=1 electron .",
+    "diagnostico:kiosko-macos": "mkdir -p node_modules/.tmp && swiftc -O scripts/sonda-presentacion-macos.swift -o node_modules/.tmp/sonda-presentacion && electron scripts/diagnostico-kiosko-macos.cjs kiosk node_modules/.tmp/sonda-presentacion && electron scripts/diagnostico-kiosko-macos.cjs corregido node_modules/.tmp/sonda-presentacion",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

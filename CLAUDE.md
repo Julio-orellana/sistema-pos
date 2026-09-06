@@ -61,7 +61,10 @@ Node requerido: **>= 22**.
 1. **Es una app de escritorio, no una web.** Electron + React + Vite +
    TypeScript estricto. Nunca `any` implícito.
 2. **Ventana en modo kiosko:** pantalla completa, sin menú, sin barra de
-   título, sin zoom con Ctrl+rueda, sin menú de clic derecho.
+   título, sin zoom con Ctrl+rueda, sin menú de clic derecho. **Nunca se usa
+   `kiosk: true` de Electron** y **nunca se tocan los mecanismos de escape del
+   sistema operativo** (ver la sección 4.5, que es una regla de diseño, no un
+   arreglo puntual).
    **Salida controlada:** el atajo `Ctrl + Shift + Alt + Q` (en macOS,
    `Ctrl + Shift + Option + Q`) le pide el PIN al administrador y, solo si el
    PIN es correcto, cierra la aplicación de forma ordenada. Es una salida de
@@ -276,6 +279,110 @@ dónde salió el segundo escritor. Probablemente signifique que se abrió el pun
 pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
 un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
 
+### 4.5 REGLA DE DISEÑO DEL MODO KIOSKO (leer antes de tocar la ventana)
+
+Esta sección existe porque el proyecto ya cometió este error una vez y encerró
+a Julio fuera de su propia Mac. No es un arreglo puntual: es la regla.
+
+#### La regla, en una frase
+
+> El modo kiosko de esta aplicación puede suprimir **conveniencias de la propia
+> aplicación**. Jamás puede tocar los **mecanismos de escape del sistema
+> operativo**.
+
+| Se PUEDE suprimir (app) | JAMÁS se toca (sistema operativo) |
+|---|---|
+| Barra de título y marco de la ventana | **Forzar Salida** (`Cmd+Option+Esc` en macOS) |
+| Menú de la aplicación | **Cambio de aplicación** (`Cmd+Tab`) |
+| Menú contextual del clic derecho | **Administrador de tareas** (`Ctrl+Shift+Esc` en Windows) |
+| Zoom con Ctrl+rueda y con teclado | **`Ctrl+Alt+Supr`** en Windows |
+| Recarga y herramientas de desarrollo | Apagar o cerrar sesión del sistema |
+
+Esto es una terminal de punto de venta, no un kiosco público donde alguien deba
+quedar físicamente encerrado sin salida. Si la aplicación se cuelga, el dueño
+tiene que poder matarla desde el sistema operativo.
+
+#### PROHIBIDO: `kiosk: true` de Electron
+
+En macOS, `kiosk: true` no se limita a poner la ventana en pantalla completa:
+le impone al sistema operativo un juego de **Presentation Options** que apaga
+funciones del propio sistema. Medido sobre este proyecto con
+`npm run diagnostico:kiosko-macos`:
+
+```
+kiosk: true   ->  currentSystemPresentationOptions = 506
+                  hideDock, hideMenuBar, disableAppleMenu,
+                  disableProcessSwitching     <- MATA Cmd+Tab
+                  disableForceQuit            <- MATA Cmd+Option+Esc
+                  disableSessionTermination, disableHideApplication
+
+sin kiosk     ->  currentSystemPresentationOptions = 0
+                  ...y la ventana sigue en pantalla completa igual.
+```
+
+La pantalla completa sin marco se consigue con `fullscreen: true` y
+`frame: false`, que no tocan nada del sistema. **No agregar `kiosk` nunca**, ni
+siquiera "solo en producción" ni "solo en Windows".
+
+Cómo volver a comprobarlo en cualquier momento:
+
+```bash
+npm run diagnostico:kiosko-macos
+```
+
+Abre una ventana con cada configuración y mide el estado real del sistema con
+una sonda en Swift (`scripts/sonda-presentacion-macos.swift`). La mitad que usa
+`kiosk` deshabilita Forzar Salida durante unos dos segundos y se cierra sola.
+
+#### Ninguna vía cierra la aplicación sin PIN
+
+El reverso de la regla: interceptar el cierre de la APLICACIÓN sí es legítimo, y
+es obligatorio. **Cualquier atajo que macOS o Windows reconozcan como "salir"
+debe redirigirse al mismo flujo de PIN**, nunca cerrar directo.
+
+| Vía | Qué hace ahora |
+|---|---|
+| `Ctrl+Shift+Alt+Q` (atajo del administrador) | Pide PIN |
+| **`Cmd+Q`** (macOS) | Interceptado en `app.on('before-quit')` → pide PIN |
+| **`Alt+F4`** / botón de cerrar (Windows) | Interceptado en `ventana.on('close')` → pide PIN |
+| Menú del Dock → Salir | Interceptado en `before-quit` → pide PIN |
+| Botón de la barra de estado | Pide PIN (mismo canal, mismo diálogo) |
+| `app.quit()` de terceros | Interceptado → pide PIN |
+
+Antes de esto, `Cmd+Q` cerraba el punto de venta de inmediato: sin PIN, sin
+registro de auditoría y sin consolidar la base de datos. Era una puerta trasera
+al alcance de cualquier cajero.
+
+**Escape deliberado:** si la ventana ya fue destruida o el renderer se cayó, el
+cierre se permite sin PIN. No hay dónde mostrar el diálogo, y dejar el proceso
+vivo sin interfaz obligaría a matarlo desde el sistema operativo.
+
+**Al agregar una pantalla nueva no hay que hacer nada especial**: la
+intercepción vive en el proceso principal, no en la interfaz, así que aplica a
+todas las pantallas por igual. Lo que sí hay que respetar es no crear ningún
+botón, menú o atajo que llame a `app.quit()` o cierre la ventana por su cuenta.
+
+#### El botón de salida visible: dónde va y por qué
+
+Hay **un solo** control visible que puede cerrar el sistema, en la barra de
+estado (`src/renderer/src/components/BarraDeEstado.tsx`), **esquina inferior
+izquierda**. Razones, para cuando se construya la pantalla de ventas real:
+
+1. **La barra de estado es cromo de la aplicación**, no parte del flujo de
+   venta: el cajero trabaja mirando el centro de la pantalla.
+2. **Esquina izquierda**, lo más lejos posible del botón de cobrar, que por
+   convención de punto de venta va abajo a la derecha. Reduce el toque
+   accidental en una pantalla táctil.
+3. **Presente en todas las pantallas**, no escondido en un menú: es una salida
+   de emergencia y un administrador tiene que poder llegar sin navegar.
+4. **Ícono discreto sin texto "Cerrar"**, con etiqueta accesible. No invita a
+   que lo prueben.
+5. **No cierra nada por su cuenta**: le pide al proceso principal que inicie la
+   salida, que responde con el mismo diálogo que el atajo. Una sola vía
+   auditable, no dos caminos paralelos.
+
+La barrera real sigue siendo el PIN; la ubicación solo evita el accidente.
+
 ### 4.4 Estado del proyecto en Supabase
 
 El esquema espejo **ya está aplicado** contra el proyecto real.
@@ -359,6 +466,9 @@ advertencias de seguridad propias (`SECURITY DEFINER` ejecutable por los roles
 | **Un único punto traduce los errores de restricción a errores de negocio** (`errores.ts`), y toda escritura de repositorio pasa por `RepositorioBase.ejecutar()`. | Dejar pasar el error crudo de SQLite; traducir en cada pantalla | "CHECK constraint failed: productos_inventario_no_negativo" no se le puede mostrar a un cajero con un cliente enfrente, y traducir en cada pantalla garantiza que alguna se olvide. El error se convierte en `STOCK_INSUFICIENTE` con el mensaje "Stock insuficiente para completar la venta", conservando la causa técnica para la bitácora. Un error que NO se reconoce pasa sin envolver, para no esconder fallos de programación detrás de un texto tranquilizador. | Prompt 6 — 2026-09-05 |
 | **El descuento de inventario debe ser atómico** (ver sección 4.3): en Postgres con `SET col = col - :cantidad`; en SQLite con comparar-y-cambiar dentro de una sola transacción de escritura, porque allí la resta en SQL sería de punto flotante. | Leer, restar en la aplicación y escribir después, en operaciones separadas | Entre la lectura y la escritura hay una ventana en la que otra operación puede mover el saldo, y entonces el CHECK se evalúa sobre datos viejos. | Prompt 6 — 2026-09-05 |
 | **Ante un conflicto de inventario (el comparar-y-cambiar afecta 0 filas): CERO reintentos automáticos.** Se revierte toda la transacción, el carrito de la pantalla se conserva y el cajero vuelve a cobrar. Queda un asiento de auditoría. | Reintentar N veces con espera; reintentar una sola vez; recalcular en silencio contra el saldo nuevo | En esta arquitectura el conflicto no debería poder ocurrir: instancia única, better-sqlite3 síncrono y `BEGIN IMMEDIATE` toma el bloqueo antes de leer. Si ocurre, la premisa se rompió —hay un segundo escritor, o el saldo se leyó fuera de la transacción— y reintentar taparía el defecto. Además, un reintento silencioso podría cobrar contra un inventario que nadie revisó, con el cliente enfrente. No confundir con `SQLITE_BUSY`, que sí se reintenta, pero lo hace el controlador con su timeout de 5000 ms. Ver la sección 4.3. | Prompt 7 — 2026-09-05 |
+| **PROHIBIDO `kiosk: true` de Electron.** La pantalla completa se consigue con `fullscreen` + `frame: false`. | Usar `kiosk: true`; usarlo solo en producción; usarlo solo en Windows | En macOS, `kiosk: true` le impone al sistema operativo Presentation Options que apagan **Forzar Salida** (`disableForceQuit`) y **Cmd+Tab** (`disableProcessSwitching`). Medido: con kiosk, `currentSystemPresentationOptions = 506`; sin kiosk, `0`, y la ventana sigue igual de completa. Esto es una terminal de punto de venta, no un kiosco público: si la app se cuelga, el dueño tiene que poder matarla desde el sistema. Reproducible con `npm run diagnostico:kiosko-macos`. Ver la sección 4.5. | Prompt 8 — 2026-09-06 |
+| **Todo atajo estándar de "salir" del sistema operativo se intercepta y se redirige al flujo con PIN**: `Cmd+Q`, `Alt+F4`, el botón de cerrar, el menú del Dock y cualquier `app.quit()` ajeno. | Dejar pasar `Cmd+Q`; bloquearlo sin ofrecer alternativa | `Cmd+Q` cerraba el punto de venta de inmediato, sin PIN, sin auditoría y sin consolidar la base de datos: una puerta trasera al alcance de cualquier cajero, y además una vía por la que se perdía el cierre ordenado. La intercepción vive en el proceso principal (`before-quit` y `close`), no en la interfaz, así que aplica a toda pantalla futura sin trabajo adicional. | Prompt 8 — 2026-09-06 |
+| **Un único control visible de salida, en la barra de estado, esquina inferior izquierda**, que dispara el mismo flujo de PIN que el atajo. | Sin botón, solo atajo; un botón en la pantalla de ventas; un botón que cierre directo | Sin botón, un administrador que no conozca el atajo queda sin salida. En la pantalla de ventas, cualquier cajero lo vería y lo tocaría. La esquina izquierda lo aleja del botón de cobrar, que por convención va abajo a la derecha. El botón no cierra nada: le pide al proceso principal que inicie la salida, de modo que haya una sola vía auditable. | Prompt 8 — 2026-09-06 |
 | Salida controlada del kiosko con atajo + PIN de administrador | Dejar la app sin salida (matar el proceso); un botón de salir en la interfaz; salida sin PIN | Sin salida ordenada había que matar el proceso desde el Administrador de tareas, lo que deja el WAL de SQLite sin consolidar y no registra nada. Un botón visible sería una invitación para el cajero. El PIN convierte la salida en una acción de administrador auditable. | Prompt 2 — 2026-09-04 |
 | El atajo se captura con `before-input-event` y no con `globalShortcut` | `globalShortcut` de Electron | `globalShortcut` registra la combinación en todo el sistema operativo y se la roba a cualquier otra aplicación abierta, incluida la del desarrollador. El atajo solo debe existir mientras el POS tiene el foco. | Prompt 2 — 2026-09-04 |
 | Las combinaciones de teclas se identifican por tecla FÍSICA (`code`) y no por carácter (`key`) | Comparar `key === 'q'` | En el teclado latinoamericano de Windows, AltGr es Ctrl+Alt y cambia el carácter que produce cada tecla. Comparando por carácter, el atajo del administrador simplemente no funcionaría en la computadora de la tienda. | Prompt 2 — 2026-09-04 |

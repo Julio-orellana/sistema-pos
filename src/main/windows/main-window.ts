@@ -32,10 +32,40 @@ const COLOR_FONDO = '#0f172a';
  * Ajustes de kiosko en un solo lugar, para que la ventana y la verificación
  * automatizada lean exactamente los mismos valores. Si alguien afloja uno de
  * estos, la verificación de arranque lo reporta.
+ *
+ * ===========================================================================
+ * PROHIBIDO: `kiosk: true` DE ELECTRON. NO VOLVER A AGREGARLO.
+ * ===========================================================================
+ * En macOS, `kiosk: true` no se limita a poner la ventana en pantalla
+ * completa: le impone al SISTEMA OPERATIVO un juego de Presentation Options
+ * que apaga mecanismos de escape del propio sistema. Medido con
+ * scripts/diagnostico-kiosko-macos.cjs sobre esta misma versión de Electron:
+ *
+ *   kiosk: true  -> currentSystemPresentationOptions = 506
+ *                   hideDock, hideMenuBar, disableAppleMenu,
+ *                   disableProcessSwitching  <- MATA Cmd+Tab
+ *                   disableForceQuit         <- MATA Cmd+Option+Esc
+ *                   disableSessionTermination, disableHideApplication
+ *
+ *   sin kiosk    -> currentSystemPresentationOptions = 0
+ *                   y la ventana sigue en pantalla completa igual.
+ *
+ * Esto es una terminal de punto de venta, no un kiosco público donde alguien
+ * deba quedar encerrado sin salida: si la aplicación se cuelga, el dueño tiene
+ * que poder forzar su cierre desde el sistema. La pantalla completa sin marco
+ * se consigue igual con `fullscreen` y `frame: false`, que no tocan nada del
+ * sistema operativo.
+ *
+ * Ver la regla de diseño completa en la sección 4.5 de CLAUDE.md.
  */
 const AJUSTES_KIOSKO = {
-  /** Pantalla completa bloqueada, sin poder salir con gestos del sistema. */
-  kiosk: true,
+  /**
+   * NUNCA activar el modo kiosko de Electron. Se deja declarado en `false` y
+   * no simplemente omitido, para que se vea la decisión y la verificación de
+   * arranque pueda comprobar que sigue apagado.
+   */
+  kioskDeElectron: false,
+  /** Pantalla completa: es lo que sí queremos, y no toca al sistema. */
   fullscreen: true,
   /** Sin marco de ventana: no hay barra de título ni botones de cerrar. */
   frame: false,
@@ -67,8 +97,8 @@ export function crearVentanaPrincipal(rutaPreload: string, mostrarAlEstarLista =
     minHeight: ALTO_MINIMO,
     show: false,
     backgroundColor: COLOR_FONDO,
-    // Kiosko: pantalla completa real, sin barra de título ni marco.
-    kiosk: AJUSTES_KIOSKO.kiosk,
+    // Pantalla completa real, sin barra de título ni marco. Deliberadamente
+    // NO se pasa `kiosk`: ver el comentario de AJUSTES_KIOSKO.
     fullscreen: AJUSTES_KIOSKO.fullscreen,
     frame: AJUSTES_KIOSKO.frame,
     titleBarStyle: 'hidden',
@@ -186,7 +216,11 @@ export function cargarInterfaz(ventana: BrowserWindow, directorioRenderer: strin
 export interface EstadoVentanaKiosko {
   /** Leído de la ventana viva. */
   readonly medido: {
-    readonly modoKiosko: boolean;
+    /**
+     * DEBE ser `false`. El modo kiosko de Electron apaga Force Quit y Cmd+Tab
+     * en macOS; esta aplicación no puede usarlo nunca. Ver AJUSTES_KIOSKO.
+     */
+    readonly usaKioskDeElectron: boolean;
     readonly pantallaCompleta: boolean;
     /**
      * Ojo al auditar: en macOS este valor SIEMPRE es `true`, porque el menú no
@@ -210,7 +244,7 @@ export interface EstadoVentanaKiosko {
 export function describirEstadoKiosko(ventana: BrowserWindow): EstadoVentanaKiosko {
   return {
     medido: {
-      modoKiosko: ventana.isKiosk(),
+      usaKioskDeElectron: ventana.isKiosk(),
       pantallaCompleta: ventana.isFullScreen(),
       barraDeMenuVisible: ventana.isMenuBarVisible(),
       menuDeAplicacionEliminado: Menu.getApplicationMenu() === null,

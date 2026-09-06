@@ -10,7 +10,7 @@
  * archivo dentro de src/main/ipc/ y se registran desde aquí.
  */
 
-import { app, ipcMain } from 'electron';
+import { BrowserWindow, app, ipcMain } from 'electron';
 import { z } from 'zod';
 
 import {
@@ -102,6 +102,21 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           sincronizacionSimulada: estadoSincronizacion.simulado,
         };
         return diagnostico;
+      }),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.solicitarSalidaControlada,
+    async (evento): Promise<RespuestaIpc<boolean>> =>
+      ejecutarConRespuesta('SOLICITUD_DE_SALIDA_FALLIDA', () => {
+        // Se resuelve la ventana desde el propio evento: así el botón no puede
+        // pedir la salida de una ventana que no es la suya.
+        const ventana = BrowserWindow.fromWebContents(evento.sender);
+        if (ventana === null) {
+          throw new Error('No se pudo identificar la ventana que pidió la salida.');
+        }
+        dependencias.controladorDeSalida.solicitarPin(ventana);
+        return true;
       }),
   );
 

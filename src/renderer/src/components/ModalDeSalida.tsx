@@ -75,6 +75,7 @@ export function ModalDeSalida(): React.JSX.Element | null {
   return (
     <div
       className="capa-modal"
+      data-prueba="dialogo-salida"
       role="dialog"
       aria-modal="true"
       aria-labelledby="titulo-salida"

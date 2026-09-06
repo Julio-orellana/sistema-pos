@@ -52,6 +52,9 @@ const apiPos: ApiPos = {
       };
     },
 
+    solicitarSalida: (): Promise<RespuestaIpc<boolean>> =>
+      ipcRenderer.invoke(CANALES_IPC.solicitarSalidaControlada) as Promise<RespuestaIpc<boolean>>,
+
     confirmarSalida: (pin: string): Promise<RespuestaIpc<ResultadoIntentoDeSalida>> =>
       ipcRenderer.invoke(CANALES_IPC.confirmarSalidaControlada, { pin }) as Promise<
         RespuestaIpc<ResultadoIntentoDeSalida>

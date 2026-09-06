@@ -10,8 +10,14 @@
  * en src/shared/kiosk-input.ts), el proceso principal le pide el PIN a la
  * interfaz, y solo si el PIN es correcto se cierra todo de forma ordenada.
  *
- * NO ES UNA FUNCIÓN DE LA INTERFAZ DE VENTA: no hay botón, ni menú, ni pista
- * visual. Es una salida de emergencia para el administrador.
+ * NINGUNA VÍA CIERRA SIN PIN. Además del atajo, este controlador intercepta
+ * los atajos de salida del sistema operativo (Cmd+Q en macOS, Alt+F4 en
+ * Windows, el menú del Dock) y los redirige a este mismo flujo. Antes de eso,
+ * Cmd+Q cerraba el punto de venta de inmediato, sin PIN, sin auditoría y sin
+ * consolidar la base de datos: una puerta trasera al alcance de cualquiera.
+ *
+ * Hay una única salida visible en la interfaz —un control discreto en la barra
+ * de estado— y dispara exactamente este mismo flujo, no uno paralelo.
  *
  * POR QUÉ `before-input-event` Y NO `globalShortcut`: un atajo global se
  * registra en todo el sistema operativo y le robaría la combinación a
@@ -60,8 +66,19 @@ export class ControladorDeSalidaControlada {
   /** Momento en que se presionó el atajo, o `null` si no hay solicitud viva. */
   private solicitadaEnMs: number | null = null;
 
-  /** Cuántas veces se presionó el atajo. Solo para diagnóstico y auditoría. */
+  /** Cuántas veces se solicitó la salida. Solo para diagnóstico y auditoría. */
   private vecesSolicitada = 0;
+
+  /**
+   * `true` solo después de que el PIN correcto autorizó el cierre.
+   *
+   * Mientras sea `false`, cualquier intento de cerrar la aplicación —Cmd+Q en
+   * macOS, Alt+F4 en Windows, el menú del Dock— se intercepta y se redirige a
+   * pedir el PIN. Sin esto, el atajo estándar de "salir" del sistema operativo
+   * sería una puerta trasera que se salta la autorización, la auditoría y el
+   * cierre ordenado de la base de datos.
+   */
+  private cierreAutorizado = false;
 
   public constructor(dependencias: DependenciasDeSalida) {
     this.verificador = dependencias.verificador;
@@ -111,6 +128,50 @@ export class ControladorDeSalidaControlada {
     this.solicitadaEnMs = null;
   }
 
+  /** ¿Ya se autorizó el cierre con el PIN? */
+  public cierreEstaAutorizado(): boolean {
+    return this.cierreAutorizado;
+  }
+
+  /**
+   * Autoriza el cierre sin pasar por el PIN.
+   *
+   * Lo usa ÚNICAMENTE el propio cierre ordenado del proceso principal, para
+   * que su `app.quit()` no quede atrapado por la intercepción que este mismo
+   * controlador instala. No debe llamarse desde ningún otro lugar.
+   */
+  public autorizarCierre(): void {
+    this.cierreAutorizado = true;
+  }
+
+  /**
+   * Decide qué hacer ante un intento de cerrar la aplicación que NO vino del
+   * flujo con PIN: Cmd+Q en macOS, Alt+F4 o el botón de cerrar en Windows, el
+   * menú del Dock, o un `app.quit()` de terceros.
+   *
+   * Devuelve `'permitir'` o `'pedir-pin'`. Cuando devuelve `'pedir-pin'` ya
+   * dejó pedido el PIN: quien llama solo tiene que cancelar el evento.
+   *
+   * ESCAPE DELIBERADO: si la ventana ya no existe o su renderer se cayó, se
+   * permite cerrar. No hay dónde mostrar el diálogo del PIN, y dejar el
+   * proceso vivo sin interfaz obligaría a matarlo desde el sistema operativo.
+   */
+  public evaluarIntentoDeCierre(ventana: BrowserWindow): 'permitir' | 'pedir-pin' {
+    if (this.cierreAutorizado) {
+      return 'permitir';
+    }
+
+    if (ventana.isDestroyed() || ventana.webContents.isCrashed()) {
+      console.warn('[kiosko] Cierre permitido sin PIN: la interfaz no está disponible para pedirlo.');
+      return 'permitir';
+    }
+
+    // TODO(auditoria): registrar el intento de cierre por una vía no autorizada.
+    console.info('[kiosko] Intento de cierre interceptado; se redirige al flujo con PIN.');
+    this.solicitarPin(ventana);
+    return 'pedir-pin';
+  }
+
   /**
    * Verifica el PIN y, si corresponde, cierra la aplicación de forma ordenada.
    */
@@ -144,6 +205,7 @@ export class ControladorDeSalidaControlada {
     }
 
     this.solicitadaEnMs = null;
+    this.cierreAutorizado = true;
     // TODO(auditoria): registrar la salida autorizada con el administrador que
     // la autorizó, cuando el módulo de usuarios permita identificarlo.
     console.info('[kiosko] Salida autorizada. Cerrando la aplicación de forma ordenada.');

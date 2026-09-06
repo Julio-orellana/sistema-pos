@@ -244,6 +244,10 @@ Antes de cada commit, en orden:
       `+ - * /` sobre montos.
 - [ ] Se respeta el **redondeo único al final**: ninguna función de cálculo
       nueva redondea resultados intermedios.
+- [ ] No se agregó `kiosk: true` ni ninguna otra opción que deshabilite
+      mecanismos de escape del sistema operativo (ver `CLAUDE.md` §4.5).
+- [ ] Ningún botón, menú ni atajo nuevo llama a `app.quit()` ni cierra la
+      ventana por su cuenta: toda salida pasa por el flujo con PIN.
 - [ ] Toda escritura nueva de un repositorio pasa por `this.ejecutar()`, para
       que un fallo de restricción llegue traducido a lenguaje de negocio y no
       como el texto crudo de SQLite.

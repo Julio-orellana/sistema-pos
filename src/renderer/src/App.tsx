@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 
 import type { DiagnosticoAplicacion, DiagnosticoBaseDeDatos } from '@shared/types/ipc';
 import { formatearQuetzales, montoACadena, sumar } from '@shared/money';
+import { BarraDeEstado } from './components/BarraDeEstado';
 import { ModalDeSalida } from './components/ModalDeSalida';
 
 /** Fila de la tabla de resultados. */
@@ -145,14 +146,18 @@ export function App(): React.JSX.Element {
         )}
       </section>
 
-      <footer className="pie">
+      <div className="pie">
         <button type="button" onClick={volverAVerificar} disabled={cargando}>
           {cargando ? 'Verificando…' : 'Volver a verificar'}
         </button>
         <p className="nota">
-          Ventana en modo kiosko: sin menú, sin barra de título, sin zoom y sin menú de clic derecho.
+          Pantalla completa sin menú, sin barra de título, sin zoom y sin menú de clic derecho.
+          Los mecanismos de escape del sistema operativo (Forzar Salida, Cmd+Tab) siguen
+          funcionando siempre.
         </p>
-      </footer>
+      </div>
+
+      <BarraDeEstado version={aplicacion?.version ?? '—'} />
     </main>
   );
 }
