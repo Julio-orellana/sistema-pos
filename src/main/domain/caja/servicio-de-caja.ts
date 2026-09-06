@@ -208,7 +208,11 @@ export class ServicioDeCaja {
     const diferencia = montoReal.minus(montoEsperado);
 
     const diferenciaTexto = montoACadena(diferencia);
-    const hayDiferencia = !diferencia.isZero();
+    // Se decide sobre el texto que se va a GUARDAR, no sobre el Decimal que
+    // está en memoria. Es el mismo valor contra el que la base aplica su CHECK
+    // (migración 008), así que la aplicación y la base no pueden discrepar
+    // nunca: si para una la caja cuadra, para la otra también.
+    const hayDiferencia = !this.cuadra(diferencia);
 
     if (hayDiferencia && autorizacion === undefined) {
       return {
@@ -263,9 +267,23 @@ export class ServicioDeCaja {
     };
   }
 
+  /**
+   * ¿Esta diferencia cuenta como caja cuadrada?
+   *
+   * Se compara la forma canónica de dos decimales, la misma que se guarda en
+   * la columna, y no `Decimal.isZero()`. Son criterios que hoy coinciden —los
+   * montos de caja son exactos al centavo—, pero si alguna vez apareciera una
+   * diferencia por debajo del centavo, `isZero()` diría que hay descuadre y
+   * pediría un PIN por algo que se guarda como '0.00' y que en efectivo físico
+   * no existe. La base rechazaría ese cierre. Manda el valor guardado.
+   */
+  private cuadra(diferencia: Decimal): boolean {
+    return montoACadena(diferencia) === '0.00';
+  }
+
   /** Texto que ve quien autoriza: cuánto y de qué signo. */
   public describirDiferencia(diferencia: Decimal): string {
-    if (diferencia.isZero()) {
+    if (this.cuadra(diferencia)) {
       return 'sin diferencia';
     }
     const magnitud = montoACadena(diferencia.absoluteValue());

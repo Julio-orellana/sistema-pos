@@ -372,15 +372,20 @@ describe('Campos que SÍ admiten negativos, a propósito, para devoluciones', ()
   });
 
   it('caja_sesiones.diferencia acepta negativos: un faltante de caja ES negativo', () => {
+    // Va con autorizante y vía porque desde la migración 008 un cierre
+    // descuadrado sin autorizar lo rechaza la base. Lo que se prueba aquí es
+    // el SIGNO, no el permiso: sin la autorización, esta prueba se caería por
+    // la restricción equivocada y dejaría de decir lo que dice su nombre.
     expect(() => {
       base
         .prepare(
           `UPDATE caja_sesiones
               SET estado = 'cerrada', monto_esperado = '1000.00', monto_real = '950.00',
-                  diferencia = '-50.00', cerrada_en = ?
+                  diferencia = '-50.00', cerrada_en = ?,
+                  diferencia_autorizada_por = ?, diferencia_autorizada_via = 'presencial'
             WHERE id = ?`,
         )
-        .run(FECHA_DE_PRUEBA, IDS_DE_PRUEBA.cajaSesion);
+        .run(FECHA_DE_PRUEBA, IDS_DE_PRUEBA.usuario, IDS_DE_PRUEBA.cajaSesion);
     }).not.toThrow();
 
     const fila = base
@@ -847,6 +852,139 @@ describe('La cola de sincronización', () => {
            VALUES (?, 'ventas', ?, 'insertar', '{"total":"16.80"}', ?)`,
         )
         .run(IDS_DE_PRUEBA.generico, IDS_DE_PRUEBA.venta, FECHA_DE_PRUEBA);
+    }).not.toThrow();
+  });
+});
+
+// ===========================================================================
+/**
+ * El permiso para cerrar descuadrado tiene que seguir al descuadre.
+ *
+ * La migración 007 amarró las dos columnas de autorización entre sí; la 008
+ * las amarra al valor de `diferencia`, que es lo que las justifica. Hasta la
+ * 008 esta regla vivía SOLO en el servicio de caja: una consulta SQL a mano o
+ * un respaldo restaurado a medias podían dejar un cierre descuadrado sin
+ * autorizante, que es justo el agujero que el flujo de PIN existe para tapar.
+ *
+ * Estas pruebas también son el seguro de la vía que usa la migración 008.
+ * `ALTER TABLE ... ADD CONSTRAINT` no está en la gramática documentada de
+ * SQLite, aunque la versión que empaqueta better-sqlite3 lo acepta y lo
+ * aplica. Si una versión futura dejara de hacerlo, estas pruebas se caen en
+ * desarrollo —la base se reconstruye desde cero en cada una— en vez de fallar
+ * al primer arranque en la máquina de Jimmy.
+ */
+describe('La autorización de un descuadre solo existe si hay descuadre', () => {
+  /** Cierra la sesión sembrada con la diferencia y la autorización dadas. */
+  function cerrarCon(
+    diferencia: string,
+    autorizadaPor: string | null,
+    autorizadaVia: string | null,
+  ): void {
+    base
+      .prepare(
+        `UPDATE caja_sesiones
+            SET estado = 'cerrada', cerrada_en = ?, monto_esperado = '500.00',
+                monto_real = ?, diferencia = ?,
+                diferencia_autorizada_por = ?, diferencia_autorizada_via = ?
+          WHERE id = ?`,
+      )
+      .run(
+        FECHA_DE_PRUEBA,
+        diferencia === '0.00' ? '500.00' : '480.00',
+        diferencia,
+        autorizadaPor,
+        autorizadaVia,
+        IDS_DE_PRUEBA.cajaSesion,
+      );
+  }
+
+  beforeEach(() => {
+    sembrarUsuario(base);
+    sembrarUsuario(base, IDS_DE_PRUEBA.usuarioAdmin, 'administrativo');
+    sembrarCajaSesion(base);
+  });
+
+  it('la restricción existe en el esquema y no creó ninguna columna fantasma', () => {
+    const esquema = base
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'caja_sesiones'")
+      .get() as { sql: string };
+    expect(esquema.sql).toContain('caja_sesiones_autorizacion_solo_con_diferencia');
+
+    const columnas = base
+      .prepare("SELECT name FROM pragma_table_info('caja_sesiones')")
+      .all()
+      .map((c) => (c as { name: string }).name);
+    expect(columnas).not.toContain('CONSTRAINT');
+    expect(columnas).toContain('diferencia_autorizada_por');
+    expect(columnas).toContain('diferencia_autorizada_via');
+  });
+
+  it('acepta un cierre que cuadra, sin autorizante', () => {
+    expect(() => {
+      cerrarCon('0.00', null, null);
+    }).not.toThrow();
+  });
+
+  it('acepta un cierre descuadrado con autorizante y vía', () => {
+    expect(() => {
+      cerrarCon('-20.00', IDS_DE_PRUEBA.usuarioAdmin, 'presencial');
+    }).not.toThrow();
+  });
+
+  it('RECHAZA un cierre descuadrado sin autorizante', () => {
+    expect(() => {
+      cerrarCon('-20.00', null, null);
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('RECHAZA un sobrante sin autorizante, igual que un faltante', () => {
+    expect(() => {
+      cerrarCon('35.50', null, null);
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('RECHAZA una autorización anotada en un cierre que cuadra', () => {
+    expect(() => {
+      cerrarCon('0.00', IDS_DE_PRUEBA.usuarioAdmin, 'remoto');
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('RECHAZA quitarle después la autorización a un cierre descuadrado', () => {
+    cerrarCon('-20.00', IDS_DE_PRUEBA.usuarioAdmin, 'presencial');
+    expect(() => {
+      base
+        .prepare(
+          `UPDATE caja_sesiones
+              SET diferencia_autorizada_por = NULL, diferencia_autorizada_via = NULL
+            WHERE id = ?`,
+        )
+        .run(IDS_DE_PRUEBA.cajaSesion);
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('RECHAZA volver descuadrado un cierre ya autorizado como cuadrado', () => {
+    cerrarCon('0.00', null, null);
+    expect(() => {
+      base
+        .prepare("UPDATE caja_sesiones SET diferencia = '-20.00' WHERE id = ?")
+        .run(IDS_DE_PRUEBA.cajaSesion);
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('un turno abierto, sin diferencia todavía, no puede llevar autorizante', () => {
+    expect(() => {
+      base
+        .prepare(
+          `UPDATE caja_sesiones SET diferencia_autorizada_por = ?, diferencia_autorizada_via = 'remoto'
+            WHERE id = ?`,
+        )
+        .run(IDS_DE_PRUEBA.usuarioAdmin, IDS_DE_PRUEBA.cajaSesion);
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('trata el cero con signo ("-0.00") como caja cuadrada, no como descuadre', () => {
+    expect(() => {
+      cerrarCon('-0.00', null, null);
     }).not.toThrow();
   });
 });

@@ -746,9 +746,14 @@ en `ServicioDeAutenticacion.configurarPinRemoto`, no en la pantalla: una
 validación que vive en la interfaz se salta llamando al canal directamente.
 
 **La salida controlada NO acepta el PIN remoto**, solo el cierre con
-diferencia. Cerrar la aplicación es una acción física y se exige presencia. Es
-un parámetro por llamada (`aceptaPinRemoto`), así que revisarlo más adelante es
-cambiar un argumento.
+diferencia. La razón no es que cerrar la aplicación sea una acción física: es
+que el PIN remoto se pidió para UNA sola cosa, autorizar diferencias de caja
+por teléfono. Dárselo además a la salida controlada sería ampliarle el alcance
+más allá de lo que se pidió, y un permiso creado para un caso que termina
+sirviendo para varios deja de ser un permiso acotado. Cada superficie nueva que
+lo acepte tiene que pedirse y decidirse aparte. Es un parámetro por llamada
+(`aceptaPinRemoto`), así que ampliarlo más adelante es cambiar un argumento —
+pero es una decisión, no un descuido que haya que corregir.
 
 #### Autorización del cierre descuadrado
 
@@ -761,6 +766,31 @@ El candado de intentos usa `superficie = 'cierre_con_diferencia'`, **separado**
 del de `'salida_controlada'` y del de ingreso. Un error de tecleo al autorizar
 un descuadre no bloquea el login de nadie ni la salida de la aplicación. Ver la
 sección 4.8.
+
+**La regla la aplica la BASE, no solo el servicio** (migración 008,
+`caja_sesiones_autorizacion_solo_con_diferencia`). El vínculo es en los dos
+sentidos: si `diferencia` es `'0.00'` —o es nula, porque el turno sigue
+abierto— las dos columnas de autorización tienen que ir vacías; si no lo es,
+las dos tienen que ir llenas. Antes, la 007 solo las amarraba entre sí, y la
+base aceptaba dos registros mentirosos: un cierre cuadrado con un autorizante
+inventado, y un cierre descuadrado sin nadie que respondiera por él. Ese
+segundo caso es exactamente el agujero que todo el flujo de PIN existe para
+tapar, y lo tapaba solo el servicio: una consulta SQL a mano o un respaldo
+restaurado a medias lo dejaban pasar.
+
+El servicio decide si la caja cuadra comparando **el texto que va a guardar**
+(`montoACadena(diferencia) === '0.00'`), no `Decimal.isZero()`. Son criterios
+que hoy coinciden, pero comparar contra el valor guardado hace imposible que la
+aplicación y la base discrepen sobre si hubo descuadre.
+
+**Al actualizar una tienda, esta restricción revisa lo ya guardado.** Se midió
+que SQLite se niega a agregarla si alguna fila existente la viola, y como cada
+migración corre en una transacción, eso revierte la migración y la aplicación
+no arranca. Si eso pasa, el mensaje no dice que el código esté mal: dice que en
+esa base hay un cierre descuadrado sin autorizante. La consulta para
+encontrarlo está en la cabecera de la migración 008. Hoy no puede haber
+ninguno: la regla la aplicaba el servicio desde que existe el módulo de caja y
+no hay ninguna tienda en producción.
 
 ### 4.10 PENDIENTE: `monto_esperado` todavía no suma ventas
 
@@ -830,9 +860,10 @@ ambos.
 | **La sesión vive en memoria y no se persiste.** | Recordar la sesión entre arranques | Es una terminal compartida: si la sesión sobreviviera al reinicio, el primero que encienda la máquina por la mañana actuaría con la identidad de quien la apagó anoche y la auditoría le atribuiría sus ventas a otra persona. | Prompt 10 — 2026-09-06 |
 | **Los permisos se comprueban con un guard que envuelve la operación** (`requiereRol`), nunca con un `if` dentro de cada manejador. | Comprobar el rol a mano en cada canal | Envuelto, es imposible olvidarlo o escribirlo distinto en cada módulo, y la operación protegida no llega a ejecutarse. Suelto, basta que un módulo futuro se distraiga. | Prompt 10 — 2026-09-06 |
 | **Dos modos de capturar efectivo, mutuamente excluyentes por construcción.** En modo detallado el sistema suma; nunca se pide además el total. | Pedir siempre el total; pedir el total y el desglose y compararlos | Si se piden las dos cosas, tarde o temprano no coinciden y hay que decidir a cuál creerle, con un cliente esperando. El tipo es una unión discriminada, así que un valor con los dos modos a la vez no se puede ni construir: no es una validación que se pueda olvidar. | Prompt 13 — 2026-09-06 |
-| **PIN de autorización remota separado del PIN normal**, en la columna `pin_remoto_hash`. | Un solo PIN para todo; una contraseña aparte más larga | El PIN normal abre la sesión del administrador. Dictarlo por teléfono se lo entrega a quien escucha, para siempre y para todo. Con uno separado, lo que se cede al dictarlo es solo la capacidad de autorizar a distancia: no sirve para entrar, y la auditoría distingue `remoto` de `presencial`. El sistema deduce cuál se usó según cuál hash coincidió, sin preguntarle al cajero. Se rechaza configurarlo igual al PIN normal, porque eso anularía toda la separación. | Prompt 13 — 2026-09-06 |
+| **PIN de autorización remota separado del PIN normal**, en la columna `pin_remoto_hash`. | Un solo PIN para todo; una contraseña aparte más larga | El PIN normal abre la sesión del administrador. Dictarlo por teléfono se lo entrega a quien escucha, para siempre y para todo. Con uno separado, lo que se cede al dictarlo es solo la capacidad de autorizar a distancia: no sirve para entrar, y la auditoría distingue `remoto` de `presencial`. El sistema deduce cuál se usó según cuál hash coincidió, sin preguntarle al cajero. Se rechaza configurarlo igual al PIN normal, porque eso anularía toda la separación. **Solo vale en el cierre con diferencia, no en la salida controlada**, y la razón es de alcance, no física: el PIN remoto se pidió para autorizar diferencias de caja y nada más, así que dárselo a otra acción sería ampliarlo más allá de lo pedido. Cada superficie nueva se decide aparte. | Prompt 13 — 2026-09-06; alcance corregido en Prompt 14 — 2026-09-06 |
 | **El candado por superficie se reutiliza, no se duplica**, para `cierre_con_diferencia`. | Un limitador nuevo para el cierre; compartir el de la salida controlada | El mecanismo ya era genérico salvo por el tipo de la superficie; se amplió el `CHECK` y el tipo, y se le pasa la superficie por parámetro. Cada superficie mantiene su propio contador, así que un error al autorizar un descuadre no bloquea la salida de la aplicación ni el login de nadie. | Prompt 13 — 2026-09-06 |
 | **`monto_esperado` es hoy el monto inicial, con un TODO explícito.** | Inventar una suma de ventas parcial para que "quede completo" | Todavía no existe el módulo de ventas. Una lógica de ventas a medias, escrita para rellenar un hueco, quedaría enterrada y nadie la encontraría al construir el módulo real. Queda marcado en el código y en la sección 4.10, y hay una prueba que documenta el comportamiento actual para que cambiarlo obligue a tocar ambos. | Prompt 13 — 2026-09-06 |
+| **La coherencia entre `diferencia` y sus columnas de autorización la aplica la base, no solo el servicio** (migración 008 y su espejo 0008). | Dejarla solo en `ServicioDeCaja`; un trigger; recrear la tabla con el procedimiento de doce pasos | Un cierre descuadrado sin autorizante es el agujero que todo el flujo de PIN existe para tapar, y hasta ahora lo tapaba solo la aplicación: una consulta SQL a mano o un respaldo restaurado a medias lo dejaban pasar. Se usa `ALTER TABLE ... ADD CONSTRAINT ... CHECK`, que **no está en la gramática documentada de SQLite** pero que en la versión empaquetada (3.53.4) se midió que se aplica de verdad, en INSERT y en UPDATE, sobrevive a reabrir el archivo y no crea columna fantasma. Se descartó recrear `caja_sesiones`: guarda dato de negocio, `ventas` la referencia, y el paso que apaga las llaves foráneas es ignorado dentro de una transacción, que es donde corre cada migración. El riesgo de usar gramática no documentada lo cubre una prueba que reconstruye la base desde cero: si una versión futura de SQLite deja de aceptarla, `npm test` se cae en desarrollo y no en el mostrador. En Postgres es un `ADD CONSTRAINT` normal, contra el número `0` en vez de la cadena `'0.00'`, porque allí la columna es NUMERIC. | Prompt 14 — 2026-09-06 |
 | **Los UUID de las denominaciones son fijos en la migración**, no generados en el cliente. | Sortearlos por instalación, como el resto de los id | Es la excepción correcta a la regla de UUID en el cliente: las denominaciones del quetzal son las mismas en toda instalación. Si cada terminal sorteara los suyos, el mismo billete de Q20 tendría identidades distintas y la sincronización los duplicaría. | Prompt 13 — 2026-09-06 |
 | **El estado de bloqueo NO se espeja en Supabase.** Ni la tabla `bloqueos_de_autorizacion` ni las columnas `usuarios.intentos_fallidos` / `bloqueado_hasta`. La nube lleva datos de negocio; el estado operativo de una terminal se queda en SQLite. | Espejar todo el esquema por simetría, que fue el reflejo inicial | Un candado deja de significar nada 30 segundos después de escribirse: con sincronización diferida llegaría vencido. Nadie lo consultaría desde la nube, y el hecho auditable sí viaja, porque `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada. Con más de una terminal, sincronizarlo sería activamente dañino: el bloqueo de una caja dejaría bloqueada la otra. Y unas columnas que existieran en Postgres sin sincronizarse nunca mostrarían `0` para todos y harían creer al auditor que nadie falló jamás un ingreso. Mismo criterio que ya se había aplicado a `sync_cola`. Ver `supabase/migrations/README.md`. | Prompt 12 — 2026-09-06 |
 | **El diálogo de autorización tiene su PROPIO candado, separado del candado de ingreso.** Por superficie (`bloqueos_de_autorizacion`), no por usuario. | Compartir `usuarios.intentos_fallidos` entre ambas superficies (lo que hacía la primera versión); un candado por usuario también en el diálogo | Compartido, un cajero que tocara el botón de salida y tecleara tres PIN al azar dejaba a **todos** los administradores sin poder iniciar sesión: una negación de servicio al alcance de cualquiera, comprobada con una prueba. Separarlos duplica el presupuesto de fuerza bruta (3+3 intentos cada 30 s en vez de 3), pero recorrer los 10 000 PIN sigue llevando más de medio día en ambos casos, así que no cambia nada práctico; lo que cambia es que un error de tecleo deja de paralizar la tienda. El candado del diálogo no es por usuario porque allí nadie eligió usuario: el intento es de la superficie, y un PIN equivocado cuenta **una vez** y no una por administrador. | Prompt 11 — 2026-09-06 |

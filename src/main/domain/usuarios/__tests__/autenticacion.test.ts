@@ -462,7 +462,9 @@ describe('PIN de autorización remota', () => {
 
   it('el PIN remoto NO autoriza donde no se acepta (salida controlada)', () => {
     servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-    // La salida controlada es una acción física: se exige presencia.
+    // No es que cerrar la app sea una acción física. El PIN remoto se pidió
+    // para una sola cosa —autorizar diferencias de caja— y dárselo además a
+    // la salida controlada le ampliaría el alcance más allá de lo pedido.
     expect(servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada').autenticado).toBe(
       false,
     );

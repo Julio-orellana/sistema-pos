@@ -79,10 +79,11 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | `0005_pin_remoto.sql` | **No — pendiente de aplicar** |
 | *(no hay 0006: ver la sección anterior)* | — |
 | `0007_autorizacion_de_diferencia.sql` | **No — pendiente de aplicar** |
+| `0008_autorizacion_solo_con_diferencia.sql` | **No — pendiente de aplicar** |
 
-**Hay tres migraciones pendientes de aplicar en la nube** (0004, 0005 y 0007).
-Se aplican solo con la aprobación explícita de Julio, mostrándole antes el SQL
-exacto.
+**Hay cuatro migraciones pendientes de aplicar en la nube** (0004, 0005, 0007 y
+0008). Se aplican solo con la aprobación explícita de Julio, mostrándole antes
+el SQL exacto.
 
 ## Al agregar una migración local nueva
 

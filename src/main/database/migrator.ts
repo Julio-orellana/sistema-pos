@@ -22,6 +22,7 @@ import sqlDenominaciones from './migrations/004_denominaciones_y_desglose.sql?ra
 import sqlPinRemoto from './migrations/005_pin_remoto.sql?raw';
 import sqlSuperficieCierre from './migrations/006_superficie_cierre_con_diferencia.sql?raw';
 import sqlAutorizacionDeDiferencia from './migrations/007_autorizacion_de_diferencia.sql?raw';
+import sqlAutorizacionSoloConDiferencia from './migrations/008_autorizacion_solo_con_diferencia.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -48,6 +49,11 @@ export const MIGRACIONES: readonly Migracion[] = [
   { orden: 5, nombre: '005_pin_remoto', sql: sqlPinRemoto },
   { orden: 6, nombre: '006_superficie_cierre_con_diferencia', sql: sqlSuperficieCierre },
   { orden: 7, nombre: '007_autorizacion_de_diferencia', sql: sqlAutorizacionDeDiferencia },
+  {
+    orden: 8,
+    nombre: '008_autorizacion_solo_con_diferencia',
+    sql: sqlAutorizacionSoloConDiferencia,
+  },
 ];
 
 /** Tabla de control. La crea el propio migrador antes que nada. */

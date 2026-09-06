@@ -212,15 +212,37 @@ describe('Caja, ventas y detalle', () => {
     expect(sesion.montoReal).toBeNull();
     expect(repos.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId)?.id).toBe(sesion.id);
 
+    // El cierre lleva faltante, así que lleva autorizante: desde la migración
+    // 008 la base rechaza un descuadre sin autorizar.
     const cerrada = repos.cajaSesiones.cerrar(sesion.id, {
       montoEsperado: '1250.75',
       montoReal: '1250.00',
       diferencia: '-0.75',
+      autorizadaPor: usuarioId,
+      autorizadaVia: 'presencial',
     });
 
     expect(cerrada.estado).toBe('cerrada');
     expect(montoACadena(cerrada.diferencia ?? '0')).toBe('-0.75');
+    expect(cerrada.diferenciaAutorizadaVia).toBe('presencial');
     expect(repos.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId)).toBeNull();
+  });
+
+  it('la base rechaza cerrar con faltante sin decir quién lo autorizó', () => {
+    const { usuarioId } = sembrarCatalogo();
+    const sesion = repos.cajaSesiones.abrir({ usuarioId, montoInicial: '500' });
+
+    // Es la última línea de defensa: aunque el servicio de caja se saltara su
+    // propia comprobación, el descuadre sin autorizar no llega al disco.
+    expect(() =>
+      repos.cajaSesiones.cerrar(sesion.id, {
+        montoEsperado: '1250.75',
+        montoReal: '1250.00',
+        diferencia: '-0.75',
+      }),
+    ).toThrow(ErrorDeNegocio);
+
+    expect(repos.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId)?.id).toBe(sesion.id);
   });
 
   it('una venta con su detalle: el subtotal exacto y el impreso se guardan por separado', () => {
