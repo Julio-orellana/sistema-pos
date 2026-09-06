@@ -34,12 +34,44 @@ espeja.**
    existiera en la nube sin sincronizarse nunca, quien consultara Postgres
    vería `0` para todos y podría concluir que nadie falló jamás un ingreso.
 
+## Los números 0002 y 0003 NO existen aquí, y es a propósito
+
+**No falta nada ni se rompió nada.** El número de cada archivo de esta carpeta
+corresponde al de su migración local en `src/main/database/migrations/`. Un
+hueco en la numeración significa que **esa migración local no tiene espejo**.
+
+| Migración local | Archivo aquí | Por qué |
+|---|---|---|
+| `001_esquema_inicial` | `0001_esquema_inicial.sql` | Datos de negocio |
+| `002_bloqueo_de_usuarios` | **(ninguno, a propósito)** | Estado por identidad, local por ahora |
+| `003_bloqueos_de_autorizacion` | **(ninguno, a propósito)** | Estado por superficie, local siempre |
+
+La próxima migración local que sí sea dato de negocio —supongamos `004`— se
+espeja como `0004_...`, conservando el hueco. **No renumerar** para "tapar" los
+que faltan: el hueco es información.
+
+Los dos casos omitidos **no son equivalentes**, aunque hoy tomen la misma
+decisión:
+
+- **`bloqueos_de_autorizacion`** no debe sincronizarse **nunca**, bajo ningún
+  diseño futuro.
+- **`usuarios.intentos_fallidos` / `bloqueado_hasta`** hoy no se sincroniza por
+  una limitación de la arquitectura de una sola terminal, y **probablemente
+  haga falta** cuando exista multi-sucursal.
+
+El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
+
+> No confundir estos números con las versiones de migración que registra
+> Supabase (`20260905143642`, etc.): esas las genera la propia plataforma al
+> aplicar, y son independientes del nombre del archivo.
+
 ## Estado
 
 | Migración | Aplicada en `pos-jimmy-cano` |
 |---|---|
 | `0001_esquema_inicial.sql` | Sí — `20260905143642` |
 | *(fijar search_path de la función de auditoría)* | Sí — `20260905171724` |
+| *(no hay 0002 ni 0003: ver la sección anterior)* | — |
 
 **No hay ninguna migración pendiente de aplicar en la nube.** Las migraciones
 locales 002 y 003 no tienen espejo a propósito.

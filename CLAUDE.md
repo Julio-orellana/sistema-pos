@@ -477,6 +477,40 @@ espejo a propósito**: son estado operativo de una terminal, no datos de
 negocio. Ver `supabase/migrations/README.md` y la fila correspondiente del
 registro de decisiones.
 
+#### Las dos migraciones eliminadas NO son el mismo caso
+
+Hoy toman la misma decisión, pero por razones distintas y con horizontes
+distintos. Confundirlas llevaría a la sesión futura a la conclusión equivocada.
+
+| | `bloqueos_de_autorizacion` | `usuarios.intentos_fallidos` / `bloqueado_hasta` |
+|---|---|---|
+| Naturaleza | Estado **POR SUPERFICIE** | Estado **POR IDENTIDAD** |
+| A quién pertenece | Al diálogo de salida **de una terminal concreta** | A **una persona**, no a una máquina |
+| ¿Sincronizar algún día? | **NUNCA, bajo ningún diseño futuro** | **Sí, probablemente hará falta** |
+
+**`bloqueos_de_autorizacion`: nunca se sincroniza.** No es una limitación
+técnica que algún día se resuelva: es lo correcto por definición. El candado
+protege *ese* diálogo en *esa* máquina. Sincronizarlo haría que un error de
+tecleo en la caja A bloqueara la caja B, que es **exactamente la negación de
+servicio entre terminales que la separación de candados (sección 4.8) existe
+para evitar**. Si una sesión futura lo agrega al motor de sincronización, está
+reintroduciendo el defecto.
+
+**`usuarios.intentos_fallidos` / `bloqueado_hasta`: hoy no, pero es temporal.**
+El estado pertenece a la persona, no a la terminal. Hoy no se sincroniza porque
+la sincronización es diferida y no resolvería el problema de fondo: un bloqueo
+que llega minutos tarde ya no protege de nada. **Eso es una limitación de la
+arquitectura actual de una sola terminal, no un principio permanente.**
+
+> **PENDIENTE PARA EL MÓDULO DE MULTI-SUCURSAL.** Cuando haya más de una caja,
+> el bloqueo por intentos de un usuario va a necesitar **una fuente de verdad
+> centralizada o sincronización en tiempo real** entre terminales. Sin eso, el
+> presupuesto para adivinar el PIN de una persona **se multiplica por el número
+> de cajas**: con tres terminales, tres intentos cada 30 segundos pasan a ser
+> nueve, y el ataque se vuelve tres veces más rápido contra el mismo PIN de
+> cuatro dígitos. No es un detalle de implementación: hay que resolverlo en el
+> diseño del módulo, no después. Ver también el punto 10 de la sección 6.2.
+
 Pendiente en la nube, para el prompt del módulo de sincronización:
 
 - Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave anónima
@@ -760,7 +794,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
-| 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. | Abierto |
+| 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
