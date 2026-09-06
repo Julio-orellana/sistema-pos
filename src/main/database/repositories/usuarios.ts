@@ -11,6 +11,8 @@ interface FilaUsuario {
   readonly rol: Rol;
   readonly pin_hash: string;
   readonly activo: number;
+  readonly intentos_fallidos: number;
+  readonly bloqueado_hasta: string | null;
   readonly creado_en: string;
   readonly actualizado_en: string;
 }
@@ -23,6 +25,8 @@ function aEntidad(fila: FilaUsuario): Usuario {
     rol: fila.rol,
     pinHash: fila.pin_hash,
     activo: desdeColumnaBooleana(fila.activo, 'usuarios.activo'),
+    intentosFallidos: fila.intentos_fallidos,
+    bloqueadoHasta: fila.bloqueado_hasta,
     creadoEn: fila.creado_en,
     actualizadoEn: fila.actualizado_en,
   };
@@ -95,6 +99,45 @@ export class RepositorioDeUsuarios extends RepositorioBase {
       this.base
         .prepare('UPDATE usuarios SET pin_hash = ?, actualizado_en = ? WHERE id = ?')
         .run(pinHash, ahora(), id);
+    });
+  }
+
+  /** ¿Hay algún usuario en la tabla? Decide si toca el primer arranque. */
+  public estaVacia(): boolean {
+    const fila = this.base.prepare('SELECT COUNT(*) AS total FROM usuarios').get() as {
+      readonly total: number;
+    };
+    return fila.total === 0;
+  }
+
+  /** Cuántos administradores activos hay. Se usa para no quedarse sin ninguno. */
+  public contarAdministradoresActivos(): number {
+    const fila = this.base
+      .prepare("SELECT COUNT(*) AS total FROM usuarios WHERE rol = 'administrativo' AND activo = 1")
+      .get() as { readonly total: number };
+    return fila.total;
+  }
+
+  /**
+   * Guarda el estado del limitador de intentos de un usuario.
+   *
+   * Se escriben los dos campos juntos y en una sola operación porque siempre
+   * cambian juntos: no tiene sentido un contador en 3 sin bloqueo, ni un
+   * bloqueo con el contador en 0.
+   */
+  public fijarEstadoDeBloqueo(
+    id: string,
+    intentosFallidos: number,
+    bloqueadoHasta: string | null,
+  ): void {
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE usuarios
+              SET intentos_fallidos = ?, bloqueado_hasta = ?, actualizado_en = ?
+            WHERE id = ?`,
+        )
+        .run(intentosFallidos, bloqueadoHasta, ahora(), id);
     });
   }
 

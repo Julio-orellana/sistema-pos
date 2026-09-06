@@ -39,6 +39,18 @@ export const CANALES_IPC = {
    * mismo camino que el atajo de teclado y quede una única vía auditable.
    */
   solicitarSalidaControlada: 'kiosko:solicitar-salida',
+
+  // --- Sesión y usuarios -------------------------------------------------
+  /** Estado de arranque: si falta configuración inicial y quién está en sesión. */
+  estadoDeSesion: 'sesion:estado',
+  /** Usuarios activos que se muestran en la pantalla de ingreso. */
+  listarUsuariosParaIngreso: 'sesion:listar-usuarios',
+  /** Intento de ingreso con usuario y PIN. */
+  iniciarSesion: 'sesion:iniciar',
+  /** Cierre de la sesión actual. */
+  cerrarSesion: 'sesion:cerrar',
+  /** Creación del primer administrador, solo en una instalación vacía. */
+  crearPrimerAdministrador: 'sesion:crear-primer-administrador',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -171,10 +183,87 @@ export interface ResultadoIntentoDeSalida {
   readonly codigo: string;
   /** Mensaje que se le muestra a quien intentó salir. */
   readonly mensaje: string;
-  /** Intentos que quedan antes del bloqueo temporal. */
-  readonly intentosRestantes: number;
-  /** Momento (ISO-8601 UTC) hasta el cual está bloqueado, o `null`. */
-  readonly bloqueadoHasta: string | null;
+  /**
+   * Segundos que faltan para poder reintentar, o `null` si no hay bloqueo.
+   *
+   * Deliberadamente NO se informan los intentos restantes: es información útil
+   * para quien está adivinando y para quien mira la pantalla de otro.
+   */
+  readonly segundosParaReintentar: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// DTO: sesión y usuarios
+// ---------------------------------------------------------------------------
+
+/** Largo exacto del PIN, repetido aquí para validar en la frontera. */
+const LARGO_DEL_PIN_IPC = 4;
+
+/** Largo máximo del nombre de un usuario. */
+const LARGO_MAXIMO_DEL_NOMBRE = 80;
+
+/** Roles del sistema, en la frontera. */
+export const ROLES = ['venta', 'administrativo'] as const;
+
+/** Rol de un usuario. */
+export type RolIpc = (typeof ROLES)[number];
+
+/** Payload de un intento de ingreso. */
+export const esquemaIntentoDeIngreso = z.object({
+  usuarioId: z.string().min(1),
+  pin: z.string().length(LARGO_DEL_PIN_IPC),
+});
+
+/** Intento de ingreso ya validado. */
+export type IntentoDeIngreso = z.infer<typeof esquemaIntentoDeIngreso>;
+
+/** Payload de creación del primer administrador. */
+export const esquemaPrimerAdministrador = z.object({
+  nombre: z.string().min(1).max(LARGO_MAXIMO_DEL_NOMBRE),
+  pin: z.string().length(LARGO_DEL_PIN_IPC),
+});
+
+/** Datos del primer administrador ya validados. */
+export type DatosPrimerAdministrador = z.infer<typeof esquemaPrimerAdministrador>;
+
+/** Un usuario tal como se muestra en la pantalla de ingreso. */
+export interface UsuarioParaIngreso {
+  readonly id: string;
+  readonly nombre: string;
+  readonly rol: RolIpc;
+  /** `true` si ahora mismo no puede intentar. */
+  readonly bloqueado: boolean;
+  /** Segundos que faltan para poder intentar, o `null`. */
+  readonly segundosParaReintentar: number | null;
+}
+
+/** Quién está en sesión. */
+export interface SesionIniciada {
+  readonly id: string;
+  readonly nombre: string;
+  readonly rol: RolIpc;
+  readonly desde: string;
+}
+
+/** Estado de arranque de la aplicación. */
+export interface EstadoDeSesion {
+  /**
+   * `true` si la instalación no tiene ningún usuario todavía. Mientras sea
+   * `true`, la única pantalla accesible es la de configuración inicial.
+   */
+  readonly requiereConfiguracionInicial: boolean;
+  /** Usuario en sesión, o `null` si nadie ingresó. */
+  readonly sesion: SesionIniciada | null;
+}
+
+/** Resultado de un intento de ingreso. */
+export interface ResultadoDeIngreso {
+  readonly autenticado: boolean;
+  readonly codigo: string;
+  readonly mensaje: string;
+  readonly sesion: SesionIniciada | null;
+  /** Segundos que faltan para reintentar. Nunca se informan intentos restantes. */
+  readonly segundosParaReintentar: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +280,23 @@ export interface ApiPos {
     baseDeDatos(solicitud?: Partial<SolicitudDiagnostico>): Promise<RespuestaIpc<DiagnosticoBaseDeDatos>>;
     /** Devuelve versiones y adaptadores activos. */
     aplicacion(): Promise<RespuestaIpc<DiagnosticoAplicacion>>;
+  };
+
+  /** Sesión, usuarios y primer arranque. */
+  readonly sesion: {
+    /** Estado de arranque: configuración inicial pendiente y sesión actual. */
+    estado(): Promise<RespuestaIpc<EstadoDeSesion>>;
+    /** Usuarios activos para la pantalla de ingreso. */
+    listarUsuarios(): Promise<RespuestaIpc<readonly UsuarioParaIngreso[]>>;
+    /** Intenta ingresar con un usuario y su PIN. */
+    iniciar(usuarioId: string, pin: string): Promise<RespuestaIpc<ResultadoDeIngreso>>;
+    /** Cierra la sesión actual. */
+    cerrar(): Promise<RespuestaIpc<boolean>>;
+    /** Crea el primer administrador. Solo funciona en una instalación vacía. */
+    crearPrimerAdministrador(
+      nombre: string,
+      pin: string,
+    ): Promise<RespuestaIpc<SesionIniciada>>;
   };
 
   /**

@@ -1,163 +1,85 @@
 /**
- * Pantalla de verificación técnica.
+ * Cascarón de la aplicación.
  *
- * ESTO NO ES UNA PANTALLA DE NEGOCIO. Existe para comprobar, a simple vista,
- * que el andamiaje funciona: que la ventana abre en kiosko, que el renderer
- * habla con el proceso principal por IPC, que SQLite responde, y que los
- * adaptadores activos son los seguros por defecto.
+ * Decide qué pantalla se muestra según el estado de arranque, y es el único
+ * lugar donde se toma esa decisión:
  *
- * Se reemplaza por la interfaz real de la caja cuando lleguen los módulos de
- * negocio.
+ *   1. Instalación sin usuarios  -> configuración inicial, y NADA más es
+ *      accesible hasta que exista el primer administrador.
+ *   2. Sin sesión                -> pantalla de ingreso.
+ *   3. Con sesión                -> pantalla base tras el ingreso.
+ *
+ * La barra de estado y el diálogo de salida están SIEMPRE montados, en
+ * cualquiera de los tres estados: la salida controlada es una función del
+ * cascarón, no de una pantalla concreta.
  */
 
 import { useEffect, useState } from 'react';
 
-import type { DiagnosticoAplicacion, DiagnosticoBaseDeDatos } from '@shared/types/ipc';
-import { formatearQuetzales, montoACadena, sumar } from '@shared/money';
+import type { EstadoDeSesion, SesionIniciada } from '@shared/types/ipc';
 import { BarraDeEstado } from './components/BarraDeEstado';
 import { ModalDeSalida } from './components/ModalDeSalida';
-
-/** Fila de la tabla de resultados. */
-function Dato({ etiqueta, valor }: { readonly etiqueta: string; readonly valor: string }): React.JSX.Element {
-  return (
-    <div className="dato">
-      <span className="dato__etiqueta">{etiqueta}</span>
-      <span className="dato__valor">{valor}</span>
-    </div>
-  );
-}
+import { PantallaDeConfiguracionInicial } from './components/PantallaDeConfiguracionInicial';
+import { PantallaDeIngreso } from './components/PantallaDeIngreso';
+import { PantallaDeSesion } from './components/PantallaDeSesion';
 
 export function App(): React.JSX.Element {
-  const [aplicacion, setAplicacion] = useState<DiagnosticoAplicacion | null>(null);
-  const [baseDeDatos, setBaseDeDatos] = useState<DiagnosticoBaseDeDatos | null>(null);
+  const [estado, setEstado] = useState<EstadoDeSesion | null>(null);
+  const [sesion, setSesion] = useState<SesionIniciada | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [cargando, setCargando] = useState<boolean>(true);
-  /** Contador que dispara una nueva verificación al pulsar el botón. */
-  const [intento, setIntento] = useState<number>(0);
+  const [recarga, setRecarga] = useState(0);
 
-  // El efecto consulta al proceso principal cuando cambia `intento`. Todos los
-  // cambios de estado ocurren DESPUÉS del await, no en el cuerpo síncrono del
-  // efecto, para no provocar renders en cascada.
   useEffect(() => {
-    let vigente = true;
-
-    const consultar = async (): Promise<void> => {
-      const [respuestaAplicacion, respuestaBase] = await Promise.all([
-        window.pos.diagnostico.aplicacion(),
-        window.pos.diagnostico.baseDeDatos({ incluirConteoDeRegistros: true }),
-      ]);
-
-      if (!vigente) {
+    const control = new AbortController();
+    void (async (): Promise<void> => {
+      const respuesta = await window.pos.sesion.estado();
+      if (control.signal.aborted) {
         return;
       }
-
-      setError(
-        respuestaAplicacion.ok
-          ? respuestaBase.ok
-            ? null
-            : respuestaBase.error.mensaje
-          : respuestaAplicacion.error.mensaje,
-      );
-
-      if (respuestaAplicacion.ok) {
-        setAplicacion(respuestaAplicacion.datos);
+      if (respuesta.ok) {
+        setEstado(respuesta.datos);
+        setSesion(respuesta.datos.sesion);
+      } else {
+        setError(respuesta.error.mensaje);
       }
-      if (respuestaBase.ok) {
-        setBaseDeDatos(respuestaBase.datos);
-      }
-      setCargando(false);
-    };
-
-    void consultar();
-
+    })();
     return (): void => {
-      vigente = false;
+      control.abort();
     };
-  }, [intento]);
+  }, [recarga]);
 
-  /** Reintenta la verificación desde el botón del pie. */
-  const volverAVerificar = (): void => {
-    setCargando(true);
-    setIntento((anterior) => anterior + 1);
+  const cerrarSesion = (): void => {
+    void (async (): Promise<void> => {
+      await window.pos.sesion.cerrar();
+      setSesion(null);
+      setRecarga((anterior) => anterior + 1);
+    })();
   };
 
-  // Demostración visible de la aritmética exacta: 0.1 + 0.2 debe dar 0.30.
-  const pruebaDecimal = montoACadena(sumar('0.1', '0.2'));
+  const contenido = ((): React.JSX.Element => {
+    if (error !== null) {
+      return <p className="alerta">Error: {error}</p>;
+    }
+    if (estado === null) {
+      return <p className="pendiente">Iniciando…</p>;
+    }
+    if (sesion !== null) {
+      return <PantallaDeSesion sesion={sesion} alCerrarSesion={cerrarSesion} />;
+    }
+    if (estado.requiereConfiguracionInicial) {
+      return <PantallaDeConfiguracionInicial alCrear={setSesion} />;
+    }
+    return <PantallaDeIngreso alIngresar={setSesion} />;
+  })();
 
   return (
     <main className="pantalla">
-      {/* Invisible hasta que el administrador presiona su atajo. */}
+      {/* Invisible hasta que se pide la salida controlada. */}
       <ModalDeSalida />
 
-      <header className="encabezado">
-        <h1>POS Agrícola</h1>
-        <p className="subtitulo">Verificación técnica del andamiaje · Cliente: Jimmy Cano</p>
-      </header>
+      {contenido}
 
-      {error !== null && <p className="alerta">Error: {error}</p>}
-
-      <section className="tarjeta">
-        <h2>Aritmética decimal</h2>
-        <Dato etiqueta="0.1 + 0.2 con Decimal.js" valor={pruebaDecimal} />
-        <Dato etiqueta="Formato de moneda" valor={formatearQuetzales('1234.5')} />
-      </section>
-
-      <section className="tarjeta">
-        <h2>Base de datos local (SQLite)</h2>
-        {baseDeDatos === null ? (
-          <p className="pendiente">{cargando ? 'Consultando…' : 'Sin datos.'}</p>
-        ) : (
-          <>
-            <Dato etiqueta="Conectada" valor={baseDeDatos.conectada ? 'Sí' : 'No'} />
-            <Dato etiqueta="Versión de SQLite" valor={baseDeDatos.versionSqlite} />
-            <Dato etiqueta="Modo journal" valor={baseDeDatos.modoJournal} />
-            <Dato
-              etiqueta="Llaves foráneas"
-              valor={baseDeDatos.llavesForaneasActivas ? 'Activas' : 'Inactivas'}
-            />
-            <Dato
-              etiqueta="Migraciones aplicadas"
-              valor={`${String(baseDeDatos.migracionesAplicadas)} (${baseDeDatos.ultimaMigracion ?? 'ninguna'})`}
-            />
-            <Dato etiqueta="Tablas del esquema" valor={String(baseDeDatos.tablas.length)} />
-            <Dato etiqueta="Archivo" valor={baseDeDatos.rutaArchivo} />
-          </>
-        )}
-      </section>
-
-      <section className="tarjeta">
-        <h2>Aplicación y adaptadores</h2>
-        {aplicacion === null ? (
-          <p className="pendiente">{cargando ? 'Consultando…' : 'Sin datos.'}</p>
-        ) : (
-          <>
-            <Dato etiqueta="Versión" valor={aplicacion.version} />
-            <Dato etiqueta="Entorno" valor={aplicacion.entorno} />
-            <Dato etiqueta="Electron" valor={aplicacion.versionElectron} />
-            <Dato etiqueta="Node" valor={aplicacion.versionNode} />
-            <Dato etiqueta="Chromium" valor={aplicacion.versionChrome} />
-            <Dato etiqueta="Adaptador de impresión" valor={aplicacion.adaptadorImpresion} />
-            <Dato etiqueta="Adaptador de sincronización" valor={aplicacion.adaptadorSincronizacion} />
-            <Dato
-              etiqueta="Supabase"
-              valor={aplicacion.sincronizacionSimulada ? 'Simulado (no consume cuota)' : 'Conectado'}
-            />
-          </>
-        )}
-      </section>
-
-      <div className="pie">
-        <button type="button" onClick={volverAVerificar} disabled={cargando}>
-          {cargando ? 'Verificando…' : 'Volver a verificar'}
-        </button>
-        <p className="nota">
-          Pantalla completa sin menú, sin barra de título, sin zoom y sin menú de clic derecho.
-          Los mecanismos de escape del sistema operativo (Forzar Salida, Cmd+Tab) siguen
-          funcionando siempre.
-        </p>
-      </div>
-
-      <BarraDeEstado version={aplicacion?.version ?? '—'} />
+      <BarraDeEstado sesion={sesion} />
     </main>
   );
 }

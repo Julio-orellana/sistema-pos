@@ -22,3 +22,15 @@ const NOMBRE_ARCHIVO_BASE_DE_DATOS = 'pos-agricola.db';
 export function obtenerRutaBaseDeDatos(): string {
   return join(app.getPath('userData'), NOMBRE_ARCHIVO_BASE_DE_DATOS);
 }
+
+/**
+ * Ruta de una base descartable, en la carpeta temporal del sistema.
+ *
+ * La usa la verificación de arranque. Sin esto, para probar el camino completo
+ * de la salida controlada habría que sembrar un administrador en la base REAL
+ * de la tienda, y una verificación automatizada no puede dejar usuarios de
+ * mentira en los datos del cliente.
+ */
+export function obtenerRutaBaseDeDatosDeVerificacion(): string {
+  return join(app.getPath('temp'), 'pos-agricola-verificacion.db');
+}

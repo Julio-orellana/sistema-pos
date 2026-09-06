@@ -16,13 +16,19 @@ import { z } from 'zod';
 import {
   CANALES_IPC,
   esquemaConfirmacionDeSalida,
+  esquemaIntentoDeIngreso,
+  esquemaPrimerAdministrador,
   esquemaSolicitudDiagnostico,
   respuestaExitosa,
   respuestaFallida,
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
+  type EstadoDeSesion,
   type RespuestaIpc,
+  type ResultadoDeIngreso,
   type ResultadoIntentoDeSalida,
+  type SesionIniciada,
+  type UsuarioParaIngreso,
 } from '@shared/types/ipc';
 import {
   crearReceiptPrinterProvider,
@@ -31,6 +37,10 @@ import {
 } from '@shared/adapters';
 import { ejecutarDiagnostico } from '@main/database/connection';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
+import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
+import type { SesionActual } from '@main/domain/usuarios/sesion';
+import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
+import { generarHashDePin } from '@shared/auth';
 
 /** Convierte cualquier error capturado en un mensaje legible para la bitácora. */
 function describirError(error: unknown): string {
@@ -67,7 +77,16 @@ async function ejecutarConRespuesta<T>(
 export interface DependenciasDeIpc {
   /** Coordina la salida controlada del modo kiosko. */
   readonly controladorDeSalida: ControladorDeSalidaControlada;
+  /** Única verificación de PIN del sistema. */
+  readonly autenticacion: ServicioDeAutenticacion;
+  /** Quién está usando la caja ahora mismo. */
+  readonly sesion: SesionActual;
+  /** Acceso a los usuarios, para la pantalla de ingreso. */
+  readonly usuarios: RepositorioDeUsuarios;
 }
+
+/** Milisegundos que tiene un segundo. */
+const MILISEGUNDOS_POR_SEGUNDO = 1000;
 
 /** Registra todos los manejadores IPC de la aplicación. */
 export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
@@ -115,7 +134,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
         if (ventana === null) {
           throw new Error('No se pudo identificar la ventana que pidió la salida.');
         }
-        dependencias.controladorDeSalida.solicitarPin(ventana);
+        dependencias.controladorDeSalida.solicitarPin(ventana, 'boton_de_interfaz');
         return true;
       }),
   );
@@ -128,6 +147,93 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
         // criptográfica: un payload deforme no debe consumir un intento.
         const confirmacion = esquemaConfirmacionDeSalida.parse(payload);
         return dependencias.controladorDeSalida.confirmarSalida(confirmacion.pin);
+      }),
+  );
+
+  // -------------------------------------------------------------------------
+  // Sesión, usuarios y primer arranque
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle(
+    CANALES_IPC.estadoDeSesion,
+    async (): Promise<RespuestaIpc<EstadoDeSesion>> =>
+      ejecutarConRespuesta('ESTADO_DE_SESION_FALLIDO', () => {
+        const estado: EstadoDeSesion = {
+          requiereConfiguracionInicial: dependencias.autenticacion.requiereConfiguracionInicial(),
+          sesion: dependencias.sesion.obtener(),
+        };
+        return estado;
+      }),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.listarUsuariosParaIngreso,
+    async (): Promise<RespuestaIpc<readonly UsuarioParaIngreso[]>> =>
+      ejecutarConRespuesta('LISTADO_DE_USUARIOS_FALLIDO', () => {
+        const instante = Date.now();
+        return dependencias.usuarios.listarActivos().map((usuario) => {
+          const restanteMs =
+            usuario.bloqueadoHasta === null ? 0 : Date.parse(usuario.bloqueadoHasta) - instante;
+          const bloqueado = restanteMs > 0;
+          return {
+            id: usuario.id,
+            nombre: usuario.nombre,
+            rol: usuario.rol,
+            bloqueado,
+            // Se informa el tiempo restante, nunca los intentos que le quedan.
+            segundosParaReintentar: bloqueado
+              ? Math.ceil(restanteMs / MILISEGUNDOS_POR_SEGUNDO)
+              : null,
+          };
+        });
+      }),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.iniciarSesion,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeIngreso>> =>
+      ejecutarConRespuesta('INGRESO_FALLIDO', () => {
+        const intento = esquemaIntentoDeIngreso.parse(payload);
+        const resultado = dependencias.autenticacion.autenticar(intento.usuarioId, intento.pin);
+
+        const sesion =
+          resultado.autenticado && resultado.usuario !== null
+            ? dependencias.sesion.iniciar(resultado.usuario)
+            : null;
+
+        const respuesta: ResultadoDeIngreso = {
+          autenticado: resultado.autenticado,
+          codigo: resultado.codigo,
+          mensaje: resultado.mensaje,
+          sesion,
+          segundosParaReintentar: resultado.segundosParaReintentar,
+        };
+        return respuesta;
+      }),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.cerrarSesion,
+    async (): Promise<RespuestaIpc<boolean>> =>
+      ejecutarConRespuesta('CIERRE_DE_SESION_FALLIDO', () => {
+        dependencias.sesion.cerrar();
+        return true;
+      }),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.crearPrimerAdministrador,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<SesionIniciada>> =>
+      ejecutarConRespuesta('CREACION_DE_ADMINISTRADOR_FALLIDA', () => {
+        const datos = esquemaPrimerAdministrador.parse(payload);
+        // El servicio vuelve a comprobar que la instalación esté vacía: sin esa
+        // condición, este canal sería una puerta para crearse un administrador
+        // en cualquier momento desde la interfaz.
+        const creado = dependencias.autenticacion.crearPrimerAdministrador(
+          datos.nombre.trim(),
+          generarHashDePin(datos.pin),
+        );
+        return dependencias.sesion.iniciar(creado);
       }),
   );
 }

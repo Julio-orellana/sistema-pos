@@ -163,6 +163,11 @@ export default defineConfig(
               group: ['@main/*', '../main/*', '../../main/*'],
               message: 'El renderer no importa código del proceso principal; solo el contrato de src/shared.',
             },
+            {
+              group: ['@shared/auth', '**/shared/auth'],
+              message:
+                'src/shared/auth.ts usa node:crypto y no existe en la ventana. El renderer manda el PIN por IPC y el proceso principal lo verifica; nunca calcula ni verifica hashes por su cuenta. Para el formato del PIN usá @shared/pin.',
+            },
           ],
         },
       ],

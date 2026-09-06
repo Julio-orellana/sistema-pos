@@ -52,6 +52,15 @@ export interface Usuario {
   readonly rol: Rol;
   readonly pinHash: string;
   readonly activo: boolean;
+  /** Intentos de PIN fallidos consecutivos. Se reinicia al ingresar bien. */
+  readonly intentosFallidos: number;
+  /**
+   * Momento (ISO-8601 UTC) hasta el cual el usuario no puede intentar de
+   * nuevo, o `null` si no está bloqueado. Se persiste en la base a propósito:
+   * si viviera en memoria, bastaría con reiniciar la aplicación para reiniciar
+   * el contador y seguir adivinando.
+   */
+  readonly bloqueadoHasta: string | null;
   readonly creadoEn: string;
   readonly actualizadoEn: string;
 }

@@ -22,10 +22,30 @@
  * que el cajero lo tenga delante como una opción más del día.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
-export function BarraDeEstado({ version }: { readonly version: string }): React.JSX.Element {
+import type { SesionIniciada } from '@shared/types/ipc';
+
+export function BarraDeEstado({
+  sesion,
+}: {
+  readonly sesion: SesionIniciada | null;
+}): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState('—');
+
+  useEffect(() => {
+    const control = new AbortController();
+    void (async (): Promise<void> => {
+      const respuesta = await window.pos.diagnostico.aplicacion();
+      if (!control.signal.aborted && respuesta.ok) {
+        setVersion(respuesta.datos.version);
+      }
+    })();
+    return (): void => {
+      control.abort();
+    };
+  }, []);
 
   const pedirSalida = (): void => {
     void (async (): Promise<void> => {
@@ -60,6 +80,11 @@ export function BarraDeEstado({ version }: { readonly version: string }): React.
       {error !== null && <span className="barra-estado__error">{error}</span>}
 
       <span className="barra-estado__relleno" />
+      {sesion !== null && (
+        <span className="barra-estado__dato" data-prueba="usuario-en-sesion">
+          {sesion.nombre} · {sesion.rol}
+        </span>
+      )}
       <span className="barra-estado__dato">v{version}</span>
     </footer>
   );

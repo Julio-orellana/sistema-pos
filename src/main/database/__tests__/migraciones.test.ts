@@ -51,7 +51,9 @@ describe('Las migraciones corren limpias desde una base vacía', () => {
 
     const resultado = migrar(prueba.base);
 
-    expect(resultado.aplicadasAhora).toEqual(['001_esquema_inicial']);
+    // Se comparan contra el registro de migraciones y no contra una lista fija,
+    // para que agregar una migración nueva no rompa esta prueba por sí solo.
+    expect(resultado.aplicadasAhora).toEqual(MIGRACIONES.map((m) => m.nombre));
     expect(resultado.yaAplicadas).toEqual([]);
     expect(tablasDe(prueba.base)).toEqual([...TABLAS_ESPERADAS]);
   });
@@ -62,7 +64,7 @@ describe('Las migraciones corren limpias desde una base vacía', () => {
     migrar(prueba.base);
 
     const fila = prueba.base
-      .prepare('SELECT orden, nombre, checksum, aplicada_en FROM migraciones_aplicadas')
+      .prepare('SELECT orden, nombre, checksum, aplicada_en FROM migraciones_aplicadas ORDER BY orden LIMIT 1')
       .get() as { orden: number; nombre: string; checksum: string; aplicada_en: string };
 
     expect(fila.orden).toBe(1);
@@ -118,7 +120,7 @@ describe('Las migraciones son idempotentes', () => {
     const segunda = migrar(prueba.base);
 
     expect(segunda.aplicadasAhora).toEqual([]);
-    expect(segunda.yaAplicadas).toEqual(['001_esquema_inicial']);
+    expect(segunda.yaAplicadas).toEqual(MIGRACIONES.map((m) => m.nombre));
   });
 
   it('correrlas tres veces deja un único registro en la tabla de control', () => {
@@ -129,7 +131,7 @@ describe('Las migraciones son idempotentes', () => {
     migrar(prueba.base);
     migrar(prueba.base);
 
-    expect(contarMigracionesAplicadas(prueba.base)).toBe(1);
+    expect(contarMigracionesAplicadas(prueba.base)).toBe(MIGRACIONES.length);
   });
 
   it('correrlas dos veces no duplica tablas ni índices', () => {
@@ -178,5 +180,67 @@ describe('Una migración que falla no deja el esquema a medias', () => {
     expect(tablasDe(prueba.base)).toEqual(['migraciones_aplicadas']);
     expect(contarMigracionesAplicadas(prueba.base)).toBe(0);
     expect(obtenerUltimaMigracion(prueba.base)).toBeNull();
+  });
+});
+
+
+// ===========================================================================
+describe('La migración 002 agrega el bloqueo por intentos', () => {
+  it('la tabla usuarios queda con intentos_fallidos y bloqueado_hasta', () => {
+    const prueba = crearBaseVacia();
+    limpiar = prueba.limpiar;
+    migrar(prueba.base);
+
+    const columnas = (
+      prueba.base.prepare("SELECT name FROM pragma_table_info('usuarios')").all() as {
+        name: string;
+      }[]
+    ).map((fila) => fila.name);
+
+    expect(columnas).toContain('intentos_fallidos');
+    expect(columnas).toContain('bloqueado_hasta');
+  });
+
+  it('intentos_fallidos arranca en 0 y no admite negativos', () => {
+    const prueba = crearBaseVacia();
+    limpiar = prueba.limpiar;
+    migrar(prueba.base);
+
+    const FECHA = '2026-09-06T12:00:00.000Z';
+    prueba.base
+      .prepare(
+        `INSERT INTO usuarios (id, nombre, rol, pin_hash, activo, creado_en, actualizado_en)
+         VALUES ('11111111-1111-4111-8111-111111111111', 'Jimmy', 'administrativo', 'h', 1, ?, ?)`,
+      )
+      .run(FECHA, FECHA);
+
+    const fila = prueba.base
+      .prepare('SELECT intentos_fallidos, bloqueado_hasta FROM usuarios')
+      .get() as { intentos_fallidos: number; bloqueado_hasta: string | null };
+
+    expect(fila.intentos_fallidos).toBe(0);
+    expect(fila.bloqueado_hasta).toBeNull();
+
+    expect(() => {
+      prueba.base.prepare('UPDATE usuarios SET intentos_fallidos = -1').run();
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('bloqueado_hasta rechaza una fecha que no sea ISO-8601 UTC', () => {
+    const prueba = crearBaseVacia();
+    limpiar = prueba.limpiar;
+    migrar(prueba.base);
+
+    const FECHA = '2026-09-06T12:00:00.000Z';
+    prueba.base
+      .prepare(
+        `INSERT INTO usuarios (id, nombre, rol, pin_hash, activo, creado_en, actualizado_en)
+         VALUES ('11111111-1111-4111-8111-111111111111', 'Jimmy', 'administrativo', 'h', 1, ?, ?)`,
+      )
+      .run(FECHA, FECHA);
+
+    expect(() => {
+      prueba.base.prepare("UPDATE usuarios SET bloqueado_hasta = 'mañana'").run();
+    }).toThrow(/CHECK constraint failed/);
   });
 });

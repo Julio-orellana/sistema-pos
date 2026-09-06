@@ -88,10 +88,10 @@ Node requerido: **>= 22**.
    arreglo puntual).
    **Salida controlada:** el atajo `Ctrl + Shift + Alt + Q` (en macOS,
    `Ctrl + Shift + Option + Q`) le pide el PIN al administrador y, solo si el
-   PIN es correcto, cierra la aplicación de forma ordenada. Es una salida de
-   emergencia para el administrador: **no** se le muestra ni se le documenta al
-   usuario de venta, y no existe ningún botón ni menú que la active. Ver la
-   sección 4.1.
+   PIN es correcto, cierra la aplicación de forma ordenada. Hay **tres** vías
+   de entrada —el atajo, la intercepción de `Cmd+Q`/`Alt+F4` y un botón
+   discreto en la barra de estado— y las tres pasan por el mismo PIN y el mismo
+   asiento de auditoría. Ver las secciones 4.1 y 4.5.
 3. **SQLite solo desde el proceso principal.** El renderer **nunca** accede a
    la base de datos: todo pasa por canales IPC explícitos y tipados. Hay una
    regla de ESLint que hace fallar el lint si alguien lo intenta.
@@ -168,11 +168,21 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
   consolida el WAL de SQLite en el archivo principal
   (`wal_checkpoint(TRUNCATE)`) y recién entonces se cierra la conexión y la
   aplicación.
-- **Origen del PIN, hoy:** variable de entorno `POS_PIN_ADMINISTRADOR`. En
-  desarrollo, si no está configurada se usa `0000` con una advertencia en
-  consola; en producción, sin PIN configurado la salida queda deshabilitada.
-  Es **provisional**: cuando exista el módulo de usuarios, el PIN saldrá de la
-  base de datos como hash y la auditoría podrá decir **quién** autorizó.
+- **Origen del PIN: usuarios REALES.** Se verifica contra los usuarios con rol
+  `administrativo` de la base, con su hash scrypt. **La variable
+  `POS_PIN_ADMINISTRADOR` ya no existe** y no hay ningún PIN por defecto en el
+  código. La auditoría registra el `usuario_id` real de quien autorizó.
+- **Una sola función de verificación para las tres rutas.** El atajo, la
+  intercepción del cierre del sistema y el botón de la interfaz llaman los tres
+  a `ControladorDeSalidaControlada.solicitarPin(ventana, origen)` y, al
+  confirmar, a `confirmarSalida(pin)`, que invoca una única vez
+  `ServicioDeAutenticacion.autorizarComoAdministrador`. No hay tres
+  implementaciones paralelas.
+- **Un solo nombre de acción en la auditoría.** Las tres rutas escriben
+  `salida_controlada_autorizada` (o `salida_controlada_rechazada`). Por dónde
+  entró la solicitud es un DATO del asiento (`origen`:
+  `atajo_de_teclado` | `cierre_del_sistema` | `boton_de_interfaz`), no una
+  acción distinta: desde el punto de vista del negocio es el mismo hecho.
 
 ### 4.2 Signos: qué campo puede ser negativo y cuál no
 
@@ -299,6 +309,88 @@ ocurrir en la tienda, la respuesta NO es agregar reintentos, sino averiguar de
 dónde salió el segundo escritor. Probablemente signifique que se abrió el punto
 pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
 un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
+
+### 4.7 Usuarios, sesión y permisos
+
+#### El PIN
+
+- **Exactamente 4 dígitos.** La defensa no es el largo sino el bloqueo por
+  intentos: tres fallos y 30 segundos de espera hacen inviable recorrer los
+  10 000 valores posibles.
+- **Se guarda con scrypt**, nunca en claro y nunca con SHA-256. Formato del
+  campo `pin_hash`, documentado en `src/shared/auth.ts`:
+
+  ```
+  scrypt$1$16384$8$1$<sal-base64>$<clave-base64>
+  └────┘ │ └───┘ │ │ └──────────┘ └────────────┘
+  algo   │  N    r p     sal          clave
+         └ versión del formato
+  ```
+
+- **Sal aleatoria distinta por usuario.** Dos personas con el mismo PIN tienen
+  hashes distintos, así que nadie deduce mirando la tabla que lo comparten.
+- **Comparación en tiempo constante** con `timingSafeEqual`.
+- **`src/shared/auth.ts` NO puede importarse desde el renderer** (usa
+  `node:crypto`). Hay una regla de ESLint y una exclusión en `tsconfig.web.json`
+  que lo impiden. La interfaz manda el PIN por IPC; nunca verifica nada.
+  Para el formato del PIN, el renderer usa `src/shared/pin.ts`, que es puro.
+
+#### Bloqueo por intentos
+
+Mismo criterio que la salida controlada, pero **por usuario y persistido**:
+`usuarios.intentos_fallidos` y `usuarios.bloqueado_hasta`. Se persiste a
+propósito: si viviera en memoria, bastaría con reiniciar la aplicación para
+reiniciar el contador y seguir adivinando.
+
+- Solo cuenta como intento un PIN **con formato válido pero equivocado**.
+- Al tercer fallo, bloqueo de 30 segundos. Un ingreso correcto reinicia todo.
+- Un usuario bloqueado no entra **aunque acierte el PIN**.
+- **Nunca se informan los intentos restantes**, solo cuánto falta para
+  reintentar: los intentos restantes son información útil para quien adivina y
+  para quien mira la pantalla de otro.
+
+#### Primer arranque
+
+Si la tabla `usuarios` está **completamente vacía**, la única pantalla
+accesible es la de configuración inicial, que obliga a crear el primer
+administrador con su nombre y un PIN elegido en ese momento. **No hay ningún
+PIN por defecto en el código**, ni siquiera "temporal". El canal
+`sesion:crear-primer-administrador` vuelve a comprobar que la instalación esté
+vacía: sin esa condición sería una puerta para crearse un administrador desde
+la interfaz en cualquier momento.
+
+#### Sesión
+
+Vive **en memoria del proceso principal** (`SesionActual`) y **no se
+persiste**. Esta es una terminal compartida: si la sesión sobreviviera al
+reinicio, el primero que encienda la computadora por la mañana quedaría
+actuando con la identidad de quien la apagó anoche, y la auditoría atribuiría
+sus ventas a otra persona.
+
+#### CÓMO USAR EL GUARD DE PERMISOS EN UN MÓDULO FUTURO
+
+Se envuelve la operación del manejador IPC. **Nunca** se comprueba el rol a
+mano dentro de la operación: así la comprobación es imposible de olvidar y de
+escribir distinto en cada módulo.
+
+```ts
+import { requiereRol } from '@main/domain/usuarios/sesion';
+
+ipcMain.handle(CANALES_IPC.cajaAbrir, async (_evento, payload) =>
+  ejecutarConRespuesta('CAJA_APERTURA_FALLIDA', () =>
+    requiereRol(dependencias.sesion, 'administrativo', () => {
+      const datos = esquemaAperturaDeCaja.parse(payload);
+      return servicioDeCaja.abrir(datos);
+    }),
+  ),
+);
+```
+
+Si el usuario en sesión no cumple, lanza `ErrorDeNegocio` con código
+`PERMISO_DENEGADO`, la operación **no se ejecuta**, y el mensaje llega a la
+interfaz ya traducido. Nunca falla en silencio ni deja pasar la acción.
+`requiereSesion(sesion, operacion)` es la variante que solo exige que haya
+alguien autenticado, sin importar el rol.
 
 ### 4.4 Estado del proyecto en Supabase
 
@@ -554,6 +646,13 @@ nunca mecanismos de escape del sistema.
 | **Un único punto traduce los errores de restricción a errores de negocio** (`errores.ts`), y toda escritura de repositorio pasa por `RepositorioBase.ejecutar()`. | Dejar pasar el error crudo de SQLite; traducir en cada pantalla | "CHECK constraint failed: productos_inventario_no_negativo" no se le puede mostrar a un cajero con un cliente enfrente, y traducir en cada pantalla garantiza que alguna se olvide. El error se convierte en `STOCK_INSUFICIENTE` con el mensaje "Stock insuficiente para completar la venta", conservando la causa técnica para la bitácora. Un error que NO se reconoce pasa sin envolver, para no esconder fallos de programación detrás de un texto tranquilizador. | Prompt 6 — 2026-09-05 |
 | **El descuento de inventario debe ser atómico** (ver sección 4.3): en Postgres con `SET col = col - :cantidad`; en SQLite con comparar-y-cambiar dentro de una sola transacción de escritura, porque allí la resta en SQL sería de punto flotante. | Leer, restar en la aplicación y escribir después, en operaciones separadas | Entre la lectura y la escritura hay una ventana en la que otra operación puede mover el saldo, y entonces el CHECK se evalúa sobre datos viejos. | Prompt 6 — 2026-09-05 |
 | **Ante un conflicto de inventario (el comparar-y-cambiar afecta 0 filas): CERO reintentos automáticos.** Se revierte toda la transacción, el carrito de la pantalla se conserva y el cajero vuelve a cobrar. Queda un asiento de auditoría. | Reintentar N veces con espera; reintentar una sola vez; recalcular en silencio contra el saldo nuevo | En esta arquitectura el conflicto no debería poder ocurrir: instancia única, better-sqlite3 síncrono y `BEGIN IMMEDIATE` toma el bloqueo antes de leer. Si ocurre, la premisa se rompió —hay un segundo escritor, o el saldo se leyó fuera de la transacción— y reintentar taparía el defecto. Además, un reintento silencioso podría cobrar contra un inventario que nadie revisó, con el cliente enfrente. No confundir con `SQLITE_BUSY`, que sí se reintenta, pero lo hace el controlador con su timeout de 5000 ms. Ver la sección 4.3. | Prompt 7 — 2026-09-05 |
+| **El PIN se guarda con scrypt, no con SHA-256 ni en claro.** Formato: `scrypt$<versión>$<N>$<r>$<p>$<sal-base64>$<clave-base64>` en el campo `pin_hash`. | SHA-256 simple; bcrypt o argon2 con dependencia externa; columnas separadas para sal y hash; JSON | Un PIN de cuatro dígitos tiene 10 000 valores: con SHA-256 se recorren todos en una fracción de segundo, así que quien se lleve el archivo .db saca todos los PIN de la tienda al abrirlo. scrypt está diseñado para ser lento y exigir memoria, y viene en `node:crypto` sin agregar dependencias. El formato de una sola cadena mantiene la sal pegada a su hash (imposible cruzarlas entre usuarios), lleva los parámetros adentro (endurecer el costo mañana no obliga a migrar datos) y lleva algoritmo y versión adelante (cambiar de algoritmo es reconocer el prefijo). | Prompt 10 — 2026-09-06 |
+| **Sal aleatoria distinta por usuario, dentro del mismo campo `pin_hash`.** | Una sal global; sin sal | Con sal por usuario, dos personas con el mismo PIN tienen hashes distintos: nadie deduce mirando la tabla que lo comparten, y las tablas precalculadas no sirven. | Prompt 10 — 2026-09-06 |
+| **El bloqueo por intentos es POR USUARIO y se persiste en la base** (`intentos_fallidos`, `bloqueado_hasta`), no en memoria. | Contador en memoria, como el provisional de la salida controlada | Un contador en memoria se reinicia cerrando y volviendo a abrir la aplicación, que es justo lo que haría alguien adivinando un PIN. En la base sobrevive al reinicio. | Prompt 10 — 2026-09-06 |
+| **RESUELTO: las tres rutas de salida controlada verifican contra usuarios reales, con UNA sola función.** Se elimina `POS_PIN_ADMINISTRADOR` y su valor de desarrollo. | Mantener el PIN de entorno; una verificación por ruta | El PIN de entorno no sabía QUIÉN autorizaba, y tres implementaciones paralelas se desincronizan. Ahora el atajo, la intercepción de `Cmd+Q`/`Alt+F4` y el botón llaman los tres a `solicitarPin(ventana, origen)` y a `confirmarSalida(pin)`, que invoca una única vez `autorizarComoAdministrador`. La auditoría registra el `usuario_id` real y **un solo nombre de acción** para las tres, con el origen como dato del asiento. | Prompt 10 — 2026-09-06 |
+| **La sesión vive en memoria y no se persiste.** | Recordar la sesión entre arranques | Es una terminal compartida: si la sesión sobreviviera al reinicio, el primero que encienda la máquina por la mañana actuaría con la identidad de quien la apagó anoche y la auditoría le atribuiría sus ventas a otra persona. | Prompt 10 — 2026-09-06 |
+| **Los permisos se comprueban con un guard que envuelve la operación** (`requiereRol`), nunca con un `if` dentro de cada manejador. | Comprobar el rol a mano en cada canal | Envuelto, es imposible olvidarlo o escribirlo distinto en cada módulo, y la operación protegida no llega a ejecutarse. Suelto, basta que un módulo futuro se distraiga. | Prompt 10 — 2026-09-06 |
+| **Nunca se informan los intentos restantes, solo el tiempo para reintentar.** | Mostrar "te quedan 2 intentos" | Los intentos restantes son información útil para quien está adivinando, y para quien mira por encima del hombro la pantalla de otro. El tiempo de espera no ayuda a adivinar. | Prompt 10 — 2026-09-06 |
 | **PLATAFORMA OBJETIVO: Windows manda.** Es la plataforma de producción y el criterio de aceptación final para todo lo dependiente de plataforma. macOS es solo el entorno de desarrollo. Ante un conflicto, gana Windows. | Tratar las dos plataformas como equivalentes; optimizar para macOS porque es donde se desarrolla | La tienda de Jimmy corre Windows; macOS es la máquina de Julio. Que algo funcione en macOS es una señal útil, nunca una verificación. El incidente del modo kiosko mostró el costo de no tener esto escrito: se dio por bueno un comportamiento medido en macOS sin distinguir qué parte aplicaba a Windows. | Prompt 9 — 2026-09-06 |
 | **Prohibido bloquear el Administrador de tareas de Windows por cualquier vía administrativa** (directiva de grupo, `DisableTaskMgr`, Assigned Access, Shell Launcher). | Usar el modo kiosco soportado de Windows para un bloqueo "de verdad" | En Windows, una aplicación común no puede bloquear `Ctrl+Alt+Supr` (Secure Attention Sequence, protegida por el núcleo) ni `Ctrl+Shift+Esc` de forma fiable, así que el riesgo no viene de Electron. Viene de que alguien intente "mejorar" el kiosko con una función administrativa y deje al dueño encerrado fuera de su computadora. Ver la sección 4.6. | Prompt 9 — 2026-09-06 |
 | **PROHIBIDO `kiosk: true` de Electron.** La pantalla completa se consigue con `fullscreen` + `frame: false`. | Usar `kiosk: true`; usarlo solo en producción; usarlo solo en Windows | En macOS, `kiosk: true` le impone al sistema operativo Presentation Options que apagan **Forzar Salida** (`disableForceQuit`) y **Cmd+Tab** (`disableProcessSwitching`). Medido: con kiosk, `currentSystemPresentationOptions = 506`; sin kiosk, `0`, y la ventana sigue igual de completa. Esto es una terminal de punto de venta, no un kiosco público: si la app se cuelga, el dueño tiene que poder matarla desde el sistema. Reproducible con `npm run diagnostico:kiosko-macos`. Ver la sección 4.5. | Prompt 8 — 2026-09-06 |
@@ -592,7 +691,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 2 | ¿La tienda emite factura fiscal (FEL/SAT) o solo recibo y proforma internos? | Cambia por completo el módulo de comprobantes y las obligaciones legales. | Abierto |
 | 3 | ¿El precio de mayoreo se activa por cantidad comprada, por tipo de cliente, o ambos? | Define el modelo de precios del catálogo. | Abierto |
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
-| 5 | ¿El PIN de autorización es por usuario administrador o uno solo para la tienda? | Determina si el log de auditoría puede identificar **quién** autorizó. Hoy el PIN sale de `POS_PIN_ADMINISTRADOR` y el sistema sabe QUE alguien autorizó, pero no QUIÉN. Recomendación técnica: por usuario. | Abierto — implementación provisional en marcha |
+| 5 | ~~¿El PIN de autorización es por usuario administrador o uno solo para la tienda?~~ | — | **RESUELTO (Prompt 10): por usuario.** Cada usuario tiene su PIN con hash scrypt y sal propia; la auditoría registra el `usuario_id` real de quien autorizó. `POS_PIN_ADMINISTRADOR` ya no existe. Ver la sección 4.7. |
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? | Define la matriz de permisos (RBAC). | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
@@ -613,6 +712,11 @@ negocio:
   ni catálogo, ni usuarios.
 - Los repositorios solo leen y escriben. No contienen ninguna regla de
   negocio: eso llega módulo por módulo en los prompts siguientes.
+- **Sí existe** el módulo de usuarios: autenticación con PIN, bloqueo por
+  intentos, sesión en memoria, guard de permisos, primer arranque y pantalla de
+  ingreso. Ver la sección 4.7.
+- No existe apertura ni cierre de caja, pantalla de ventas, ni ninguna pantalla
+  administrativa más allá de la creación del primer usuario.
 - No hay lógica de ventas, inventario, descuentos, caja, usuarios ni
   auditoría. La
   única excepción es el verificador de PIN de administrador
@@ -646,12 +750,15 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     migrator.ts      aplica las migraciones y verifica sus checksums
   ipc/          manejadores IPC, con validación Zod de cada payload
   preload/      único puente hacia el renderer (expone window.pos)
-  security/     verificación del PIN de administrador
+  domain/       módulos de dominio
+    usuarios/   autenticación, bloqueo por intentos, sesión y permisos
   windows/      creación y bloqueos de la ventana kiosko
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
 src/shared/     código compartido main <-> renderer
   adapters/     interfaces de integración + implementaciones seguras
   types/        contrato IPC y DTOs con Zod
+  auth.ts       hash y verificación del PIN con scrypt (NO va al renderer)
+  pin.ts        reglas de formato del PIN (sí va al renderer)
   money.ts      aritmética exacta con Decimal.js
   __tests__/    pruebas automatizadas
 supabase/       espejo del esquema en Postgres (migraciones para la nube)

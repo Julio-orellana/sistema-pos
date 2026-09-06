@@ -30,7 +30,10 @@ import type { BrowserWindow } from 'electron';
 
 import { CANALES_IPC, type ResultadoIntentoDeSalida } from '@shared/types/ipc';
 import { esAtajoDeSalidaControlada } from '@shared/kiosk-input';
-import type { VerificadorDePinAdministrador } from '@main/security/admin-pin';
+import type {
+  OrigenDeSalida,
+  ServicioDeAutenticacion,
+} from '@main/domain/usuarios/autenticacion';
 
 /**
  * Cuánto vale una solicitud de salida antes de caducar, en milisegundos.
@@ -44,8 +47,14 @@ const VALIDEZ_DE_LA_SOLICITUD_MS = 120_000;
 
 /** Dependencias que el controlador necesita del resto de la aplicación. */
 export interface DependenciasDeSalida {
-  /** Verifica el PIN del administrador. */
-  readonly verificador: VerificadorDePinAdministrador;
+  /**
+   * Servicio de autenticación contra usuarios REALES.
+   *
+   * Es la única verificación de PIN del sistema. Las tres rutas de salida
+   * terminan llamando a `autorizarComoAdministrador` a través de
+   * `confirmarSalida`: no hay tres implementaciones paralelas.
+   */
+  readonly autenticacion: ServicioDeAutenticacion;
   /** Cierra la aplicación de forma ordenada. La provee el proceso principal. */
   readonly cerrarAplicacion: () => void;
   /** Reloj inyectable, para poder probar la caducidad sin esperar. */
@@ -59,9 +68,12 @@ export interface DependenciasDeSalida {
  * solicitud en curso y desde cuándo.
  */
 export class ControladorDeSalidaControlada {
-  private readonly verificador: VerificadorDePinAdministrador;
+  private readonly autenticacion: ServicioDeAutenticacion;
   private readonly cerrarAplicacion: () => void;
   private readonly ahora: () => number;
+
+  /** Por cuál de las tres rutas llegó la solicitud viva. */
+  private origenDeLaSolicitud: OrigenDeSalida | null = null;
 
   /** Momento en que se presionó el atajo, o `null` si no hay solicitud viva. */
   private solicitadaEnMs: number | null = null;
@@ -81,7 +93,7 @@ export class ControladorDeSalidaControlada {
   private cierreAutorizado = false;
 
   public constructor(dependencias: DependenciasDeSalida) {
-    this.verificador = dependencias.verificador;
+    this.autenticacion = dependencias.autenticacion;
     this.cerrarAplicacion = dependencias.cerrarAplicacion;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
@@ -96,17 +108,22 @@ export class ControladorDeSalidaControlada {
       }
       // Se consume el evento para que la combinación no llegue a la interfaz.
       evento.preventDefault();
-      this.solicitarPin(ventana);
+      this.solicitarPin(ventana, 'atajo_de_teclado');
     });
   }
 
-  /** Marca que hay una solicitud viva y le avisa a la interfaz. */
-  public solicitarPin(ventana: BrowserWindow): void {
+  /**
+   * Marca que hay una solicitud viva y le avisa a la interfaz.
+   *
+   * ÚNICO punto de entrada de las tres rutas. `origen` solo se guarda para el
+   * asiento de auditoría: no cambia el comportamiento, porque desde el punto
+   * de vista del negocio los tres son el mismo hecho.
+   */
+  public solicitarPin(ventana: BrowserWindow, origen: OrigenDeSalida): void {
     this.solicitadaEnMs = this.ahora();
+    this.origenDeLaSolicitud = origen;
     this.vecesSolicitada += 1;
-    // TODO(auditoria): registrar el intento de salida en el log de auditoría
-    // cuando exista el módulo, con fecha, usuario en sesión y resultado.
-    console.info('[kiosko] Se solicitó la salida controlada; se pide el PIN de administrador.');
+    console.info(`[kiosko] Se solicitó la salida controlada (origen: ${origen}); se pide el PIN.`);
     ventana.webContents.send(CANALES_IPC.solicitudDeSalidaControlada);
   }
 
@@ -166,9 +183,8 @@ export class ControladorDeSalidaControlada {
       return 'permitir';
     }
 
-    // TODO(auditoria): registrar el intento de cierre por una vía no autorizada.
     console.info('[kiosko] Intento de cierre interceptado; se redirige al flujo con PIN.');
-    this.solicitarPin(ventana);
+    this.solicitarPin(ventana, 'cierre_del_sistema');
     return 'pedir-pin';
   }
 
@@ -177,46 +193,48 @@ export class ControladorDeSalidaControlada {
    */
   public confirmarSalida(pin: string): ResultadoIntentoDeSalida {
     if (!this.haySolicitudVigente()) {
-      // Nadie presionó el atajo (o pasó demasiado tiempo). No se verifica el
-      // PIN siquiera: así, aunque la interfaz estuviera comprometida, no puede
+      // Nadie pidió salir (o pasó demasiado tiempo). No se verifica el PIN
+      // siquiera: así, aunque la interfaz estuviera comprometida, no puede
       // usarse como oráculo para adivinar el PIN a fuerza de intentos.
       return {
         autorizado: false,
         codigo: 'SIN_SOLICITUD_VIGENTE',
         mensaje:
-          'No hay ninguna solicitud de salida en curso. Presioná de nuevo el atajo de administrador.',
-        intentosRestantes: 0,
-        bloqueadoHasta: null,
+          'No hay ninguna solicitud de salida en curso. Volvé a pedir la salida y probá de nuevo.',
+        segundosParaReintentar: null,
       };
     }
 
-    const resultado = this.verificador.verificar(pin);
+    const origen = this.origenDeLaSolicitud ?? 'atajo_de_teclado';
 
-    if (!resultado.autorizado) {
-      // TODO(auditoria): registrar el intento fallido con su código.
-      console.warn(`[kiosko] Intento de salida rechazado: ${resultado.codigo}`);
+    // ÚNICA verificación de PIN del sistema, para las tres rutas.
+    const resultado = this.autenticacion.autorizarComoAdministrador(pin);
+
+    if (!resultado.autenticado) {
+      console.warn(`[kiosko] Intento de salida rechazado (${origen}): ${resultado.codigo}`);
+      this.autenticacion.registrarSalida(false, origen, null, resultado.codigo);
       return {
         autorizado: false,
         codigo: resultado.codigo,
         mensaje: resultado.mensaje,
-        intentosRestantes: resultado.intentosRestantes,
-        bloqueadoHasta: resultado.bloqueadoHasta,
+        segundosParaReintentar: resultado.segundosParaReintentar,
       };
     }
 
     this.solicitadaEnMs = null;
     this.cierreAutorizado = true;
-    // TODO(auditoria): registrar la salida autorizada con el administrador que
-    // la autorizó, cuando el módulo de usuarios permita identificarlo.
-    console.info('[kiosko] Salida autorizada. Cerrando la aplicación de forma ordenada.');
+    const autorizadoPor = resultado.usuario?.id ?? null;
+    console.info(
+      `[kiosko] Salida autorizada por ${resultado.usuario?.nombre ?? 'desconocido'} (origen: ${origen}).`,
+    );
+    this.autenticacion.registrarSalida(true, origen, autorizadoPor, 'PIN correcto');
     this.cerrarAplicacion();
 
     return {
       autorizado: true,
       codigo: resultado.codigo,
       mensaje: 'Autorización correcta. Cerrando el punto de venta.',
-      intentosRestantes: resultado.intentosRestantes,
-      bloqueadoHasta: null,
+      segundosParaReintentar: null,
     };
   }
 }

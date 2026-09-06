@@ -7,13 +7,25 @@
  * desde la interfaz.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 
 import { CANALES_IPC } from '@shared/types/ipc';
 import { ATAJO_SALIDA_CONTROLADA } from '@shared/kiosk-input';
-import { VerificadorDePinPorConfiguracion } from '@main/security/admin-pin';
+import { generarHashDePin } from '@shared/auth';
+import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
+import { crearRepositorios } from '@main/database/repositories';
+import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { ControladorDeSalidaControlada } from '../controlled-exit';
+
+/** Limpiezas pendientes de las bases temporales que crea cada escenario. */
+const limpiezas: (() => void)[] = [];
+
+afterEach(() => {
+  while (limpiezas.length > 0) {
+    limpiezas.pop()?.();
+  }
+});
 
 const PIN_CORRECTO = '4321';
 const PIN_EQUIVOCADO = '1111';
@@ -61,17 +73,38 @@ function crearVentanaFalsa(estado: { destruida?: boolean; rendererCaido?: boolea
   };
 }
 
-/** Arma un controlador con reloj controlado y PIN conocido. */
+/**
+ * Arma un controlador sobre una base de datos REAL con un administrador
+ * sembrado. Se usa el servicio de autenticación de verdad, no un doble: lo que
+ * se quiere comprobar es que las tres rutas terminan en esa única verificación.
+ */
 function crearEscenario(): {
   controlador: ControladorDeSalidaControlada;
   cerrarAplicacion: ReturnType<typeof vi.fn>;
   avanzarMinutos: (minutos: number) => void;
+  limpiar: () => void;
+  asientosDeAuditoria: () => { accion: string; usuario_id: string | null; valor_nuevo: string | null }[];
 } {
   let instante = Date.UTC(2026, 0, 1);
   const cerrarAplicacion = vi.fn();
 
+  const prueba = crearBaseMigrada();
+  limpiezas.push(prueba.limpiar);
+  const repos = crearRepositorios(prueba.base);
+  repos.usuarios.crear({
+    nombre: 'Jimmy',
+    rol: 'administrativo',
+    pinHash: generarHashDePin(PIN_CORRECTO),
+  });
+
+  const autenticacion = new ServicioDeAutenticacion({
+    usuarios: repos.usuarios,
+    auditoria: repos.auditoria,
+    ahora: (): number => instante,
+  });
+
   const controlador = new ControladorDeSalidaControlada({
-    verificador: new VerificadorDePinPorConfiguracion({ pinConfigurado: PIN_CORRECTO }),
+    autenticacion,
     cerrarAplicacion,
     ahora: (): number => instante,
   });
@@ -82,6 +115,11 @@ function crearEscenario(): {
     avanzarMinutos: (minutos: number): void => {
       instante += minutos * MILISEGUNDOS_POR_MINUTO;
     },
+    limpiar: prueba.limpiar,
+    asientosDeAuditoria: () =>
+      prueba.base
+        .prepare('SELECT accion, usuario_id, valor_nuevo FROM auditoria_log ORDER BY fecha')
+        .all() as { accion: string; usuario_id: string | null; valor_nuevo: string | null }[],
   };
 }
 
@@ -299,11 +337,17 @@ describe('No se puede saltar el atajo', () => {
 });
 
 // ===========================================================================
-describe('Instalación sin PIN configurado', () => {
+describe('Instalación sin ningún administrador', () => {
   it('la salida queda deshabilitada y el mensaje lo explica', () => {
     const cerrarAplicacion = vi.fn();
+    const prueba = crearBaseMigrada();
+    limpiezas.push(prueba.limpiar);
+    const repos = crearRepositorios(prueba.base);
     const controlador = new ControladorDeSalidaControlada({
-      verificador: new VerificadorDePinPorConfiguracion({ pinConfigurado: null }),
+      autenticacion: new ServicioDeAutenticacion({
+        usuarios: repos.usuarios,
+        auditoria: repos.auditoria,
+      }),
       cerrarAplicacion,
     });
     const { ventana, dispararEntrada } = crearVentanaFalsa();
@@ -313,7 +357,115 @@ describe('Instalación sin PIN configurado', () => {
     const resultado = controlador.confirmarSalida('0000');
 
     expect(resultado.autorizado).toBe(false);
-    expect(resultado.codigo).toBe('PIN_NO_CONFIGURADO');
+    expect(resultado.codigo).toBe('SIN_ADMINISTRADORES');
     expect(cerrarAplicacion).not.toHaveBeenCalled();
+  });
+});
+
+
+// ===========================================================================
+describe('Las TRES rutas de salida usan la misma verificación y el mismo asiento', () => {
+  // Es la garantía de que no hay tres implementaciones paralelas: el atajo de
+  // teclado, la intercepción del cierre del sistema (Cmd+Q / Alt+F4) y el botón
+  // de la interfaz terminan los tres en confirmarSalida, que llama una sola vez
+  // a autorizarComoAdministrador.
+
+  /** Dispara cada ruta y devuelve el resultado de confirmar con el PIN correcto. */
+  function recorrer(
+    ruta: 'atajo' | 'cierre-del-sistema' | 'boton',
+  ): ReturnType<typeof crearEscenario> & { autorizado: boolean; origenRegistrado: string } {
+    const escenario = crearEscenario();
+    const { ventana, dispararEntrada } = crearVentanaFalsa();
+    escenario.controlador.conectarVentana(ventana);
+
+    if (ruta === 'atajo') {
+      dispararEntrada(PULSACION_DEL_ATAJO);
+    } else if (ruta === 'cierre-del-sistema') {
+      escenario.controlador.evaluarIntentoDeCierre(ventana);
+    } else {
+      // Es exactamente lo que hace el manejador IPC del botón.
+      escenario.controlador.solicitarPin(ventana, 'boton_de_interfaz');
+    }
+
+    const resultado = escenario.controlador.confirmarSalida(PIN_CORRECTO);
+    const asiento = escenario
+      .asientosDeAuditoria()
+      .find((fila) => fila.accion === 'salida_controlada_autorizada');
+    const origen = JSON.parse(asiento?.valor_nuevo ?? '{}') as { origen?: string };
+
+    return { ...escenario, autorizado: resultado.autorizado, origenRegistrado: origen.origen ?? '' };
+  }
+
+  it('el ATAJO DE TECLADO autoriza contra un administrador real', () => {
+    const { autorizado, cerrarAplicacion } = recorrer('atajo');
+    expect(autorizado).toBe(true);
+    expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
+  });
+
+  it('el CIERRE DEL SISTEMA (Cmd+Q / Alt+F4) autoriza contra un administrador real', () => {
+    const { autorizado, cerrarAplicacion } = recorrer('cierre-del-sistema');
+    expect(autorizado).toBe(true);
+    expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
+  });
+
+  it('el BOTÓN de la interfaz autoriza contra un administrador real', () => {
+    const { autorizado, cerrarAplicacion } = recorrer('boton');
+    expect(autorizado).toBe(true);
+    expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
+  });
+
+  it('las tres escriben el MISMO nombre de acción en la auditoría', () => {
+    const acciones = (['atajo', 'cierre-del-sistema', 'boton'] as const).map((ruta) => {
+      const escenario = recorrer(ruta);
+      return escenario.asientosDeAuditoria().map((fila) => fila.accion);
+    });
+
+    for (const deUnaRuta of acciones) {
+      expect(deUnaRuta).toContain('salida_controlada_autorizada');
+      // No hay acciones distintas por ruta: nada de SALIDA_TECLADO vs SALIDA_CMDQ.
+      expect(deUnaRuta.filter((a) => a.startsWith('salida_controlada')).length).toBe(1);
+    }
+  });
+
+  it('el origen se guarda como DATO del asiento, distinto en cada ruta', () => {
+    expect(recorrer('atajo').origenRegistrado).toBe('atajo_de_teclado');
+    expect(recorrer('cierre-del-sistema').origenRegistrado).toBe('cierre_del_sistema');
+    expect(recorrer('boton').origenRegistrado).toBe('boton_de_interfaz');
+  });
+
+  it('la auditoría registra el usuario_id REAL de quien autorizó, no un anónimo', () => {
+    const escenario = recorrer('atajo');
+    const asiento = escenario
+      .asientosDeAuditoria()
+      .find((fila) => fila.accion === 'salida_controlada_autorizada');
+
+    expect(asiento?.usuario_id).not.toBeNull();
+    expect(asiento?.usuario_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('por las tres rutas, un PIN equivocado deja asiento de RECHAZO y no cierra', () => {
+    for (const ruta of ['atajo', 'cierre-del-sistema', 'boton'] as const) {
+      const escenario = crearEscenario();
+      const { ventana, dispararEntrada } = crearVentanaFalsa();
+      escenario.controlador.conectarVentana(ventana);
+
+      if (ruta === 'atajo') {
+        dispararEntrada(PULSACION_DEL_ATAJO);
+      } else if (ruta === 'cierre-del-sistema') {
+        escenario.controlador.evaluarIntentoDeCierre(ventana);
+      } else {
+        escenario.controlador.solicitarPin(ventana, 'boton_de_interfaz');
+      }
+
+      const resultado = escenario.controlador.confirmarSalida(PIN_EQUIVOCADO);
+
+      expect(resultado.autorizado).toBe(false);
+      expect(escenario.cerrarAplicacion).not.toHaveBeenCalled();
+      expect(escenario.asientosDeAuditoria().map((f) => f.accion)).toContain(
+        'salida_controlada_rechazada',
+      );
+    }
   });
 });

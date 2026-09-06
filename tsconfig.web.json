@@ -6,6 +6,10 @@
     "src/renderer/src/**/*.d.ts",
     "src/shared/**/*.ts"
   ],
+  "exclude": [
+    "src/shared/__tests__/**",
+    "src/shared/auth.ts"
+  ],
   "compilerOptions": {
     "composite": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

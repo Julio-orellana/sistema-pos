@@ -176,16 +176,20 @@ doce caracteres o con algo que no sea un dígito) y cancelar el diálogo **no**
 consumen intento, para que un error de tecleo no deje al administrador
 bloqueado.
 
-**El PIN en desarrollo:** si no hay `POS_PIN_ADMINISTRADOR` en el `.env`, en
-desarrollo se usa **`0000`** y la consola lo avisa al arrancar. Para trabajar
-con un PIN propio:
+**El PIN en desarrollo:** es el del administrador que vos mismo creaste en el
+primer arranque. **No hay ningún PIN por defecto en el código**, ni en
+desarrollo ni en producción, y tampoco existe ya la variable de entorno que
+había antes.
+
+Si perdiste el PIN de tu base de desarrollo, borrá el archivo y volvé a hacer
+el primer arranque:
 
 ```bash
-echo "POS_PIN_ADMINISTRADOR=1234" >> .env
+rm ~/Library/Application\ Support/pos-agricola/pos-agricola.db*
 ```
 
-En producción **no hay PIN de respaldo**: si la instalación no tiene uno
-configurado, la salida controlada queda deshabilitada y el diálogo lo dice.
+Si la instalación no tiene ningún administrador, la salida controlada se
+rechaza con el código `SIN_ADMINISTRADORES` y el diálogo lo explica.
 
 ### 4.2 Qué significa "cierre ordenado"
 

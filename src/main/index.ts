@@ -9,6 +9,7 @@
  *   4. crear ventana — en modo kiosko.
  */
 
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { app, BrowserWindow, dialog } from 'electron';
 
@@ -19,9 +20,16 @@ import {
   ejecutarDiagnostico,
   type ResultadoCierreOrdenado,
 } from '@main/database/connection';
-import { obtenerRutaBaseDeDatos } from '@main/database/db-path';
+import {
+  obtenerRutaBaseDeDatos,
+  obtenerRutaBaseDeDatosDeVerificacion,
+} from '@main/database/db-path';
+import { obtenerBaseDeDatos } from '@main/database/connection';
+import { crearRepositorios } from '@main/database/repositories';
+import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
+import { SesionActual } from '@main/domain/usuarios/sesion';
+import { generarHashDePin } from '@shared/auth';
 import { quitarManejadoresIpc, registrarManejadoresIpc } from '@main/ipc/register-handlers';
-import { PIN_POR_DEFECTO_EN_DESARROLLO, crearVerificadorDePin } from '@main/security/admin-pin';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import { cargarInterfaz, crearVentanaPrincipal, describirEstadoKiosko } from '@main/windows/main-window';
 import { ATAJO_SALIDA_CONTROLADA, describirAtajo } from '@shared/kiosk-input';
@@ -106,7 +114,18 @@ app.on('second-instance', () => {
 app.whenReady().then(
   () => {
     try {
-      const migraciones = abrirBaseDeDatos(obtenerRutaBaseDeDatos());
+      // En verificación se usa una base descartable en la carpeta temporal: la
+      // prueba necesita sembrar un administrador y no puede dejar usuarios de
+      // mentira en los datos reales de la tienda.
+      const ruta = enVerificacionDeArranque
+        ? obtenerRutaBaseDeDatosDeVerificacion()
+        : obtenerRutaBaseDeDatos();
+      if (enVerificacionDeArranque) {
+        rmSync(ruta, { force: true });
+        rmSync(`${ruta}-wal`, { force: true });
+        rmSync(`${ruta}-shm`, { force: true });
+      }
+      const migraciones = abrirBaseDeDatos(ruta);
       if (migraciones.aplicadasAhora.length > 0) {
         console.info(`[base-de-datos] Migraciones aplicadas: ${migraciones.aplicadasAhora.join(', ')}`);
       }
@@ -120,13 +139,25 @@ app.whenReady().then(
       return;
     }
 
+    const repositorios = crearRepositorios(obtenerBaseDeDatos());
+    const autenticacion = new ServicioDeAutenticacion({
+      usuarios: repositorios.usuarios,
+      auditoria: repositorios.auditoria,
+    });
+    const sesion = new SesionActual();
+
     const controladorDeSalida = new ControladorDeSalidaControlada({
-      verificador: crearVerificadorDePin(process.env, app.isPackaged),
+      autenticacion,
       cerrarAplicacion: cerrarAplicacionOrdenadamente,
     });
     controladorDeSalidaActivo = controladorDeSalida;
 
-    registrarManejadoresIpc({ controladorDeSalida });
+    registrarManejadoresIpc({
+      controladorDeSalida,
+      autenticacion,
+      sesion,
+      usuarios: repositorios.usuarios,
+    });
 
     const ventana = crearVentanaPrincipal(RUTA_PRELOAD, !enVerificacionDeArranque);
     controladorDeSalida.conectarVentana(ventana);
@@ -135,7 +166,7 @@ app.whenReady().then(
 
     if (enVerificacionDeArranque) {
       ventana.webContents.once('did-finish-load', () => {
-        void ejecutarVerificacionDeArranque(ventana, controladorDeSalida);
+        void ejecutarVerificacionDeArranque(ventana, controladorDeSalida, autenticacion);
       });
       return;
     }
@@ -230,6 +261,20 @@ function interceptarCierresDelSistema(
   });
 }
 
+/** Cantidad de PIN posibles con un dígito menos, para sortear uno de cuatro. */
+const RANGO_DE_PIN = 9000;
+
+/** Menor PIN de cuatro dígitos. */
+const PIN_MINIMO = 1000;
+
+/**
+ * Sortea un PIN de cuatro dígitos para la verificación de arranque.
+ * No hay ningún PIN por defecto en el código, tampoco para las pruebas.
+ */
+function generarPinAleatorioDePrueba(): string {
+  return String(Math.floor(Math.random() * RANGO_DE_PIN) + PIN_MINIMO);
+}
+
 /** Milisegundos que se espera a que el atajo sintético llegue de vuelta. */
 const ESPERA_MAXIMA_DEL_ATAJO_MS = 3000;
 
@@ -271,7 +316,14 @@ async function esperarDialogoDeSalida(ventana: BrowserWindow): Promise<boolean> 
 async function ejecutarVerificacionDeArranque(
   ventana: BrowserWindow,
   controladorDeSalida: ControladorDeSalidaControlada,
+  autenticacion: ServicioDeAutenticacion,
 ): Promise<void> {
+  // Se siembra un administrador con un PIN sorteado en el momento. No hay
+  // ningún PIN por defecto en el código, tampoco para la verificación.
+  const pinDePrueba = generarPinAleatorioDePrueba();
+  const requeriaConfiguracionInicial = autenticacion.requiereConfiguracionInicial();
+  autenticacion.crearPrimerAdministrador('Administrador de prueba', generarHashDePin(pinDePrueba));
+  const yaNoRequiereConfiguracion = !autenticacion.requiereConfiguracionInicial();
   const bloqueos = await medirBloqueosEnLaVentana(ventana);
 
   // Se envía el atajo real a la ventana para comprobar que el proceso
@@ -287,8 +339,11 @@ async function ejecutarVerificacionDeArranque(
     ESPERA_MAXIMA_DEL_ATAJO_MS,
   );
 
-  // Un PIN equivocado NO debe cerrar nada. La solicitud sigue viva después.
-  const conPinIncorrecto = controladorDeSalida.confirmarSalida('999999');
+  // Un PIN equivocado NO debe cerrar nada. Se usa uno de CUATRO dígitos y
+  // distinto del sembrado: con un largo inválido fallaría por formato y no se
+  // estaría probando el caso que importa, que es un PIN bien formado y erróneo.
+  const pinIncorrecto = pinDePrueba === '1000' ? '9999' : '1000';
+  const conPinIncorrecto = controladorDeSalida.confirmarSalida(pinIncorrecto);
 
   // --- El BOTÓN de la barra de estado dispara el mismo flujo que el atajo ---
   const solicitudesAntesDelBoton = controladorDeSalida.solicitudesRecibidas();
@@ -324,8 +379,7 @@ async function ejecutarVerificacionDeArranque(
 
   // Camino completo: el PIN correcto autoriza y dispara el cierre ordenado.
   // Es la misma ruta que recorrerá el administrador en la tienda.
-  const pinReal = process.env.POS_PIN_ADMINISTRADOR ?? PIN_POR_DEFECTO_EN_DESARROLLO;
-  const conPinCorrecto = controladorDeSalida.confirmarSalida(pinReal);
+  const conPinCorrecto = controladorDeSalida.confirmarSalida(pinDePrueba);
 
   const informe = {
     plataforma: process.platform,
@@ -348,6 +402,10 @@ async function ejecutarVerificacionDeArranque(
       // Es la ruta por la que pasa Cmd+Q en macOS y Alt+F4 en Windows.
       cierreDirectoInterceptado,
       aplicacionSiguioViva: siguiaViva,
+    },
+    primerArranque: {
+      requeriaConfiguracionInicial,
+      administradorCreado: yaNoRequiereConfiguracion,
     },
     cierreOrdenado: ultimoCierre,
     baseDeDatos,

@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import type { Database } from 'better-sqlite3';
 
 import sqlEsquemaInicial from './migrations/001_esquema_inicial.sql?raw';
+import sqlBloqueoDeUsuarios from './migrations/002_bloqueo_de_usuarios.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -36,6 +37,7 @@ export interface Migracion {
  */
 export const MIGRACIONES: readonly Migracion[] = [
   { orden: 1, nombre: '001_esquema_inicial', sql: sqlEsquemaInicial },
+  { orden: 2, nombre: '002_bloqueo_de_usuarios', sql: sqlBloqueoDeUsuarios },
 ];
 
 /** Tabla de control. La crea el propio migrador antes que nada. */

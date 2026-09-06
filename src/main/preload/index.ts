@@ -14,9 +14,13 @@ import {
   type ApiPos,
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
+  type EstadoDeSesion,
   type RespuestaIpc,
+  type ResultadoDeIngreso,
   type ResultadoIntentoDeSalida,
+  type SesionIniciada,
   type SolicitudDiagnostico,
+  type UsuarioParaIngreso,
 } from '@shared/types/ipc';
 import { instalarBloqueosDeKioskoEnDom } from './kiosk-dom-guards';
 
@@ -33,6 +37,32 @@ const apiPos: ApiPos = {
     aplicacion: (): Promise<RespuestaIpc<DiagnosticoAplicacion>> =>
       ipcRenderer.invoke(CANALES_IPC.diagnosticoAplicacion) as Promise<
         RespuestaIpc<DiagnosticoAplicacion>
+      >,
+  },
+
+  sesion: {
+    estado: (): Promise<RespuestaIpc<EstadoDeSesion>> =>
+      ipcRenderer.invoke(CANALES_IPC.estadoDeSesion) as Promise<RespuestaIpc<EstadoDeSesion>>,
+
+    listarUsuarios: (): Promise<RespuestaIpc<readonly UsuarioParaIngreso[]>> =>
+      ipcRenderer.invoke(CANALES_IPC.listarUsuariosParaIngreso) as Promise<
+        RespuestaIpc<readonly UsuarioParaIngreso[]>
+      >,
+
+    iniciar: (usuarioId: string, pin: string): Promise<RespuestaIpc<ResultadoDeIngreso>> =>
+      ipcRenderer.invoke(CANALES_IPC.iniciarSesion, { usuarioId, pin }) as Promise<
+        RespuestaIpc<ResultadoDeIngreso>
+      >,
+
+    cerrar: (): Promise<RespuestaIpc<boolean>> =>
+      ipcRenderer.invoke(CANALES_IPC.cerrarSesion) as Promise<RespuestaIpc<boolean>>,
+
+    crearPrimerAdministrador: (
+      nombre: string,
+      pin: string,
+    ): Promise<RespuestaIpc<SesionIniciada>> =>
+      ipcRenderer.invoke(CANALES_IPC.crearPrimerAdministrador, { nombre, pin }) as Promise<
+        RespuestaIpc<SesionIniciada>
       >,
   },
 
