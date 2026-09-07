@@ -34,7 +34,7 @@ espeja.**
    existiera en la nube sin sincronizarse nunca, quien consultara Postgres
    vería `0` para todos y podría concluir que nadie falló jamás un ingreso.
 
-## Los números 0002 y 0003 NO existen aquí, y es a propósito
+## Los números 0002, 0003 y 0006 NO existen aquí, y es a propósito
 
 **No falta nada ni se rompió nada.** El número de cada archivo de esta carpeta
 corresponde al de su migración local en `src/main/database/migrations/`. Un
@@ -49,12 +49,18 @@ hueco en la numeración significa que **esa migración local no tiene espejo**.
 | `005_pin_remoto` | `0005_pin_remoto.sql` | Columna de `usuarios`, que ya se sincroniza entera |
 | `006_superficie_cierre_con_diferencia` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja |
 | `007_autorizacion_de_diferencia` | `0007_autorizacion_de_diferencia.sql` | Parte del corte de caja |
+| `008_autorizacion_solo_con_diferencia` | `0008_autorizacion_solo_con_diferencia.sql` | Parte del corte de caja |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
 
-Los dos casos omitidos **no son equivalentes**, aunque hoy tomen la misma
-decisión:
+Son **tres números** omitidos pero **dos casos**: el 0003 y el 0006 son la
+misma tabla, `bloqueos_de_autorizacion` —la 006 solo le amplía el CHECK de
+superficies—, así que si la tabla no se espeja, ninguna migración que la toque
+se espeja tampoco. Ese es todo el motivo del hueco del 0006: no hay ninguna
+razón adicional, ni nada pendiente de decidir sobre él.
+
+Los dos casos **no son equivalentes**, aunque hoy tomen la misma decisión:
 
 - **`bloqueos_de_autorizacion`** no debe sincronizarse **nunca**, bajo ningún
   diseño futuro.
