@@ -198,8 +198,6 @@ export function FormularioDeProducto({
     <section className="tarjeta" data-prueba="formulario-de-producto">
       <h2>{esNuevo ? 'Nuevo producto' : `Editar ${producto.nombre}`}</h2>
 
-      {mensaje !== null && <p className="alerta">{mensaje}</p>}
-
       <label className="campo">
         <span className="campo__etiqueta">Nombre</span>
         <input
@@ -375,6 +373,20 @@ export function FormularioDeProducto({
       {impedimento !== null && (
         <p className="advertencia" data-prueba="producto-impedimento">
           {impedimento}
+        </p>
+      )}
+
+      {/*
+        El aviso de error va JUNTO AL BOTÓN, no en el encabezado del
+        formulario. Se descubrió manejando la aplicación real: este formulario
+        es más alto que la pantalla, así que al pulsar «Crear producto» —que
+        está abajo— un mensaje puesto arriba queda fuera de la vista y parece
+        que el botón no hizo nada. El aviso tiene que aparecer donde está
+        mirando quien lo pulsó.
+      */}
+      {mensaje !== null && (
+        <p className="alerta" data-prueba="producto-error">
+          {mensaje}
         </p>
       )}
 

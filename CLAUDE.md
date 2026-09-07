@@ -898,6 +898,17 @@ las llamadas al repositorio.
 - **Subirlas a Supabase Storage es trabajo del módulo de sincronización.** Hoy
   la imagen vive solo en el disco de la tienda.
 
+#### El aviso de error va junto al botón, no en el encabezado
+
+En el formulario de producto el mensaje de error se muestra **inmediatamente
+arriba de «Crear producto»**, no en la cabecera de la tarjeta. Se descubrió
+manejando la aplicación real: el formulario es más alto que la pantalla, así
+que al pulsar el botón —que está abajo— un mensaje puesto arriba queda fuera de
+la vista y parece que el botón no hizo nada. El aviso tiene que aparecer donde
+está mirando quien lo pulsó.
+
+Vale para cualquier formulario futuro que crezca más que la pantalla.
+
 #### Datos de ejemplo: NO son una migración
 
 `npm run seed:ejemplo` y `npm run seed:limpiar` siembran y quitan un catálogo
