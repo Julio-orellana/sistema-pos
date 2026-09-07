@@ -513,3 +513,197 @@ button:disabled {
   margin: 8px 0 0;
   color: var(--texto-tenue);
 }
+
+/* ---------------------------------------------------------------------------
+   Pantallas de administración del catálogo (categorías y productos).
+
+   Sin pulido visual a propósito: el trabajo fino se reserva para la pantalla
+   de venta. Lo que sí se respeta acá son las reglas táctiles del proyecto —
+   objetivos grandes y alto contraste — porque esta pantalla también se usa en
+   el mostrador, con el mismo dedo y la misma luz.
+   --------------------------------------------------------------------------- */
+
+.campo {
+  display: block;
+  margin-bottom: 14px;
+  border: 0;
+  padding: 0;
+}
+
+.campo__etiqueta {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--texto-tenue);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.campo input[type='text'],
+.campo input[type='search'],
+.campo input[type='number'],
+.campo select {
+  width: 100%;
+  /* 48 px de alto: objetivo táctil cómodo en la pantalla del mostrador. */
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  background: var(--fondo);
+  color: var(--texto);
+  font-size: 16px;
+  /* Los campos de texto son la única excepción a la selección bloqueada del
+     kiosko: sin esto no se puede corregir lo que uno escribió. */
+  user-select: text;
+}
+
+.campo input:focus-visible,
+.campo select:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: 1px;
+}
+
+.opciones {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.opcion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  background: var(--fondo);
+  cursor: pointer;
+}
+
+.acciones {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.filtros {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.filtros .campo {
+  flex: 1 1 200px;
+  margin-bottom: 0;
+}
+
+.lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lista__fila {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--borde);
+}
+
+.lista__fila:last-child {
+  border-bottom: 0;
+}
+
+/* Una fila desactivada se atenúa pero NO se oculta: tiene que poder verse
+   para reactivarla, y su nombre sigue ocupado por el UNIQUE de la tabla. */
+.lista__fila--inactiva {
+  opacity: 0.55;
+}
+
+.lista__principal {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lista__nombre {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.lista__detalle {
+  color: var(--texto-tenue);
+  font-size: 13px;
+}
+
+.lista__acciones {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lista__acciones button {
+  min-height: 44px;
+}
+
+.etiqueta {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border: 1px solid var(--alerta);
+  border-radius: 999px;
+  color: var(--alerta);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.miniatura {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  border: 1px solid var(--borde);
+  object-fit: cover;
+  background: var(--fondo);
+}
+
+.miniatura--vacia {
+  display: block;
+}
+
+.foto {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.foto__vista {
+  width: 96px;
+  height: 96px;
+  border-radius: 8px;
+  border: 1px solid var(--borde);
+  object-fit: cover;
+}
+
+.foto__vacia {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border: 1px dashed var(--borde);
+  border-radius: 8px;
+  color: var(--texto-tenue);
+  font-size: 13px;
+}
+
+.foto .acciones {
+  margin-top: 0;
+}

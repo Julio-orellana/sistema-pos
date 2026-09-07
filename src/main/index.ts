@@ -11,7 +11,8 @@
 
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { app, BrowserWindow, dialog } from 'electron';
+import { pathToFileURL } from 'node:url';
+import { app, BrowserWindow, dialog, net, protocol } from 'electron';
 
 import {
   abrirBaseDeDatos,
@@ -25,10 +26,22 @@ import {
   obtenerRutaBaseDeDatosDeVerificacion,
 } from '@main/database/db-path';
 import { obtenerBaseDeDatos } from '@main/database/connection';
-import { crearRepositorios } from '@main/database/repositories';
+import { crearRepositorios, type Repositorios } from '@main/database/repositories';
 import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { SesionActual } from '@main/domain/usuarios/sesion';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
+import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
+import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
+import {
+  AlmacenDeFotos,
+  ESQUEMA_DE_FOTOS,
+  rutaRelativaDesdeUrl,
+} from '@main/domain/catalogo/almacen-de-fotos';
+import {
+  contarDatosDeEjemplo,
+  limpiarDatosDeEjemplo,
+  sembrarDatosDeEjemplo,
+} from '@main/domain/catalogo/datos-de-ejemplo';
 import { generarHashDePin } from '@shared/auth';
 import { quitarManejadoresIpc, registrarManejadoresIpc } from '@main/ipc/register-handlers';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
@@ -54,6 +67,30 @@ const enVerificacionDeArranque = process.env.POS_VERIFICACION_ARRANQUE === '1';
 
 /** Marca que la consola busca para extraer el informe de verificación. */
 const MARCA_INFORME = 'INFORME_DE_VERIFICACION';
+
+/**
+ * Modo de datos de ejemplo (`npm run seed:ejemplo` y `npm run seed:limpiar`).
+ *
+ * Se activa con un ARGUMENTO de línea de comandos y no con una variable de
+ * entorno a propósito: `VARIABLE=valor comando` no funciona en el `cmd` de
+ * Windows, que es la plataforma de producción, y un guion que solo corre en
+ * macOS es un guion que tarde o temprano nadie puede usar.
+ *
+ * Arranca el proceso principal SIN abrir ventana, siembra o limpia el catálogo
+ * de ejemplo contra la MISMA base de datos que usa la aplicación, imprime lo
+ * que hizo y sale. Reutiliza este arranque en vez de tener un guion aparte
+ * porque la ruta del archivo sale de `app.getPath('userData')`: un guion en
+ * Node puro tendría que adivinar esa ruta por sistema operativo, y el día que
+ * no coincidiera sembraría una base que nadie mira.
+ *
+ * NO es una migración y no toca el sistema de migraciones. Ver
+ * src/main/domain/catalogo/datos-de-ejemplo.ts.
+ */
+const BANDERA_DATOS_DE_EJEMPLO = '--datos-de-ejemplo=';
+const modoDatosDeEjemplo =
+  process.argv.find((argumento) => argumento.startsWith(BANDERA_DATOS_DE_EJEMPLO))?.slice(
+    BANDERA_DATOS_DE_EJEMPLO.length,
+  ) ?? '';
 
 /** Evita que el cierre ordenado se ejecute dos veces. */
 let cierreEnCurso = false;
@@ -94,6 +131,81 @@ function cerrarAplicacionOrdenadamente(): void {
   console.info(`[cierre] ${ultimoCierre.mensaje}`);
 
   app.quit();
+}
+
+/**
+ * El esquema `pos-foto:` se declara ANTES de que la aplicación esté lista.
+ *
+ * Registrarlo como estándar y seguro hace que la ventana lo trate como una
+ * dirección normal: sin eso, la política de seguridad de contenido bloquearía
+ * la imagen en el `<img>` y la miniatura del producto quedaría en blanco sin
+ * ningún error visible. No se usa `file:` a propósito: ese daría acceso a
+ * cualquier ruta del disco, y este solo entrega archivos de la carpeta de
+ * fotos, comprobando la ruta antes de abrirlos.
+ */
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: ESQUEMA_DE_FOTOS,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+  },
+]);
+
+/**
+ * Siembra o limpia el catálogo de ejemplo y cierra la aplicación.
+ *
+ * Imprime un informe con lo que hizo —no un "listo"— para que se pueda
+ * comparar el resultado esperado contra el real sin abrir la base a mano.
+ */
+function ejecutarModoDatosDeEjemplo(modo: string, repositorios: Repositorios): void {
+  const base = obtenerBaseDeDatos();
+  const antes = contarDatosDeEjemplo(repositorios);
+
+  try {
+    if (modo === 'sembrar') {
+      const informe = sembrarDatosDeEjemplo(base, repositorios);
+      const despues = contarDatosDeEjemplo(repositorios);
+      console.info(
+        `[datos-de-ejemplo] Sembrado. Categorías creadas: ${String(informe.categoriasCreadas)}; ` +
+          `productos creados: ${String(informe.productosCreados)}; ` +
+          `ya existían y se dejaron como estaban: ${String(informe.yaExistian)}. ` +
+          `Total de ejemplo en la base: ${String(despues.categorias)} categorías y ` +
+          `${String(despues.productos)} productos.`,
+      );
+    } else if (modo === 'limpiar') {
+      const informe = limpiarDatosDeEjemplo(base, repositorios);
+      if (informe.conservadosPorTenerVentas.length > 0) {
+        console.warn(
+          '[datos-de-ejemplo] NO se borró nada: estos productos de ejemplo tienen ventas ' +
+            `asociadas y borrarlos rompería un comprobante: ${informe.conservadosPorTenerVentas.join(', ')}.`,
+        );
+      } else {
+        const despues = contarDatosDeEjemplo(repositorios);
+        console.info(
+          `[datos-de-ejemplo] Limpiado. Productos eliminados: ${String(informe.productosEliminados)}; ` +
+            `categorías eliminadas: ${String(informe.categoriasEliminadas)}. ` +
+            `Quedan en la base: ${String(despues.categorias)} categorías y ` +
+            `${String(despues.productos)} productos de ejemplo.`,
+        );
+      }
+    } else {
+      console.error(
+        `[datos-de-ejemplo] Modo desconocido: "${modo}". Se esperaba "sembrar" o "limpiar".`,
+      );
+    }
+  } catch (error) {
+    const detalle = error instanceof Error ? error.message : String(error);
+    console.error(`[datos-de-ejemplo] Falló: ${detalle}`);
+  }
+
+  console.info(
+    `[datos-de-ejemplo] Estado anterior: ${String(antes.categorias)} categorías y ` +
+      `${String(antes.productos)} productos de ejemplo.`,
+  );
+
+  quitarManejadoresIpc();
+  const cierre = cerrarBaseDeDatosOrdenadamente();
+  console.info(`[cierre] ${cierre.mensaje}`);
+  app.exit(0);
 }
 
 /**
@@ -154,11 +266,52 @@ app.whenReady().then(
       auditoria: repositorios.auditoria,
     });
 
+    const servicioDeCategorias = new ServicioDeCategorias({
+      categorias: repositorios.categorias,
+      auditoria: repositorios.auditoria,
+    });
+    const servicioDeProductos = new ServicioDeProductos({
+      productos: repositorios.productos,
+      categorias: repositorios.categorias,
+      auditoria: repositorios.auditoria,
+    });
+    const almacenDeFotos = new AlmacenDeFotos(app.getPath('userData'));
+
+    // Modo semilla: siembra o limpia el catálogo de ejemplo y sale, sin abrir
+    // ventana. Va después de construir los repositorios y antes de cualquier
+    // cosa de interfaz.
+    if (modoDatosDeEjemplo !== '') {
+      ejecutarModoDatosDeEjemplo(modoDatosDeEjemplo, repositorios);
+      return;
+    }
+
     const controladorDeSalida = new ControladorDeSalidaControlada({
       autenticacion,
       cerrarAplicacion: cerrarAplicacionOrdenadamente,
     });
     controladorDeSalidaActivo = controladorDeSalida;
+
+    /**
+     * Servidor del esquema `pos-foto:`.
+     *
+     * La ventana pide una URL y el proceso principal decide qué archivo
+     * entrega. `rutaAbsolutaDe` comprueba que la ruta caiga dentro de la
+     * carpeta de fotos: sin esa comprobación, un `foto_path` manipulado en la
+     * base serviría cualquier archivo del disco a la ventana.
+     */
+    protocol.handle(ESQUEMA_DE_FOTOS, async (peticion) => {
+      const NO_ENCONTRADA = 404;
+      const relativa = rutaRelativaDesdeUrl(peticion.url);
+      if (relativa === null || relativa === '') {
+        return new Response('Foto no encontrada.', { status: NO_ENCONTRADA });
+      }
+      try {
+        const absoluta = almacenDeFotos.rutaAbsolutaDe(relativa);
+        return await net.fetch(pathToFileURL(absoluta).toString());
+      } catch {
+        return new Response('Foto no encontrada.', { status: NO_ENCONTRADA });
+      }
+    });
 
     registrarManejadoresIpc({
       controladorDeSalida,
@@ -166,6 +319,11 @@ app.whenReady().then(
       sesion,
       usuarios: repositorios.usuarios,
       caja,
+      catalogo: {
+        categorias: servicioDeCategorias,
+        productos: servicioDeProductos,
+        fotos: almacenDeFotos,
+      },
     });
 
     const ventana = crearVentanaPrincipal(RUTA_PRELOAD, !enVerificacionDeArranque);

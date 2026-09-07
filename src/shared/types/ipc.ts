@@ -61,6 +61,37 @@ export const CANALES_IPC = {
   abrirCaja: 'caja:abrir',
   /** Intenta cerrar el turno; con diferencia, exige PIN de autorización. */
   cerrarCaja: 'caja:cerrar',
+
+  // --- Catálogo: categorías ------------------------------------------------
+  /** Todas las categorías, activas e inactivas, con su conteo de productos. */
+  categoriasListar: 'catalogo:categorias-listar',
+  /** Crea una categoría. */
+  categoriasCrear: 'catalogo:categorias-crear',
+  /** Edita nombre y orden de una categoría. */
+  categoriasEditar: 'catalogo:categorias-editar',
+  /** Activa o desactiva una categoría. Nunca la borra. */
+  categoriasFijarActivo: 'catalogo:categorias-fijar-activo',
+
+  // --- Catálogo: productos -------------------------------------------------
+  /** Todos los productos, activos e inactivos, con su categoría resuelta. */
+  productosListar: 'catalogo:productos-listar',
+  /** Crea un producto con su inventario inicial. */
+  productosCrear: 'catalogo:productos-crear',
+  /** Edita los datos de catálogo de un producto. NO mueve el inventario. */
+  productosEditar: 'catalogo:productos-editar',
+  /** Activa o desactiva un producto. Nunca lo borra. */
+  productosFijarActivo: 'catalogo:productos-fijar-activo',
+  /**
+   * Recepción de mercadería: SUMA al inventario y deja su propio asiento de
+   * auditoría. Canal separado de `productosEditar` a propósito: es un hecho
+   * distinto del negocio, no un campo más del formulario.
+   */
+  productosAjustarInventario: 'catalogo:productos-ajustar-inventario',
+  /**
+   * Abre el diálogo nativo de archivos, valida la imagen y la copia a la
+   * carpeta de datos del usuario. Devuelve la ruta relativa que se guarda.
+   */
+  productosElegirFoto: 'catalogo:productos-elegir-foto',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -363,6 +394,158 @@ export interface ResultadoDeCierreIpc {
 }
 
 // ---------------------------------------------------------------------------
+// DTO: catálogo (categorías y productos)
+// ---------------------------------------------------------------------------
+
+/** Largo máximo del nombre de una categoría, repetido aquí para la frontera. */
+const LARGO_MAXIMO_NOMBRE_CATEGORIA = 60;
+
+/** Largo máximo del nombre de un producto. */
+const LARGO_MAXIMO_NOMBRE_PRODUCTO = 80;
+
+/** Largo máximo del motivo de un ajuste de inventario. */
+const LARGO_MAXIMO_MOTIVO = 200;
+
+/** Largo máximo de un número escrito a mano (precio, cantidad, inventario). */
+const LARGO_MAXIMO_NUMERO = 20;
+
+/** Orden máximo admitido en la frontera; más allá es un error de tecleo. */
+const ORDEN_MAXIMO = 9999;
+
+/** Largo máximo de una ruta relativa de foto. */
+const LARGO_MAXIMO_RUTA_FOTO = 300;
+
+/** Tipos de medida, en la frontera. */
+export const TIPOS_DE_MEDIDA_IPC = ['unidad', 'peso'] as const;
+
+/** Unidades de peso, en la frontera. */
+export const UNIDADES_DE_PESO_IPC = ['lb', 'kg'] as const;
+
+/** Cómo se mide un producto, del lado de la interfaz. */
+export type TipoMedidaIpc = (typeof TIPOS_DE_MEDIDA_IPC)[number];
+
+/** Unidad de peso, del lado de la interfaz. */
+export type UnidadPesoIpc = (typeof UNIDADES_DE_PESO_IPC)[number];
+
+/** Payload de creación de categoría. */
+export const esquemaCategoriaNueva = z.object({
+  nombre: z.string().min(1).max(LARGO_MAXIMO_NOMBRE_CATEGORIA),
+  orden: z.number().int().min(0).max(ORDEN_MAXIMO),
+});
+
+/** Payload de edición de categoría. */
+export const esquemaCategoriaEditada = esquemaCategoriaNueva.extend({
+  id: z.string().min(1),
+});
+
+/** Payload de activación o desactivación, común a categorías y productos. */
+export const esquemaFijarActivo = z.object({
+  id: z.string().min(1),
+  activo: z.boolean(),
+});
+
+/**
+ * Campos de catálogo de un producto.
+ *
+ * `unidadPeso` viaja como `null` cuando no aplica, nunca ausente: así el
+ * proceso principal distingue "se mandó vacío a propósito" de "se olvidó el
+ * campo", y la coherencia con `tipoMedida` se comprueba sobre un valor real.
+ * La regla en sí NO vive aquí sino en el servicio, porque una validación en la
+ * frontera se saltaría llamando al servicio desde otro lugar.
+ */
+const camposDeProducto = {
+  nombre: z.string().min(1).max(LARGO_MAXIMO_NOMBRE_PRODUCTO),
+  categoriaId: z.string().min(1),
+  tipoMedida: z.enum(TIPOS_DE_MEDIDA_IPC),
+  unidadPeso: z.enum(UNIDADES_DE_PESO_IPC).nullable(),
+  cantidadPredefinidaIcono: z.string().min(1).max(LARGO_MAXIMO_NUMERO),
+  precioBase: z.string().min(1).max(LARGO_MAXIMO_NUMERO),
+  fotoPath: z.string().max(LARGO_MAXIMO_RUTA_FOTO).nullable(),
+};
+
+/** Payload de creación de producto: los campos de catálogo más el saldo inicial. */
+export const esquemaProductoNuevo = z.object({
+  ...camposDeProducto,
+  inventarioInicial: z.string().min(1).max(LARGO_MAXIMO_NUMERO),
+});
+
+/** Payload de edición de producto. Sin inventario: eso es otra operación. */
+export const esquemaProductoEditado = z.object({
+  ...camposDeProducto,
+  id: z.string().min(1),
+});
+
+/** Payload de una recepción de mercadería. */
+export const esquemaAjusteDeInventario = z.object({
+  productoId: z.string().min(1),
+  cantidad: z.string().min(1).max(LARGO_MAXIMO_NUMERO),
+  motivo: z.string().max(LARGO_MAXIMO_MOTIVO).nullable(),
+});
+
+/** Datos de un producto nuevo, ya validados. */
+export type ProductoNuevoIpc = z.infer<typeof esquemaProductoNuevo>;
+
+/** Datos de un producto editado, ya validados. */
+export type ProductoEditadoIpc = z.infer<typeof esquemaProductoEditado>;
+
+/** Una categoría tal como la muestra la pantalla de administración. */
+export interface CategoriaIpc {
+  readonly id: string;
+  readonly nombre: string;
+  readonly orden: number;
+  readonly activo: boolean;
+  /** Cuántos productos la referencian. Se muestra antes de desactivarla. */
+  readonly productosAsociados: number;
+}
+
+/** Un producto tal como lo muestra la pantalla de administración. */
+export interface ProductoIpc {
+  readonly id: string;
+  readonly nombre: string;
+  readonly categoriaId: string;
+  /** Nombre de la categoría, ya resuelto: el renderer no cruza tablas. */
+  readonly categoriaNombre: string;
+  readonly tipoMedida: TipoMedidaIpc;
+  readonly unidadPeso: UnidadPesoIpc | null;
+  /** Cantidad del ícono, como cadena canónica de tres decimales. */
+  readonly cantidadPredefinidaIcono: string;
+  /** Precio, como cadena canónica de dos decimales. */
+  readonly precioBase: string;
+  /** Inventario, como cadena canónica de tres decimales. */
+  readonly inventarioDisponible: string;
+  /** Ruta relativa guardada en la base, o `null`. */
+  readonly fotoPath: string | null;
+  /**
+   * URL con la que la ventana puede mostrar la foto, o `null`.
+   *
+   * Es un esquema propio servido por el proceso principal. El renderer no lee
+   * el disco: pide esta URL y el proceso principal decide qué archivo entrega,
+   * comprobando antes que la ruta caiga dentro de la carpeta de fotos.
+   */
+  readonly fotoUrl: string | null;
+  readonly activo: boolean;
+  readonly contadorVentas: number;
+}
+
+/** Resultado de una recepción de mercadería, para confirmarla en pantalla. */
+export interface ResultadoDeAjusteIpc {
+  readonly producto: ProductoIpc;
+  readonly cantidadAnterior: string;
+  readonly cantidadAgregada: string;
+  readonly cantidadNueva: string;
+}
+
+/** Resultado de elegir una foto con el diálogo nativo. */
+export interface FotoElegidaIpc {
+  /** `false` si la persona cerró el diálogo sin elegir nada. */
+  readonly elegida: boolean;
+  /** Ruta relativa ya copiada a la carpeta de datos, o `null`. */
+  readonly fotoPath: string | null;
+  /** URL para mostrarla de inmediato en el formulario, o `null`. */
+  readonly fotoUrl: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Superficie que el preload expone al renderer
 // ---------------------------------------------------------------------------
 
@@ -412,6 +595,41 @@ export interface ApiPos {
       efectivo: EfectivoDeclaradoIpc,
       pin?: string,
     ): Promise<RespuestaIpc<ResultadoDeCierreIpc>>;
+  };
+
+  /**
+   * Catálogo: categorías y productos.
+   *
+   * Todo lo de aquí exige rol administrativo, y lo hace cumplir el proceso
+   * principal con el guard `requiereRol`. La interfaz oculta las opciones por
+   * comodidad, no como control: esconder un botón no protege nada.
+   */
+  readonly catalogo: {
+    /** Todas las categorías, con cuántos productos usa cada una. */
+    listarCategorias(): Promise<RespuestaIpc<readonly CategoriaIpc[]>>;
+    crearCategoria(nombre: string, orden: number): Promise<RespuestaIpc<CategoriaIpc>>;
+    editarCategoria(
+      id: string,
+      nombre: string,
+      orden: number,
+    ): Promise<RespuestaIpc<CategoriaIpc>>;
+    /** Activa o desactiva. Nunca borra. */
+    fijarActivoCategoria(id: string, activo: boolean): Promise<RespuestaIpc<CategoriaIpc>>;
+
+    /** Todos los productos, con su categoría ya resuelta. */
+    listarProductos(): Promise<RespuestaIpc<readonly ProductoIpc[]>>;
+    crearProducto(datos: ProductoNuevoIpc): Promise<RespuestaIpc<ProductoIpc>>;
+    editarProducto(datos: ProductoEditadoIpc): Promise<RespuestaIpc<ProductoIpc>>;
+    /** Activa o desactiva. Nunca borra. */
+    fijarActivoProducto(id: string, activo: boolean): Promise<RespuestaIpc<ProductoIpc>>;
+    /** Recepción de mercadería: suma al inventario y queda auditada. */
+    ajustarInventario(
+      productoId: string,
+      cantidad: string,
+      motivo: string | null,
+    ): Promise<RespuestaIpc<ResultadoDeAjusteIpc>>;
+    /** Abre el diálogo nativo, valida la imagen y la copia. */
+    elegirFoto(): Promise<RespuestaIpc<FotoElegidaIpc>>;
   };
 
   /**

@@ -10,7 +10,9 @@ import { useState } from 'react';
 import type { SesionIniciada } from '@shared/types/ipc';
 import { PanelDeVerificacion } from './PanelDeVerificacion';
 import { PantallaDeCaja } from './PantallaDeCaja';
+import { PantallaDeCategorias } from './PantallaDeCategorias';
 import { PantallaDePinRemoto } from './PantallaDePinRemoto';
+import { PantallaDeProductos } from './PantallaDeProductos';
 
 export interface PantallaDeSesionProps {
   readonly sesion: SesionIniciada;
@@ -18,7 +20,7 @@ export interface PantallaDeSesionProps {
 }
 
 /** Dónde está parado el usuario dentro de la sesión. */
-type Vista = 'menu' | 'caja' | 'pin-remoto';
+type Vista = 'menu' | 'caja' | 'pin-remoto' | 'categorias' | 'productos';
 
 export function PantallaDeSesion({
   sesion,
@@ -31,6 +33,12 @@ export function PantallaDeSesion({
   }
   if (vista === 'pin-remoto') {
     return <PantallaDePinRemoto alVolver={() => { setVista('menu'); }} />;
+  }
+  if (vista === 'categorias') {
+    return <PantallaDeCategorias alVolver={() => { setVista('menu'); }} />;
+  }
+  if (vista === 'productos') {
+    return <PantallaDeProductos alVolver={() => { setVista('menu'); }} />;
   }
 
   return (
@@ -46,16 +54,36 @@ export function PantallaDeSesion({
         <button type="button" data-prueba="ir-a-caja" onClick={() => { setVista('caja'); }}>
           Caja
         </button>
-        {/* El PIN remoto solo lo configura un administrador, para sí mismo. */}
+        {/*
+          El catálogo y el PIN remoto son de administración. Esconder los
+          botones es comodidad: quien de verdad impide el acceso es el guard
+          `requiereRol` del proceso principal, en cada canal.
+        */}
         {sesion.rol === 'administrativo' && (
-          <button
-            type="button"
-            className="boton--secundario"
-            data-prueba="ir-a-pin-remoto"
-            onClick={() => { setVista('pin-remoto'); }}
-          >
-            PIN de autorización remota
-          </button>
+          <>
+            <button
+              type="button"
+              data-prueba="ir-a-productos"
+              onClick={() => { setVista('productos'); }}
+            >
+              Productos
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-categorias"
+              onClick={() => { setVista('categorias'); }}
+            >
+              Categorías
+            </button>
+            <button
+              type="button"
+              className="boton--secundario"
+              data-prueba="ir-a-pin-remoto"
+              onClick={() => { setVista('pin-remoto'); }}
+            >
+              PIN de autorización remota
+            </button>
+          </>
         )}
       </div>
 

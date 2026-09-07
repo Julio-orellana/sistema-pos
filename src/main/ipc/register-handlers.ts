@@ -11,7 +11,6 @@
  */
 
 import { BrowserWindow, app, ipcMain } from 'electron';
-import { z } from 'zod';
 
 import {
   CANALES_IPC,
@@ -22,8 +21,6 @@ import {
   esquemaPinRemoto,
   esquemaPrimerAdministrador,
   esquemaSolicitudDiagnostico,
-  respuestaExitosa,
-  respuestaFallida,
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
   type EstadoDeCaja,
@@ -50,37 +47,11 @@ import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import { generarHashDePin } from '@shared/auth';
 import { montoACadena } from '@shared/money';
-
-/** Convierte cualquier error capturado en un mensaje legible para la bitácora. */
-function describirError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-/**
- * Envuelve un manejador para que ningún error escape al renderer sin formato.
- * Un fallo inesperado se convierte en una respuesta con código, no en una
- * excepción silenciosa que deje la pantalla congelada frente al cliente.
- */
-async function ejecutarConRespuesta<T>(
-  codigoDeError: string,
-  operacion: () => T | Promise<T>,
-): Promise<RespuestaIpc<T>> {
-  try {
-    return respuestaExitosa(await operacion());
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return respuestaFallida<T>(
-        'PAYLOAD_INVALIDO',
-        'Los datos enviados desde la interfaz no cumplen el contrato esperado.',
-        JSON.stringify(error.issues),
-      );
-    }
-    return respuestaFallida<T>(codigoDeError, 'La operación no pudo completarse.', describirError(error));
-  }
-}
+import { ejecutarConRespuesta } from './respuesta';
+import {
+  registrarManejadoresDeCatalogo,
+  type DependenciasDeCatalogo,
+} from './catalogo';
 
 /** Dependencias que los manejadores necesitan del resto del proceso principal. */
 export interface DependenciasDeIpc {
@@ -94,6 +65,8 @@ export interface DependenciasDeIpc {
   readonly usuarios: RepositorioDeUsuarios;
   /** Apertura y cierre del turno de caja. */
   readonly caja: ServicioDeCaja;
+  /** Catálogo: categorías, productos y fotos. */
+  readonly catalogo: Omit<DependenciasDeCatalogo, 'sesion'>;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -101,6 +74,10 @@ const MILISEGUNDOS_POR_SEGUNDO = 1000;
 
 /** Registra todos los manejadores IPC de la aplicación. */
 export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
+  // Los del catálogo viven en su propio archivo, como manda la convención de
+  // este módulo, y comparten la misma sesión y el mismo envoltorio de respuesta.
+  registrarManejadoresDeCatalogo({ sesion: dependencias.sesion, ...dependencias.catalogo });
+
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,
     async (_evento, payload: unknown): Promise<RespuestaIpc<DiagnosticoBaseDeDatos>> =>

@@ -12,12 +12,18 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   CANALES_IPC,
   type ApiPos,
+  type CategoriaIpc,
   type DiagnosticoAplicacion,
   type DiagnosticoBaseDeDatos,
   type EfectivoDeclaradoIpc,
   type EstadoDeCaja,
   type EstadoDeSesion,
+  type FotoElegidaIpc,
+  type ProductoEditadoIpc,
+  type ProductoIpc,
+  type ProductoNuevoIpc,
   type RespuestaIpc,
+  type ResultadoDeAjusteIpc,
   type ResultadoDeCierreIpc,
   type TurnoAbierto,
   type ResultadoDeIngreso,
@@ -90,6 +96,64 @@ const apiPos: ApiPos = {
     ): Promise<RespuestaIpc<ResultadoDeCierreIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.cerrarCaja, { efectivo, pin }) as Promise<
         RespuestaIpc<ResultadoDeCierreIpc>
+      >,
+  },
+
+  catalogo: {
+    listarCategorias: (): Promise<RespuestaIpc<readonly CategoriaIpc[]>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasListar) as Promise<
+        RespuestaIpc<readonly CategoriaIpc[]>
+      >,
+
+    crearCategoria: (nombre: string, orden: number): Promise<RespuestaIpc<CategoriaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasCrear, { nombre, orden }) as Promise<
+        RespuestaIpc<CategoriaIpc>
+      >,
+
+    editarCategoria: (
+      id: string,
+      nombre: string,
+      orden: number,
+    ): Promise<RespuestaIpc<CategoriaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasEditar, { id, nombre, orden }) as Promise<
+        RespuestaIpc<CategoriaIpc>
+      >,
+
+    fijarActivoCategoria: (id: string, activo: boolean): Promise<RespuestaIpc<CategoriaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasFijarActivo, { id, activo }) as Promise<
+        RespuestaIpc<CategoriaIpc>
+      >,
+
+    listarProductos: (): Promise<RespuestaIpc<readonly ProductoIpc[]>> =>
+      ipcRenderer.invoke(CANALES_IPC.productosListar) as Promise<
+        RespuestaIpc<readonly ProductoIpc[]>
+      >,
+
+    crearProducto: (datos: ProductoNuevoIpc): Promise<RespuestaIpc<ProductoIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.productosCrear, datos) as Promise<RespuestaIpc<ProductoIpc>>,
+
+    editarProducto: (datos: ProductoEditadoIpc): Promise<RespuestaIpc<ProductoIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.productosEditar, datos) as Promise<RespuestaIpc<ProductoIpc>>,
+
+    fijarActivoProducto: (id: string, activo: boolean): Promise<RespuestaIpc<ProductoIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.productosFijarActivo, { id, activo }) as Promise<
+        RespuestaIpc<ProductoIpc>
+      >,
+
+    ajustarInventario: (
+      productoId: string,
+      cantidad: string,
+      motivo: string | null,
+    ): Promise<RespuestaIpc<ResultadoDeAjusteIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.productosAjustarInventario, {
+        productoId,
+        cantidad,
+        motivo,
+      }) as Promise<RespuestaIpc<ResultadoDeAjusteIpc>>,
+
+    elegirFoto: (): Promise<RespuestaIpc<FotoElegidaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.productosElegirFoto) as Promise<
+        RespuestaIpc<FotoElegidaIpc>
       >,
   },
 

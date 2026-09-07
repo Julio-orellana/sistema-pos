@@ -50,6 +50,7 @@ hueco en la numeración significa que **esa migración local no tiene espejo**.
 | `006_superficie_cierre_con_diferencia` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja |
 | `007_autorizacion_de_diferencia` | `0007_autorizacion_de_diferencia.sql` | Parte del corte de caja |
 | `008_autorizacion_solo_con_diferencia` | `0008_autorizacion_solo_con_diferencia.sql` | Parte del corte de caja |
+| `009_categorias_activo` | `0009_categorias_activo.sql` | Catálogo: dato de negocio |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
@@ -86,16 +87,17 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | *(no hay 0006: ver la sección anterior)* | — |
 | `0007_autorizacion_de_diferencia.sql` | Sí — `20260907002212` |
 | `0008_autorizacion_solo_con_diferencia.sql` | Sí — `20260907002231` |
+| `0009_categorias_activo.sql` | **No — pendiente de aplicar** |
 
-**No queda ninguna migración pendiente de aplicar en la nube.** Las cuatro del
-corte de caja se aplicaron el 2026-09-06 con la aprobación explícita de Julio,
-después de mostrarle el SQL exacto, y se verificaron consultando el catálogo del
+**Hay una migración pendiente de aplicar en la nube: `0009`.** Como todas, se
+aplica solo con la aprobación explícita de Julio y después de mostrarle el SQL
+exacto.
+
+Las cuatro del corte de caja (0004, 0005, 0007 y 0008) se aplicaron el
+2026-09-06 por esa misma vía, y se verificaron consultando el catálogo del
 proyecto: 12 tablas con RLS activo, los dos CHECK de `caja_sesiones` con
 `convalidated = true`, y las 11 denominaciones cotejadas una a una contra los
 UUID del esquema local.
-
-La próxima migración que se agregue aquí vuelve a la regla de siempre: se
-muestra el SQL y se espera aprobación antes de aplicarla.
 
 ## Al agregar una migración local nueva
 

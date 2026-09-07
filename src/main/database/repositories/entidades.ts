@@ -96,6 +96,13 @@ export interface Categoria {
   readonly id: string;
   readonly nombre: string;
   readonly orden: number;
+  /**
+   * Baja lógica: una categoría inactiva deja de ofrecerse al crear o editar un
+   * producto, y NADA más. Los productos que ya la referencian siguen intactos
+   * y siguen vendiéndose. Nunca se borra físicamente, porque
+   * `productos.categoria_id` la referencia con ON DELETE RESTRICT.
+   */
+  readonly activo: boolean;
   readonly creadoEn: string;
   readonly actualizadoEn: string;
 }
@@ -104,6 +111,12 @@ export interface Categoria {
 export interface NuevaCategoria {
   readonly nombre: string;
   readonly orden?: number;
+}
+
+/** Campos editables de una categoría existente. */
+export interface CambiosDeCategoria {
+  readonly nombre: string;
+  readonly orden: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +154,26 @@ export interface NuevoProducto {
   readonly precioBase: Decimal | string;
   readonly inventarioDisponible: Decimal | string;
   readonly activo?: boolean;
+}
+
+/**
+ * Campos editables de un producto existente.
+ *
+ * NO incluye `inventarioDisponible`: mover el saldo es recepción de mercadería
+ * y tiene su propia operación auditada (`ServicioDeProductos.ajustarInventario`).
+ * Dejarlo aquí permitiría cambiar el inventario "de paso" al corregir un
+ * precio, sin que quedara constancia de que entró mercadería.
+ *
+ * Tampoco incluye `contadorVentas`, que solo lo mueve una venta real.
+ */
+export interface CambiosDeProducto {
+  readonly nombre: string;
+  readonly categoriaId: string;
+  readonly fotoPath: string | null;
+  readonly tipoMedida: TipoMedida;
+  readonly unidadPeso: UnidadPeso | null;
+  readonly cantidadPredefinidaIcono: Decimal | string;
+  readonly precioBase: Decimal | string;
 }
 
 // ---------------------------------------------------------------------------

@@ -343,11 +343,14 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**No hay ninguna migración pendiente de aplicar en la nube.** Las migraciones
-locales 002 (bloqueo por intentos), 003 (candado por superficie) y 006 (que solo
-amplía el CHECK de superficies de esa misma tabla) **no tienen espejo a
-propósito**: son estado operativo de una terminal, no datos de negocio. Ver
-`supabase/migrations/README.md` y la fila correspondiente del registro de
+**Hay UNA migración pendiente de aplicar en la nube: `0009_categorias_activo`**,
+el espejo de la baja lógica de categorías. Se aplica como todas: mostrando
+antes el SQL exacto y con la aprobación explícita de Julio.
+
+Las migraciones locales 002 (bloqueo por intentos), 003 (candado por superficie)
+y 006 (que solo amplía el CHECK de superficies de esa misma tabla) **no tienen
+espejo a propósito**: son estado operativo de una terminal, no datos de negocio.
+Ver `supabase/migrations/README.md` y la fila correspondiente del registro de
 decisiones.
 
 #### Las dos migraciones eliminadas NO son el mismo caso
@@ -817,6 +820,104 @@ y nadie la encontraría después. Hay un `TODO(ventas)` en el método y una prue
 que documenta el comportamiento actual, para que cambiarlo obligue a tocar
 ambos.
 
+### 4.11 Catálogo: categorías, productos e inventario
+
+#### Nada se borra: todo se desactiva
+
+Ni una categoría ni un producto se eliminan jamás. `productos.categoria_id`
+referencia a `categorias` con ON DELETE RESTRICT, y `venta_detalle` referencia
+a `productos`: borrar rompería el historial de ventas, que es justo lo que una
+auditoría necesita conservar. Las dos tablas tienen `activo`.
+
+**Desactivar una CATEGORÍA solo la retira de las opciones al crear o editar un
+producto.** No desactiva sus productos, no los mueve y no los saca de la venta.
+Confundir las dos cosas retiraría mercadería del mostrador sin que nadie lo
+haya pedido. Hay una prueba que lo verifica.
+
+**Desactivar un PRODUCTO sí lo saca de la pantalla de venta**, pero conserva su
+inventario y su historial. La pantalla pide confirmación explícita porque el
+efecto es inmediato para el cajero.
+
+La única excepción del proyecto a esta regla son los datos de ejemplo, que sí
+se borran físicamente; el porqué está más abajo.
+
+#### El ajuste de inventario es una acción propia, no un campo de "editar"
+
+`ServicioDeProductos.ajustarInventario` es una operación aparte, con su propio
+canal IPC, su propio botón visible y su propio nombre de acción en la auditoría
+(`inventario_ajustado`, nunca `producto_editado`). `editar` **no puede** tocar
+el saldo: el tipo `CambiosDeProducto` ni siquiera incluye el campo.
+
+**SOLO SUMA.** Las mermas, pérdidas y correcciones a la baja son un módulo
+futuro con sus propias reglas de autorización. Una cantidad que no sea
+estrictamente positiva se rechaza en el servicio, con mensaje claro, mucho
+antes de llegar al CHECK `productos_inventario_no_negativo`, que sigue siendo
+la última red.
+
+El asiento guarda el saldo anterior, el nuevo, lo agregado y el motivo en texto
+libre.
+
+#### `tipo_medida` SÍ se puede cambiar después de creado
+
+No hay ninguna restricción que lo impida, y es deliberado: `venta_detalle`
+guarda una foto del nombre, la unidad y el precio al momento de cada venta, así
+que cambiar el tipo de medida hoy no altera un solo comprobante de ayer.
+Prohibirlo obligaría a crear un producto nuevo por un error de carga y a
+arrastrar un duplicado inútil en el catálogo para siempre.
+
+#### Tres capas de validación, y ninguna sobra
+
+| Capa | Qué aporta |
+|---|---|
+| Formulario (renderer) | Avisa mientras se escribe y deshabilita «Guardar». Evita llenar un formulario largo para descubrir el problema al final. |
+| Servicio (dominio) | **Decide.** Rechaza con mensaje de negocio antes de tocar la base. Es la única capa que no se puede saltar llamando a otra cosa. |
+| CHECK del esquema | Última red. Atrapa a un módulo futuro distraído, una consulta a mano o un respaldo restaurado a medias. |
+
+La del formulario es comodidad; la del servicio es la regla; la de la base es
+la garantía. Hay pruebas de las tres, y una de ellas comprueba explícitamente
+que la incoherencia se rechaza **sin que se escriba nada en la base**, contando
+las llamadas al repositorio.
+
+#### Fotos de producto
+
+- Se copian a `<userData>/fotos-de-productos/`, **nunca** a la carpeta de
+  instalación: en Windows no es escribible de forma confiable y se reemplaza
+  entera en cada actualización.
+- El nombre de destino es un UUID nuevo, no el original: dos personas eligen
+  `foto.jpg` y la segunda pisaría la del primer producto.
+- En la base se guarda **solo la ruta relativa**. La absoluta cambia entre
+  máquinas y rompería un respaldo restaurado en otra computadora.
+- Se aceptan JPG y PNG, hasta 5 MB. **Se comprueba la firma binaria del
+  archivo, no solo la extensión**: renombrar un archivo es gratis, y un
+  ejecutable llamado `foto.png` pasaría cualquier comprobación de extensión.
+- No se redimensiona ni se comprime. Si hace falta, es una mejora futura.
+- La ventana ve las fotos por el esquema propio `pos-foto:`, servido por el
+  proceso principal, y **no** por `file:`, que le daría acceso a cualquier ruta
+  del disco. Antes de abrir el archivo se comprueba que la ruta caiga dentro de
+  la carpeta de fotos.
+- **Subirlas a Supabase Storage es trabajo del módulo de sincronización.** Hoy
+  la imagen vive solo en el disco de la tienda.
+
+#### Datos de ejemplo: NO son una migración
+
+`npm run seed:ejemplo` y `npm run seed:limpiar` siembran y quitan un catálogo
+de mentira mientras Jimmy no entregue el suyo. **No pasan por el sistema de
+migraciones**, y la distinción importa: una migración es historial permanente
+del esquema, se aplica una vez y no se deshace. Estos datos tienen que poder
+sembrarse, borrarse y volver a sembrarse tantas veces como haga falta.
+
+Se reconocen por el prefijo `[Ejemplo] ` en el nombre. Se eligió un prefijo y
+no una columna nueva porque una columna sería esquema permanente para un
+problema temporal —habría que espejarla en Postgres y quitarla después—, y
+porque el prefijo **se ve**: quien abra la pantalla sabe de un vistazo que ese
+catálogo no es el de la tienda.
+
+La limpieza sí borra físicamente. Es la única excepción a "nunca eliminar", y
+la razón es que estos registros no tienen historial que proteger: dejarlos
+desactivados seguiría ocupando los nombres por el UNIQUE de la tabla, y el
+"Maíz blanco" real de Jimmy chocaría con el de mentira. Si algún producto de
+ejemplo llegara a tener ventas, **no se borra nada** y se informa cuál.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -874,6 +975,12 @@ ambos.
 | **PIN de autorización remota separado del PIN normal**, en la columna `pin_remoto_hash`. | Un solo PIN para todo; una contraseña aparte más larga | El PIN normal abre la sesión del administrador. Dictarlo por teléfono se lo entrega a quien escucha, para siempre y para todo. Con uno separado, lo que se cede al dictarlo es solo la capacidad de autorizar a distancia: no sirve para entrar, y la auditoría distingue `remoto` de `presencial`. El sistema deduce cuál se usó según cuál hash coincidió, sin preguntarle al cajero. Se rechaza configurarlo igual al PIN normal, porque eso anularía toda la separación. **Solo vale en el cierre con diferencia, no en la salida controlada**, y la razón es de alcance, no física: el PIN remoto se pidió para autorizar diferencias de caja y nada más, así que dárselo a otra acción sería ampliarlo más allá de lo pedido. Cada superficie nueva se decide aparte. | Prompt 13 — 2026-09-06; alcance corregido en Prompt 14 — 2026-09-06 |
 | **El candado por superficie se reutiliza, no se duplica**, para `cierre_con_diferencia`. | Un limitador nuevo para el cierre; compartir el de la salida controlada | El mecanismo ya era genérico salvo por el tipo de la superficie; se amplió el `CHECK` y el tipo, y se le pasa la superficie por parámetro. Cada superficie mantiene su propio contador, así que un error al autorizar un descuadre no bloquea la salida de la aplicación ni el login de nadie. | Prompt 13 — 2026-09-06 |
 | **`monto_esperado` es hoy el monto inicial, con un TODO explícito.** | Inventar una suma de ventas parcial para que "quede completo" | Todavía no existe el módulo de ventas. Una lógica de ventas a medias, escrita para rellenar un hueco, quedaría enterrada y nadie la encontraría al construir el módulo real. Queda marcado en el código y en la sección 4.10, y hay una prueba que documenta el comportamiento actual para que cambiarlo obligue a tocar ambos. | Prompt 13 — 2026-09-06 |
+| **El ajuste de inventario es una ACCIÓN PROPIA, no un campo de «editar producto».** Canal IPC propio, botón propio y nombre de acción propio en la auditoría (`inventario_ajustado`). El tipo `CambiosDeProducto` ni siquiera incluye el saldo. | Un campo más en el formulario de edición; un campo editable en la lista | Recibir mercadería y corregir el catálogo son **hechos distintos del negocio**. Si compartieran operación, cambiar el inventario quedaría registrado como «producto editado» y no se podría auditar cuánta mercadería entró sin abrir y leer el contenido de cada asiento; peor, se podría mover el saldo «de paso» al corregir un precio, sin que quedara constancia de que entró nada. Separadas, el asiento guarda saldo anterior, saldo nuevo, cantidad agregada y motivo. La operación **solo suma**: las mermas y pérdidas son un módulo futuro con sus propias reglas de autorización, y dejar que esta aceptara negativos convertiría la recepción de mercadería en una vía para bajar inventario sin controles. | Prompt 15 — 2026-09-07 |
+| **NO se restringe cambiar `tipo_medida` después de creado un producto.** | Bloquear el cambio y obligar a crear un producto nuevo; permitirlo solo si el producto nunca se vendió | El motivo por el que se bloquearía —«corrompe las ventas pasadas»— **no aplica en este esquema**: `venta_detalle` guarda una foto del nombre, la unidad y el precio al momento de cada venta, así que un cambio de hoy no altera un solo comprobante de ayer. Sin ese riesgo, prohibirlo solo tendría costos: un error de carga —marcar «por unidad» algo que se vende por libra— obligaría a crear un producto nuevo y a arrastrar un duplicado inútil en el catálogo para siempre. La coherencia entre `tipo_medida` y `unidad_peso` sí se sigue exigiendo en cada cambio, en las tres capas. | Prompt 15 — 2026-09-07 |
+| **`categorias` recibe `activo`; ninguna categoría ni producto se borra jamás.** | Borrar la categoría cuando ya no se usa; dejar `categorias` sin baja lógica | Sin `activo` no había forma de retirar una categoría de las opciones sin borrarla, y borrarla es imposible en cuanto tenga un producto: `productos.categoria_id` la referencia con ON DELETE RESTRICT. Desactivar resuelve el caso real sin tocar nada más. Se acota a propósito qué significa: **solo** deja de ofrecerse al crear o editar un producto; no desactiva sus productos, no los mueve y no los saca de la venta, porque eso retiraría mercadería del mostrador sin que nadie lo pidiera. | Prompt 15 — 2026-09-07 |
+| **La foto de producto se valida por su FIRMA BINARIA, no solo por la extensión**, y se copia a `userData` con nombre UUID; en la base va la ruta relativa. | Confiar en la extensión y en el filtro del diálogo nativo; guardar la ruta absoluta; conservar el nombre original | Renombrar un archivo es gratis: un ejecutable llamado `foto.png` pasa cualquier comprobación de extensión, y el filtro del diálogo nativo se puede esquivar escribiendo el nombre a mano. Los primeros bytes sí dicen qué es el archivo de verdad. La ruta absoluta rompería un respaldo restaurado en otra computadora, y conservar el nombre original haría que dos fotos llamadas `foto.jpg` se pisaran entre productos. La ventana las ve por el esquema propio `pos-foto:` y no por `file:`, que le daría acceso a todo el disco. | Prompt 15 — 2026-09-07 |
+| **Los datos de ejemplo NO pasan por el sistema de migraciones**, se marcan con el prefijo `[Ejemplo] ` en el nombre y su limpieza SÍ borra físicamente. | Sembrarlos en una migración; marcarlos con una columna `es_de_ejemplo`; darlos de baja lógica al limpiar | Una migración es historial permanente: se aplica una vez y no se deshace, así que un catálogo inventado quedaría en la base de la tienda para siempre y quitarlo exigiría otra migración. Una columna sería esquema permanente para un problema temporal —habría que espejarla en Postgres y quitarla después—, mientras que el prefijo **se ve** en pantalla y avisa solo. Y la baja lógica no serviría: el nombre seguiría ocupado por el UNIQUE y el «Maíz blanco» real de Jimmy chocaría con el de mentira. Es la única excepción a «nunca borrar», y se sostiene porque estos registros no tienen historial que proteger; si alguno llegara a tener ventas, no se borra nada. | Prompt 15 — 2026-09-07 |
+| **Un `ErrorDeNegocio` cruza el puente IPC con SU código y SU mensaje**, no envuelto en un genérico. | Devolver siempre «La operación no pudo completarse» y dejar el detalle en la bitácora | Los mensajes de negocio están escritos para que los lea una persona frente a la pantalla —«El precio no puede ser negativo. Se permite 0, para muestras y regalos»— y esconderlos detrás de un genérico deja a quien carga el catálogo sin saber qué corregir. Era además lo que §4.7 ya decía que pasaba («el mensaje llega a la interfaz ya traducido») y no era cierto. Cualquier otro error sí se generaliza: un fallo inesperado no debe filtrar detalles internos a la ventana. El envoltorio vive en un solo lugar, `src/main/ipc/respuesta.ts`, para que ningún módulo tenga su propia variante. | Prompt 15 — 2026-09-07 |
 | **La coherencia entre `diferencia` y sus columnas de autorización la aplica la base, no solo el servicio** (migración 008 y su espejo 0008). | Dejarla solo en `ServicioDeCaja`; un trigger; recrear la tabla con el procedimiento de doce pasos | Un cierre descuadrado sin autorizante es el agujero que todo el flujo de PIN existe para tapar, y hasta ahora lo tapaba solo la aplicación: una consulta SQL a mano o un respaldo restaurado a medias lo dejaban pasar. Se usa `ALTER TABLE ... ADD CONSTRAINT ... CHECK`, que **no está en la gramática documentada de SQLite** pero que en la versión empaquetada (3.53.4) se midió que se aplica de verdad, en INSERT y en UPDATE, sobrevive a reabrir el archivo y no crea columna fantasma. Se descartó recrear `caja_sesiones`: guarda dato de negocio, `ventas` la referencia, y el paso que apaga las llaves foráneas es ignorado dentro de una transacción, que es donde corre cada migración. El riesgo de usar gramática no documentada lo cubre una prueba que reconstruye la base desde cero: si una versión futura de SQLite deja de aceptarla, `npm test` se cae en desarrollo y no en el mostrador. En Postgres es un `ADD CONSTRAINT` normal, contra el número `0` en vez de la cadena `'0.00'`, porque allí la columna es NUMERIC. | Prompt 14 — 2026-09-06 |
 | **Los UUID de las denominaciones son fijos en la migración**, no generados en el cliente. | Sortearlos por instalación, como el resto de los id | Es la excepción correcta a la regla de UUID en el cliente: las denominaciones del quetzal son las mismas en toda instalación. Si cada terminal sorteara los suyos, el mismo billete de Q20 tendría identidades distintas y la sincronización los duplicaría. | Prompt 13 — 2026-09-06 |
 | **El estado de bloqueo NO se espeja en Supabase.** Ni la tabla `bloqueos_de_autorizacion` ni las columnas `usuarios.intentos_fallidos` / `bloqueado_hasta`. La nube lleva datos de negocio; el estado operativo de una terminal se queda en SQLite. | Espejar todo el esquema por simetría, que fue el reflejo inicial | Un candado deja de significar nada 30 segundos después de escribirse: con sincronización diferida llegaría vencido. Nadie lo consultaría desde la nube, y el hecho auditable sí viaja, porque `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada. Con más de una terminal, sincronizarlo sería activamente dañino: el bloqueo de una caja dejaría bloqueada la otra. Y unas columnas que existieran en Postgres sin sincronizarse nunca mostrarían `0` para todos y harían creer al auditor que nadie falló jamás un ingreso. Mismo criterio que ya se había aplicado a `sync_cola`. Ver `supabase/migrations/README.md`. | Prompt 12 — 2026-09-06 |
@@ -919,10 +1026,11 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
 | 5 | ~~¿El PIN de autorización es por usuario administrador o uno solo para la tienda?~~ | — | **RESUELTO (Prompt 10): por usuario.** Cada usuario tiene su PIN con hash scrypt y sal propia; la auditoría registra el `usuario_id` real de quien autorizó. `POS_PIN_ADMINISTRADOR` ya no existe. Ver la sección 4.7. |
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? | Define la matriz de permisos (RBAC). | Abierto |
-| 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. | Abierto |
+| 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? ¿Hace falta autorización de administrador para bajar inventario, como la hay para un descuadre de caja? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. **Ya hay un hueco concreto esperándola:** `ServicioDeProductos.ajustarInventario` solo SUMA y rechaza cualquier cantidad no positiva, a propósito, para no convertir la recepción de mercadería en una vía de bajar inventario sin controles. El módulo de mermas tiene que traer su propia regla de autorización. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
+| 13 | **El catálogo real de Jimmy.** Nombres, categorías, precios, unidades e inventario inicial de verdad. Iba a entregarlo al día siguiente del Prompt 15. | Mientras no llegue, la tienda corre con el catálogo de ejemplo (`npm run seed:ejemplo`), que está marcado con el prefijo `[Ejemplo] ` justamente para que nadie lo confunda con el real. El día que llegue: `npm run seed:limpiar` y cargar el verdadero. | Abierto — **es lo próximo que hace falta del cliente** |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -944,14 +1052,19 @@ negocio:
 - **Sí existe** el módulo de caja: apertura y cierre con los dos modos de
   captura, arqueo por denominaciones y autorización dual del descuadre. Ver la
   sección 4.9.
+- **Sí existe** el módulo de catálogo: categorías, productos, ajuste de
+  inventario con auditoría, fotos en disco local y sus dos pantallas de
+  administración. Ver la sección 4.11.
+- **Sí existe** un catálogo de ejemplo sembrable y borrable
+  (`npm run seed:ejemplo` / `npm run seed:limpiar`), que **no** es parte de las
+  migraciones. El catálogo real de Jimmy todavía no llegó.
 - No existe la pantalla de ventas, ni el cálculo real de `monto_esperado` (ver
-  la sección 4.10), ni ninguna pantalla administrativa más allá de la creación
-  del primer usuario y la configuración del PIN remoto.
-- No hay lógica de ventas, inventario, descuentos, caja, usuarios ni
-  auditoría. La
-  única excepción es el verificador de PIN de administrador
-  (`src/main/security/admin-pin.ts`), que existe porque la salida controlada lo
-  necesitaba; es provisional y lo reemplazará el módulo de usuarios.
+  la sección 4.10).
+- No hay lógica de ventas ni de descuentos. Tampoco hay **mermas ni ajustes de
+  inventario a la baja**: el ajuste que existe solo suma mercadería recibida, y
+  las bajas son un módulo futuro con sus propias reglas de autorización.
+- `productos.contador_ventas` existe y se lee, pero **nada lo incrementa
+  todavía**: lo hará la venta, dentro de su misma transacción.
 - No hay log de auditoría: los puntos donde debería escribirse ya están
   marcados con `TODO(auditoria)` en el controlador de salida.
 - No hay adaptador real de impresora ni de Supabase: solo los contratos y las
@@ -967,7 +1080,14 @@ npm run lint         # revisar reglas de código y de arquitectura
 npm run typecheck    # verificar tipos en los tres proyectos de TypeScript
 npm run verify       # lint + typecheck + pruebas, todo junto
 npm run verify:arranque  # arranca la app, imprime un informe de verificación y sale
+npm run seed:ejemplo     # siembra el catálogo de ejemplo (NO es una migración)
+npm run seed:limpiar     # quita el catálogo de ejemplo, sin tocar datos reales
 ```
+
+Los dos últimos arrancan el proceso principal sin abrir ventana, trabajan
+contra la MISMA base que usa la aplicación e imprimen qué hicieron. Se activan
+con un argumento de línea de comandos y no con una variable de entorno, para
+que también funcionen en el `cmd` de Windows.
 
 ## 9. Mapa del repositorio
 
@@ -979,10 +1099,12 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     decimal-columns.ts  única vía para leer/escribir dinero, peso y cantidad
     migrator.ts      aplica las migraciones y verifica sus checksums
   ipc/          manejadores IPC, con validación Zod de cada payload
+    respuesta.ts   envoltorio único de respuesta; todo manejador pasa por aquí
   preload/      único puente hacia el renderer (expone window.pos)
   domain/       módulos de dominio
     usuarios/   autenticación, bloqueo por intentos, sesión y permisos
     caja/       apertura y cierre del turno, arqueo por denominaciones
+    catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
   windows/      creación y bloqueos de la ventana kiosko
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
 src/shared/     código compartido main <-> renderer

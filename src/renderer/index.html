@@ -7,10 +7,22 @@
       Política de seguridad de contenido: sin scripts remotos, sin conexiones
       salientes desde el renderer. Todo lo que necesite red pasa por el proceso
       principal a través de IPC.
+
+      `pos-foto:` es un esquema propio que sirve el proceso principal, y es la
+      ÚNICA vía por la que la ventana ve una imagen del disco. No se admite
+      `file:` a propósito: daría acceso a cualquier ruta de la máquina, mientras
+      que `pos-foto:` solo entrega archivos de la carpeta de fotos y comprueba
+      la ruta antes de abrirlos.
+
+      `pos-foto:` es un esquema propio que sirve el proceso principal, y es la
+      ÚNICA vía por la que la ventana ve una imagen del disco. No se admite
+      `file:` a propósito: daría acceso a cualquier ruta de la máquina, mientras
+      que `pos-foto:` solo entrega archivos de la carpeta de fotos y comprueba
+      la ruta antes de abrirlos.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: pos-foto: pos-foto:; connect-src 'self'"
     />
     <title>POS Agrícola</title>
   </head>

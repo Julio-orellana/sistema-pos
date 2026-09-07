@@ -2,7 +2,13 @@
 
 import type Decimal from 'decimal.js';
 
-import type { NuevoProducto, Producto, TipoMedida, UnidadPeso } from './entidades';
+import type {
+  CambiosDeProducto,
+  NuevoProducto,
+  Producto,
+  TipoMedida,
+  UnidadPeso,
+} from './entidades';
 import { RepositorioBase, ahora, nuevoId } from './base';
 import {
   aColumnaBooleana,
@@ -101,6 +107,20 @@ export class RepositorioDeProductos extends RepositorioBase {
     return fila === undefined ? null : aEntidad(fila);
   }
 
+  /**
+   * TODOS los productos, activos e inactivos.
+   *
+   * Es lo que necesita la pantalla de administración: un producto desactivado
+   * tiene que seguir viéndose para poder consultarlo o reactivarlo. La
+   * pantalla de venta usa `listarActivos`.
+   */
+  public listarTodos(): Producto[] {
+    const filas = this.base
+      .prepare('SELECT * FROM productos ORDER BY nombre')
+      .all() as FilaProducto[];
+    return filas.map(aEntidad);
+  }
+
   public listarActivos(): Producto[] {
     const filas = this.base
       .prepare('SELECT * FROM productos WHERE activo = 1 ORDER BY nombre')
@@ -123,6 +143,43 @@ export class RepositorioDeProductos extends RepositorioBase {
       )
       .all(limite) as FilaProducto[];
     return filas.map(aEntidad);
+  }
+
+  /**
+   * Edita los datos de catálogo de un producto.
+   *
+   * NO toca `inventario_disponible` ni `contador_ventas`, y no es un olvido:
+   * el saldo se mueve con `fijarInventario`, desde la operación de ajuste, que
+   * deja su propio asiento de auditoría. Si la edición pudiera cambiarlo,
+   * entraría mercadería sin que quedara constancia de que entró.
+   */
+  public actualizar(id: string, cambios: CambiosDeProducto): void {
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE productos
+              SET nombre = @nombre,
+                  categoria_id = @categoria_id,
+                  foto_path = @foto_path,
+                  tipo_medida = @tipo_medida,
+                  unidad_peso = @unidad_peso,
+                  cantidad_predefinida_icono = @cantidad_predefinida_icono,
+                  precio_base = @precio_base,
+                  actualizado_en = @actualizado_en
+            WHERE id = @id`,
+        )
+        .run({
+          id,
+          nombre: cambios.nombre,
+          categoria_id: cambios.categoriaId,
+          foto_path: cambios.fotoPath,
+          tipo_medida: cambios.tipoMedida,
+          unidad_peso: cambios.unidadPeso,
+          cantidad_predefinida_icono: aColumnaCantidad(cambios.cantidadPredefinidaIcono),
+          precio_base: aColumnaMonto(cambios.precioBase),
+          actualizado_en: ahora(),
+        });
+    });
   }
 
   /**
@@ -169,10 +226,20 @@ export class RepositorioDeProductos extends RepositorioBase {
 
   /** Baja lógica: nunca se borra, porque las ventas históricas lo referencian. */
   public desactivar(id: string): void {
+    this.fijarActivo(id, false);
+  }
+
+  /**
+   * Baja o alta lógica. Un producto desactivado desaparece de la pantalla de
+   * venta pero conserva su historial: `venta_detalle` lo referencia, y además
+   * guarda una foto de su nombre y su precio, así que las ventas viejas se
+   * reimprimen igual aunque el producto ya no se venda.
+   */
+  public fijarActivo(id: string, activo: boolean): void {
     this.ejecutar(() => {
       this.base
-        .prepare('UPDATE productos SET activo = 0, actualizado_en = ? WHERE id = ?')
-        .run(ahora(), id);
+        .prepare('UPDATE productos SET activo = ?, actualizado_en = ? WHERE id = ?')
+        .run(aColumnaBooleana(activo), ahora(), id);
     });
   }
 }
