@@ -81,15 +81,21 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | `0001_esquema_inicial.sql` | Sí — `20260905143642` |
 | *(fijar search_path de la función de auditoría)* | Sí — `20260905171724` |
 | *(no hay 0002 ni 0003: ver la sección anterior)* | — |
-| `0004_denominaciones_y_desglose.sql` | **No — pendiente de aplicar** |
-| `0005_pin_remoto.sql` | **No — pendiente de aplicar** |
+| `0004_denominaciones_y_desglose.sql` | Sí — `20260907002143` |
+| `0005_pin_remoto.sql` | Sí — `20260907002154` |
 | *(no hay 0006: ver la sección anterior)* | — |
-| `0007_autorizacion_de_diferencia.sql` | **No — pendiente de aplicar** |
-| `0008_autorizacion_solo_con_diferencia.sql` | **No — pendiente de aplicar** |
+| `0007_autorizacion_de_diferencia.sql` | Sí — `20260907002212` |
+| `0008_autorizacion_solo_con_diferencia.sql` | Sí — `20260907002231` |
 
-**Hay cuatro migraciones pendientes de aplicar en la nube** (0004, 0005, 0007 y
-0008). Se aplican solo con la aprobación explícita de Julio, mostrándole antes
-el SQL exacto.
+**No queda ninguna migración pendiente de aplicar en la nube.** Las cuatro del
+corte de caja se aplicaron el 2026-09-06 con la aprobación explícita de Julio,
+después de mostrarle el SQL exacto, y se verificaron consultando el catálogo del
+proyecto: 12 tablas con RLS activo, los dos CHECK de `caja_sesiones` con
+`convalidated = true`, y las 11 denominaciones cotejadas una a una contra los
+UUID del esquema local.
+
+La próxima migración que se agregue aquí vuelve a la regla de siempre: se
+muestra el SQL y se espera aprobación antes de aplicarla.
 
 ## Al agregar una migración local nueva
 

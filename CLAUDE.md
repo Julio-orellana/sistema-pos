@@ -320,24 +320,35 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable` |
-| Aplicadas el | 2026-09-05 |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia` |
+| Aplicadas el | 2026-09-05 (las dos primeras) y 2026-09-06 (las cuatro del corte de caja) |
 | Plan | gratuito |
 
-Estado verificado contra el proyecto, no contra el script: **10 tablas**, 0 filas,
-RLS activo en las 10 sin políticas (deniega todo), 21 índices propios, 11 llaves
-foráneas, 37 restricciones CHECK y el trigger `auditoria_log_prohibir_cambios`.
-`sync_cola` **no** existe allí, como corresponde.
+Estado verificado contra el proyecto, no contra el script: **12 tablas**, RLS
+activo en las 12 sin políticas (deniega todo), 24 índices propios, 14 llaves
+foráneas, 44 restricciones CHECK y el trigger `auditoria_log_prohibir_cambios`.
+Todas las tablas están en 0 filas **salvo `denominaciones`, que tiene las 11 del
+quetzal**, con los mismos UUID que el esquema local — cotejado en la nube con un
+`FULL OUTER JOIN` contra la lista local, sin discrepancias.
+
+Ni `sync_cola`, ni `bloqueos_de_autorizacion`, ni `usuarios.intentos_fallidos`
+existen allí, como corresponde.
+
+Los dos CHECK del corte de caja quedaron con `convalidated = true`, es decir que
+Postgres verificó contra las filas existentes: `caja_sesiones_autorizacion_coherente`
+(las dos columnas van juntas) y `caja_sesiones_autorizacion_solo_con_diferencia`
+(van si y solo si hay descuadre).
 
 La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
 **No hay ninguna migración pendiente de aplicar en la nube.** Las migraciones
-locales 002 (bloqueo por intentos) y 003 (candado por superficie) **no tienen
-espejo a propósito**: son estado operativo de una terminal, no datos de
-negocio. Ver `supabase/migrations/README.md` y la fila correspondiente del
-registro de decisiones.
+locales 002 (bloqueo por intentos), 003 (candado por superficie) y 006 (que solo
+amplía el CHECK de superficies de esa misma tabla) **no tienen espejo a
+propósito**: son estado operativo de una terminal, no datos de negocio. Ver
+`supabase/migrations/README.md` y la fila correspondiente del registro de
+decisiones.
 
 #### Las dos migraciones eliminadas NO son el mismo caso
 
@@ -377,7 +388,7 @@ Pendiente en la nube, para el prompt del módulo de sincronización:
 
 - Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave anónima
   no puede leer ni escribir nada. La sincronización usará una llave de
-  servicio, que ignora RLS por diseño. Mientras tanto, los 10 avisos
+  servicio, que ignora RLS por diseño. Mientras tanto, los 12 avisos
   `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
   problema.
 
