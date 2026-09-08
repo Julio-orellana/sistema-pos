@@ -245,7 +245,7 @@ describe('Pisos de no negatividad: qué NO puede ser negativo', () => {
     expect(conGlob.resultado).toBe(0);
   });
 
-  it('un precio no puede ser negativo, pero sí puede ser 0 (muestras y regalos)', () => {
+  it('un precio no puede ser negativo, pero sí puede ser 0', () => {
     expect(() => { insertarProductoCon('precio_base', '-2.50'); }).toThrow(/CHECK constraint failed/);
     expect(() => { insertarProductoCon('precio_base', '0.00'); }).not.toThrow();
   });

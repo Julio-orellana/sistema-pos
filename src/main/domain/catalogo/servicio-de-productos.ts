@@ -244,7 +244,11 @@ export class ServicioDeProductos {
     if (esNegativo(precio)) {
       throw new ErrorDeNegocio(
         'DATO_INVALIDO',
-        'El precio no puede ser negativo. Se permite 0, para muestras y regalos.',
+        // Neutro a propósito: el 0 se acepta, pero POR QUÉ le sirve a la tienda
+        // es una definición de negocio que Jimmy no confirmó. Un mensaje que
+        // se la atribuya convierte una suposición nuestra en algo que parece
+        // decidido por él.
+        'El precio no puede ser negativo.',
         `precio_base recibido: ${montoACadena(precio)}`,
       );
     }

@@ -57,7 +57,7 @@ describe('Un ErrorDeNegocio llega a la pantalla con SU mensaje', () => {
     const respuesta = await ejecutarConRespuesta('PRODUCTO_CREACION_FALLIDA', () => {
       throw new ErrorDeNegocio(
         'DATO_INVALIDO',
-        'El precio no puede ser negativo. Se permite 0, para muestras y regalos.',
+        'El precio no puede ser negativo.',
         'precio_base recibido: -5.00',
       );
     });
@@ -69,14 +69,14 @@ describe('Un ErrorDeNegocio llega a la pantalla con SU mensaje', () => {
     const respuesta = await ejecutarConRespuesta('PRODUCTO_CREACION_FALLIDA', () => {
       throw new ErrorDeNegocio(
         'DATO_INVALIDO',
-        'El precio no puede ser negativo. Se permite 0, para muestras y regalos.',
+        'El precio no puede ser negativo.',
         'precio_base recibido: -5.00',
       );
     });
 
     // Este es exactamente el texto que se verificó manejando la aplicación real.
     expect(errorDe(respuesta).mensaje).toBe(
-      'El precio no puede ser negativo. Se permite 0, para muestras y regalos.',
+      'El precio no puede ser negativo.',
     );
     expect(errorDe(respuesta).mensaje).not.toBe('La operación no pudo completarse.');
   });
