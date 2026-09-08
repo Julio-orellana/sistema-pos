@@ -329,8 +329,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia` |
-| Aplicadas el | 2026-09-05 (las dos primeras) y 2026-09-06 (las cuatro del corte de caja) |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja) y 2026-09-08 (`categorias.activo`) |
 | Plan | gratuito |
 
 Estado verificado contra el proyecto, no contra el script: **12 tablas**, RLS
@@ -352,9 +352,10 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**Hay UNA migración pendiente de aplicar en la nube: `0009_categorias_activo`**,
-el espejo de la baja lógica de categorías. Se aplica como todas: mostrando
-antes el SQL exacto y con la aprobación explícita de Julio.
+**No hay ninguna migración pendiente de aplicar en la nube.** La última fue
+`0009_categorias_activo`, el 2026-09-08: `categorias.activo` quedó
+`boolean NOT NULL DEFAULT true` y se creó `idx_categorias_activas` sobre
+`(activo, orden)`, verificado contra `information_schema` y `pg_indexes`.
 
 Las migraciones locales 002 (bloqueo por intentos), 003 (candado por superficie)
 y 006 (que solo amplía el CHECK de superficies de esa misma tabla) **no tienen

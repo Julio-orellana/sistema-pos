@@ -87,11 +87,13 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | *(no hay 0006: ver la sección anterior)* | — |
 | `0007_autorizacion_de_diferencia.sql` | Sí — `20260907002212` |
 | `0008_autorizacion_solo_con_diferencia.sql` | Sí — `20260907002231` |
-| `0009_categorias_activo.sql` | **No — pendiente de aplicar** |
+| `0009_categorias_activo.sql` | Sí — `20260908121557` |
 
-**Hay una migración pendiente de aplicar en la nube: `0009`.** Como todas, se
-aplica solo con la aprobación explícita de Julio y después de mostrarle el SQL
-exacto.
+**No queda ninguna migración pendiente de aplicar en la nube.** La `0009` se
+aplicó el 2026-09-08 por la vía de siempre —SQL a la vista y aprobación
+explícita— y se verificó contra el catálogo del proyecto: la columna `activo`
+quedó `boolean NOT NULL DEFAULT true` y el índice `idx_categorias_activas`
+existe sobre `(activo, orden)`.
 
 Las cuatro del corte de caja (0004, 0005, 0007 y 0008) se aplicaron el
 2026-09-06 por esa misma vía, y se verificaron consultando el catálogo del
