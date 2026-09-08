@@ -34,7 +34,7 @@ espeja.**
    existiera en la nube sin sincronizarse nunca, quien consultara Postgres
    vería `0` para todos y podría concluir que nadie falló jamás un ingreso.
 
-## Los números 0002, 0003 y 0006 NO existen aquí, y es a propósito
+## Los números 0002, 0003, 0006 y 0011 NO existen aquí, y es a propósito
 
 **No falta nada ni se rompió nada.** El número de cada archivo de esta carpeta
 corresponde al de su migración local en `src/main/database/migrations/`. Un
@@ -51,15 +51,18 @@ hueco en la numeración significa que **esa migración local no tiene espejo**.
 | `007_autorizacion_de_diferencia` | `0007_autorizacion_de_diferencia.sql` | Parte del corte de caja |
 | `008_autorizacion_solo_con_diferencia` | `0008_autorizacion_solo_con_diferencia.sql` | Parte del corte de caja |
 | `009_categorias_activo` | `0009_categorias_activo.sql` | Catálogo: dato de negocio |
+| `010_una_caja_por_sistema` | `0010_una_caja_por_sistema.sql` | Corte de caja: dato de negocio |
+| `011_superficie_cierre_de_caja_ajena` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja |
+| `012_caja_cerrada_por` | `0012_caja_cerrada_por.sql` | Corte de caja: dato de negocio |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
 
-Son **tres números** omitidos pero **dos casos**: el 0003 y el 0006 son la
-misma tabla, `bloqueos_de_autorizacion` —la 006 solo le amplía el CHECK de
-superficies—, así que si la tabla no se espeja, ninguna migración que la toque
-se espeja tampoco. Ese es todo el motivo del hueco del 0006: no hay ninguna
-razón adicional, ni nada pendiente de decidir sobre él.
+Son **cuatro números** omitidos pero **dos casos**: el 0003, el 0006 y el 0011
+son la misma tabla, `bloqueos_de_autorizacion` —la 006 y la 011 solo le amplían
+el CHECK de superficies—, así que si la tabla no se espeja, ninguna migración
+que la toque se espeja tampoco. Ese es todo el motivo de esos tres huecos: no
+hay ninguna razón adicional, ni nada pendiente de decidir sobre ellos.
 
 Los dos casos **no son equivalentes**, aunque hoy tomen la misma decisión:
 
@@ -88,8 +91,15 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | `0007_autorizacion_de_diferencia.sql` | Sí — `20260907002212` |
 | `0008_autorizacion_solo_con_diferencia.sql` | Sí — `20260907002231` |
 | `0009_categorias_activo.sql` | Sí — `20260908121557` |
+| `0010_una_caja_por_sistema.sql` | **No — pendiente de aplicar** |
+| *(no hay 0011: ver la sección anterior)* | — |
+| `0012_caja_cerrada_por.sql` | **No — pendiente de aplicar** |
 
-**No queda ninguna migración pendiente de aplicar en la nube.** La `0009` se
+**Hay dos migraciones pendientes de aplicar en la nube: `0010` y `0012`.** Como
+todas, se aplican solo con la aprobación explícita de Julio y después de
+mostrarle el SQL exacto.
+
+La `0009` se
 aplicó el 2026-09-08 por la vía de siempre —SQL a la vista y aprobación
 explícita— y se verificó contra el catálogo del proyecto: la columna `activo`
 quedó `boolean NOT NULL DEFAULT true` y el índice `idx_categorias_activas`

@@ -210,7 +210,7 @@ describe('Caja, ventas y detalle', () => {
 
     expect(sesion.estado).toBe('abierta');
     expect(sesion.montoReal).toBeNull();
-    expect(repos.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId)?.id).toBe(sesion.id);
+    expect(repos.cajaSesiones.obtenerAbierta()?.id).toBe(sesion.id);
 
     // El cierre lleva faltante, así que lleva autorizante: desde la migración
     // 008 la base rechaza un descuadre sin autorizar.
@@ -225,7 +225,7 @@ describe('Caja, ventas y detalle', () => {
     expect(cerrada.estado).toBe('cerrada');
     expect(montoACadena(cerrada.diferencia ?? '0')).toBe('-0.75');
     expect(cerrada.diferenciaAutorizadaVia).toBe('presencial');
-    expect(repos.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId)).toBeNull();
+    expect(repos.cajaSesiones.obtenerAbierta()).toBeNull();
   });
 
   it('la base rechaza cerrar con faltante sin decir quién lo autorizó', () => {
@@ -242,7 +242,7 @@ describe('Caja, ventas y detalle', () => {
       }),
     ).toThrow(ErrorDeNegocio);
 
-    expect(repos.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId)?.id).toBe(sesion.id);
+    expect(repos.cajaSesiones.obtenerAbierta()?.id).toBe(sesion.id);
   });
 
   it('una venta con su detalle: el subtotal exacto y el impreso se guardan por separado', () => {

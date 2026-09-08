@@ -257,7 +257,11 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
       ejecutarConRespuesta('ESTADO_DE_CAJA_FALLIDO', () =>
         requiereSesion(dependencias.sesion, () => {
           const enSesion = dependencias.sesion.obtener();
-          const turno = enSesion === null ? null : dependencias.caja.sesionAbiertaDe(enSesion.id);
+          // EL turno del sistema, no el del usuario en sesión: la caja física
+          // es una sola y puede haberla abierto otra persona.
+          const turno = dependencias.caja.sesionAbierta();
+          const quienAbrio =
+            turno === null ? null : dependencias.usuarios.obtenerPorId(turno.usuarioId);
 
           const estado: EstadoDeCaja = {
             turnoAbierto:
@@ -267,6 +271,10 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
                     id: turno.id,
                     montoInicial: montoACadena(turno.montoInicial),
                     abiertaEn: turno.abiertaEn,
+                    abiertaPorId: turno.usuarioId,
+                    abiertaPorNombre: quienAbrio?.nombre ?? '(usuario eliminado)',
+                    esDeOtroUsuario:
+                      enSesion !== null && turno.usuarioId !== enSesion.id,
                   },
             denominaciones: dependencias.caja.listarDenominaciones().map((d) => ({
               id: d.id,
@@ -293,11 +301,16 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             throw new Error('No hay sesión iniciada.');
           }
           const turno = dependencias.caja.abrir(enSesion.id, datos.efectivo);
-          return {
+          const abierto: TurnoAbierto = {
             id: turno.id,
             montoInicial: montoACadena(turno.montoInicial),
             abiertaEn: turno.abiertaEn,
+            abiertaPorId: turno.usuarioId,
+            abiertaPorNombre: enSesion.nombre,
+            // Recién abierto por quien está en sesión: nunca es de otro.
+            esDeOtroUsuario: false,
           };
+          return abierto;
         }),
       ),
   );
@@ -312,19 +325,56 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           if (enSesion === null) {
             throw new Error('No hay sesión iniciada.');
           }
-          const turno = dependencias.caja.sesionAbiertaDe(enSesion.id);
+          const turno = dependencias.caja.sesionAbierta();
           if (turno === null) {
             throw new ErrorDeNegocio(
               'DATO_INVALIDO',
-              'No tenés ningún turno de caja abierto.',
-              `El usuario ${enSesion.id} no tiene sesión de caja abierta.`,
+              'No hay ninguna caja abierta en el sistema.',
+              'Se intentó cerrar sin ninguna sesión de caja abierta.',
             );
           }
 
-          // Primer paso: sin PIN, solo se calcula. Si hay diferencia, no cierra
-          // y devuelve el monto para que la interfaz lo muestre antes de pedir
-          // el código a quien va a autorizar.
-          const tentativo = dependencias.caja.intentarCerrar(turno.id, datos.efectivo);
+          // ---- Autorización 1: ¿la caja es de otra persona? ----------------
+          // Se resuelve ANTES de contar el efectivo. Es una superficie propia,
+          // con su propio candado, y NO acepta el PIN remoto: ese se pidió
+          // para autorizar diferencias por teléfono y nada más (CLAUDE.md §4.9).
+          let autorizacionDeCajaAjena: { readonly autorizadaPor: string } | undefined;
+
+          if (dependencias.caja.requiereAutorizacionDeCajaAjena(turno, enSesion.id)) {
+            if (datos.pinCajaAjena === undefined) {
+              const aviso = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
+                usuarioQueCierra: enSesion.id,
+              });
+              return { ...aviso, autorizadaVia: null, segundosParaReintentar: null };
+            }
+
+            const permiso = dependencias.autenticacion.autorizarComoAdministrador(
+              datos.pinCajaAjena,
+              'cierre_de_caja_ajena',
+              { aceptaPinRemoto: false },
+            );
+            if (!permiso.autenticado || permiso.usuario === null) {
+              return {
+                cerrada: false,
+                codigo: permiso.codigo,
+                mensaje: permiso.mensaje,
+                diferencia: '0.00',
+                montoEsperado: montoACadena(turno.montoInicial),
+                montoReal: '0.00',
+                autorizadaVia: null,
+                segundosParaReintentar: permiso.segundosParaReintentar,
+              };
+            }
+            autorizacionDeCajaAjena = { autorizadaPor: permiso.usuario.id };
+          }
+
+          // ---- Autorización 2: ¿la caja cuadra? ----------------------------
+          // Sin PIN, solo se calcula. Si hay diferencia, no cierra y devuelve
+          // el monto para que la interfaz lo muestre antes de pedir el código.
+          const tentativo = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
+            usuarioQueCierra: enSesion.id,
+            autorizacionDeCajaAjena,
+          });
           if (tentativo.cerrada || datos.pin === undefined) {
             return {
               ...tentativo,
@@ -356,8 +406,9 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
 
           const via = autorizacion.viaDeAutorizacion ?? 'presencial';
           const cerrado = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
-            autorizadaPor: autorizacion.usuario.id,
-            via,
+            usuarioQueCierra: enSesion.id,
+            autorizacionDeCajaAjena,
+            autorizacion: { autorizadaPor: autorizacion.usuario.id, via },
           });
           return { ...cerrado, autorizadaVia: via, segundosParaReintentar: null };
         }),

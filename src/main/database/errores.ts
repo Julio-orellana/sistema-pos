@@ -107,11 +107,22 @@ const REGLAS: readonly ReglaDeTraduccion[] = [
   },
   {
     codigo: 'CAJA_YA_ABIERTA',
-    mensaje: 'Ese usuario ya tiene un turno de caja abierto. Hay que cerrarlo antes de abrir otro.',
-    // SQLite reporta la columna, no el nombre del índice parcial:
-    // "UNIQUE constraint failed: caja_sesiones.usuario_id". Comprobado.
+    // El mensaje NO dice de quién es la caja, y es deliberado: desde la
+    // migración 010 la caja es UNA en todo el sistema, así que la que está
+    // abierta puede ser de cualquiera. Decir "ya tenés" sería falso la mitad
+    // de las veces y mandaría a buscar un turno propio que no existe.
+    mensaje: 'Ya hay una caja abierta en el sistema. Hay que cerrarla antes de abrir otra.',
+    // SQLite reporta la columna indexada, no el nombre del índice parcial.
+    // Desde la 010 el índice es sobre `estado`, así que el mensaje pasó de
+    // "caja_sesiones.usuario_id" a "caja_sesiones.estado". Se reconocen los
+    // dos: una base todavía sin migrar reportaría el viejo.
     coincide: (error) =>
-      contiene(error.message, 'caja_sesiones.usuario_id', 'idx_caja_sesiones_una_abierta'),
+      contiene(
+        error.message,
+        'caja_sesiones.estado',
+        'caja_sesiones.usuario_id',
+        'idx_caja_sesiones_una_abierta',
+      ),
   },
   {
     codigo: 'NUMERO_DE_RECIBO_DUPLICADO',

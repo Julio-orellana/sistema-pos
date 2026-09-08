@@ -202,13 +202,57 @@ describe('Apertura de caja', () => {
       // para poder dar un mensaje que el cajero entienda.
       expect(error).toBeInstanceOf(ErrorDeNegocio);
       expect((error as ErrorDeNegocio).codigo).toBe('CAJA_YA_ABIERTA');
-      expect((error as ErrorDeNegocio).mensajeParaElUsuario).toContain('Cerralo antes de abrir otro');
+      expect((error as ErrorDeNegocio).mensajeParaElUsuario).toContain(
+        'Ya hay una caja abierta en el sistema',
+      );
     }
   });
 
-  it('dos cajeros distintos SÍ pueden tener su propio turno abierto', () => {
+  it('dos cajeros distintos NO pueden tener cada uno su turno abierto', () => {
+    // Esta prueba afirmaba lo CONTRARIO hasta la migración 010, y era el error
+    // de alcance: Jimmy tiene un solo cajón de dinero. Dos turnos simultáneos
+    // sobre el mismo efectivo hacen que ninguno de los dos cortes signifique
+    // nada, porque lo que entra por uno sale contado en el otro.
     expect(() => caja.abrir(idCajera, { modo: 'simple', monto: '500' })).not.toThrow();
-    expect(() => caja.abrir(idJimmy, { modo: 'simple', monto: '800' })).not.toThrow();
+
+    try {
+      caja.abrir(idJimmy, { modo: 'simple', monto: '800' });
+      expect.unreachable('el segundo turno debió rechazarse');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ErrorDeNegocio);
+      expect((error as ErrorDeNegocio).codigo).toBe('CAJA_YA_ABIERTA');
+    }
+
+    expect(repos.cajaSesiones.listarPorEstado('abierta')).toHaveLength(1);
+  });
+
+  it('el mensaje NO le atribuye la caja a quien intenta abrirla', () => {
+    caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    try {
+      caja.abrir(idJimmy, { modo: 'simple', monto: '800' });
+      expect.unreachable('debió rechazarse');
+    } catch (error) {
+      const mensaje = (error as ErrorDeNegocio).mensajeParaElUsuario;
+      // Decirle "ya tenés una caja abierta" a Jimmy sería falso y lo mandaría
+      // a buscar un turno propio que no existe.
+      expect(mensaje).not.toContain('tenés');
+      expect(mensaje).toContain('Ya hay una caja abierta');
+    }
+  });
+
+  it('la base lo impide aunque alguien se saltee el servicio', () => {
+    caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    // Escritura directa contra el repositorio: es lo que haría un módulo
+    // futuro distraído, y el índice único parcial tiene que atraparlo.
+    try {
+      repos.cajaSesiones.abrir({ usuarioId: idJimmy, montoInicial: '800' });
+      expect.unreachable('la base debió rechazarlo');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ErrorDeNegocio);
+      expect((error as ErrorDeNegocio).codigo).toBe('CAJA_YA_ABIERTA');
+      expect((error as ErrorDeNegocio).causaTecnica).toMatch(/UNIQUE constraint failed/);
+    }
   });
 
   it('la apertura queda en auditoría con el monto y el modo usado', () => {
@@ -227,7 +271,7 @@ describe('Apertura de caja', () => {
 describe('Cierre de caja sin diferencia', () => {
   it('si la caja cuadra, cierra directo sin pedir nada', () => {
     const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
-    const resultado = caja.intentarCerrar(sesion.id, { modo: 'simple', monto: '500' });
+    const resultado = caja.intentarCerrar(sesion.id, { modo: 'simple', monto: '500' }, { usuarioQueCierra: idCajera });
 
     expect(resultado.cerrada).toBe(true);
     expect(resultado.codigo).toBe('CIERRE_CORRECTO');
@@ -239,7 +283,7 @@ describe('Cierre de caja sin diferencia', () => {
 
   it('cuadra también contando por denominaciones', () => {
     const sesion = caja.abrir(idCajera, desglose({ '100.00': 2, '50.00': 2 }));
-    const resultado = caja.intentarCerrar(sesion.id, desglose({ '200.00': 1, '100.00': 1 }));
+    const resultado = caja.intentarCerrar(sesion.id, desglose({ '200.00': 1, '100.00': 1 }), { usuarioQueCierra: idCajera });
 
     expect(resultado.cerrada).toBe(true);
     expect(resultado.diferencia).toBe('0.00');
@@ -256,7 +300,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
 
   it('con faltante NO cierra y explica qué falta autorizar', () => {
     const sesionId = turnoDeQuinientos();
-    const resultado = caja.intentarCerrar(sesionId, { modo: 'simple', monto: '480' });
+    const resultado = caja.intentarCerrar(sesionId, { modo: 'simple', monto: '480' }, { usuarioQueCierra: idCajera });
 
     expect(resultado.cerrada).toBe(false);
     expect(resultado.codigo).toBe('REQUIERE_AUTORIZACION');
@@ -268,7 +312,9 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
   });
 
   it('con sobrante tampoco cierra, y lo dice como sobrante', () => {
-    const resultado = caja.intentarCerrar(turnoDeQuinientos(), { modo: 'simple', monto: '515.50' });
+    const resultado = caja.intentarCerrar(turnoDeQuinientos(), { modo: 'simple', monto: '515.50' }, {
+      usuarioQueCierra: idCajera,
+    });
 
     expect(resultado.cerrada).toBe(false);
     expect(resultado.diferencia).toBe('15.50');
@@ -289,7 +335,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
     const resultado = caja.intentarCerrar(
       sesionId,
       { modo: 'simple', monto: '480' },
-      { autorizadaPor: idJimmy, via: 'presencial' },
+      { usuarioQueCierra: idCajera, autorizacion: { autorizadaPor: idJimmy, via: 'presencial' } },
     );
 
     expect(resultado.cerrada).toBe(true);
@@ -312,7 +358,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
     const resultado = caja.intentarCerrar(
       sesionId,
       { modo: 'simple', monto: '480' },
-      { autorizadaPor: idJimmy, via: 'remoto' },
+      { usuarioQueCierra: idCajera, autorizacion: { autorizadaPor: idJimmy, via: 'remoto' } },
     );
 
     expect(resultado.sesion?.diferenciaAutorizadaVia).toBe('remoto');
@@ -332,7 +378,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
     caja.intentarCerrar(
       sesionId,
       { modo: 'simple', monto: '480' },
-      { autorizadaPor: idJimmy, via: 'remoto' },
+      { usuarioQueCierra: idCajera, autorizacion: { autorizadaPor: idJimmy, via: 'remoto' } },
     );
 
     const asiento = base
@@ -349,14 +395,14 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
 
   it('la diferencia se calcula con Decimal: 500.10 - 500.05 da exactamente 0.05', () => {
     const sesionId = caja.abrir(idCajera, { modo: 'simple', monto: '500.05' }).id;
-    const resultado = caja.intentarCerrar(sesionId, { modo: 'simple', monto: '500.10' });
+    const resultado = caja.intentarCerrar(sesionId, { modo: 'simple', monto: '500.10' }, { usuarioQueCierra: idCajera });
     expect(resultado.diferencia).toBe('0.05');
   });
 
   it('no se puede cerrar dos veces el mismo turno', () => {
     const sesionId = turnoDeQuinientos();
-    caja.intentarCerrar(sesionId, { modo: 'simple', monto: '500' });
-    expect(() => caja.intentarCerrar(sesionId, { modo: 'simple', monto: '500' })).toThrow(
+    caja.intentarCerrar(sesionId, { modo: 'simple', monto: '500' }, { usuarioQueCierra: idCajera });
+    expect(() => caja.intentarCerrar(sesionId, { modo: 'simple', monto: '500' }, { usuarioQueCierra: idCajera })).toThrow(
       /ya está cerrado/,
     );
   });
@@ -369,5 +415,224 @@ describe('monto_esperado: pendiente del módulo de ventas', () => {
     // monto_inicial + ventas en efectivo de la sesión. Ver CLAUDE.md §4.10.
     const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '750.25' });
     expect(montoACadena(caja.montoEsperadoDe(sesion))).toBe('750.25');
+  });
+});
+
+// ===========================================================================
+/**
+ * Cerrar la caja que abrió otra persona.
+ *
+ * Existe desde que la caja es UNA en todo el sistema (migración 010): al turno
+ * de la mañana puede tocarle cerrarlo el de la tarde. Que eso sea posible no
+ * significa que sea libre.
+ */
+describe('Cerrar una caja que abrió OTRA persona', () => {
+  it('quien la abrió la cierra directo, sin ningún código', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    const resultado = caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      { usuarioQueCierra: idCajera },
+    );
+
+    expect(resultado.cerrada).toBe(true);
+    expect(resultado.codigo).toBe('CIERRE_CORRECTO');
+    // Y NO se registra un cierre ajeno, porque no lo fue.
+    expect(resultado.sesion?.cerradaPor).toBeNull();
+  });
+
+  it('otro usuario NO puede cerrarla sin autorización', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    const resultado = caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      { usuarioQueCierra: idJimmy },
+    );
+
+    expect(resultado.cerrada).toBe(false);
+    expect(resultado.codigo).toBe('REQUIERE_AUTORIZACION_DE_CAJA_AJENA');
+    expect(resultado.mensaje).toContain('otra persona');
+    // La caja sigue abierta: no se cerró "a medias".
+    expect(repos.cajaSesiones.obtenerPorId(sesion.id)?.estado).toBe('abierta');
+  });
+
+  it('la regla NO tiene excepción por rol: un administrador tampoco cierra la ajena gratis', () => {
+    // Jimmy es administrativo. Aun así necesita autorizar, porque no fue él
+    // quien abrió. Una excepción "salvo que sea administrador" es la clase de
+    // caso especial que ya costó una vuelta en este proyecto con Cmd+Q.
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    expect(
+      caja.intentarCerrar(
+        sesion.id,
+        { modo: 'simple', monto: '500' },
+        { usuarioQueCierra: idJimmy },
+      ).codigo,
+    ).toBe('REQUIERE_AUTORIZACION_DE_CAJA_AJENA');
+  });
+
+  it('el PIN normal de un administrador SÍ autoriza el cierre ajeno', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    const permiso = autenticacion.autorizarComoAdministrador(
+      PIN_DE_JIMMY,
+      'cierre_de_caja_ajena',
+      { aceptaPinRemoto: false },
+    );
+    expect(permiso.autenticado).toBe(true);
+
+    const resultado = caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      {
+        usuarioQueCierra: idJimmy,
+        autorizacionDeCajaAjena: { autorizadaPor: permiso.usuario?.id ?? '' },
+      },
+    );
+
+    expect(resultado.cerrada).toBe(true);
+  });
+
+  it('queda registrado en cerrada_por QUIEN CERRÓ, no quien autorizó', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      {
+        usuarioQueCierra: idJimmy,
+        autorizacionDeCajaAjena: { autorizadaPor: idJimmy },
+      },
+    );
+
+    const guardada = repos.cajaSesiones.obtenerPorId(sesion.id);
+    expect(guardada?.usuarioId).toBe(idCajera); // quién la abrió
+    expect(guardada?.cerradaPor).toBe(idJimmy); // quién la cerró
+  });
+
+  it('el PIN REMOTO NO autoriza un cierre ajeno', () => {
+    // El PIN remoto se pidió para autorizar diferencias de caja por teléfono y
+    // nada más. Ampliarlo a otra acción sería estirarle el alcance.
+    const rechazo = autenticacion.autorizarComoAdministrador(
+      PIN_REMOTO_DE_JIMMY,
+      'cierre_de_caja_ajena',
+      { aceptaPinRemoto: false },
+    );
+    expect(rechazo.autenticado).toBe(false);
+  });
+
+  it('la auditoría separa quién abrió, quién cerró y quién autorizó', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      {
+        usuarioQueCierra: idJimmy,
+        autorizacionDeCajaAjena: { autorizadaPor: idJimmy },
+      },
+    );
+
+    const asiento = base
+      .prepare("SELECT usuario_id, valor_nuevo FROM auditoria_log WHERE accion = 'caja_cerrada'")
+      .get() as { usuario_id: string; valor_nuevo: string };
+    const datos = JSON.parse(asiento.valor_nuevo) as Record<string, unknown>;
+
+    // El asiento se atribuye a quien HIZO la acción de cerrar.
+    expect(asiento.usuario_id).toBe(idJimmy);
+    expect(datos.abiertaPor).toBe(idCajera);
+    expect(datos.cerradaPor).toBe(idJimmy);
+    expect(datos.fueCajaAjena).toBe(true);
+    expect(datos.cierreAjenoAutorizadoPor).toBe(idJimmy);
+  });
+
+  it('un cierre propio deja constancia de que NO fue ajeno', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      { usuarioQueCierra: idCajera },
+    );
+
+    const asiento = base
+      .prepare("SELECT valor_nuevo FROM auditoria_log WHERE accion = 'caja_cerrada'")
+      .get() as { valor_nuevo: string };
+    const datos = JSON.parse(asiento.valor_nuevo) as Record<string, unknown>;
+
+    expect(datos.fueCajaAjena).toBe(false);
+    expect(datos.cierreAjenoAutorizadoPor).toBeNull();
+  });
+
+  it('el aviso de caja ajena llega ANTES de contar: no se calcula la diferencia', () => {
+    // Si alguien no puede cerrar esta caja, no tiene sentido hacerle contar el
+    // dinero para decírselo después.
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    const resultado = caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '480' },
+      { usuarioQueCierra: idJimmy },
+    );
+
+    expect(resultado.codigo).toBe('REQUIERE_AUTORIZACION_DE_CAJA_AJENA');
+    expect(resultado.diferencia).toBe('0.00');
+  });
+
+  it('cerrar una caja ajena Y descuadrada exige las DOS autorizaciones', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    // Con la del cierre ajeno pero sin la de la diferencia, todavía no cierra.
+    const primerPaso = caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '480' },
+      {
+        usuarioQueCierra: idJimmy,
+        autorizacionDeCajaAjena: { autorizadaPor: idJimmy },
+      },
+    );
+    expect(primerPaso.cerrada).toBe(false);
+    expect(primerPaso.codigo).toBe('REQUIERE_AUTORIZACION');
+
+    // Con las dos, cierra y guarda ambas cosas.
+    const segundoPaso = caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '480' },
+      {
+        usuarioQueCierra: idJimmy,
+        autorizacionDeCajaAjena: { autorizadaPor: idJimmy },
+        autorizacion: { autorizadaPor: idJimmy, via: 'presencial' },
+      },
+    );
+    expect(segundoPaso.cerrada).toBe(true);
+    expect(segundoPaso.sesion?.cerradaPor).toBe(idJimmy);
+    expect(segundoPaso.sesion?.diferenciaAutorizadaPor).toBe(idJimmy);
+  });
+});
+
+// ===========================================================================
+describe('La caja abierta es LA del sistema, no la de un usuario', () => {
+  it('sesionAbierta la encuentra aunque la haya abierto otro', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+
+    // Este era el defecto de la pantalla: preguntaba por el turno del usuario
+    // en sesión y recibía `null`, así que ofrecía abrir una segunda caja.
+    expect(caja.sesionAbierta()?.id).toBe(sesion.id);
+  });
+
+  it('devuelve null cuando de verdad no hay ninguna', () => {
+    expect(caja.sesionAbierta()).toBeNull();
+  });
+
+  it('vuelve a null después de cerrar, y entonces sí se puede abrir otra', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      { usuarioQueCierra: idCajera },
+    );
+
+    expect(caja.sesionAbierta()).toBeNull();
+    expect(() => caja.abrir(idJimmy, { modo: 'simple', monto: '800' })).not.toThrow();
   });
 });

@@ -234,6 +234,15 @@ export interface CajaSesion {
   readonly montoReal: Decimal | null;
   readonly diferencia: Decimal | null;
   readonly cerradaEn: string | null;
+  /**
+   * Quién CERRÓ el turno, si no fue quien lo abrió; `null` en el caso normal.
+   *
+   * `usuarioId` dice quién abrió. Desde la migración 010 la caja es una sola
+   * en todo el sistema, así que puede cerrarla otra persona con autorización
+   * de un administrador. Guarda a quien cerró, NO a quien autorizó: eso último
+   * queda en el asiento de auditoría.
+   */
+  readonly cerradaPor: string | null;
   readonly estado: EstadoCaja;
   /** Administrador que autorizó cerrar con diferencia, o `null`. */
   readonly diferenciaAutorizadaPor: string | null;
@@ -260,6 +269,8 @@ export interface CierreDeCaja {
   readonly autorizadaPor?: string | null;
   /** Vía por la que autorizó. Va siempre junto con el autorizante. */
   readonly autorizadaVia?: ViaDeAutorizacion | null;
+  /** Quién cerró, si no fue quien abrió. `null` u omitido en el caso normal. */
+  readonly cerradaPor?: string | null;
 }
 
 // ---------------------------------------------------------------------------

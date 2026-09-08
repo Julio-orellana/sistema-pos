@@ -53,13 +53,40 @@ export type EfectivoDeclarado =
 /** Resultado de cerrar, o el motivo por el que no se pudo. */
 export interface ResultadoDeCierre {
   readonly cerrada: boolean;
-  readonly codigo: 'CIERRE_CORRECTO' | 'REQUIERE_AUTORIZACION';
+  readonly codigo:
+    | 'CIERRE_CORRECTO'
+    /** Hay diferencia y falta el código que la autorice. */
+    | 'REQUIERE_AUTORIZACION'
+    /** La abrió otra persona y falta el PIN del administrador. */
+    | 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA';
   readonly mensaje: string;
   readonly sesion: CajaSesion | null;
   /** Diferencia calculada, como cadena canónica, para mostrarla al autorizar. */
   readonly diferencia: string;
   readonly montoEsperado: string;
   readonly montoReal: string;
+}
+
+/**
+ * Quién cierra y con qué permisos.
+ *
+ * `usuarioQueCierra` NO es opcional a propósito: cerrar sin decir quién lo
+ * hace dejaría de poder distinguirse un cierre propio de uno ajeno, que es la
+ * distinción de la que depende todo lo demás.
+ */
+export interface ContextoDeCierre {
+  /** Usuario en sesión. Siempre sale de la sesión, nunca de la interfaz. */
+  readonly usuarioQueCierra: string;
+  /**
+   * Administrador que autorizó cerrar una caja AJENA, si hizo falta. Su PIN lo
+   * verifica quien llama, con `autorizarComoAdministrador` y la superficie
+   * `cierre_de_caja_ajena`.
+   */
+  readonly autorizacionDeCajaAjena?: { readonly autorizadaPor: string } | undefined;
+  /** Administrador que autorizó la DIFERENCIA, si la hubo. Es otra cosa. */
+  readonly autorizacion?:
+    | { readonly autorizadaPor: string; readonly via: ViaDeAutorizacion }
+    | undefined;
 }
 
 /** Dependencias del servicio. */
@@ -131,8 +158,32 @@ export class ServicioDeCaja {
   }
 
   /** El turno abierto de un usuario, si tiene alguno. */
-  public sesionAbiertaDe(usuarioId: string): CajaSesion | null {
-    return this.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId);
+  /**
+   * EL turno abierto del sistema, si hay alguno.
+   *
+   * No recibe usuario: la caja física es una sola y desde la migración 010 la
+   * base garantiza que haya como mucho un turno abierto en toda la tabla.
+   * Antes esto preguntaba por el turno de UNA persona, y por eso respondía
+   * "no hay" cuando la caja estaba abierta por otra.
+   */
+  public sesionAbierta(): CajaSesion | null {
+    return this.cajaSesiones.obtenerAbierta();
+  }
+
+  /**
+   * ¿Cerrar este turno exige la autorización de un administrador?
+   *
+   * UNA SOLA REGLA, SIN EXCEPCIONES POR ROL: hace falta autorización siempre
+   * que quien cierra no sea quien abrió, aunque quien cierra sea a su vez
+   * administrador. Un administrador que quiera cerrar la caja de otro teclea
+   * su propio PIN, y así el cierre ajeno queda registrado igual.
+   *
+   * La tentación de agregar "salvo que sea administrador" es exactamente la
+   * clase de caso especial que ya costó una vuelta en este proyecto con la
+   * intercepción de Cmd+Q: la excepción parece inofensiva y abre el hueco.
+   */
+  public requiereAutorizacionDeCajaAjena(sesion: CajaSesion, usuarioQueCierra: string): boolean {
+    return sesion.usuarioId !== usuarioQueCierra;
   }
 
   /**
@@ -144,11 +195,17 @@ export class ServicioDeCaja {
   public abrir(usuarioId: string, efectivo: EfectivoDeclarado): CajaSesion {
     // Se valida también desde la aplicación y no solo con el índice único de
     // la base, para poder dar un mensaje que el cajero entienda.
-    if (this.cajaSesiones.obtenerAbiertaDeUsuario(usuarioId) !== null) {
+    //
+    // La comprobación es GLOBAL, no por usuario: la caja física es una sola.
+    // Dos turnos simultáneos sobre el mismo cajón harían que ninguno de los
+    // dos cortes signifique nada, porque el dinero que entra por uno sale
+    // contado en el otro.
+    const abierta = this.cajaSesiones.obtenerAbierta();
+    if (abierta !== null) {
       throw new ErrorDeNegocio(
         'CAJA_YA_ABIERTA',
-        'Ya tenés un turno de caja abierto. Cerralo antes de abrir otro.',
-        `El usuario ${usuarioId} ya tiene una sesión de caja abierta.`,
+        'Ya hay una caja abierta en el sistema. Hay que cerrarla antes de abrir otra.',
+        `Ya existe la sesión de caja ${abierta.id}, abierta por el usuario ${abierta.usuarioId}.`,
       );
     }
 
@@ -198,9 +255,30 @@ export class ServicioDeCaja {
   public intentarCerrar(
     cajaSesionId: string,
     efectivo: EfectivoDeclarado,
-    autorizacion?: { readonly autorizadaPor: string; readonly via: ViaDeAutorizacion },
+    contexto: ContextoDeCierre,
   ): ResultadoDeCierre {
     const sesion = this.obtenerSesionAbierta(cajaSesionId);
+    const autorizacion = contexto.autorizacion;
+
+    // PRIMER FILTRO: ¿esta caja es de quien la está cerrando?
+    //
+    // Va antes de contar el efectivo a propósito. Si alguien no puede cerrar
+    // esta caja, no tiene sentido pedirle que cuente el dinero primero para
+    // decírselo después; y el arqueo de una caja ajena sin permiso no debería
+    // ni llegar a calcularse.
+    const esAjena = this.requiereAutorizacionDeCajaAjena(sesion, contexto.usuarioQueCierra);
+    if (esAjena && contexto.autorizacionDeCajaAjena === undefined) {
+      return {
+        cerrada: false,
+        codigo: 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA',
+        mensaje:
+          'Esta caja la abrió otra persona. Un administrador tiene que autorizar el cierre con su PIN.',
+        sesion,
+        diferencia: '0.00',
+        montoEsperado: montoACadena(this.montoEsperadoDe(sesion)),
+        montoReal: '0.00',
+      };
+    }
 
     const montoEsperado = this.montoEsperadoDe(sesion);
     const montoReal = this.montoDeclarado(efectivo);
@@ -234,12 +312,19 @@ export class ServicioDeCaja {
       montoEsperado,
       montoReal,
       diferencia,
+      // NULL cuando cierra quien abrió, que es el caso normal: así un cierre
+      // ajeno se ve de un vistazo sin comparar dos columnas.
+      cerradaPor: esAjena ? contexto.usuarioQueCierra : null,
       autorizadaPor: hayDiferencia ? (autorizacion?.autorizadaPor ?? null) : null,
       autorizadaVia: hayDiferencia ? (autorizacion?.via ?? null) : null,
     });
 
     this.auditoria.registrar({
-      usuarioId: sesion.usuarioId,
+      // El asiento se atribuye a QUIEN CERRÓ, que es quien hizo la acción.
+      // Quién abrió el turno queda como dato del asiento: si se atribuyera al
+      // que abrió, la bitácora diría que el cierre lo hizo alguien que quizá
+      // ya se había ido de la tienda.
+      usuarioId: contexto.usuarioQueCierra,
       accion: ACCIONES_DE_CAJA.cierreDeCaja,
       entidadTipo: 'caja_sesiones',
       entidadId: sesion.id,
@@ -248,6 +333,15 @@ export class ServicioDeCaja {
         montoReal: montoACadena(montoReal),
         diferencia: diferenciaTexto,
         modo: efectivo.modo,
+        abiertaPor: sesion.usuarioId,
+        cerradaPor: contexto.usuarioQueCierra,
+        // Las tres personas posibles de un cierre quedan separadas: quien
+        // abrió, quien cerró, quien autorizó el cierre ajeno y quien autorizó
+        // la diferencia. No son la misma y confundirlas arruina la auditoría.
+        fueCajaAjena: esAjena,
+        cierreAjenoAutorizadoPor: esAjena
+          ? (contexto.autorizacionDeCajaAjena?.autorizadaPor ?? null)
+          : null,
         autorizadaPor: hayDiferencia ? (autorizacion?.autorizadaPor ?? null) : null,
         autorizadaVia: hayDiferencia ? (autorizacion?.via ?? null) : null,
       },

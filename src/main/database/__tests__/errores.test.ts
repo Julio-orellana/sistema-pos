@@ -92,7 +92,30 @@ describe('Otras reglas que la base hace cumplir, traducidas', () => {
       expect.unreachable('Se esperaba que el segundo turno fuera rechazado.');
     } catch (error) {
       expect((error as ErrorDeNegocio).codigo).toBe('CAJA_YA_ABIERTA');
-      expect((error as ErrorDeNegocio).mensajeParaElUsuario).toContain('turno de caja abierto');
+      expect((error as ErrorDeNegocio).mensajeParaElUsuario).toContain(
+        'Ya hay una caja abierta en el sistema',
+      );
+    }
+  });
+
+  it('el índice único que lo impide es GLOBAL, no por usuario', () => {
+    // El mismo caso pero con DOS usuarios distintos. Antes de la migración 010
+    // esto pasaba sin error, y era el defecto: dos turnos sobre el mismo cajón.
+    const { usuarioId } = sembrarCatalogo();
+    const otro = repos.usuarios.crear({
+      nombre: 'Cajera de la tarde',
+      rol: 'venta',
+      pinHash: 'hash-de-prueba',
+    });
+    repos.cajaSesiones.abrir({ usuarioId, montoInicial: '500' });
+
+    try {
+      repos.cajaSesiones.abrir({ usuarioId: otro.id, montoInicial: '800' });
+      expect.unreachable('Se esperaba que el turno del segundo usuario fuera rechazado.');
+    } catch (error) {
+      expect((error as ErrorDeNegocio).codigo).toBe('CAJA_YA_ABIERTA');
+      // La causa técnica delata que fue la BASE y no una validación nuestra.
+      expect((error as ErrorDeNegocio).causaTecnica).toMatch(/UNIQUE constraint failed/);
     }
   });
 

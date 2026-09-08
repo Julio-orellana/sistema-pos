@@ -15,7 +15,15 @@ import { RepositorioBase, ahora } from './base';
  * una migración que amplíe ese CHECK (ver la 006), a propósito: así el
  * conjunto de superficies protegidas queda siempre a la vista.
  */
-export type SuperficieDeAutorizacion = 'salida_controlada' | 'cierre_con_diferencia';
+export type SuperficieDeAutorizacion =
+  | 'salida_controlada'
+  | 'cierre_con_diferencia'
+  /**
+   * Cerrar un turno de caja que abrió OTRA persona. Existe desde que la caja
+   * es una sola en todo el sistema (migración 010): al turno de la mañana
+   * puede cerrárselo el de la tarde, y eso exige el PIN de un administrador.
+   */
+  | 'cierre_de_caja_ajena';
 
 /** Estado del candado de una superficie. */
 export interface BloqueoDeAutorizacion {

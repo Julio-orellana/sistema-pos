@@ -352,10 +352,11 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**No hay ninguna migración pendiente de aplicar en la nube.** La última fue
-`0009_categorias_activo`, el 2026-09-08: `categorias.activo` quedó
-`boolean NOT NULL DEFAULT true` y se creó `idx_categorias_activas` sobre
-`(activo, orden)`, verificado contra `information_schema` y `pg_indexes`.
+**Hay DOS migraciones pendientes de aplicar en la nube: `0010_una_caja_por_sistema`
+y `0012_caja_cerrada_por`**, las dos del corte de caja. Se aplican como todas:
+mostrando antes el SQL exacto y con la aprobación explícita de Julio.
+
+La última aplicada fue `0009_categorias_activo`, el 2026-09-08.
 
 Las migraciones locales 002 (bloqueo por intentos), 003 (candado por superficie)
 y 006 (que solo amplía el CHECK de superficies de esa misma tabla) **no tienen
@@ -671,7 +672,7 @@ El sistema tiene **dos superficies distintas** donde alguien teclea un PIN, y
 
 | | Ingreso a la aplicación | Diálogo de autorización |
 |---|---|---|
-| Dónde | Pantalla de ingreso | Salida controlada (y, en el futuro, autorización de descuentos) |
+| Dónde | Pantalla de ingreso | Salida controlada, cierre con diferencia y cierre de caja ajena |
 | Ámbito del candado | **Por usuario** | **Por superficie** |
 | Dónde se guarda | `usuarios.intentos_fallidos` / `bloqueado_hasta` | `bloqueos_de_autorizacion` |
 | Código al bloquear | `USUARIO_BLOQUEADO` | `AUTORIZACION_BLOQUEADA` |
@@ -739,12 +740,62 @@ o `'cierre'`. Un `UNIQUE (caja_sesion_id, denominacion_id, momento)` impide
 contar dos veces la misma denominación y duplicar el arqueo sin que nadie lo
 note.
 
-#### Un cajero, un turno
+#### UNA CAJA EN TODO EL SISTEMA, no una por persona
 
-La regla la hacen cumplir **dos capas**: el índice único parcial de la base y
-una comprobación en el servicio. La de la base es la garantía; la del servicio
-existe para poder decir *"ya tenés un turno abierto, cerralo antes de abrir
-otro"* en vez de dejar salir un error de restricción.
+**Esto corrige un error de alcance del diseño original.** La restricción decía
+"un usuario no puede tener dos turnos abiertos", lo que permitía que dos
+personas distintas abrieran cada una su turno sobre **el mismo cajón físico de
+dinero**. Jimmy tiene una sola caja y una sola pantalla: con dos turnos
+simultáneos ninguno de los dos cortes significa nada, porque lo que entra por
+uno sale contado en el otro.
+
+La regla correcta es global: **como máximo una fila con `estado = 'abierta'` en
+toda la tabla**, sin importar quién la abrió. La hacen cumplir dos capas: el
+índice único parcial de la migración 010 —sobre la columna `estado` bajo
+`WHERE estado = 'abierta'`, el modismo habitual para "una sola fila así"— y una
+comprobación en el servicio, que existe para dar un mensaje legible en vez de
+un error de restricción.
+
+**El mensaje no dice de quién es la caja**: *"Ya hay una caja abierta en el
+sistema"*, nunca *"ya tenés"*. La que está abierta puede ser de cualquiera, y
+atribuírsela a quien intenta abrir lo mandaría a buscar un turno propio que no
+existe.
+
+#### Cerrar la caja que abrió otra persona
+
+Como consecuencia de lo anterior, al turno de la mañana puede tocarle cerrarlo
+el de la tarde. Eso no es libre:
+
+| Quién cierra | Qué hace falta |
+|---|---|
+| La misma persona que abrió | Nada. Cierra directo. |
+| Cualquier otra | El **PIN normal** de un administrador activo |
+
+**UNA SOLA REGLA, SIN EXCEPCIONES POR ROL.** Hace falta autorización siempre
+que quien cierra no sea quien abrió, **aunque quien cierra sea a su vez
+administrador**: teclea su propio PIN y el cierre ajeno queda registrado igual.
+La tentación de agregar "salvo que sea administrador" es exactamente la clase
+de caso especial que ya costó una vuelta en este proyecto con la intercepción
+de `Cmd+Q`: la excepción parece inofensiva y abre el hueco.
+
+**No acepta el PIN remoto**, por la misma razón de alcance de siempre: ese PIN
+se pidió para autorizar diferencias de caja por teléfono y nada más.
+
+El candado de intentos usa la superficie `cierre_de_caja_ajena`, separada de
+las otras dos y del ingreso. Las **seis combinaciones cruzadas** entre las
+cuatro (tres superficies más el ingreso) están probadas en ambos sentidos.
+
+**`caja_sesiones.cerrada_por`** guarda **quién cerró**, y va `NULL` cuando fue
+la misma persona que abrió: así `WHERE cerrada_por IS NOT NULL` son exactamente
+los cierres que necesitaron autorización, sin comparar dos columnas. Guarda a
+quien cerró, **no a quien autorizó**: son dos personas distintas —el cajero
+cierra, el administrador autoriza— y confundirlas haría que el corte pareciera
+hecho por alguien que quizá ni estaba en la tienda. Quién autorizó queda en el
+asiento de auditoría, junto con quién abrió y quién cerró.
+
+Un mismo cierre puede necesitar **las dos autorizaciones**: cerrar una caja
+ajena y encima encontrarla descuadrada. Son superficies distintas, con candados
+distintos, y se piden en ese orden.
 
 #### PIN normal y PIN remoto: por qué son dos
 
@@ -1081,6 +1132,9 @@ ejemplo llegara a tener ventas, **no se borra nada** y se informa cuál.
 | **Un `ErrorDeNegocio` cruza el puente IPC con SU código y SU mensaje**, no envuelto en un genérico. | Devolver siempre «La operación no pudo completarse» y dejar el detalle en la bitácora | Los mensajes de negocio están escritos para que los lea una persona frente a la pantalla —«El precio no puede ser negativo»— y esconderlos detrás de un genérico deja a quien carga el catálogo sin saber qué corregir. Era además lo que §4.7 ya decía que pasaba («el mensaje llega a la interfaz ya traducido») y no era cierto. Cualquier otro error sí se generaliza: un fallo inesperado no debe filtrar detalles internos a la ventana. El envoltorio vive en un solo lugar, `src/main/ipc/respuesta.ts`, para que ningún módulo tenga su propia variante. | Prompt 15 — 2026-09-07 |
 | **`playwright-core` como devDependency, en modo Electron, para `npm run verify:pantallas`.** | No verificar la interfaz automáticamente y confiar en pruebas manuales; usar el paquete `playwright` completo; escribir un arnés propio sobre el protocolo de depuración de Chrome | Hay defectos que ninguna prueba de Vitest puede ver: si el mensaje correcto LLEGA a la ventana y si quedó dentro de la parte visible. Los dos que se encontraron eran de esa clase y aparecieron a mano. Se eligió `playwright-core` y no `playwright` porque el primero **no tiene guiones de instalación ni dependencias** y por lo tanto no descarga navegadores —medido: tras instalarlo y usarlo no existe ninguna carpeta `ms-playwright`—, y su modo `_electron` maneja el binario de Electron que el proyecto ya tiene. **No viaja en el instalador de Jimmy**, comprobado empaquetando: `electron-builder` reescribe el `package.json` que va dentro del asar dejando solo `dependencies`, y una búsqueda de «playwright» en los 935 archivos del paquete y en todo el `.app` no devuelve nada. | Prompt 16 — 2026-09-08 |
 | **Los mensajes al usuario no inventan razones de negocio.** «El precio no puede ser negativo», no «…Se permite 0, para muestras y regalos». | Explicar en el mensaje para qué sirve cada regla | Que un precio 0 se acepte es una decisión técnica del esquema; PARA QUÉ le sirve a la tienda es una definición de negocio que Jimmy no confirmó. Un mensaje que se la atribuya convierte una suposición nuestra en algo que parece decidido por él, y eso es exactamente lo que este proyecto no puede hacer: el resto de la documentación distingue con cuidado lo confirmado de lo supuesto. La regla vale para todo texto que vea una persona. | Prompt 16 — 2026-09-08 |
+| **CORREGIDO: la caja es UNA EN TODO EL SISTEMA, no una por usuario.** El índice único parcial pasa de `(usuario_id) WHERE estado='abierta'` a `(estado) WHERE estado='abierta'` (migración 010 y su espejo 0010). | Dejar la restricción por usuario; no restringir y confiar en que nadie abra dos; restringir por terminal | El alcance original estaba mal, no corto: permitía que **dos personas distintas abrieran cada una su turno sobre el mismo cajón físico de dinero**, y con dos turnos simultáneos ninguno de los dos cortes significa nada, porque lo que entra por uno sale contado en el otro. Jimmy tiene una sola caja y una sola pantalla. Se indexa la propia columna `estado` porque dentro de la condición su valor es siempre el mismo, así que la unicidad sobre ella permite una sola fila. El mensaje de `CAJA_YA_ABIERTA` deja de decir «ya tenés» y pasa a «ya hay»: la caja abierta puede ser de cualquiera, y atribuírsela a quien intenta abrir lo manda a buscar un turno propio que no existe. | Prompt 17 — 2026-09-08 |
+| **Cerrar una caja que abrió otra persona exige el PIN normal de un administrador, SIN excepción por rol.** Superficie de candado propia, `cierre_de_caja_ajena` (migración 011, no espejada). | Dejar cerrar a cualquiera; permitírselo libre a quien tenga rol administrativo; reusar la superficie `cierre_con_diferencia` | Si la caja es una sola, al turno de la tarde le toca cerrar el de la mañana, y ese cierre mueve dinero que el que cierra no contó al abrir. Se exige autorización **siempre** que quien cierra no sea quien abrió, incluso si quien cierra es administrador: la excepción «salvo que sea administrador» es la misma clase de caso especial que ya costó una vuelta con la intercepción de `Cmd+Q`, parece inofensiva y abre el hueco; además, con ella el cierre ajeno de un administrador no quedaría registrado como tal. No se reusa la superficie de la diferencia porque un mismo cierre puede necesitar las dos autorizaciones y compartir candado haría que fallar una bloqueara la otra; y porque el PIN remoto vale para la diferencia y **no** para esto. | Prompt 17 — 2026-09-08 |
+| **`caja_sesiones.cerrada_por` guarda a QUIEN CERRÓ, no a quien autorizó, y va NULL cuando cerró quien abrió** (migración 012 y su espejo 0012). | Guardar al administrador que autorizó; repetir siempre el `usuario_id` de quien cerró; no guardar nada y deducirlo de la auditoría | Son tres personas posibles y distintas: quien abrió, quien cerró y quien autorizó. Guardar al autorizante haría que el corte pareciera hecho por un administrador que quizá ni estaba en la tienda. Dejarlo NULL cuando coincide con quien abrió hace que `WHERE cerrada_por IS NOT NULL` sean exactamente los cierres que necesitaron autorización, sin comparar dos columnas. Quién autorizó sí queda, en el asiento de auditoría del cierre, junto con los otros dos. | Prompt 17 — 2026-09-08 |
 | **La coherencia entre `diferencia` y sus columnas de autorización la aplica la base, no solo el servicio** (migración 008 y su espejo 0008). | Dejarla solo en `ServicioDeCaja`; un trigger; recrear la tabla con el procedimiento de doce pasos | Un cierre descuadrado sin autorizante es el agujero que todo el flujo de PIN existe para tapar, y hasta ahora lo tapaba solo la aplicación: una consulta SQL a mano o un respaldo restaurado a medias lo dejaban pasar. Se usa `ALTER TABLE ... ADD CONSTRAINT ... CHECK`, que **no está en la gramática documentada de SQLite** pero que en la versión empaquetada (3.53.4) se midió que se aplica de verdad, en INSERT y en UPDATE, sobrevive a reabrir el archivo y no crea columna fantasma. Se descartó recrear `caja_sesiones`: guarda dato de negocio, `ventas` la referencia, y el paso que apaga las llaves foráneas es ignorado dentro de una transacción, que es donde corre cada migración. El riesgo de usar gramática no documentada lo cubre una prueba que reconstruye la base desde cero: si una versión futura de SQLite deja de aceptarla, `npm test` se cae en desarrollo y no en el mostrador. En Postgres es un `ADD CONSTRAINT` normal, contra el número `0` en vez de la cadena `'0.00'`, porque allí la columna es NUMERIC. | Prompt 14 — 2026-09-06 |
 | **Los UUID de las denominaciones son fijos en la migración**, no generados en el cliente. | Sortearlos por instalación, como el resto de los id | Es la excepción correcta a la regla de UUID en el cliente: las denominaciones del quetzal son las mismas en toda instalación. Si cada terminal sorteara los suyos, el mismo billete de Q20 tendría identidades distintas y la sincronización los duplicaría. | Prompt 13 — 2026-09-06 |
 | **El estado de bloqueo NO se espeja en Supabase.** Ni la tabla `bloqueos_de_autorizacion` ni las columnas `usuarios.intentos_fallidos` / `bloqueado_hasta`. La nube lleva datos de negocio; el estado operativo de una terminal se queda en SQLite. | Espejar todo el esquema por simetría, que fue el reflejo inicial | Un candado deja de significar nada 30 segundos después de escribirse: con sincronización diferida llegaría vencido. Nadie lo consultaría desde la nube, y el hecho auditable sí viaja, porque `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada. Con más de una terminal, sincronizarlo sería activamente dañino: el bloqueo de una caja dejaría bloqueada la otra. Y unas columnas que existieran en Postgres sin sincronizarse nunca mostrarían `0` para todos y harían creer al auditor que nadie falló jamás un ingreso. Mismo criterio que ya se había aplicado a `sync_cola`. Ver `supabase/migrations/README.md`. | Prompt 12 — 2026-09-06 |
@@ -1150,8 +1204,9 @@ negocio:
   intentos, sesión en memoria, guard de permisos, primer arranque y pantalla de
   ingreso. Ver la sección 4.7.
 - **Sí existe** el módulo de caja: apertura y cierre con los dos modos de
-  captura, arqueo por denominaciones y autorización dual del descuadre. Ver la
-  sección 4.9.
+  captura, arqueo por denominaciones, autorización dual del descuadre, una sola
+  caja en todo el sistema y autorización para cerrar la caja de otra persona.
+  Ver la sección 4.9.
 - **Sí existe** el módulo de catálogo: categorías, productos, ajuste de
   inventario con auditoría, fotos en disco local y sus dos pantallas de
   administración. Ver la sección 4.11.

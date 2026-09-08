@@ -14,7 +14,11 @@ import type { Database } from 'better-sqlite3';
 
 import { generarHashDePin } from '@shared/auth';
 import { type ErrorDeNegocio } from '@main/database/errores';
-import { crearRepositorios, type Repositorios } from '@main/database/repositories';
+import {
+  crearRepositorios,
+  type Repositorios,
+  type SuperficieDeAutorizacion,
+} from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import {
   INTENTOS_MAXIMOS,
@@ -507,7 +511,7 @@ describe('Las superficies de autorización tienen candados INDEPENDIENTES entre 
   const PIN_EQUIVOCADO_2 = '0000';
 
   /** Agota los tres intentos de una superficie. */
-  function bloquear(superficie: 'salida_controlada' | 'cierre_con_diferencia'): void {
+  function bloquear(superficie: SuperficieDeAutorizacion): void {
     servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, superficie);
     servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, superficie);
     servicio.autorizarComoAdministrador(PIN_EQUIVOCADO_2, superficie);
@@ -550,5 +554,132 @@ describe('Las superficies de autorización tienen candados INDEPENDIENTES entre 
 
     expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').intentosFallidos).toBe(2);
     expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').intentosFallidos).toBe(1);
+  });
+});
+
+// ===========================================================================
+/**
+ * LAS SEIS COMBINACIONES CRUZADAS, en las dos direcciones.
+ *
+ * Hay cuatro lugares donde alguien teclea un PIN y se puede equivocar: las
+ * tres superficies de autorización y el ingreso a la aplicación. Entre cuatro
+ * cosas hay seis pares, y cada par se prueba en los dos sentidos.
+ *
+ * POR QUÉ ESTÁN TODAS, y no una muestra: el defecto original de este proyecto
+ * —un cajero que, tecleando mal tres veces en el diálogo de salida, dejaba a
+ * TODOS los administradores sin poder iniciar sesión— era exactamente una de
+ * estas combinaciones. Probar solo algunas deja el mismo agujero abierto en
+ * las otras, y con tres superficies ya no alcanza con mirarlo a ojo.
+ */
+describe('Los cuatro candados son independientes: las seis combinaciones cruzadas', () => {
+  const PIN_MALO = '0000';
+
+  /** Las tres superficies de autorización. */
+  const SUPERFICIES: readonly SuperficieDeAutorizacion[] = [
+    'salida_controlada',
+    'cierre_con_diferencia',
+    'cierre_de_caja_ajena',
+  ];
+
+  /** Agota los tres intentos de una superficie de autorización. */
+  function agotar(superficie: SuperficieDeAutorizacion): void {
+    for (let intento = 0; intento < 3; intento += 1) {
+      servicio.autorizarComoAdministrador(PIN_MALO, superficie);
+    }
+  }
+
+  /** Agota los tres intentos del INGRESO de un usuario. */
+  function agotarIngreso(): void {
+    for (let intento = 0; intento < 3; intento += 1) {
+      servicio.autenticar(idJimmy, PIN_MALO);
+    }
+  }
+
+  /** ¿Esta superficie está bloqueada ahora mismo? */
+  function bloqueada(superficie: SuperficieDeAutorizacion): boolean {
+    return servicio.autorizarComoAdministrador(PIN_DE_JIMMY, superficie).codigo ===
+      'AUTORIZACION_BLOQUEADA';
+  }
+
+  /** ¿El ingreso está bloqueado ahora mismo? */
+  function ingresoBloqueado(): boolean {
+    return servicio.autenticar(idJimmy, PIN_DE_JIMMY).codigo === 'USUARIO_BLOQUEADO';
+  }
+
+  // ---- Los tres pares ENTRE SUPERFICIES, en ambos sentidos ----------------
+  for (const bloqueada1 of SUPERFICIES) {
+    for (const otra of SUPERFICIES) {
+      if (bloqueada1 === otra) {
+        continue;
+      }
+      it(`bloquear ${bloqueada1} NO bloquea ${otra}`, () => {
+        agotar(bloqueada1);
+
+        expect(bloqueada(bloqueada1)).toBe(true);
+        expect(bloqueada(otra)).toBe(false);
+      });
+    }
+  }
+
+  // ---- Los tres pares SUPERFICIE ↔ INGRESO, en ambos sentidos -------------
+  for (const superficie of SUPERFICIES) {
+    it(`bloquear ${superficie} NO impide iniciar sesión`, () => {
+      agotar(superficie);
+
+      expect(bloqueada(superficie)).toBe(true);
+      expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+      // Y ni siquiera le tocó el contador al usuario.
+      expect(repos.usuarios.obtenerPorId(idJimmy)?.intentosFallidos).toBe(0);
+    });
+
+    it(`bloquear el INGRESO no bloquea ${superficie}`, () => {
+      agotarIngreso();
+
+      expect(ingresoBloqueado()).toBe(true);
+      expect(bloqueada(superficie)).toBe(false);
+    });
+  }
+
+  it('cada una de las tres superficies lleva su propio contador en la base', () => {
+    servicio.autorizarComoAdministrador(PIN_MALO, 'salida_controlada');
+    servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_con_diferencia');
+    servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_con_diferencia');
+    servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
+    servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
+    servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
+
+    expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').intentosFallidos).toBe(1);
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').intentosFallidos).toBe(2);
+
+    // La tercera llegó al límite: el contador se reinicia y lo que queda es el
+    // bloqueo con su vencimiento. Las otras dos siguen contando lo suyo, sin
+    // bloquearse.
+    const tercera = repos.bloqueosDeAutorizacion.obtener('cierre_de_caja_ajena');
+    expect(tercera.intentosFallidos).toBe(0);
+    expect(tercera.bloqueadoHasta).not.toBeNull();
+    expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').bloqueadoHasta).toBeNull();
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').bloqueadoHasta).toBeNull();
+  });
+
+  it('bloquear las TRES a la vez sigue sin impedir el ingreso', () => {
+    for (const superficie of SUPERFICIES) {
+      agotar(superficie);
+    }
+    expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+  });
+
+  it('la base acepta la superficie nueva, y solo las tres declaradas', () => {
+    servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_de_caja_ajena').intentosFallidos).toBe(1);
+
+    // El CHECK de la migración 011 es lo que mantiene el conjunto a la vista.
+    expect(() =>
+      base
+        .prepare(
+          `INSERT INTO bloqueos_de_autorizacion (superficie, intentos_fallidos, actualizado_en)
+           VALUES ('superficie_inventada', 1, '2026-09-08T00:00:00.000Z')`,
+        )
+        .run(),
+    ).toThrow(/CHECK constraint failed/);
   });
 });

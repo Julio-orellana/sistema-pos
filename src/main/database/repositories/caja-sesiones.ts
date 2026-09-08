@@ -20,6 +20,7 @@ interface FilaCajaSesion {
   readonly monto_real: string | null;
   readonly diferencia: string | null;
   readonly cerrada_en: string | null;
+  readonly cerrada_por: string | null;
   readonly estado: EstadoCaja;
   readonly diferencia_autorizada_por: string | null;
   readonly diferencia_autorizada_via: ViaDeAutorizacion | null;
@@ -37,6 +38,7 @@ function aEntidad(fila: FilaCajaSesion): CajaSesion {
     montoReal: desdeColumnaDecimalNulable(fila.monto_real, 'caja_sesiones.monto_real'),
     diferencia: desdeColumnaDecimalNulable(fila.diferencia, 'caja_sesiones.diferencia'),
     cerradaEn: fila.cerrada_en,
+    cerradaPor: fila.cerrada_por,
     estado: fila.estado,
     diferenciaAutorizadaPor: fila.diferencia_autorizada_por,
     diferenciaAutorizadaVia: fila.diferencia_autorizada_via,
@@ -96,6 +98,7 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
                   monto_real = @monto_real,
                   diferencia = @diferencia,
                   cerrada_en = @cerrada_en,
+                  cerrada_por = @cerrada_por,
                   diferencia_autorizada_por = @autorizada_por,
                   diferencia_autorizada_via = @autorizada_via,
                   actualizado_en = @actualizado_en
@@ -107,6 +110,7 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
           monto_real: aColumnaMonto(corte.montoReal),
           diferencia: aColumnaMonto(corte.diferencia),
           cerrada_en: corte.cerradaEn ?? momento,
+          cerrada_por: corte.cerradaPor ?? null,
           autorizada_por: corte.autorizadaPor ?? null,
           autorizada_via: corte.autorizadaVia ?? null,
           actualizado_en: momento,
@@ -127,11 +131,19 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
     return fila === undefined ? null : aEntidad(fila);
   }
 
-  /** El turno abierto de un cajero, si tiene alguno. */
-  public obtenerAbiertaDeUsuario(usuarioId: string): CajaSesion | null {
+  /**
+   * EL turno abierto del sistema, si hay alguno. No recibe usuario y no es un
+   * olvido: desde la migración 010 puede haber como mucho uno en toda la
+   * tabla, sin importar quién lo abrió, y la caja física es una sola.
+   *
+   * Reemplaza a `obtenerAbiertaDeUsuario`, que preguntaba por el turno de UNA
+   * persona y por lo tanto respondía "no hay" cuando la caja estaba abierta
+   * por otra: la pantalla ofrecía abrir una segunda caja sobre el mismo cajón.
+   */
+  public obtenerAbierta(): CajaSesion | null {
     const fila = this.base
-      .prepare("SELECT * FROM caja_sesiones WHERE usuario_id = ? AND estado = 'abierta'")
-      .get(usuarioId) as FilaCajaSesion | undefined;
+      .prepare("SELECT * FROM caja_sesiones WHERE estado = 'abierta'")
+      .get() as FilaCajaSesion | undefined;
     return fila === undefined ? null : aEntidad(fila);
   }
 

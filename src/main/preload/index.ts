@@ -93,8 +93,9 @@ const apiPos: ApiPos = {
     cerrar: (
       efectivo: EfectivoDeclaradoIpc,
       pin?: string,
+      pinCajaAjena?: string,
     ): Promise<RespuestaIpc<ResultadoDeCierreIpc>> =>
-      ipcRenderer.invoke(CANALES_IPC.cerrarCaja, { efectivo, pin }) as Promise<
+      ipcRenderer.invoke(CANALES_IPC.cerrarCaja, { efectivo, pin, pinCajaAjena }) as Promise<
         RespuestaIpc<ResultadoDeCierreIpc>
       >,
   },

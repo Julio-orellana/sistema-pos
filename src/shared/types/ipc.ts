@@ -347,10 +347,22 @@ export type EfectivoDeclaradoIpc = z.infer<typeof esquemaEfectivoDeclarado>;
 /** Payload de apertura de caja. El usuario sale de la sesión, nunca del payload. */
 export const esquemaAperturaDeCaja = z.object({ efectivo: esquemaEfectivoDeclarado });
 
-/** Payload de cierre de caja. El PIN solo viaja si hubo diferencia que autorizar. */
+/**
+ * Payload de cierre de caja.
+ *
+ * Hay DOS PIN posibles y son distintos, no dos nombres de lo mismo:
+ *
+ *   · `pinCajaAjena` autoriza cerrar un turno que abrió otra persona. Solo
+ *     acepta el PIN NORMAL de un administrador.
+ *   · `pin` autoriza una DIFERENCIA de arqueo. Acepta también el PIN remoto.
+ *
+ * Un mismo cierre puede necesitar los dos: cerrar la caja de otro y encima
+ * encontrarla descuadrada. Cada uno tiene su propio candado de intentos.
+ */
 export const esquemaCierreDeCaja = z.object({
   efectivo: esquemaEfectivoDeclarado,
   pin: z.string().length(LARGO_DEL_PIN_IPC).optional(),
+  pinCajaAjena: z.string().length(LARGO_DEL_PIN_IPC).optional(),
 });
 
 /** Payload de configuración del PIN remoto. */
@@ -365,20 +377,43 @@ export interface DenominacionParaContar {
   readonly orden: number;
 }
 
-/** Turno de caja abierto del usuario en sesión. */
+/**
+ * EL turno de caja abierto del sistema, si hay alguno.
+ *
+ * No es "el turno del usuario en sesión": la caja física es una sola y puede
+ * haberla abierto otra persona. La pantalla necesita saber quién, para poder
+ * mostrar los tres estados posibles.
+ */
 export interface TurnoAbierto {
   readonly id: string;
   readonly montoInicial: string;
   readonly abiertaEn: string;
+  /** Quién lo abrió. */
+  readonly abiertaPorId: string;
+  /** Nombre de quien lo abrió, ya resuelto: el renderer no cruza tablas. */
+  readonly abiertaPorNombre: string;
+  /**
+   * `true` si lo abrió alguien distinto del usuario en sesión. Lo decide el
+   * proceso principal y no la interfaz: es la misma comprobación que después
+   * exige el PIN, y calcularla dos veces es pedirle a las dos que coincidan.
+   */
+  readonly esDeOtroUsuario: boolean;
 }
 
 /** Lo que la pantalla de caja necesita para dibujarse. */
 export interface EstadoDeCaja {
+  /** `null` si NO hay ninguna caja abierta en todo el sistema. */
   readonly turnoAbierto: TurnoAbierto | null;
   readonly denominaciones: readonly DenominacionParaContar[];
 }
 
-/** Resultado de intentar cerrar un turno. */
+/**
+ * Resultado de intentar cerrar un turno.
+ *
+ * `codigo` puede ser `CIERRE_CORRECTO`, `REQUIERE_AUTORIZACION` (hay
+ * diferencia), `REQUIERE_AUTORIZACION_DE_CAJA_AJENA` (la abrió otro), o el
+ * código de un intento de autorización fallido.
+ */
 export interface ResultadoDeCierreIpc {
   readonly cerrada: boolean;
   readonly codigo: string;
@@ -594,6 +629,7 @@ export interface ApiPos {
     cerrar(
       efectivo: EfectivoDeclaradoIpc,
       pin?: string,
+      pinCajaAjena?: string,
     ): Promise<RespuestaIpc<ResultadoDeCierreIpc>>;
   };
 

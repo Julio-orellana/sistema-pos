@@ -24,6 +24,9 @@ import sqlSuperficieCierre from './migrations/006_superficie_cierre_con_diferenc
 import sqlAutorizacionDeDiferencia from './migrations/007_autorizacion_de_diferencia.sql?raw';
 import sqlAutorizacionSoloConDiferencia from './migrations/008_autorizacion_solo_con_diferencia.sql?raw';
 import sqlCategoriasActivo from './migrations/009_categorias_activo.sql?raw';
+import sqlUnaCajaPorSistema from './migrations/010_una_caja_por_sistema.sql?raw';
+import sqlSuperficieCajaAjena from './migrations/011_superficie_cierre_de_caja_ajena.sql?raw';
+import sqlCajaCerradaPor from './migrations/012_caja_cerrada_por.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -56,6 +59,13 @@ export const MIGRACIONES: readonly Migracion[] = [
     sql: sqlAutorizacionSoloConDiferencia,
   },
   { orden: 9, nombre: '009_categorias_activo', sql: sqlCategoriasActivo },
+  { orden: 10, nombre: '010_una_caja_por_sistema', sql: sqlUnaCajaPorSistema },
+  {
+    orden: 11,
+    nombre: '011_superficie_cierre_de_caja_ajena',
+    sql: sqlSuperficieCajaAjena,
+  },
+  { orden: 12, nombre: '012_caja_cerrada_por', sql: sqlCajaCerradaPor },
 ];
 
 /** Tabla de control. La crea el propio migrador antes que nada. */
