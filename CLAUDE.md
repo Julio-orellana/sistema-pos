@@ -898,6 +898,45 @@ las llamadas al repositorio.
 - **Subirlas a Supabase Storage es trabajo del módulo de sincronización.** Hoy
   la imagen vive solo en el disco de la tienda.
 
+#### Un producto sin foto tiene su propio estado visual
+
+No es un caso raro: es el estado NORMAL de todo producto recién dado de alta, y
+lo que se ve en la lista entera la primera vez que se carga un catálogo. Se
+dibuja con `MiniaturaDeProducto`: las **iniciales del producto sobre un color
+derivado de su nombre**. Antes había un recuadro oscuro vacío, que no era un
+ícono roto pero se leía como un agujero.
+
+Tres decisiones dentro de eso:
+
+- **Iniciales y no un ícono genérico único.** Un mismo ícono repetido en todas
+  las filas no distingue nada, y esta lista se recorre buscando un producto
+  concreto.
+- **El color es determinista**, sale del nombre. Al azar cambiaría en cada
+  recarga y no serviría para reconocer nada.
+- **Se anuncia a un lector de pantalla** (`role="img"` con «todavía sin foto»).
+  Antes era `aria-hidden`, o sea que quien no ve la lista no se enteraba de que
+  faltaba la foto.
+
+El prefijo `[Ejemplo] ` se ignora al calcular las iniciales: si no, todos los
+productos de ejemplo mostrarían la misma letra.
+
+El mismo componente se usa en la lista y en la vista previa del formulario, con
+dos tamaños. Cualquier lugar futuro que muestre una miniatura debe usarlo
+también, y no un `<img>` suelto: dos formas distintas de decir «sin foto» es
+exactamente lo que esto vino a eliminar.
+
+#### Los guiones de datos de ejemplo fallan RUIDOSAMENTE
+
+Si el punto de venta ya está abierto, `seed:ejemplo` y `seed:limpiar` no pueden
+trabajar: la aplicación es de instancia única. Antes salían **en silencio y con
+código 0**, o sea que parecían haber funcionado sin haber tocado la base. Ahora
+imprimen qué pasó y salen con código 1. Un guion que miente sobre lo que hizo
+es peor que uno que falla.
+
+Para la aplicación normal, en cambio, salir callado sigue siendo lo correcto:
+la segunda copia le pasa el foco a la primera y no tiene nada que decirle al
+cajero.
+
 #### El aviso de error va junto al botón, no en el encabezado
 
 En el formulario de producto el mensaje de error se muestra **inmediatamente

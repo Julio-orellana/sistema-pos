@@ -21,6 +21,7 @@ import type {
   TipoMedidaIpc,
   UnidadPesoIpc,
 } from '@shared/types/ipc';
+import { MiniaturaDeProducto } from './MiniaturaDeProducto';
 
 /** Lo que el formulario tiene en pantalla. Todo texto: se valida al guardar. */
 interface Borrador {
@@ -338,11 +339,13 @@ export function FormularioDeProducto({
       <div className="campo">
         <span className="campo__etiqueta">Foto (opcional, JPG o PNG, hasta 5 MB)</span>
         <div className="foto">
-          {borrador.fotoUrl === null ? (
-            <span className="foto__vacia">Sin foto</span>
-          ) : (
-            <img className="foto__vista" src={borrador.fotoUrl} alt={`Foto de ${borrador.nombre}`} />
-          )}
+          {/* El MISMO marcador que la lista, para que el producto se vea igual
+              en los dos lados y no haya dos formas de decir «sin foto». */}
+          <MiniaturaDeProducto
+            nombre={borrador.nombre.trim() === '' ? 'Producto nuevo' : borrador.nombre}
+            fotoUrl={borrador.fotoUrl}
+            tamano="formulario"
+          />
           <div className="acciones">
             <button
               type="button"

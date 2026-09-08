@@ -673,8 +673,35 @@ button:disabled {
   background: var(--fondo);
 }
 
-.miniatura--vacia {
-  display: block;
+/*
+   Marcador de "todavía sin foto": las iniciales del producto sobre un color
+   derivado de su nombre. NO es un hueco ni un error de carga; es el estado
+   normal de un producto recién dado de alta, y tiene que verse intencional.
+   El color lo pone el componente en línea, porque depende del nombre.
+*/
+.miniatura--sin-foto {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Sin borde: el borde es lo que hacía que el recuadro vacío pareciera un
+     marco esperando una imagen que nunca llegó. */
+  border: 0;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  /* Las iniciales son una etiqueta, no texto que alguien vaya a copiar. */
+  user-select: none;
+}
+
+/* La vista previa del formulario: mismo marcador, más grande. */
+.miniatura--grande {
+  width: 96px;
+  height: 96px;
+}
+
+.miniatura--grande.miniatura--sin-foto {
+  font-size: 34px;
 }
 
 .foto {
@@ -682,26 +709,6 @@ button:disabled {
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
-}
-
-.foto__vista {
-  width: 96px;
-  height: 96px;
-  border-radius: 8px;
-  border: 1px solid var(--borde);
-  object-fit: cover;
-}
-
-.foto__vacia {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 96px;
-  height: 96px;
-  border: 1px dashed var(--borde);
-  border-radius: 8px;
-  color: var(--texto-tenue);
-  font-size: 13px;
 }
 
 .foto .acciones {

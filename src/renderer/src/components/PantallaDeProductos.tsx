@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CategoriaIpc, ProductoIpc } from '@shared/types/ipc';
 import { formatearQuetzales } from '@shared/money';
 import { FormularioDeProducto } from './FormularioDeProducto';
+import { MiniaturaDeProducto } from './MiniaturaDeProducto';
 import { ModalDeAjusteDeInventario } from './ModalDeAjusteDeInventario';
 
 /** Valor del filtro que significa "todas las categorías". */
@@ -198,11 +199,7 @@ export function PantallaDeProductos({
                 key={producto.id}
                 className={producto.activo ? 'lista__fila' : 'lista__fila lista__fila--inactiva'}
               >
-                {producto.fotoUrl === null ? (
-                  <span className="miniatura miniatura--vacia" aria-hidden="true" />
-                ) : (
-                  <img className="miniatura" src={producto.fotoUrl} alt={`Foto de ${producto.nombre}`} />
-                )}
+                <MiniaturaDeProducto nombre={producto.nombre} fotoUrl={producto.fotoUrl} />
 
                 <div className="lista__principal">
                   <span className="lista__nombre">{producto.nombre}</span>

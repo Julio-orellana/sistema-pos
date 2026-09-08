@@ -214,7 +214,26 @@ function ejecutarModoDatosDeEjemplo(modo: string, repositorios: Repositorios): v
  */
 const obtuvoElCandado = app.requestSingleInstanceLock();
 if (!obtuvoElCandado) {
-  app.quit();
+  /*
+    NO se sale en silencio, y menos en los guiones de datos de ejemplo.
+    Se descubrió con la aplicación abierta: `npm run seed:limpiar` terminaba
+    sin imprimir nada y con código de salida 0, o sea que parecía haber
+    funcionado, cuando en realidad no había llegado a tocar la base. Un guion
+    que miente sobre lo que hizo es peor que uno que falla.
+
+    Para la aplicación normal, en cambio, salir callado es lo correcto: la
+    segunda copia le pasa el foco a la primera (ver `second-instance`) y no
+    tiene nada que decirle al cajero.
+  */
+  if (modoDatosDeEjemplo !== '') {
+    console.error(
+      '[datos-de-ejemplo] NO se hizo nada: el punto de venta ya está abierto y ' +
+        'la aplicación es de instancia única. Cerralo y volvé a correr el guion.',
+    );
+    app.exit(1);
+  } else {
+    app.quit();
+  }
 }
 
 app.on('second-instance', () => {
