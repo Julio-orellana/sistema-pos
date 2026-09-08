@@ -14,23 +14,34 @@
  * concreto: dos marcadores distintos ayudan a barrerla, uno igual en todas las
  * filas no aporta nada.
  *
- * EL COLOR ES DETERMINISTA: sale del nombre, así que el mismo producto tiene
- * siempre el mismo color, en esta pantalla y en cualquier otra. Si fuera al
- * azar, el marcador cambiaría en cada recarga y dejaría de servir para
- * reconocer nada.
+ * EL COLOR ES DETERMINISTA Y SALE DE UNA PALETA CERRADA: el nombre elige uno
+ * de ocho colores elegidos a mano, nunca compone un RGB propio. Determinista
+ * porque si fuera al azar el marcador cambiaría en cada recarga y dejaría de
+ * servir para reconocer nada; de paleta cerrada porque un color calculado
+ * podría caer en una combinación ilegible, y la legibilidad no se apuesta.
  */
 
 /** Cuántas letras lleva el marcador. Más de dos deja de leerse de un vistazo. */
 const MAXIMO_DE_INICIALES = 2;
 
 /**
- * Colores del marcador.
+ * PALETA FIJA del marcador. Ocho colores elegidos a mano, no calculados.
  *
- * Elegidos oscuros a propósito: el texto va en blanco y sobre estos fondos
- * mantiene el contraste alto que exigen las reglas táctiles del proyecto, en
- * la pantalla del mostrador y con la luz que haya.
+ * ES UNA PALETA CERRADA A PROPÓSITO. La alternativa —convertir el hash
+ * directamente en un RGB— dejaría la legibilidad librada a la suerte: bastaría
+ * un nombre de producto desafortunado para producir un amarillo claro sobre el
+ * que las iniciales blancas no se leen. Con una lista cerrada, el hash solo
+ * elige ENTRE opciones ya aprobadas; nunca inventa un color.
+ *
+ * Todos son oscuros para que el texto blanco encima mantenga contraste alto,
+ * y todos combinan con el tema oscuro de la aplicación.
+ *
+ * REGLA PARA QUIEN AGREGUE UN COLOR: tiene que dar al menos 4,5:1 de contraste
+ * con el blanco. No hace falta calcularlo a mano —la prueba «cada color de la
+ * paleta es legible con texto blanco» lo mide y falla si no llega—, pero sí
+ * hace falta saber que ese es el criterio y no el gusto.
  */
-const COLORES = [
+export const PALETA_DE_MARCADORES = [
   '#1d4ed8',
   '#6d28d9',
   '#0f766e',
@@ -41,8 +52,23 @@ const COLORES = [
   '#a21caf',
 ] as const;
 
-/** Multiplicador del hash. Un primo pequeño reparte bien nombres parecidos. */
+/** Alias interno, para que el resto del archivo se lea corto. */
+const COLORES = PALETA_DE_MARCADORES;
+
+/** Multiplicador del hash. */
 const FACTOR_DE_HASH = 31;
+
+/**
+ * Módulo del hash: 2³¹ − 1, primo de Mersenne.
+ *
+ * El resto se toma contra ESTE número en cada vuelta, y recién al final contra
+ * el tamaño de la paleta. Tomarlo directamente contra 8 —como estaba antes—
+ * degeneraba el hash: 31 ≡ −1 (mod 8), así que se convertía en una suma
+ * alternada y los nombres de una misma familia caían en el mismo color. Se
+ * midió: «Maíz blanco», «Maíz amarillo» y «Maíz quebrado» compartían color, y
+ * con el módulo primo los cuatro «Maíz» del catálogo quedan distintos.
+ */
+const MODULO_DEL_HASH = 2147483647;
 
 /**
  * Iniciales que se muestran cuando el producto no tiene foto.
@@ -73,9 +99,10 @@ export function inicialesDe(nombre: string): string {
 export function colorDe(nombre: string): string {
   let acumulado = 0;
   for (const caracter of nombre) {
-    acumulado = (acumulado * FACTOR_DE_HASH + (caracter.codePointAt(0) ?? 0)) % COLORES.length;
+    acumulado = (acumulado * FACTOR_DE_HASH + (caracter.codePointAt(0) ?? 0)) % MODULO_DEL_HASH;
   }
-  return COLORES[acumulado] ?? COLORES[0];
+  // El hash solo ELIGE dentro de la paleta; nunca compone un color.
+  return COLORES[acumulado % COLORES.length] ?? COLORES[0];
 }
 
 export interface MiniaturaDeProductoProps {

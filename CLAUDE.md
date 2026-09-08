@@ -920,8 +920,21 @@ Tres decisiones dentro de eso:
 - **Iniciales y no un ícono genérico único.** Un mismo ícono repetido en todas
   las filas no distingue nada, y esta lista se recorre buscando un producto
   concreto.
-- **El color es determinista**, sale del nombre. Al azar cambiaría en cada
-  recarga y no serviría para reconocer nada.
+- **El color sale de una PALETA CERRADA de ocho colores elegidos a mano**
+  (`PALETA_DE_MARCADORES`), no de un RGB calculado a partir del hash. El hash
+  solo ELIGE entre opciones ya aprobadas. Un color compuesto dejaría la
+  legibilidad librada a la suerte: bastaría un nombre desafortunado para
+  producir un amarillo claro sobre el que las iniciales blancas no se leen.
+  **La garantía no es el buen gusto sino una prueba**: mide el contraste WCAG
+  de cada color con el texto blanco y falla por debajo de 4,5:1. Medido, el
+  peor de los ocho da 4,92:1. Se comprobó que la prueba muerde agregando un
+  amarillo claro a propósito: falla con «El color #fbbf24 da 1.67:1».
+- **Es determinista**: el mismo producto tiene siempre el mismo color. Al azar
+  cambiaría en cada recarga y no serviría para reconocer nada. El resto del
+  hash se toma contra 2³¹−1 y solo al final contra el tamaño de la paleta;
+  tomarlo contra 8 en cada vuelta degeneraba el hash —31 ≡ −1 (mod 8), o sea
+  una suma alternada— y los «Maíz blanco», «Maíz amarillo» y «Maíz quebrado»
+  del catálogo caían todos en el mismo color.
 - **Se anuncia a un lector de pantalla** (`role="img"` con «todavía sin foto»).
   Antes era `aria-hidden`, o sea que quien no ve la lista no se enteraba de que
   faltaba la foto.
