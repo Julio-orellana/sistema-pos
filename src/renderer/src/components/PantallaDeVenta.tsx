@@ -1,9 +1,15 @@
 /**
  * Pantalla de venta: la cuadrícula de productos y el ticket en curso.
  *
- * ALCANCE DE ESTE MÓDULO: arma el ticket EN MEMORIA. No registra la venta, no
- * descuenta inventario, no aplica descuentos, no pide forma de pago y no
- * imprime nada. El botón de cobrar avisa que esa parte llega en otro módulo.
+ * ALCANCE DE ESTE MÓDULO: arma el ticket EN MEMORIA y lo manda a cobrar. Lo
+ * que NO hace es calcular lo que se cobra: el precio de cada línea y el total
+ * los recalcula el proceso principal contra el catálogo, dentro de la misma
+ * transacción que descuenta inventario. Acá no se imprime nada todavía.
+ *
+ * DESPUÉS DE COBRAR, LA PANTALLA VUELVE A CERO: ticket vacío, sin descuento y
+ * con el catálogo recargado, porque el inventario y el orden de los íconos
+ * acaban de cambiar. Dejar el ticket cobrado a la vista invita a cobrarlo dos
+ * veces.
  *
  * ACCESO CONDICIONADO A LA CAJA. Antes de dibujar nada se consulta el estado
  * real, y hay tres respuestas posibles:
@@ -25,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { EstadoDeVenta, ProductoParaVender } from '@shared/types/ipc';
 import { formatearQuetzales } from '@shared/money';
 import { CuadriculaDeProductos, TODAS_LAS_CATEGORIAS } from './CuadriculaDeProductos';
+import { DialogoDeCobro } from './DialogoDeCobro';
 import { TecladoNumerico } from './TecladoNumerico';
 import { TicketDeVenta } from './TicketDeVenta';
 import {
@@ -69,8 +76,20 @@ export function PantallaDeVenta({
   /** `true` mientras se confirma vaciar el ticket. */
   const [confirmandoVaciar, setConfirmandoVaciar] = useState(false);
 
-  /** Aviso del botón de cobrar, que todavía no cobra. */
-  const [avisoDeCobro, setAvisoDeCobro] = useState<string | null>(null);
+  /** `true` mientras está abierto el diálogo de cobro. */
+  const [cobrando, setCobrando] = useState(false);
+
+  /** Confirmación de la última venta, que se muestra sobre la cuadrícula. */
+  const [ultimaVenta, setUltimaVenta] = useState<string | null>(null);
+
+  /**
+   * Se incrementa después de cada venta para volver a pedir el estado.
+   *
+   * Hace falta releer y no solo vaciar el ticket: la venta acaba de bajar el
+   * inventario y de mover el contador que ordena los íconos, así que el
+   * catálogo en pantalla quedó viejo.
+   */
+  const [recarga, setRecarga] = useState(0);
 
   useEffect(() => {
     const control = new AbortController();
@@ -88,10 +107,10 @@ export function PantallaDeVenta({
     return (): void => {
       control.abort();
     };
-  }, []);
+  }, [recarga]);
 
   const tocarProducto = useCallback((producto: ProductoParaVender): void => {
-    setAvisoDeCobro(null);
+    setUltimaVenta(null);
     setLineas((anteriores) => agregarAlTicket(anteriores, producto));
   }, []);
 
@@ -121,7 +140,7 @@ export function PantallaDeVenta({
     setLineas([]);
     setConfirmandoVaciar(false);
     setEnEdicion(null);
-    setAvisoDeCobro(null);
+    setUltimaVenta(null);
   }, []);
 
   const turno = estado?.turnoAbierto ?? null;
@@ -225,9 +244,9 @@ export function PantallaDeVenta({
         </button>
       </header>
 
-      {avisoDeCobro !== null && (
-        <p className="alerta" data-prueba="aviso-de-cobro">
-          {avisoDeCobro}
+      {ultimaVenta !== null && (
+        <p className="aviso-exito" data-prueba="venta-registrada">
+          {ultimaVenta}
         </p>
       )}
 
@@ -251,12 +270,33 @@ export function PantallaDeVenta({
             setConfirmandoVaciar(true);
           }}
           alCobrar={() => {
-            setAvisoDeCobro(
-              'El cobro se habilita en el siguiente módulo. Todavía no se registra ninguna venta.',
-            );
+            setEnEdicion(null);
+            setCobrando(true);
           }}
         />
       </div>
+
+      {cobrando && (
+        <DialogoDeCobro
+          lineas={lineas}
+          alCancelar={() => {
+            setCobrando(false);
+          }}
+          alTerminar={(venta) => {
+            // LA PANTALLA VUELVE A CERO. El ticket se vacía, el diálogo se
+            // cierra y se relee el catálogo, que acaba de cambiar.
+            setCobrando(false);
+            setLineas([]);
+            setEnEdicion(null);
+            setCantidadTecleada('');
+            setBusqueda('');
+            setUltimaVenta(
+              `Venta registrada por ${formatearQuetzales(venta.total)}. Lista para la siguiente.`,
+            );
+            setRecarga((vuelta) => vuelta + 1);
+          }}
+        />
+      )}
 
       {/* Corrección de cantidad con el mismo teclado táctil del PIN. */}
       {enEdicion !== null && (

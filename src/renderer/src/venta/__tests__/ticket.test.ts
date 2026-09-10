@@ -10,17 +10,22 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ProductoParaVender } from '@shared/types/ipc';
-import { montoACadena, sumarLista, multiplicar, redondearMonto } from '@shared/money';
+import { decimal, montoACadena, sumarLista, multiplicar, redondearMonto } from '@shared/money';
 import {
   agregarAlTicket,
   avisoDeInventario,
   cantidadLegible,
   decimalesDe,
   descripcionDeCantidad,
+  descripcionDePrecioEspecial,
+  descuentoDelTicket,
   excedeInventarioConocido,
   fijarCantidad,
+  hayPrecioEspecial,
   quitarDelTicket,
   subtotalDeLineaParaMostrar,
+  subtotalExactoDelTicket,
+  totalDelTicketConDescuento,
   totalDelTicketParaMostrar,
   unidadDe,
   type LineaDeTicket,
@@ -36,6 +41,8 @@ const MAIZ: ProductoParaVender = {
   unidadPeso: 'lb',
   cantidadPredefinidaIcono: '0.500',
   precioBase: '0.67',
+  precioEfectivo: '0.67',
+  precioEspecial: null,
   inventarioDisponible: '8.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -51,6 +58,8 @@ const HUEVOS: ProductoParaVender = {
   unidadPeso: null,
   cantidadPredefinidaIcono: '1.000',
   precioBase: '42.00',
+  precioEfectivo: '42.00',
+  precioEspecial: null,
   inventarioDisponible: '24.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -296,5 +305,128 @@ describe('Cómo se leen las cantidades en el mostrador', () => {
   it('los decimales admitidos dependen del tipo de medida', () => {
     expect(decimalesDe('peso')).toBe(3);
     expect(decimalesDe('unidad')).toBe(0);
+  });
+});
+
+// ===========================================================================
+/**
+ * El precio especial en el ticket.
+ *
+ * El error que estas pruebas cierran es cobrar el precio de lista teniendo una
+ * promoción vigente: el cliente pagaría de más y nadie lo notaría, porque el
+ * ticket se ve igual de bien con un número que con el otro.
+ */
+describe('Precio especial: se cobra el efectivo, y se ve que se aplicó', () => {
+  /** El maíz con un 20 % de rebaja ya resuelta por el proceso principal. */
+  const MAIZ_REBAJADO: ProductoParaVender = {
+    ...MAIZ,
+    precioEfectivo: '0.54',
+    precioEspecial: {
+      id: 'pe-1',
+      tipo: 'porcentaje',
+      valor: '20.00',
+      vigenteDesde: '2026-09-01T00:00:00.000Z',
+      vigenteHasta: null,
+    },
+  };
+
+  it('la línea se cobra al precio EFECTIVO, no al de lista', () => {
+    const [linea] = agregarAlTicket([], MAIZ_REBAJADO);
+    expect(linea?.precioUnitario).toBe('0.54');
+    // Y el de lista se conserva al lado, para poder mostrar de cuánto bajó.
+    expect(linea?.precioBase).toBe('0.67');
+  });
+
+  it('el subtotal usa el precio efectivo', () => {
+    const lineas = agregarAlTicket([], MAIZ_REBAJADO);
+    // Media libra a Q0.54 son Q0.27, no Q0.335.
+    expect(subtotalDeLineaParaMostrar(lineas[0]!)).toBe('0.27');
+  });
+
+  it('sin precio especial la línea queda marcada como tal', () => {
+    const [linea] = agregarAlTicket([], MAIZ);
+    expect(linea?.precioEspecial).toBeNull();
+    expect(hayPrecioEspecial(agregarAlTicket([], MAIZ))).toBe(false);
+  });
+
+  it('con precio especial el ticket lo sabe', () => {
+    expect(hayPrecioEspecial(agregarAlTicket([], MAIZ_REBAJADO))).toBe(true);
+  });
+
+  it('la descripción dice CUÁNTO baja, sin inventarle nombre a la promoción', () => {
+    expect(
+      descripcionDePrecioEspecial({
+        id: 'pe-1',
+        tipo: 'porcentaje',
+        valor: '20.00',
+        vigenteDesde: '2026-09-01T00:00:00.000Z',
+        vigenteHasta: null,
+      }),
+    ).toBe('20 % menos');
+
+    expect(
+      descripcionDePrecioEspecial({
+        id: 'pe-2',
+        tipo: 'monto_fijo',
+        valor: '2.50',
+        vigenteDesde: '2026-09-01T00:00:00.000Z',
+        vigenteHasta: null,
+      }),
+    ).toBe('Q2.5 menos');
+  });
+});
+
+// ===========================================================================
+/**
+ * El descuento sobre la venta completa.
+ *
+ * Estas cuentas tienen que dar EXACTAMENTE lo mismo que las del proceso
+ * principal, porque son literalmente las mismas funciones: el módulo compartido
+ * `@shared/descuento`. Si algún día alguien las duplica, estas pruebas siguen
+ * pasando y el cliente empieza a pagar un total distinto del que ve.
+ */
+describe('Descuento del ticket: lo que se muestra es lo que se va a cobrar', () => {
+  /** Un ticket de Q42.00: un cartón de huevos. */
+  function ticketDeCuarentaYDos(): LineaDeTicket[] {
+    return agregarAlTicket([], HUEVOS);
+  }
+
+  it('sin descuento, el total es el subtotal redondeado', () => {
+    const lineas = ticketDeCuarentaYDos();
+    expect(montoACadena(totalDelTicketConDescuento(lineas, null))).toBe('42.00');
+    expect(montoACadena(descuentoDelTicket(lineas, null))).toBe('0.00');
+  });
+
+  it('un descuento en porcentaje rebaja la proporción', () => {
+    const lineas = ticketDeCuarentaYDos();
+    const pedido = { tipo: 'porcentaje' as const, valor: decimal('10') };
+
+    expect(montoACadena(descuentoDelTicket(lineas, pedido))).toBe('4.20');
+    expect(montoACadena(totalDelTicketConDescuento(lineas, pedido))).toBe('37.80');
+  });
+
+  it('un descuento de monto fijo rebaja los quetzales que dice', () => {
+    const lineas = ticketDeCuarentaYDos();
+    const pedido = { tipo: 'monto_fijo' as const, valor: decimal('5.50') };
+
+    expect(montoACadena(totalDelTicketConDescuento(lineas, pedido))).toBe('36.50');
+  });
+
+  it('PISO EN CERO: un descuento mayor que la venta no devuelve dinero', () => {
+    const lineas = ticketDeCuarentaYDos();
+    const pedido = { tipo: 'monto_fijo' as const, valor: decimal('100') };
+
+    expect(montoACadena(totalDelTicketConDescuento(lineas, pedido))).toBe('0.00');
+  });
+
+  it('el descuento se aplica sobre el subtotal EXACTO, no sobre el redondeado', () => {
+    // Tres medias libras a Q0.67: subtotal exacto 1.005, que redondea a 1.01.
+    let lineas = agregarAlTicket([], MAIZ);
+    lineas = fijarCantidad(lineas, MAIZ.id, '1.5');
+    expect(montoACadena(subtotalExactoDelTicket(lineas))).toBe('1.01');
+
+    const pedido = { tipo: 'porcentaje' as const, valor: decimal('50') };
+    // La mitad de 1.005 es 0.5025, y 1.005 − 0.5025 = 0.5025 → 0.50.
+    expect(montoACadena(totalDelTicketConDescuento(lineas, pedido))).toBe('0.50');
   });
 });

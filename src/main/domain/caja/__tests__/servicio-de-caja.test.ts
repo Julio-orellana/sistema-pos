@@ -61,6 +61,7 @@ beforeEach(() => {
     cajaSesiones: repos.cajaSesiones,
     denominaciones: repos.denominaciones,
     desglose: repos.desgloseDeCaja,
+    ventas: repos.ventas,
     auditoria: repos.auditoria,
   });
   autenticacion = new ServicioDeAutenticacion({
@@ -409,13 +410,15 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
 });
 
 // ===========================================================================
-describe('monto_esperado: pendiente del módulo de ventas', () => {
-  it('HOY equivale al monto inicial, porque todavía no hay ventas que sumar', () => {
-    // Cuando exista el módulo de ventas esto DEBE pasar a ser
-    // monto_inicial + ventas en efectivo de la sesión. Ver CLAUDE.md §4.10.
+describe('monto_esperado = monto inicial + ventas en efectivo del turno', () => {
+  it('un turno SIN ventas espera exactamente el fondo con que se abrió', () => {
     const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '750.25' });
     expect(montoACadena(caja.montoEsperadoDe(sesion))).toBe('750.25');
   });
+
+  // Que la fórmula SUME las ventas en efectivo y EXCLUYA las de tarjeta se
+  // verifica en las pruebas del servicio de venta, que es donde se pueden
+  // registrar ventas de verdad en vez de insertar filas a mano.
 });
 
 // ===========================================================================

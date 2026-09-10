@@ -44,6 +44,8 @@ import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exi
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
+import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import { generarHashDePin } from '@shared/auth';
 import { montoACadena } from '@shared/money';
@@ -68,6 +70,10 @@ export interface DependenciasDeIpc {
   readonly caja: ServicioDeCaja;
   /** Catálogo: categorías, productos y fotos. */
   readonly catalogo: Omit<DependenciasDeCatalogo, 'sesion'>;
+  /** Registro de la venta: la transacción que descuenta inventario y cobra. */
+  readonly venta: ServicioDeVenta;
+  /** Precios especiales vigentes, para resolver el precio efectivo. */
+  readonly preciosEspeciales: RepositorioDePreciosEspeciales;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -85,6 +91,9 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     caja: dependencias.caja,
     categorias: dependencias.catalogo.categorias,
     productos: dependencias.catalogo.productos,
+    venta: dependencias.venta,
+    autenticacion: dependencias.autenticacion,
+    preciosEspeciales: dependencias.preciosEspeciales,
     usuarios: dependencias.usuarios,
   });
 

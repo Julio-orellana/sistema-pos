@@ -103,6 +103,12 @@ export const CANALES_IPC = {
    * activos y ningún dato de administración.
    */
   ventaEstado: 'venta:estado',
+  /**
+   * Registra la venta del ticket. Es el canal que escribe: descuenta
+   * inventario, inserta la venta y su detalle y mueve los contadores, todo
+   * dentro de una sola transacción.
+   */
+  ventaCobrar: 'venta:cobrar',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -606,6 +612,34 @@ export interface CategoriaDeVenta {
   readonly productos: number;
 }
 
+/** Tipos de valor de un descuento, en la frontera. */
+export const TIPOS_DE_VALOR_IPC = ['porcentaje', 'monto_fijo'] as const;
+
+/** Porcentaje o quetzales, del lado de la interfaz. */
+export type TipoValorIpc = (typeof TIPOS_DE_VALOR_IPC)[number];
+
+/** Formas de pago, en la frontera. */
+export const FORMAS_DE_PAGO_IPC = ['efectivo', 'tarjeta'] as const;
+
+/** Cómo pagó el cliente, del lado de la interfaz. */
+export type FormaPagoIpc = (typeof FORMAS_DE_PAGO_IPC)[number];
+
+/**
+ * El precio especial que está rebajando a un producto hoy.
+ *
+ * Es POR PRODUCTO y PRECONFIGURADO: lo dejó puesto un administrador con una
+ * vigencia. No confundir con el descuento discrecional, que es sobre la venta
+ * completa y lo decide quien vende en el momento.
+ */
+export interface PrecioEspecialVigente {
+  readonly id: string;
+  readonly tipo: TipoValorIpc;
+  /** Cadena canónica de dos decimales: 10.00 significa 10 % o Q10. */
+  readonly valor: string;
+  readonly vigenteDesde: string;
+  readonly vigenteHasta: string | null;
+}
+
 /**
  * Un producto tal como lo muestra la cuadrícula de venta.
  *
@@ -622,8 +656,18 @@ export interface ProductoParaVender {
   readonly unidadPeso: UnidadPesoIpc | null;
   /** Cuánto agrega un toque al ícono. Cadena canónica de tres decimales. */
   readonly cantidadPredefinidaIcono: string;
-  /** Precio unitario. Cadena canónica de dos decimales. */
+  /** Precio de lista. Cadena canónica de dos decimales. */
   readonly precioBase: string;
+  /**
+   * El precio que se le cobra HOY, ya con el precio especial vigente aplicado.
+   *
+   * Es igual a `precioBase` cuando no hay ninguno vigente. La pantalla cobra
+   * SIEMPRE por este, nunca por `precioBase`: el de lista queda solo para
+   * poder mostrar tachado de cuánto bajó.
+   */
+  readonly precioEfectivo: string;
+  /** El precio especial que se está aplicando, o `null` si se cobra el de lista. */
+  readonly precioEspecial: PrecioEspecialVigente | null;
   /**
    * Inventario conocido AL MOMENTO de cargar la pantalla.
    *
@@ -648,6 +692,98 @@ export interface EstadoDeVenta {
   readonly categorias: readonly CategoriaDeVenta[];
   readonly productos: readonly ProductoParaVender[];
 }
+
+/** Largo máximo del número de boleta de un voucher de tarjeta. */
+const LARGO_MAXIMO_BOLETA = 40;
+
+/**
+ * Largo máximo de un decimal que llega como cadena.
+ *
+ * No es una regla de negocio: es un freno a un payload absurdo antes de que
+ * llegue al dominio. Quién decide si el número es válido es `money.ts`.
+ */
+const LARGO_MAXIMO_DECIMAL = 20;
+
+/** Cuántas líneas puede tener un ticket como máximo. */
+const LINEAS_MAXIMAS_DEL_TICKET = 200;
+
+/**
+ * Payload de cobro.
+ *
+ * NO LLEVA PRECIOS NI TOTALES, y eso es deliberado: el precio de cada línea y
+ * el total los recalcula el proceso principal contra el catálogo y los precios
+ * especiales vigentes. Si viajaran desde la ventana, cualquiera podría cobrar
+ * un maíz a un centavo llamando al canal directamente.
+ */
+export const esquemaCobro = z.object({
+  lineas: z
+    .array(
+      z.object({
+        productoId: z.uuid(),
+        /** Cantidad pedida. Cadena decimal; el dominio la redondea a tres. */
+        cantidad: z.string().min(1).max(LARGO_MAXIMO_DECIMAL),
+      }),
+    )
+    .min(1)
+    .max(LINEAS_MAXIMAS_DEL_TICKET),
+  descuento: z
+    .object({
+      tipo: z.enum(TIPOS_DE_VALOR_IPC),
+      valor: z.string().min(1).max(LARGO_MAXIMO_DECIMAL),
+    })
+    .nullable(),
+  formaPago: z.enum(FORMAS_DE_PAGO_IPC),
+  numBoleta: z.string().max(LARGO_MAXIMO_BOLETA).nullable(),
+  /**
+   * PIN del administrador que autoriza un descuento por encima del tope del
+   * rol. Se manda solo en el SEGUNDO intento: el primero llega sin él, para
+   * que la pantalla pueda mostrar cuánto se está por autorizar antes de pedir
+   * el código.
+   */
+  pinDescuento: z.string().min(1).max(LARGO_MAXIMO_DECIMAL).optional(),
+});
+
+/** Payload de cobro, ya validado. */
+export type PedidoDeCobro = z.infer<typeof esquemaCobro>;
+
+/** Una venta que quedó registrada. */
+export interface VentaRegistrada {
+  readonly registrada: true;
+  readonly ventaId: string;
+  /** Fecha ISO de la venta, tal como quedó guardada. */
+  readonly fecha: string;
+  readonly subtotal: string;
+  readonly descuentoAplicado: string;
+  readonly total: string;
+  readonly formaPago: FormaPagoIpc;
+  readonly numBoleta: string | null;
+  readonly lineas: number;
+  /** Cuántas líneas se cobraron con un precio especial vigente. */
+  readonly lineasConPrecioEspecial: number;
+}
+
+/**
+ * Una venta que NO se registró, y por qué.
+ *
+ * `requiereAutorizacion` distingue el caso que no es un error: el descuento
+ * pasa el tope del rol y falta el PIN. La pantalla usa `tope` y `exceso` para
+ * mostrar exactamente qué se está por autorizar ANTES de pedir el código.
+ */
+export interface VentaRechazada {
+  readonly registrada: false;
+  readonly codigo: string;
+  readonly mensaje: string;
+  readonly requiereAutorizacion: boolean;
+  /** El tope del rol de quien vende. `null` si el rechazo es por otra cosa. */
+  readonly tope: string | null;
+  /** Cuánto se pasa del tope. `null` si el rechazo es por otra cosa. */
+  readonly exceso: string | null;
+  /** Segundos para reintentar, cuando el candado del PIN está cerrado. */
+  readonly segundosParaReintentar: number | null;
+}
+
+/** Resultado de intentar cobrar. */
+export type ResultadoDeCobro = VentaRegistrada | VentaRechazada;
 
 // ---------------------------------------------------------------------------
 // Superficie que el preload expone al renderer
@@ -746,6 +882,14 @@ export interface ApiPos {
   readonly venta: {
     /** Si se puede vender, el catálogo activo en su orden y las categorías. */
     estado(): Promise<RespuestaIpc<EstadoDeVenta>>;
+    /**
+     * Registra la venta del ticket, en una sola transacción.
+     *
+     * Se llama DOS veces cuando el descuento excede el tope del rol: la
+     * primera sin `pinDescuento`, que devuelve el rechazo con el tope y el
+     * exceso para mostrarlos, y la segunda con el PIN del administrador.
+     */
+    cobrar(pedido: PedidoDeCobro): Promise<RespuestaIpc<ResultadoDeCobro>>;
   };
 
   /**

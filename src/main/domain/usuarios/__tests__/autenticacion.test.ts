@@ -559,26 +559,29 @@ describe('Las superficies de autorización tienen candados INDEPENDIENTES entre 
 
 // ===========================================================================
 /**
- * LAS SEIS COMBINACIONES CRUZADAS, en las dos direcciones.
+ * LAS DIEZ COMBINACIONES CRUZADAS, en las dos direcciones.
  *
- * Hay cuatro lugares donde alguien teclea un PIN y se puede equivocar: las
- * tres superficies de autorización y el ingreso a la aplicación. Entre cuatro
- * cosas hay seis pares, y cada par se prueba en los dos sentidos.
+ * Hay CINCO lugares donde alguien teclea un PIN y se puede equivocar: las
+ * cuatro superficies de autorización y el ingreso a la aplicación. Entre cinco
+ * cosas hay diez pares, y cada par se prueba en los dos sentidos.
  *
  * POR QUÉ ESTÁN TODAS, y no una muestra: el defecto original de este proyecto
  * —un cajero que, tecleando mal tres veces en el diálogo de salida, dejaba a
  * TODOS los administradores sin poder iniciar sesión— era exactamente una de
  * estas combinaciones. Probar solo algunas deja el mismo agujero abierto en
- * las otras, y con tres superficies ya no alcanza con mirarlo a ojo.
+ * las otras, y con cuatro superficies ya no alcanza con mirarlo a ojo. El
+ * recuento crece rápido: cada superficie nueva agrega tantos pares como
+ * superficies había, así que se generan en un bucle y no a mano.
  */
-describe('Los cuatro candados son independientes: las seis combinaciones cruzadas', () => {
+describe('Los cinco candados son independientes: las diez combinaciones cruzadas', () => {
   const PIN_MALO = '0000';
 
-  /** Las tres superficies de autorización. */
+  /** Las cuatro superficies de autorización. */
   const SUPERFICIES: readonly SuperficieDeAutorizacion[] = [
     'salida_controlada',
     'cierre_con_diferencia',
     'cierre_de_caja_ajena',
+    'descuento_excedente',
   ];
 
   /** Agota los tres intentos de una superficie de autorización. */
@@ -640,39 +643,43 @@ describe('Los cuatro candados son independientes: las seis combinaciones cruzada
     });
   }
 
-  it('cada una de las tres superficies lleva su propio contador en la base', () => {
+  it('cada una de las cuatro superficies lleva su propio contador en la base', () => {
     servicio.autorizarComoAdministrador(PIN_MALO, 'salida_controlada');
     servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_con_diferencia');
     servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_con_diferencia');
+    servicio.autorizarComoAdministrador(PIN_MALO, 'descuento_excedente');
+    servicio.autorizarComoAdministrador(PIN_MALO, 'descuento_excedente');
     servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
     servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
     servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
 
     expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').intentosFallidos).toBe(1);
     expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').intentosFallidos).toBe(2);
+    expect(repos.bloqueosDeAutorizacion.obtener('descuento_excedente').intentosFallidos).toBe(2);
 
     // La tercera llegó al límite: el contador se reinicia y lo que queda es el
-    // bloqueo con su vencimiento. Las otras dos siguen contando lo suyo, sin
+    // bloqueo con su vencimiento. Las otras tres siguen contando lo suyo, sin
     // bloquearse.
     const tercera = repos.bloqueosDeAutorizacion.obtener('cierre_de_caja_ajena');
     expect(tercera.intentosFallidos).toBe(0);
     expect(tercera.bloqueadoHasta).not.toBeNull();
     expect(repos.bloqueosDeAutorizacion.obtener('salida_controlada').bloqueadoHasta).toBeNull();
     expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').bloqueadoHasta).toBeNull();
+    expect(repos.bloqueosDeAutorizacion.obtener('descuento_excedente').bloqueadoHasta).toBeNull();
   });
 
-  it('bloquear las TRES a la vez sigue sin impedir el ingreso', () => {
+  it('bloquear las CUATRO a la vez sigue sin impedir el ingreso', () => {
     for (const superficie of SUPERFICIES) {
       agotar(superficie);
     }
     expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
   });
 
-  it('la base acepta la superficie nueva, y solo las tres declaradas', () => {
-    servicio.autorizarComoAdministrador(PIN_MALO, 'cierre_de_caja_ajena');
-    expect(repos.bloqueosDeAutorizacion.obtener('cierre_de_caja_ajena').intentosFallidos).toBe(1);
+  it('la base acepta la superficie nueva, y solo las cuatro declaradas', () => {
+    servicio.autorizarComoAdministrador(PIN_MALO, 'descuento_excedente');
+    expect(repos.bloqueosDeAutorizacion.obtener('descuento_excedente').intentosFallidos).toBe(1);
 
-    // El CHECK de la migración 011 es lo que mantiene el conjunto a la vista.
+    // El CHECK de la migración 013 es lo que mantiene el conjunto a la vista.
     expect(() =>
       base
         .prepare(

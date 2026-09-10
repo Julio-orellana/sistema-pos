@@ -97,6 +97,48 @@ export class RepositorioDePreciosEspeciales extends RepositorioBase {
     return filas.map(aEntidad);
   }
 
+  /**
+   * Los precios especiales vigentes HOY, de todos los productos a la vez.
+   *
+   * COMPARA POR DÍA, no por instante, y la diferencia importa: un precio
+   * configurado «hasta el 10 de septiembre» tiene que valer todo el 10. La
+   * comparación por instante que usa `listarVigentes` lo daría por vencido a
+   * las 00:00 de ese día, o sea que el último día no existiría.
+   *
+   * Se trae todo junto porque la pantalla de venta necesita el precio efectivo
+   * de cada producto de la cuadrícula: preguntar uno por uno serían tantas
+   * consultas como productos, cada vez que se abre la caja.
+   *
+   * SOBRE LA ZONA HORARIA: `date()` de SQLite interpreta el instante en UTC, y
+   * la tienda está en UTC−6. Un precio que vence «el 10» deja de aplicar a las
+   * 18:00 hora de Guatemala si se guardó a medianoche UTC. Hoy no hay pantalla
+   * para configurar precios especiales, así que no hay dato real que se vea
+   * afectado; queda anotado como pendiente en CLAUDE.md §6.2.
+   */
+  public vigentesPorProductoEn(momento: string): Map<string, PrecioEspecial[]> {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM precios_especiales
+          WHERE activo = 1
+            AND date(vigente_desde) <= date(?)
+            AND (vigente_hasta IS NULL OR date(vigente_hasta) >= date(?))
+          ORDER BY producto_id, vigente_desde DESC`,
+      )
+      .all(momento, momento) as FilaPrecioEspecial[];
+
+    const porProducto = new Map<string, PrecioEspecial[]>();
+    for (const fila of filas) {
+      const entidad = aEntidad(fila);
+      const existentes = porProducto.get(entidad.productoId);
+      if (existentes === undefined) {
+        porProducto.set(entidad.productoId, [entidad]);
+      } else {
+        existentes.push(entidad);
+      }
+    }
+    return porProducto;
+  }
+
   public desactivar(id: string): void {
     this.ejecutar(() => {
       this.base

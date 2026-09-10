@@ -32,6 +32,7 @@ import { SesionActual } from '@main/domain/usuarios/sesion';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
+import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import {
   AlmacenDeFotos,
   ESQUEMA_DE_FOTOS,
@@ -271,7 +272,8 @@ app.whenReady().then(
       return;
     }
 
-    const repositorios = crearRepositorios(obtenerBaseDeDatos());
+    const baseDeDatos = obtenerBaseDeDatos();
+    const repositorios = crearRepositorios(baseDeDatos);
     const autenticacion = new ServicioDeAutenticacion({
       usuarios: repositorios.usuarios,
       auditoria: repositorios.auditoria,
@@ -282,6 +284,7 @@ app.whenReady().then(
       cajaSesiones: repositorios.cajaSesiones,
       denominaciones: repositorios.denominaciones,
       desglose: repositorios.desgloseDeCaja,
+      ventas: repositorios.ventas,
       auditoria: repositorios.auditoria,
     });
 
@@ -295,6 +298,20 @@ app.whenReady().then(
       auditoria: repositorios.auditoria,
     });
     const almacenDeFotos = new AlmacenDeFotos(app.getPath('userData'));
+
+    // La venta recibe la CONEXIÓN además de los repositorios: es quien delimita
+    // la transacción que descuenta inventario, inserta la venta y su detalle y
+    // mueve los contadores, todo o nada.
+    const servicioDeVenta = new ServicioDeVenta({
+      base: baseDeDatos,
+      ventas: repositorios.ventas,
+      ventaDetalle: repositorios.ventaDetalle,
+      productos: repositorios.productos,
+      preciosEspeciales: repositorios.preciosEspeciales,
+      limitesDescuento: repositorios.limitesDescuento,
+      cajaSesiones: repositorios.cajaSesiones,
+      auditoria: repositorios.auditoria,
+    });
 
     // Modo semilla: siembra o limpia el catálogo de ejemplo y sale, sin abrir
     // ventana. Va después de construir los repositorios y antes de cualquier
@@ -338,6 +355,8 @@ app.whenReady().then(
       sesion,
       usuarios: repositorios.usuarios,
       caja,
+      venta: servicioDeVenta,
+      preciosEspeciales: repositorios.preciosEspeciales,
       catalogo: {
         categorias: servicioDeCategorias,
         productos: servicioDeProductos,

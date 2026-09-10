@@ -23,7 +23,13 @@ export type SuperficieDeAutorizacion =
    * es una sola en todo el sistema (migración 010): al turno de la mañana
    * puede cerrárselo el de la tarde, y eso exige el PIN de un administrador.
    */
-  | 'cierre_de_caja_ajena';
+  | 'cierre_de_caja_ajena'
+  /**
+   * Aplicar un descuento que excede el tope del rol de quien vende. Acepta
+   * ÚNICAMENTE el PIN normal de un administrador, nunca el remoto: ese se pidió
+   * para autorizar diferencias de caja y extenderlo exige decisión explícita.
+   */
+  | 'descuento_excedente';
 
 /** Estado del candado de una superficie. */
 export interface BloqueoDeAutorizacion {

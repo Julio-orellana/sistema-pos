@@ -490,7 +490,15 @@ describe('La cuadrícula de venta tiene un orden determinista', () => {
   function sembrar(nombre: string, ventas: number): string {
     const creado = productos.crear(idAdmin, maiz({ nombre }));
     for (let venta = 0; venta < ventas; venta += 1) {
-      repos.productos.incrementarContadorVentas(creado.id);
+      const actual = repos.productos.obtenerPorId(creado.id);
+      if (actual === null) {
+        throw new Error('El producto recién creado desapareció.');
+      }
+      repos.productos.registrarVentaDeProducto(
+        creado.id,
+        actual.cantidadVendida,
+        actual.cantidadVendida.plus(1),
+      );
     }
     return creado.id;
   }

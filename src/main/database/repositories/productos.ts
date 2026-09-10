@@ -30,6 +30,7 @@ interface FilaProducto {
   readonly precio_base: string;
   readonly inventario_disponible: string;
   readonly contador_ventas: number;
+  readonly cantidad_vendida: string;
   readonly activo: number;
   readonly creado_en: string;
   readonly actualizado_en: string;
@@ -53,6 +54,7 @@ function aEntidad(fila: FilaProducto): Producto {
       'productos.inventario_disponible',
     ),
     contadorVentas: fila.contador_ventas,
+    cantidadVendida: desdeColumnaDecimal(fila.cantidad_vendida, 'productos.cantidad_vendida'),
     activo: desdeColumnaBooleana(fila.activo, 'productos.activo'),
     creadoEn: fila.creado_en,
     actualizadoEn: fila.actualizado_en,
@@ -223,6 +225,47 @@ export class RepositorioDeProductos extends RepositorioBase {
     });
   }
 
+  /**
+   * COMPARAR-Y-CAMBIAR del inventario. Es el patrón de CLAUDE.md §4.3, que
+   * estaba documentado pero no escrito hasta ahora.
+   *
+   * Solo actualiza si el saldo sigue siendo EXACTAMENTE el que se leyó. Si
+   * entre la lectura y la escritura alguien lo movió, no toca nada y devuelve
+   * `false`: quien llama debe abortar la transacción entera.
+   *
+   * POR QUÉ NO SE RESTA EN SQL, que sería lo evidente: `inventario_disponible`
+   * es TEXT, así que `columna - :cantidad` obligaría a SQLite a convertir
+   * ambos a REAL y hacer aritmética de punto flotante —justo lo que money.ts
+   * existe para evitar—, y el resultado ni siquiera pasaría el CHECK de forma
+   * canónica. El saldo nuevo se calcula afuera con Decimal.js y entra ya hecho.
+   *
+   * La comparación es de CADENAS canónicas, que es exacta: dos saldos iguales
+   * tienen siempre la misma representación de tres decimales.
+   */
+  public descontarSiSigueIgual(
+    id: string,
+    saldoQueSeLeyo: Decimal | string,
+    saldoNuevo: Decimal | string,
+  ): boolean {
+    return this.ejecutar(() => {
+      const resultado = this.base
+        .prepare(
+          `UPDATE productos
+              SET inventario_disponible = @saldo_nuevo,
+                  actualizado_en = @actualizado_en
+            WHERE id = @id
+              AND inventario_disponible = @saldo_leido`,
+        )
+        .run({
+          id,
+          saldo_nuevo: aColumnaCantidad(saldoNuevo),
+          saldo_leido: aColumnaCantidad(saldoQueSeLeyo),
+          actualizado_en: ahora(),
+        });
+      return resultado.changes === 1;
+    });
+  }
+
   public actualizarPrecioBase(id: string, precio: Decimal | string): void {
     this.ejecutar(() => {
       this.base
@@ -232,20 +275,49 @@ export class RepositorioDeProductos extends RepositorioBase {
   }
 
   /**
-   * Suma uno al contador de ventas del producto.
+   * Anota que el producto se vendió: una vez más, y tanta cantidad más.
    *
-   * Es un entero, no un decimal, así que sí puede incrementarse en SQL. DEBE
-   * llamarse dentro de la MISMA transacción que registra la venta: si se hace
-   * en una operación aparte y esa falla, el orden de los íconos deja de
+   * LAS DOS MEDIDAS SUBEN EN UN SOLO UPDATE, a propósito. Son dos preguntas
+   * distintas —cuántas veces se vendió y cuánta mercadería salió— y separarlas
+   * en dos llamadas dejaría abierta la posibilidad de mover una sin la otra.
+   *
+   * `contador_ventas` es INTEGER, así que se incrementa en SQL sin riesgo.
+   * `cantidad_vendida` es TEXT canónico: el valor nuevo se calcula ACÁ con
+   * Decimal.js y entra ya hecho, por la misma razón que el inventario (§4.3);
+   * `columna + :cantidad` obligaría a SQLite a convertir a REAL y haría
+   * aritmética de punto flotante.
+   *
+   * Como el saldo nuevo se calcula a partir del que se leyó, se escribe con la
+   * MISMA condición de comparar-y-cambiar del inventario: si alguien movió el
+   * acumulado entremedio, el UPDATE no afecta ninguna fila y quien llama se
+   * entera. DEBE ejecutarse dentro de la misma transacción que registra la
+   * venta: si corriera aparte y esa fallara, el orden de los íconos dejaría de
    * corresponder a lo que realmente se vendió.
+   *
+   * Devuelve `false` si no afectó exactamente una fila.
    */
-  public incrementarContadorVentas(id: string): void {
-    this.ejecutar(() => {
-      this.base
+  public registrarVentaDeProducto(
+    id: string,
+    cantidadQueSeLeyo: Decimal | string,
+    cantidadNueva: Decimal | string,
+  ): boolean {
+    return this.ejecutar(() => {
+      const resultado = this.base
         .prepare(
-          'UPDATE productos SET contador_ventas = contador_ventas + 1, actualizado_en = ? WHERE id = ?',
+          `UPDATE productos
+              SET contador_ventas = contador_ventas + 1,
+                  cantidad_vendida = @cantidad_nueva,
+                  actualizado_en = @actualizado_en
+            WHERE id = @id
+              AND cantidad_vendida = @cantidad_leida`,
         )
-        .run(ahora(), id);
+        .run({
+          id,
+          cantidad_nueva: aColumnaCantidad(cantidadNueva),
+          cantidad_leida: aColumnaCantidad(cantidadQueSeLeyo),
+          actualizado_en: ahora(),
+        });
+      return resultado.changes === 1;
     });
   }
 

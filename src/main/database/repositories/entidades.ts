@@ -137,7 +137,10 @@ export interface Producto {
   readonly cantidadPredefinidaIcono: Decimal;
   readonly precioBase: Decimal;
   readonly inventarioDisponible: Decimal;
+  /** Cuántas VECES se vendió. Ordena los íconos de la pantalla de venta. */
   readonly contadorVentas: number;
+  /** Cuánta CANTIDAD acumulada salió. No es comparable entre unidades. */
+  readonly cantidadVendida: Decimal;
   readonly activo: boolean;
   readonly creadoEn: string;
   readonly actualizadoEn: string;

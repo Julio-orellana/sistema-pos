@@ -15,7 +15,7 @@
 
 import Decimal from 'decimal.js';
 
-import { CERO, montoACadena, multiplicar, sumar } from '@shared/money';
+import { CERO, montoACadena, multiplicar, sumar, sumarLista } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
 import type {
   CajaSesion,
@@ -26,6 +26,7 @@ import type {
 } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeCajaSesiones } from '@main/database/repositories/caja-sesiones';
+import type { RepositorioDeVentas } from '@main/database/repositories/ventas';
 import type {
   RepositorioDeDenominaciones,
   RepositorioDeDesgloseDeCaja,
@@ -105,6 +106,7 @@ export interface DependenciasDeCaja {
   readonly cajaSesiones: RepositorioDeCajaSesiones;
   readonly denominaciones: RepositorioDeDenominaciones;
   readonly desglose: RepositorioDeDesgloseDeCaja;
+  readonly ventas: RepositorioDeVentas;
   readonly auditoria: RepositorioDeAuditoria;
   readonly ahora?: () => number;
 }
@@ -113,6 +115,7 @@ export class ServicioDeCaja {
   private readonly cajaSesiones: RepositorioDeCajaSesiones;
   private readonly denominaciones: RepositorioDeDenominaciones;
   private readonly desglose: RepositorioDeDesgloseDeCaja;
+  private readonly ventas: RepositorioDeVentas;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly ahora: () => number;
 
@@ -120,6 +123,7 @@ export class ServicioDeCaja {
     this.cajaSesiones = dependencias.cajaSesiones;
     this.denominaciones = dependencias.denominaciones;
     this.desglose = dependencias.desglose;
+    this.ventas = dependencias.ventas;
     this.auditoria = dependencias.auditoria;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
@@ -272,17 +276,35 @@ export class ServicioDeCaja {
   }
 
   /**
-   * Calcula lo que DEBERÍA haber en la caja al cerrar.
+   * Calcula lo que DEBERÍA haber en el cajón al cerrar.
    *
-   * TODO(ventas): hoy devuelve el monto inicial, que equivale a asumir cero
-   * ventas en efectivo. Es correcto solo mientras no exista el módulo de
-   * ventas. En cuanto exista, esto DEBE pasar a ser
-   * `monto_inicial + suma de las ventas en efectivo de esta sesión`.
-   * Ver CLAUDE.md §4.10. No se inventa una lógica de ventas parcial para
-   * rellenarlo: quedaría enterrada y nadie la encontraría después.
+   *     monto_esperado = monto_inicial + Σ ventas EN EFECTIVO y COMPLETADAS
+   *                                        de esta sesión de caja
+   *
+   * QUÉ QUEDA FUERA, y por qué:
+   *
+   *   · LAS VENTAS CON TARJETA. Ese dinero nunca entró al cajón: entra por el
+   *     banco, con su propia liquidación. Sumarlas haría que toda caja con
+   *     ventas con tarjeta apareciera faltante por exactamente ese monto, y el
+   *     cajero tendría que pedir una autorización de descuadre por un dinero
+   *     que nadie perdió.
+   *   · LAS VENTAS ANULADAS. Hoy nada las produce —anular una venta ya
+   *     registrada todavía no existe—, pero el filtro va desde ahora para que
+   *     el día que exista no haya que acordarse de agregarlo acá.
+   *   · LAS VENTAS DE OTRAS SESIONES. Se filtra por `caja_sesion_id`, no por
+   *     fecha: un turno es un turno, aunque cruce la medianoche.
+   *
+   * La suma se hace con Decimal.js sobre los totales ya redondeados de cada
+   * venta, no con un `SUM()` de SQL: `ventas.total` es TEXT canónico y SQLite
+   * lo convertiría a punto flotante para sumarlo.
+   *
+   * SUMA LOS TOTALES, NO LOS SUBTOTALES: el descuento discrecional ya está
+   * aplicado en el total, que es lo que el cliente pagó y lo que entró al
+   * cajón.
    */
   public montoEsperadoDe(sesion: CajaSesion): Decimal {
-    return sesion.montoInicial;
+    const enEfectivo = this.ventas.totalesEnEfectivoDeSesion(sesion.id);
+    return sumar(sesion.montoInicial, sumarLista(enEfectivo));
   }
 
   /**

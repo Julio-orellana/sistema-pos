@@ -4,16 +4,22 @@
  * La pantalla de venta: acceso condicionado, cuadrícula y ticket.
  *
  * Lo que se verifica es que la pantalla NO muestre la cuadrícula sin una caja
- * propia abierta, que el ticket se arme como el cajero espera, y que ninguna
- * acción destructiva ocurra sin confirmar. El cobro no existe todavía y la
- * pantalla tiene que decirlo, no simularlo.
+ * propia abierta, que el ticket se arme como el cajero espera, que ninguna
+ * acción destructiva ocurra sin confirmar, y que después de cobrar la pantalla
+ * quede lista para la siguiente venta en vez de dejar el ticket cobrado a la
+ * vista.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-import type { EstadoDeVenta, ProductoParaVender } from '@shared/types/ipc';
+import type {
+  EstadoDeVenta,
+  PedidoDeCobro,
+  ProductoParaVender,
+  ResultadoDeCobro,
+} from '@shared/types/ipc';
 import { PantallaDeVenta } from '../PantallaDeVenta';
 
 declare global {
@@ -29,6 +35,8 @@ const MAIZ: ProductoParaVender = {
   unidadPeso: 'lb',
   cantidadPredefinidaIcono: '1.000',
   precioBase: '4.25',
+  precioEfectivo: '4.25',
+  precioEspecial: null,
   inventarioDisponible: '8.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -43,6 +51,8 @@ const HUEVOS: ProductoParaVender = {
   unidadPeso: null,
   cantidadPredefinidaIcono: '1.000',
   precioBase: '42.00',
+  precioEfectivo: '42.00',
+  precioEspecial: null,
   inventarioDisponible: '24.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -71,11 +81,38 @@ let contenedor: HTMLDivElement;
 let raiz: Root;
 let fueACaja: number;
 
+/** Los pedidos de cobro que la pantalla mandó, en orden. */
+let cobrosPedidos: PedidoDeCobro[];
+
+/** Lo que el proceso principal simulado va a responder a cada cobro, en orden. */
+let respuestasDeCobro: ResultadoDeCobro[];
+
+/** Una venta registrada de mentira, para el camino feliz. */
+const VENTA_OK: ResultadoDeCobro = {
+  registrada: true,
+  ventaId: 'v-1',
+  fecha: '2026-09-10T15:00:00.000Z',
+  subtotal: '4.25',
+  descuentoAplicado: '0.00',
+  total: '4.25',
+  formaPago: 'efectivo',
+  numBoleta: null,
+  lineas: 1,
+  lineasConPrecioEspecial: 0,
+};
+
 function instalarApi(estado: EstadoDeVenta): void {
   fueACaja = 0;
+  cobrosPedidos = [];
+  respuestasDeCobro = [VENTA_OK];
   (window as unknown as { pos: unknown }).pos = {
     venta: {
       estado: async (): Promise<unknown> => Promise.resolve({ ok: true as const, datos: estado }),
+      cobrar: async (pedido: PedidoDeCobro): Promise<unknown> => {
+        cobrosPedidos.push(pedido);
+        const respuesta = respuestasDeCobro.shift() ?? VENTA_OK;
+        return Promise.resolve({ ok: true as const, datos: respuesta });
+      },
     },
   };
 }
@@ -406,7 +443,24 @@ describe('El aviso de inventario avisa sin bloquear', () => {
 });
 
 // ===========================================================================
-describe('El botón de cobrar todavía no cobra, y lo dice', () => {
+/** Escribe en un campo de texto como lo haría una persona. */
+async function escribir(elemento: HTMLElement, texto: string): Promise<void> {
+  const campo = elemento as HTMLInputElement;
+  /*
+    Se escribe por el descriptor nativo y no con `campo.value = texto`: React
+    sobreescribe la propiedad del elemento para saber qué cambió, y asignarle
+    directamente hace que el evento llegue sin el valor nuevo.
+  */
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  const escribirValor = descriptor?.set?.bind(campo);
+  await act(async () => {
+    escribirValor?.(texto);
+    campo.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
+describe('Cobrar: del ticket a la venta registrada', () => {
   beforeEach(() => {
     instalarApi(PUEDE_VENDER);
   });
@@ -416,14 +470,202 @@ describe('El botón de cobrar todavía no cobra, y lo dice', () => {
     expect((exigir('cobrar') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('con el ticket lleno avisa que el cobro llega en otro módulo', async () => {
+  it('el diálogo muestra el total del ticket antes de cobrar nada', async () => {
     await montar();
     await tocarProducto('p-maiz');
     await clic(exigir('cobrar'));
 
-    // Ni simula un cobro exitoso ni se queda mudo: las dos cosas engañarían al
-    // cajero de maneras distintas.
-    expect(porPrueba('aviso-de-cobro')?.textContent).toContain('siguiente módulo');
+    expect(porPrueba('dialogo-de-cobro')).not.toBeNull();
+    expect(porPrueba('cobro-total')?.textContent).toContain('4.25');
+    // Todavía no se mandó nada al proceso principal.
+    expect(cobrosPedidos).toHaveLength(0);
+  });
+
+  it('el camino corto: sin descuento y en efectivo', async () => {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('cobro-confirmar'));
+
+    expect(cobrosPedidos).toHaveLength(1);
+    expect(cobrosPedidos[0]?.descuento).toBeNull();
+    expect(cobrosPedidos[0]?.formaPago).toBe('efectivo');
+    expect(cobrosPedidos[0]?.numBoleta).toBeNull();
+    // El pedido lleva qué producto y cuánto, NUNCA un precio: ese lo pone el
+    // proceso principal contra el catálogo.
+    expect(cobrosPedidos[0]?.lineas).toEqual([{ productoId: 'p-maiz', cantidad: '1.000' }]);
+  });
+
+  it('DESPUÉS DE COBRAR el ticket queda vacío y la pantalla lista', async () => {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('cobro-confirmar'));
+
+    expect(porPrueba('cobro-listo')).not.toBeNull();
+    expect(porPrueba('cobro-total-cobrado')?.textContent).toContain('4.25');
+
+    await clic(exigir('cobro-siguiente-venta'));
+
+    expect(porPrueba('cobro-listo')).toBeNull();
+    expect(todos('linea-de-ticket')).toHaveLength(0);
+    expect(porPrueba('ticket-vacio')).not.toBeNull();
+    expect(porPrueba('venta-registrada')?.textContent).toContain('4.25');
+  });
+
+  it('con tarjeta y SIN boleta no se manda nada: se avisa', async () => {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('pago-tarjeta'));
+    await clic(exigir('cobro-confirmar'));
+
+    expect(porPrueba('cobro-aviso')?.textContent).toContain('boleta');
+    expect(cobrosPedidos).toHaveLength(0);
+  });
+
+  it('con tarjeta y boleta, el número viaja tal cual, con su cero a la izquierda', async () => {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('pago-tarjeta'));
+    await escribir(exigir('pago-boleta'), '004512');
+    await clic(exigir('cobro-confirmar'));
+
+    expect(cobrosPedidos[0]?.formaPago).toBe('tarjeta');
+    expect(cobrosPedidos[0]?.numBoleta).toBe('004512');
+  });
+
+  it('volver a efectivo LIMPIA la boleta escrita por error', async () => {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('pago-tarjeta'));
+    await escribir(exigir('pago-boleta'), '004512');
+    await clic(exigir('pago-efectivo'));
+    await clic(exigir('cobro-confirmar'));
+
+    // La base rechaza una venta en efectivo con boleta (migración 014), y ese
+    // rechazo sería incomprensible para el cajero.
+    expect(cobrosPedidos[0]?.numBoleta).toBeNull();
+  });
+
+  it('el descuento se resta del total que se muestra antes de cobrar', async () => {
+    await montar();
+    await tocarProducto('p-huevos');
+    await clic(exigir('cobrar'));
+    await clic(exigir('descuento-porcentaje'));
+    await escribir(exigir('descuento-valor'), '10');
+
+    expect(porPrueba('cobro-subtotal')?.textContent).toContain('42.00');
+    expect(porPrueba('cobro-rebaja')?.textContent).toContain('4.20');
+    expect(porPrueba('cobro-total')?.textContent).toContain('37.80');
+  });
+
+  it('cancelar el cobro NO toca el ticket', async () => {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-cancelar'));
+
+    expect(porPrueba('dialogo-de-cobro')).toBeNull();
     expect(todos('linea-de-ticket')).toHaveLength(1);
+    expect(cobrosPedidos).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+/**
+ * El descuento que se pasa del tope del rol.
+ *
+ * Lo que importa acá no es que pida un PIN: es que MUESTRE CUÁNTO se está por
+ * autorizar antes de pedirlo. Quien teclea su código tiene que ver el número
+ * que aprueba, igual que en el cierre de caja descuadrado.
+ */
+describe('Autorización de un descuento que excede el tope', () => {
+  const RECHAZO_POR_TOPE: ResultadoDeCobro = {
+    registrada: false,
+    codigo: 'REQUIERE_AUTORIZACION_DE_DESCUENTO',
+    mensaje: 'Ese descuento pasa el límite de tu rol.',
+    requiereAutorizacion: true,
+    tope: '10.00',
+    exceso: '15.00',
+    segundosParaReintentar: null,
+  };
+
+  beforeEach(() => {
+    instalarApi(PUEDE_VENDER);
+  });
+
+  it('muestra el tope y el exceso ANTES de pedir el PIN', async () => {
+    respuestasDeCobro = [RECHAZO_POR_TOPE];
+    await montar();
+    await tocarProducto('p-huevos');
+    await clic(exigir('cobrar'));
+    await clic(exigir('descuento-porcentaje'));
+    await escribir(exigir('descuento-valor'), '25');
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('cobro-confirmar'));
+
+    expect(porPrueba('cobro-autorizacion')).not.toBeNull();
+    expect(porPrueba('cobro-descuento-pedido')?.textContent).toContain('25');
+    expect(porPrueba('cobro-tope')?.textContent).toContain('10.00');
+    expect(porPrueba('cobro-exceso')?.textContent).toContain('15.00');
+  });
+
+  it('el PIN viaja en el SEGUNDO intento, no en el primero', async () => {
+    respuestasDeCobro = [RECHAZO_POR_TOPE, VENTA_OK];
+    await montar();
+    await tocarProducto('p-huevos');
+    await clic(exigir('cobrar'));
+    await clic(exigir('descuento-porcentaje'));
+    await escribir(exigir('descuento-valor'), '25');
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('cobro-confirmar'));
+
+    for (const digito of '2468') {
+      await clic(exigir(`tecla-${digito}`));
+    }
+    await clic(exigir('tecla-confirmar'));
+
+    expect(cobrosPedidos).toHaveLength(2);
+    expect(cobrosPedidos[0]?.pinDescuento).toBeUndefined();
+    expect(cobrosPedidos[1]?.pinDescuento).toBe('2468');
+    expect(porPrueba('cobro-listo')).not.toBeNull();
+  });
+
+  it('un PIN equivocado deja el diálogo abierto con su aviso', async () => {
+    respuestasDeCobro = [
+      RECHAZO_POR_TOPE,
+      {
+        registrada: false,
+        codigo: 'PIN_INCORRECTO',
+        mensaje: 'El PIN no es correcto.',
+        requiereAutorizacion: true,
+        tope: '10.00',
+        exceso: '15.00',
+        segundosParaReintentar: null,
+      },
+    ];
+    await montar();
+    await tocarProducto('p-huevos');
+    await clic(exigir('cobrar'));
+    await clic(exigir('descuento-porcentaje'));
+    await escribir(exigir('descuento-valor'), '25');
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('cobro-confirmar'));
+
+    for (const digito of '1111') {
+      await clic(exigir(`tecla-${digito}`));
+    }
+    await clic(exigir('tecla-confirmar'));
+
+    expect(porPrueba('cobro-autorizacion')).not.toBeNull();
+    expect(porPrueba('cobro-aviso')?.textContent).toContain('no es correcto');
   });
 });

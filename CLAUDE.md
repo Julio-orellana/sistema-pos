@@ -352,18 +352,23 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**No hay ninguna migración pendiente de aplicar en la nube.** Las dos últimas
-fueron `0010_una_caja_por_sistema` y `0012_caja_cerrada_por`, el 2026-09-09:
-`idx_caja_sesiones_una_abierta` pasó a `(estado) WHERE estado = 'abierta'` y
-`cerrada_por` quedó como `uuid` nulable con `ON DELETE SET NULL` hacia
-`usuarios`, verificado contra `pg_indexes`, `information_schema` y
-`pg_constraint`.
+**HAY DOS MIGRACIONES PENDIENTES DE APLICAR EN LA NUBE:
+`0014_boleta_solo_con_tarjeta` y `0015_cantidad_vendida`**, las dos del módulo
+de venta. Se aplican como todas: mostrando antes el SQL exacto y con la
+aprobación explícita de Julio, y trayendo después la evidencia consultada contra
+el proyecto real.
+
+Las dos últimas aplicadas fueron `0010_una_caja_por_sistema` y
+`0012_caja_cerrada_por`, el 2026-09-09: `idx_caja_sesiones_una_abierta` pasó a
+`(estado) WHERE estado = 'abierta'` y `cerrada_por` quedó como `uuid` nulable
+con `ON DELETE SET NULL` hacia `usuarios`, verificado contra `pg_indexes`,
+`information_schema` y `pg_constraint`.
 
 Las migraciones locales 002 (bloqueo por intentos), 003 (candado por superficie)
-y 006 y 011 (que solo amplían el CHECK de superficies de esa misma tabla) **no
-tienen espejo a propósito**: son estado operativo de una terminal, no datos de negocio.
-Ver `supabase/migrations/README.md` y la fila correspondiente del registro de
-decisiones.
+y 006, 011 y 013 (que solo amplían el CHECK de superficies de esa misma tabla)
+**no tienen espejo a propósito**: son estado operativo de una terminal, no datos
+de negocio. Ver `supabase/migrations/README.md` y la fila correspondiente del
+registro de decisiones.
 
 #### Las dos migraciones eliminadas NO son el mismo caso
 
@@ -868,19 +873,32 @@ encontrarlo está en la cabecera de la migración 008. Hoy no puede haber
 ninguno: la regla la aplicaba el servicio desde que existe el módulo de caja y
 no hay ninguna tienda en producción.
 
-### 4.10 PENDIENTE: `monto_esperado` todavía no suma ventas
+### 4.10 `monto_esperado`: la fórmula, ya cerrada
 
-`ServicioDeCaja.montoEsperadoDe` devuelve **el monto inicial**, que equivale a
-asumir cero ventas en efectivo. Es correcto solo mientras no exista el módulo
-de ventas.
+**RESUELTO en el Prompt 19.** Hasta entonces `ServicioDeCaja.montoEsperadoDe`
+devolvía el monto inicial, con un `TODO(ventas)`, porque no había ventas que
+sumar. Ahora la fórmula es la definitiva:
 
-> **EN CUANTO EXISTA EL MÓDULO DE VENTAS, ESTO DEBE PASAR A SER:**
-> `monto_inicial + suma de las ventas en efectivo de esta sesión`.
+```
+monto_esperado = monto_inicial + Σ ventas EN EFECTIVO y COMPLETADAS
+                                   de esta sesión de caja
+```
 
-No se inventó una lógica de ventas parcial para rellenarlo: quedaría enterrada
-y nadie la encontraría después. Hay un `TODO(ventas)` en el método y una prueba
-que documenta el comportamiento actual, para que cambiarlo obligue a tocar
-ambos.
+Qué queda fuera, y por qué:
+
+| Se excluye | Razón |
+|---|---|
+| **Las ventas con tarjeta** | Ese dinero nunca entró al cajón: entra por el banco, con su propia liquidación. Sumarlas haría que toda caja con ventas con tarjeta apareciera faltante por exactamente ese monto, y el cajero tendría que pedir una autorización de descuadre por un dinero que nadie perdió. |
+| **Las ventas anuladas** | Hoy nada las produce —anular una venta registrada todavía no existe—, pero el filtro va desde ahora para que el día que exista no haya que acordarse de agregarlo. |
+| **Las ventas de otros turnos** | Se filtra por `caja_sesion_id`, no por fecha: un turno es un turno, aunque cruce la medianoche. |
+
+**Suma los TOTALES, no los subtotales**: el descuento discrecional ya está
+aplicado en el total, que es lo que el cliente pagó y lo que entró al cajón.
+
+**La suma se hace con Decimal.js, no con un `SUM()` de SQL.** `ventas.total` es
+TEXT canónico y SQLite lo convertiría a punto flotante para sumarlo, que es
+exactamente lo que descuadraría el corte. El filtro sí se hace en SQL, porque
+`forma_pago` y `estado` son texto de verdad.
 
 ### 4.11 Catálogo: categorías, productos e inventario
 
@@ -1068,16 +1086,21 @@ desactivados seguiría ocupando los nombres por el UNIQUE de la tabla, y el
 "Maíz blanco" real de Jimmy chocaría con el de mentira. Si algún producto de
 ejemplo llegara a tener ventas, **no se borra nada** y se informa cuál.
 
-### 4.12 Pantalla de venta (el ticket, no el cobro)
+### 4.12 Pantalla de venta: del ticket al cobro
 
 #### Qué hace y qué NO hace todavía
 
-Arma el ticket **en memoria**: agrega productos, corrige cantidades, quita
-líneas y calcula el total. **No registra la venta, no descuenta inventario, no
-aplica descuentos, no pide forma de pago y no imprime.** El botón de cobrar
-existe y avisa que el cobro llega en otro módulo; ni simula un cobro exitoso
-—sería mentirle al cajero— ni se queda mudo, que se leería como que la pantalla
-se colgó.
+Arma el ticket **en memoria** —agrega productos, corrige cantidades, quita
+líneas y calcula el total— y lo manda a cobrar por el canal `venta:cobrar`.
+**Todavía no imprime ni genera recibo, y no se puede anular una venta ya
+registrada.**
+
+Lo que la pantalla **no** hace es decidir cuánto se cobra: el precio de cada
+línea, el descuento y el total los vuelve a calcular el proceso principal
+contra el catálogo, dentro de la misma transacción que descuenta inventario. El
+payload de cobro lleva **qué producto y cuánto**, nunca un precio; si los
+precios viajaran desde la ventana, cualquiera podría cobrar un maíz a un
+centavo llamando al canal directamente.
 
 La lógica del ticket vive en `src/renderer/src/venta/ticket.ts`, en funciones
 puras: así se prueba sin DOM y sin base de datos.
@@ -1113,22 +1136,26 @@ Es deliberado. El saldo con el que se compara es una **foto tomada al cargar la
 pantalla**, y mientras el cajero arma el ticket ese número puede haber
 cambiado. Bloquear con un dato viejo impediría vender mercadería que sí está en
 la bodega. **La comprobación real es el piso `>= 0` de la base dentro de la
-transacción atómica que registra la venta** (§4.3), y esa todavía no existe:
-llega con el módulo de registro. El comentario que lo dice está en
-`excedeInventarioConocido`, junto al código.
+transacción atómica que registra la venta** (§4.3, §4.13). El comentario que lo
+dice está en `excedeInventarioConocido`, junto al código.
 
 #### El orden de la cuadrícula es determinista
 
 `contador_ventas DESC, nombre ASC`. El desempate por nombre no es decorativo:
-hoy **nada incrementa `contador_ventas`**, así que todos los productos están en
-cero y sin desempate SQLite podría devolverlos en cualquier orden; la
-cuadrícula se reacomodaría entre recargas y el cajero que ya sabe dónde está el
-maíz tendría que volver a buscarlo. Mismo criterio de «nunca dejar un orden
-ambiguo» del reparto de centavos.
+un catálogo recién cargado tiene todos los contadores en cero, y sin desempate
+SQLite podría devolver las filas en cualquier orden; la cuadrícula se
+reacomodaría entre recargas y el cajero que ya sabe dónde está el maíz tendría
+que volver a buscarlo. Mismo criterio de «nunca dejar un orden ambiguo» del
+reparto de centavos.
 
-Por lo mismo, la insignia de «más vendido» **solo aparece en productos con
-ventas reales**. Hoy no la ve ninguno: poner el número igual sería decorar la
-pantalla con un dato falso.
+La insignia de «más vendido» **solo aparece en productos con ventas reales**,
+así que en una instalación nueva no la lleva ninguno: poner el número igual
+sería decorar la pantalla con un dato falso.
+
+**`contador_ventas` cuenta VECES, no cantidad**, y desde el Prompt 19 convive
+con `cantidad_vendida`, que sí acumula la cantidad. Cuál de las dos debe ordenar
+la cuadrícula es una definición de negocio abierta: ver el punto 14 de §6.2 y la
+fila correspondiente del registro de decisiones.
 
 #### Qué se tomó del diseño importado y qué se ajustó
 
@@ -1150,7 +1177,7 @@ o más.
 | Tipografías Archivo e IBM Plex Mono desde Google Fonts | Se nombran primero, con una pila del sistema detrás; **no se cargan de la red** | La política de seguridad de contenido prohíbe conexiones salientes desde el renderer, y **la tienda tiene que funcionar sin internet**. Empaquetar los archivos de fuente es posible —las dos son de licencia abierta— y sería un cambio de una línea. |
 | Paleta clara en toda la aplicación | Acotada a la pantalla de venta | Las otras cinco pantallas siguen oscuras. Migrarlas es una decisión aparte, no algo que deba colarse en el prompt de la venta. |
 | Anchos fijos: 244 px de categorías, 552 px de ticket | `clamp()` | El diseño está dibujado a 1920 px. En una pantalla menor los dos paneles fijos se comían la cuadrícula y la dejaban **en una sola columna**; se vio corriendo la aplicación. |
-| Cliente, selector detalle/mayoreo, descuento, formas de pago, número de ticket | **No se implementaron** | Son módulos que no existen. Dibujarlos vacíos sería prometer funciones que no están. |
+| Cliente, selector detalle/mayoreo, número de ticket | **No se implementaron** | Son módulos que no existen. Dibujarlos vacíos sería prometer funciones que no están. El descuento y la forma de pago **sí** llegaron en el Prompt 19, en el diálogo de cobro. |
 | Nombre de la tienda, «CAJA 1», reloj | No se muestran | No hay de dónde sacarlos: no existe configuración de tienda ni de terminal. Inventarlos sería atribuirle datos a Jimmy. |
 
 Además, corriendo la aplicación apareció un defecto que ninguna prueba veía: el
@@ -1158,6 +1185,13 @@ pie del ticket, con el botón de cobrar, quedaba **debajo de la barra de estado
 fija** del kiosko. La pantalla de venta reserva ahora ese alto
 (`--alto-barra-estado`). Vale para cualquier pantalla futura que use
 `position: fixed`.
+
+Y un segundo defecto de la misma clase, en el Prompt 19: el distintivo de precio
+especial estaba dentro de la columna del nombre, donde compite por espacio con
+el subtotal, y en el ticket angosto se partía en **cuatro renglones** —peor
+todavía por ir en mayúsculas espaciadas—. Ahora ocupa su propia fila, a lo
+ancho de la línea y en minúsculas. **Los distintivos y avisos de una línea del
+ticket van en su propia fila**, no metidos en la columna del nombre.
 
 #### El teclado táctil es el mismo, con dos modos
 
@@ -1168,6 +1202,163 @@ ocultar una cantidad que el cliente está mirando pesar no protege nada e
 impediría corregir un error de tecleo. El punto decimal solo existe donde
 significa algo: tres decimales para el peso, ninguno para lo que se vende por
 unidad.
+
+### 4.13 El registro de la venta: la transacción del proyecto
+
+`ServicioDeVenta.registrar` es la operación donde se juntan casi todas las
+reglas del sistema. **Todo ocurre dentro de una sola transacción de SQLite**, en
+este orden, y si cualquier paso falla no queda nada escrito:
+
+| # | Paso | Por qué va donde va |
+|---|---|---|
+| 1 | **Se reverifica la caja** | Entre que se abrió la pantalla y este momento alguien pudo haber cerrado el turno. Va ANTES de tocar inventario para no descontar mercadería de una venta que igual va a rechazarse. |
+| 2 | Se resuelve cada línea: producto activo, cantidad positiva, precio efectivo, saldo nuevo | Todas las validaciones antes de la primera escritura. |
+| 3 | Subtotal exacto, descuento y **total con redondeo único** | La cadena entera se mantiene exacta y se redondea una sola vez. |
+| 4 | **Se descuenta inventario**, línea por línea, con comparar-y-cambiar | Primera escritura. Si una línea falla, la transacción se revierte y ninguna otra queda tocada. |
+| 5 | Cabecera en `ventas` y detalle en `venta_detalle`, con `repartirMonto` para `subtotal_impreso` | El reparto conserva `orden_linea`, que es el orden de captura. |
+| 6 | `contador_ventas` y `cantidad_vendida` de cada producto | En la MISMA transacción: si corrieran aparte y esa fallara, el orden de los íconos dejaría de corresponder a lo vendido. |
+| 7 | Asiento de auditoría de la venta, y otro más si hubo autorización de descuento | Son dos hechos distintos, con dos responsables distintos. |
+
+El servicio recibe **la conexión** además de los repositorios, porque es quien
+sabe qué va adentro de la transacción. Los repositorios nunca la abren.
+
+**No hay un solo `try/catch` dentro de la transacción.** `transaction()` de
+better-sqlite3 revierte con cualquier excepción y vuelve a lanzarla: ese es todo
+el mecanismo de «todo o nada», y un `catch` mal puesto podría tragarse un fallo
+a medio camino y dejar la venta escrita a medias.
+
+**Cero reintentos automáticos** ante un conflicto de inventario: la política
+está en §4.3 y el servicio la aplica tal cual, nombrando en el mensaje **qué
+producto** falló.
+
+#### El mismo producto dos veces en el ticket se rechaza con SU motivo
+
+La pantalla junta las cantidades del mismo producto en una sola línea, pero el
+canal IPC se trata como entrada no confiable. Dos líneas del mismo producto
+leerían las dos el MISMO saldo y la segunda fallaría con
+`CONFLICTO_DE_INVENTARIO`, que le diría al cajero algo falso: que el saldo
+cambió mientras cobraba. Se rechaza antes, con `DATO_INVALIDO` y el motivo
+verdadero.
+
+#### Precio especial y descuento discrecional son DOS cosas distintas
+
+Es la distinción que `src/main/domain/venta/precios.ts` existe para mantener:
+
+| | Precio especial | Descuento discrecional |
+|---|---|---|
+| Sobre qué | Un **producto** | La **venta completa** |
+| Quién decide | Un administrador, **de antemano**, con vigencia | Quien vende, **en el momento** |
+| Dónde vive | `precios_especiales` | `ventas.descuento_tipo` / `descuento_valor` |
+| ¿Pide autorización? | No: ya la tuvo al configurarse | Sí, si pasa el tope del rol |
+| Se ve en pantalla | Línea marcada, precio de lista tachado | Renglón «Descuento» en el diálogo de cobro |
+
+Un mismo ticket puede llevar los dos, y se aplican en ese orden: primero el
+precio especial de cada línea, después el descuento sobre el total.
+
+**Si hay varios precios especiales vigentes para un producto, gana el más
+reciente por `vigente_desde` y NO se acumulan.** Dos promociones encimadas
+darían un descuento que nadie configuró, y el cajero no tendría cómo explicarle
+al cliente de dónde salió el precio.
+
+**La vigencia se compara POR DÍA, no por instante.** Una promoción cuyo
+`vigente_hasta` es hoy sigue valiendo todo el día: el último día de una promoción
+es un día de promoción, y con comparación por instante el cliente pagaría de más
+justo el día en que el cartel del mostrador todavía dice que está rebajado.
+
+> **Cuidado con la zona horaria.** La comparación usa `date()` de SQLite sobre
+> las cadenas ISO, que están en UTC. Guatemala es UTC−6, así que entre las 18:00
+> y la medianoche locales el «hoy» de la base ya es el día siguiente. Para una
+> promoción de varios días no cambia nada; para una de un solo día, su último
+> día termina a las 18:00 de la tienda. Cuando exista una promoción real habrá
+> que decidir si se corrige, y es una definición de negocio, no técnica.
+
+#### El tope de descuento es POR ROL, y por TIPO
+
+El porcentaje se compara contra `descuento_max_porcentaje` y el monto fijo
+contra `descuento_max_monto_fijo`. **Son dos topes independientes y no se
+convierten entre sí**: convertir uno en el otro exigiría conocer el total de la
+venta y haría que el mismo porcentaje pasara o no según lo que llevara el
+cliente.
+
+**Sin fila configurada para el rol, el tope es CERO.** Es el valor seguro: un
+olvido de configuración no debe convertirse en un permiso. La consecuencia
+práctica es que en una instalación recién montada **cualquier descuento pide
+PIN, incluso el que pide un administrador**, hasta que alguien configure los
+límites. Todavía no hay pantalla para configurarlos: ver el punto 15 de §6.2.
+
+Si el descuento **no** excede el tope, **no se guarda autorizante aunque venga**.
+Registrar una autorización que no hizo falta ensuciaría la auditoría con
+permisos que nadie usó, y `WHERE descuento_autorizado_por IS NOT NULL` dejaría
+de ser la lista de las excepciones reales.
+
+#### La autorización del descuento: superficie propia, sin PIN remoto
+
+Superficie `descuento_excedente` (migración 013, no espejada), con su propio
+candado de intentos. **No acepta el PIN remoto**, por la misma razón de alcance
+de siempre: ese PIN se pidió para autorizar diferencias de caja por teléfono y
+nada más. Dárselo además al descuento sería ampliarle el alcance más allá de lo
+pedido, y un permiso creado para un caso que termina sirviendo para varios deja
+de ser un permiso acotado. Y acá el argumento es más fuerte que en la salida
+controlada: **un descuento es dinero que sale de la venta**, y autorizarlo a
+distancia sin ver el ticket es aprobar a ciegas.
+
+**Se muestra CUÁNTO se está por autorizar antes de pedir el código**: el
+descuento pedido, el tope del rol y el exceso. Mismo criterio que el cierre de
+caja descuadrado. El cobro se manda dos veces: la primera sin PIN, que devuelve
+el rechazo con esos números, y la segunda con el PIN.
+
+#### Forma de pago: la boleta va con tarjeta y solo con tarjeta
+
+Regla en las tres capas: el diálogo avisa mientras se escribe, el servicio la
+rechaza con un mensaje que la nombra, y la base la hace cumplir con
+`ventas_boleta_solo_con_tarjeta` (migración 014). Sin ese número una venta con
+tarjeta no se puede conciliar contra el estado de cuenta del banco.
+
+**Volver a «efectivo» limpia la boleta escrita por error**, porque la base
+rechaza una venta en efectivo con boleta y ese rechazo sería incomprensible
+frente a un cliente.
+
+**El descuento en la base ya estaba amarrado desde la migración 001** —no se
+puede guardar un tipo sin valor, ni un valor sin tipo, ni un autorizante sin
+descuento—, así que no hizo falta agregar ese CHECK. Se midió antes de escribir
+nada. La 014 cierra el hueco que sí estaba abierto, que era la boleta.
+
+#### Después de cobrar, la pantalla vuelve a cero
+
+Ticket vacío, sin descuento, con la confirmación del total a la vista y **el
+catálogo releído**, porque el inventario y el orden de los íconos acaban de
+cambiar. Dejar el ticket cobrado a la vista invita a cobrarlo dos veces.
+
+La confirmación muestra el total y **el id de la venta como referencia**. No hay
+número correlativo todavía: ese vive en `recibos.numero_recibo` y llega con el
+módulo de recibos. Inventar acá un número que después no coincida con el impreso
+sería peor que no mostrar ninguno. Ver el punto 16 de §6.2.
+
+#### `contador_ventas` cuenta VECES; `cantidad_vendida` cuenta CANTIDAD
+
+Son dos columnas y dos preguntas distintas, y suben **en un solo `UPDATE`** para
+que sea imposible mover una sin la otra.
+
+| Columna | Qué mide | Para qué sirve |
+|---|---|---|
+| `contador_ventas` (INTEGER) | Cuántas VECES se vendió | Ordena los íconos de la cuadrícula |
+| `cantidad_vendida` (TEXT canónico) | Cuánta mercadería salió | Conciliar contra inventario; base del módulo de mermas |
+
+**Por qué dos y no una.** El pedido original era que `contador_ventas` subiera
+por la cantidad vendida, pero es INTEGER y una venta a granel de 2.5 lb no cabe
+en un entero sin mentir: truncarla pierde media libra en cada venta y
+redondearla inventa media libra que nadie compró. Cambiarle el tipo a la columna
+exigiría el rebuild de doce pasos de `productos`, que este proyecto ya descartó
+una vez (ver la fila de la migración 008): `venta_detalle` y `precios_especiales`
+la referencian, y el paso que apaga las llaves foráneas es ignorado dentro de una
+transacción, que es donde corre cada migración. `ADD COLUMN` no tiene ninguno de
+esos problemas.
+
+**Y las dos medidas sirven para cosas distintas.** Las libras de maíz y las
+unidades de huevo **no se pueden sumar en un mismo número**: ordenar la
+cuadrícula por cantidad pondría el maíz —que sale de a cien libras— siempre por
+encima de todo lo que se vende por unidad. Contar transacciones es la única
+medida comparable entre productos.
 
 ## 5. Registro de decisiones técnicas
 
@@ -1225,7 +1416,7 @@ unidad.
 | **Dos modos de capturar efectivo, mutuamente excluyentes por construcción.** En modo detallado el sistema suma; nunca se pide además el total. | Pedir siempre el total; pedir el total y el desglose y compararlos | Si se piden las dos cosas, tarde o temprano no coinciden y hay que decidir a cuál creerle, con un cliente esperando. El tipo es una unión discriminada, así que un valor con los dos modos a la vez no se puede ni construir: no es una validación que se pueda olvidar. | Prompt 13 — 2026-09-06 |
 | **PIN de autorización remota separado del PIN normal**, en la columna `pin_remoto_hash`. | Un solo PIN para todo; una contraseña aparte más larga | El PIN normal abre la sesión del administrador. Dictarlo por teléfono se lo entrega a quien escucha, para siempre y para todo. Con uno separado, lo que se cede al dictarlo es solo la capacidad de autorizar a distancia: no sirve para entrar, y la auditoría distingue `remoto` de `presencial`. El sistema deduce cuál se usó según cuál hash coincidió, sin preguntarle al cajero. Se rechaza configurarlo igual al PIN normal, porque eso anularía toda la separación. **Solo vale en el cierre con diferencia, no en la salida controlada**, y la razón es de alcance, no física: el PIN remoto se pidió para autorizar diferencias de caja y nada más, así que dárselo a otra acción sería ampliarlo más allá de lo pedido. Cada superficie nueva se decide aparte. | Prompt 13 — 2026-09-06; alcance corregido en Prompt 14 — 2026-09-06 |
 | **El candado por superficie se reutiliza, no se duplica**, para `cierre_con_diferencia`. | Un limitador nuevo para el cierre; compartir el de la salida controlada | El mecanismo ya era genérico salvo por el tipo de la superficie; se amplió el `CHECK` y el tipo, y se le pasa la superficie por parámetro. Cada superficie mantiene su propio contador, así que un error al autorizar un descuadre no bloquea la salida de la aplicación ni el login de nadie. | Prompt 13 — 2026-09-06 |
-| **`monto_esperado` es hoy el monto inicial, con un TODO explícito.** | Inventar una suma de ventas parcial para que "quede completo" | Todavía no existe el módulo de ventas. Una lógica de ventas a medias, escrita para rellenar un hueco, quedaría enterrada y nadie la encontraría al construir el módulo real. Queda marcado en el código y en la sección 4.10, y hay una prueba que documenta el comportamiento actual para que cambiarlo obligue a tocar ambos. | Prompt 13 — 2026-09-06 |
+| ~~**`monto_esperado` es hoy el monto inicial, con un TODO explícito.**~~ **RESUELTA en el Prompt 19:** ver la fila de la fórmula definitiva. | Inventar una suma de ventas parcial para que "quede completo" | Todavía no existe el módulo de ventas. Una lógica de ventas a medias, escrita para rellenar un hueco, quedaría enterrada y nadie la encontraría al construir el módulo real. Queda marcado en el código y en la sección 4.10, y hay una prueba que documenta el comportamiento actual para que cambiarlo obligue a tocar ambos. | Prompt 13 — 2026-09-06 |
 | **El ajuste de inventario es una ACCIÓN PROPIA, no un campo de «editar producto».** Canal IPC propio, botón propio y nombre de acción propio en la auditoría (`inventario_ajustado`). El tipo `CambiosDeProducto` ni siquiera incluye el saldo. | Un campo más en el formulario de edición; un campo editable en la lista | Recibir mercadería y corregir el catálogo son **hechos distintos del negocio**. Si compartieran operación, cambiar el inventario quedaría registrado como «producto editado» y no se podría auditar cuánta mercadería entró sin abrir y leer el contenido de cada asiento; peor, se podría mover el saldo «de paso» al corregir un precio, sin que quedara constancia de que entró nada. Separadas, el asiento guarda saldo anterior, saldo nuevo, cantidad agregada y motivo. La operación **solo suma**: las mermas y pérdidas son un módulo futuro con sus propias reglas de autorización, y dejar que esta aceptara negativos convertiría la recepción de mercadería en una vía para bajar inventario sin controles. | Prompt 15 — 2026-09-07 |
 | **NO se restringe cambiar `tipo_medida` después de creado un producto.** | Bloquear el cambio y obligar a crear un producto nuevo; permitirlo solo si el producto nunca se vendió | El motivo por el que se bloquearía —«corrompe las ventas pasadas»— **no aplica en este esquema**: `venta_detalle` guarda una foto del nombre, la unidad y el precio al momento de cada venta, así que un cambio de hoy no altera un solo comprobante de ayer. Sin ese riesgo, prohibirlo solo tendría costos: un error de carga —marcar «por unidad» algo que se vende por libra— obligaría a crear un producto nuevo y a arrastrar un duplicado inútil en el catálogo para siempre. La coherencia entre `tipo_medida` y `unidad_peso` sí se sigue exigiendo en cada cambio, en las tres capas. | Prompt 15 — 2026-09-07 |
 | **`categorias` recibe `activo`; ninguna categoría ni producto se borra jamás.** | Borrar la categoría cuando ya no se usa; dejar `categorias` sin baja lógica | Sin `activo` no había forma de retirar una categoría de las opciones sin borrarla, y borrarla es imposible en cuanto tenga un producto: `productos.categoria_id` la referencia con ON DELETE RESTRICT. Desactivar resuelve el caso real sin tocar nada más. Se acota a propósito qué significa: **solo** deja de ofrecerse al crear o editar un producto; no desactiva sus productos, no los mueve y no los saca de la venta, porque eso retiraría mercadería del mostrador sin que nadie lo pidiera. | Prompt 15 — 2026-09-07 |
@@ -1234,6 +1425,15 @@ unidad.
 | **Un `ErrorDeNegocio` cruza el puente IPC con SU código y SU mensaje**, no envuelto en un genérico. | Devolver siempre «La operación no pudo completarse» y dejar el detalle en la bitácora | Los mensajes de negocio están escritos para que los lea una persona frente a la pantalla —«El precio no puede ser negativo»— y esconderlos detrás de un genérico deja a quien carga el catálogo sin saber qué corregir. Era además lo que §4.7 ya decía que pasaba («el mensaje llega a la interfaz ya traducido») y no era cierto. Cualquier otro error sí se generaliza: un fallo inesperado no debe filtrar detalles internos a la ventana. El envoltorio vive en un solo lugar, `src/main/ipc/respuesta.ts`, para que ningún módulo tenga su propia variante. | Prompt 15 — 2026-09-07 |
 | **`playwright-core` como devDependency, en modo Electron, para `npm run verify:pantallas`.** | No verificar la interfaz automáticamente y confiar en pruebas manuales; usar el paquete `playwright` completo; escribir un arnés propio sobre el protocolo de depuración de Chrome | Hay defectos que ninguna prueba de Vitest puede ver: si el mensaje correcto LLEGA a la ventana y si quedó dentro de la parte visible. Los dos que se encontraron eran de esa clase y aparecieron a mano. Se eligió `playwright-core` y no `playwright` porque el primero **no tiene guiones de instalación ni dependencias** y por lo tanto no descarga navegadores —medido: tras instalarlo y usarlo no existe ninguna carpeta `ms-playwright`—, y su modo `_electron` maneja el binario de Electron que el proyecto ya tiene. **No viaja en el instalador de Jimmy**, comprobado empaquetando: `electron-builder` reescribe el `package.json` que va dentro del asar dejando solo `dependencies`, y una búsqueda de «playwright» en los 935 archivos del paquete y en todo el `.app` no devuelve nada. | Prompt 16 — 2026-09-08 |
 | **Los mensajes al usuario no inventan razones de negocio.** «El precio no puede ser negativo», no «…Se permite 0, para muestras y regalos». | Explicar en el mensaje para qué sirve cada regla | Que un precio 0 se acepte es una decisión técnica del esquema; PARA QUÉ le sirve a la tienda es una definición de negocio que Jimmy no confirmó. Un mensaje que se la atribuya convierte una suposición nuestra en algo que parece decidido por él, y eso es exactamente lo que este proyecto no puede hacer: el resto de la documentación distingue con cuidado lo confirmado de lo supuesto. La regla vale para todo texto que vea una persona. | Prompt 16 — 2026-09-08 |
+| **Precio especial (por PRODUCTO, preconfigurado) y descuento discrecional (por VENTA, en el momento) son dos cosas distintas y no se mezclan.** Un ticket puede llevar los dos, en ese orden. | Un solo mecanismo de descuento que sirviera para las dos cosas; aplicar el precio especial como un descuento más sobre el total | Se decide en momentos distintos, por personas distintas y con controles distintos: el precio especial lo deja puesto un administrador de antemano y ya tuvo su autorización al configurarse; el descuento lo decide quien vende con el cliente enfrente y por eso tiene tope por rol y PIN. Fundirlos obligaría a elegir un solo control para los dos casos: o el administrador tendría que autorizar cada venta de un producto en promoción, o el vendedor podría rebajar la venta entera sin tope. Además se guardan en lugares distintos —`precios_especiales` contra `ventas`— y un auditor necesita poder separarlos: una promoción de temporada y un favor a un cliente no son el mismo hecho. Si hay varios precios especiales vigentes gana el más reciente y **no se acumulan**, porque dos promociones encimadas darían un precio que nadie configuró. | Prompt 19 — 2026-09-10 |
+| **La vigencia de un precio especial se compara POR DÍA, no por instante.** Una promoción cuyo `vigente_hasta` es hoy vale todo el día. | Comparar el instante completo, como hacía `listarVigentes` | El último día de una promoción es un día de promoción. Con comparación por instante, una promoción que vence «hoy» deja de aplicarse a las 00:00 y el cliente paga de más justo el día en que el cartel del mostrador todavía dice que está rebajado. Queda anotada la salvedad de zona horaria: `date()` trabaja sobre cadenas UTC y Guatemala es UTC−6, así que el «hoy» de la base se adelanta a las 18:00 locales. Para una promoción de varios días es indiferente; para una de un solo día habrá que decidirlo cuando exista una real, y es definición de negocio. | Prompt 19 — 2026-09-10 |
+| **`descuento_excedente` es una superficie de candado propia y NO acepta el PIN remoto** (migración 013, no espejada). | Reusar `cierre_con_diferencia`; aceptar el PIN remoto para poder autorizar por teléfono | La razón es de alcance, la misma de siempre: el PIN remoto se pidió para autorizar diferencias de caja por teléfono y nada más, y dárselo a otra acción sería ampliarlo más allá de lo pedido. Acá el argumento es incluso más fuerte que en la salida controlada: **un descuento es dinero que sale de la venta**, y autorizarlo a distancia sin ver el ticket es aprobar a ciegas; quien autoriza tiene que estar mirando la pantalla donde se le muestra el tope, el pedido y el exceso. No se reusa la superficie de la diferencia porque son candados independientes por diseño (§4.8) y fallar al autorizar un descuento no debe bloquear un corte de caja. | Prompt 19 — 2026-09-10 |
+| **`monto_esperado = monto_inicial + Σ ventas en efectivo COMPLETADAS de la sesión`.** Cierra el `TODO(ventas)` que estaba abierto desde el Prompt 13. | Sumar todas las ventas del turno; sumar por fecha en vez de por `caja_sesion_id`; sumar los subtotales | Las ventas con tarjeta nunca entran al cajón: ese dinero llega por el banco. Sumarlas haría que toda caja con ventas con tarjeta apareciera faltante por exactamente ese monto, y el cajero tendría que pedir una autorización de descuadre por un dinero que nadie perdió. Se filtra por `caja_sesion_id` y no por fecha porque un turno es un turno aunque cruce la medianoche. Se suman los TOTALES y no los subtotales porque el descuento ya está aplicado en el total, que es lo que el cliente pagó. La suma se hace con Decimal.js y no con `SUM()` de SQL: `ventas.total` es TEXT canónico y SQLite lo convertiría a punto flotante, que es justo lo que descuadraría el corte. | Prompt 19 — 2026-09-10 |
+| **El cálculo del descuento vive en `@shared/descuento`, compartido por las dos capas.** | Que el renderer calcule su propia versión para mostrar y el proceso principal la suya para guardar | Las dos capas necesitan el mismo número: la pantalla para mostrarle al cajero cuánto rebaja antes de cobrar, y el proceso principal para calcular el total que se guarda. Dos implementaciones discrepan tarde o temprano, y el síntoma sería el peor posible: el cliente paga un total distinto del que vio en pantalla. Lo que NO se comparte es la autorización —el tope por rol y el PIN—, que vive solo en el proceso principal, porque una validación que viviera en la ventana se saltaría llamando al canal directamente. | Prompt 19 — 2026-09-10 |
+| **`productos.cantidad_vendida` es una COLUMNA NUEVA (migración 015), no un cambio de `contador_ventas`.** Una cuenta veces, la otra cantidad, y las dos suben en el mismo `UPDATE`. | Hacer que `contador_ventas` subiera por la cantidad, como pedía el prompt; cambiarle el tipo a TEXT canónico; guardar la cantidad en milésimas dentro del mismo entero | `contador_ventas` es INTEGER y una venta a granel de 2.5 lb no cabe en un entero sin mentir: truncarla pierde media libra por venta, redondearla inventa media libra que nadie compró, y guardar milésimas dentro de una columna llamada «contador» engañaría a cualquiera que la lea. Cambiarle el tipo exigiría el rebuild de doce pasos de `productos` —que este proyecto ya descartó por el mismo motivo que en la migración 008: `venta_detalle` y `precios_especiales` la referencian y `PRAGMA foreign_keys=OFF` es ignorado dentro de una transacción—, mientras que `ADD COLUMN` no tiene ninguno de esos problemas. Y hay una razón de fondo: **las libras de maíz y las unidades de huevo no se pueden sumar en un mismo número**, así que ordenar la cuadrícula por cantidad pondría el maíz siempre arriba. Contar transacciones es la única medida comparable entre productos. Cuál de las dos debe ordenar la cuadrícula queda como definición de negocio abierta (§6.2, punto 14). | Prompt 19 — 2026-09-10 |
+| **La boleta va con tarjeta y solo con tarjeta, y lo hace cumplir la base** (migración 014 y su espejo 0014). | Dejarlo solo en el servicio; agregar además un CHECK de coherencia del descuento | Sin número de boleta una venta con tarjeta no se puede conciliar contra el estado de cuenta del banco, y una venta en efectivo con boleta es un dato inventado que ensucia esa misma conciliación. Se midió antes de escribir la migración qué aceptaba y qué rechazaba la tabla: el descuento **ya estaba amarrado desde la migración 001** —no se puede guardar tipo sin valor, ni valor sin tipo, ni autorizante sin descuento—, así que volver a agregarlo solo habría ensuciado el esquema con una restricción redundante. El hueco real era la boleta, y es el que se cerró. | Prompt 19 — 2026-09-10 |
+| **El mismo producto repetido en dos líneas del payload se rechaza con `DATO_INVALIDO`, no con `CONFLICTO_DE_INVENTARIO`.** | Dejar que fallara solo, por el comparar-y-cambiar | La pantalla junta las cantidades del mismo producto en una sola línea, pero el canal IPC se trata como entrada no confiable. Dos líneas del mismo producto leen las dos el MISMO saldo, y la segunda haría fallar el comparar-y-cambiar: el cajero vería «el inventario cambió mientras se cobraba», que es **falso**. Un mensaje que miente sobre la causa manda a investigar el lugar equivocado. | Prompt 19 — 2026-09-10 |
+| **No se puede vender en la caja de otra persona, ni con autorización.** | Permitirlo con el PIN de un administrador, como el cierre de caja ajena | Una venta se registra contra `caja_sesion_id`, así que vender en el turno ajeno metería el dinero en el corte de alguien que no lo recibió y le aparecería un sobrante que no cometió. **Cerrar** la caja de otro sí se autoriza porque es un acto único y auditado; **vender** es continuo, y autorizar una vez dejaría toda una tarde atribuida a quien no estaba. La salida correcta ya existe y la pantalla lleva a ella: cerrar ese turno y abrir el propio. | Prompt 19 — 2026-09-10 |
 | **CORREGIDO: la caja es UNA EN TODO EL SISTEMA, no una por usuario.** El índice único parcial pasa de `(usuario_id) WHERE estado='abierta'` a `(estado) WHERE estado='abierta'` (migración 010 y su espejo 0010). | Dejar la restricción por usuario; no restringir y confiar en que nadie abra dos; restringir por terminal | El alcance original estaba mal, no corto: permitía que **dos personas distintas abrieran cada una su turno sobre el mismo cajón físico de dinero**, y con dos turnos simultáneos ninguno de los dos cortes significa nada, porque lo que entra por uno sale contado en el otro. Jimmy tiene una sola caja y una sola pantalla. Se indexa la propia columna `estado` porque dentro de la condición su valor es siempre el mismo, así que la unicidad sobre ella permite una sola fila. El mensaje de `CAJA_YA_ABIERTA` deja de decir «ya tenés» y pasa a «ya hay»: la caja abierta puede ser de cualquiera, y atribuírsela a quien intenta abrir lo manda a buscar un turno propio que no existe. | Prompt 17 — 2026-09-08 |
 | **Cerrar una caja que abrió otra persona exige el PIN normal de un administrador, SIN excepción por rol.** Superficie de candado propia, `cierre_de_caja_ajena` (migración 011, no espejada). | Dejar cerrar a cualquiera; permitírselo libre a quien tenga rol administrativo; reusar la superficie `cierre_con_diferencia` | Si la caja es una sola, al turno de la tarde le toca cerrar el de la mañana, y ese cierre mueve dinero que el que cierra no contó al abrir. Se exige autorización **siempre** que quien cierra no sea quien abrió, incluso si quien cierra es administrador: la excepción «salvo que sea administrador» es la misma clase de caso especial que ya costó una vuelta con la intercepción de `Cmd+Q`, parece inofensiva y abre el hueco; además, con ella el cierre ajeno de un administrador no quedaría registrado como tal. No se reusa la superficie de la diferencia porque un mismo cierre puede necesitar las dos autorizaciones y compartir candado haría que fallar una bloqueara la otra; y porque el PIN remoto vale para la diferencia y **no** para esto. | Prompt 17 — 2026-09-08 |
 | **`caja_sesiones.cerrada_por` guarda a QUIEN CERRÓ, no a quien autorizó, y va NULL cuando cerró quien abrió** (migración 012 y su espejo 0012). | Guardar al administrador que autorizó; repetir siempre el `usuario_id` de quien cerró; no guardar nada y deducirlo de la auditoría | Son tres personas posibles y distintas: quien abrió, quien cerró y quien autorizó. Guardar al autorizante haría que el corte pareciera hecho por un administrador que quizá ni estaba en la tienda. Dejarlo NULL cuando coincide con quien abrió hace que `WHERE cerrada_por IS NOT NULL` sean exactamente los cierres que necesitaron autorización, sin comparar dos columnas. Quién autorizó sí queda, en el asiento de auditoría del cierre, junto con los otros dos. | Prompt 17 — 2026-09-08 |
@@ -1290,6 +1490,9 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
 | 13 | **El catálogo real de Jimmy.** Nombres, categorías, precios, unidades e inventario inicial de verdad. Iba a entregarlo al día siguiente del Prompt 15. | Mientras no llegue, la tienda corre con el catálogo de ejemplo (`npm run seed:ejemplo`), que está marcado con el prefijo `[Ejemplo] ` justamente para que nadie lo confunda con el real. El día que llegue: `npm run seed:limpiar` y cargar el verdadero. | Abierto — **es lo próximo que hace falta del cliente** |
+| 14 | **¿Qué debe ordenar los íconos de la pantalla de venta: cuántas VECES se vendió un producto (`contador_ventas`) o cuánta CANTIDAD salió (`cantidad_vendida`)?** | Hoy ordena por veces, que es como estaba y es la única medida comparable entre productos: las libras de maíz y las unidades de huevo no se pueden sumar en un mismo número. Pero si para Jimmy «lo que más se mueve» significa volumen y no transacciones, el orden que ve el cajero está mal. Las dos columnas ya se llevan, así que cambiarlo es cambiar un `ORDER BY`. | Abierto |
+| 15 | **¿Quién configura los límites de descuento por rol, y desde dónde?** | `limites_descuento` existe y el servicio la respeta, pero **no hay pantalla para llenarla**. Sin fila, el tope es cero, así que en una instalación recién montada cualquier descuento pide el PIN de un administrador — incluso uno que pida el propio administrador. Hace falta saber qué topes quiere Jimmy para el rol de venta antes de construir la pantalla, y si el rol administrativo debe tener tope o no. | Abierto — **bloquea el uso normal del descuento** |
+| 16 | **¿Qué número de venta quiere ver el cajero en la confirmación?** | Hoy se muestra el id de la venta, que es un UUID: sirve para rastrear en la base pero no es un número que una persona pueda cantar o anotar. El correlativo vive en `recibos.numero_recibo` y llega con el módulo de recibos. Si Jimmy quiere un correlativo visible antes de eso, hay que decidir de dónde sale y si tiene que coincidir con el del comprobante impreso. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -1318,16 +1521,22 @@ negocio:
 - **Sí existe** un catálogo de ejemplo sembrable y borrable
   (`npm run seed:ejemplo` / `npm run seed:limpiar`), que **no** es parte de las
   migraciones. El catálogo real de Jimmy todavía no llegó.
-- **Sí existe** la pantalla de venta, pero SOLO arma el ticket en memoria: no
-  registra la venta, no descuenta inventario, no aplica descuentos, no pide
-  forma de pago y no imprime. Ver la sección 4.12.
-- No existe el registro de la venta ni el cálculo real de `monto_esperado` (ver
-  la sección 4.10).
-- No hay lógica de ventas ni de descuentos. Tampoco hay **mermas ni ajustes de
-  inventario a la baja**: el ajuste que existe solo suma mercadería recibida, y
-  las bajas son un módulo futuro con sus propias reglas de autorización.
-- `productos.contador_ventas` existe y se lee, pero **nada lo incrementa
-  todavía**: lo hará la venta, dentro de su misma transacción.
+- **Sí existe** el módulo de venta completo hasta el cobro: la pantalla táctil,
+  el ticket, los precios especiales, el descuento con tope por rol y su
+  autorización, la forma de pago y la transacción atómica que registra la venta.
+  Ver las secciones 4.12 y 4.13.
+- **Sí existe** el cálculo real de `monto_esperado`, con las ventas en efectivo
+  sumadas y las de tarjeta excluidas. Ver la sección 4.10.
+- **No existe todavía**: generación de recibo o PDF, impresión térmica, y
+  **anular una venta ya registrada**. `RepositorioDeVentas.anular` existe como
+  operación de datos, pero no hay servicio, canal ni pantalla que la use, ni
+  reglas de autorización, ni devolución de inventario.
+- **No hay pantalla para configurar `limites_descuento`.** Sin fila, el tope de
+  un rol es cero y cualquier descuento pide PIN. Ver el punto 15 de la sección
+  6.2.
+- Tampoco hay **mermas ni ajustes de inventario a la baja**: el ajuste que
+  existe solo suma mercadería recibida, y las bajas son un módulo futuro con sus
+  propias reglas de autorización.
 - No hay log de auditoría: los puntos donde debería escribirse ya están
   marcados con `TODO(auditoria)` en el controlador de salida.
 - No hay adaptador real de impresora ni de Supabase: solo los contratos y las
@@ -1369,6 +1578,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     usuarios/   autenticación, bloqueo por intentos, sesión y permisos
     caja/       apertura y cierre del turno, arqueo por denominaciones
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
+    venta/      precio efectivo, descuento y la transacción que registra la venta
   windows/      creación y bloqueos de la ventana kiosko
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
   src/venta/    lógica pura del ticket en memoria (sin DOM, sin IPC)
@@ -1378,6 +1588,7 @@ src/shared/     código compartido main <-> renderer
   auth.ts       hash y verificación del PIN con scrypt (NO va al renderer)
   pin.ts        reglas de formato del PIN (sí va al renderer)
   money.ts      aritmética exacta con Decimal.js
+  descuento.ts  cálculo del descuento discrecional (lo usan las DOS capas)
   __tests__/    pruebas automatizadas
 supabase/       espejo del esquema en Postgres (migraciones para la nube)
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones

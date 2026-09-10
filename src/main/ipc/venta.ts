@@ -1,48 +1,65 @@
 /**
- * Manejador IPC de la pantalla de venta.
+ * Manejadores IPC de la pantalla de venta.
  *
- * SOLO LECTURA. Este canal arma lo que la pantalla necesita para dibujarse y
- * nada más: no registra ventas, no descuenta inventario y no toca la caja. El
- * registro de la venta llega en su propio módulo, con su propia transacción.
+ * Son dos canales: `venta:estado`, que arma lo que la pantalla necesita para
+ * dibujarse y no escribe nada, y `venta:cobrar`, que registra la venta entera
+ * en una sola transacción.
  *
- * ES UN CANAL APARTE DE LOS DEL CATÁLOGO, y la razón importa: los de catálogo
+ * SON CANALES APARTE DE LOS DEL CATÁLOGO, y la razón importa: los de catálogo
  * exigen rol administrativo porque sirven para editar el catálogo, y vender lo
- * hace un cajero. Este exige solo que haya sesión, y a cambio devuelve
+ * hace un cajero. Estos exigen solo que haya sesión, y a cambio devuelven
  * únicamente productos ACTIVOS y ningún dato de administración.
+ *
+ * EL COBRO NO CONFÍA EN NINGÚN PRECIO QUE VENGA DE LA VENTANA. El payload trae
+ * qué producto y cuánto; el precio, el subtotal y el total los vuelve a
+ * calcular el dominio contra el catálogo. Y el usuario y el rol salen de la
+ * sesión del proceso principal, nunca del mensaje.
  */
 
 import { ipcMain } from 'electron';
 
 import {
   CANALES_IPC,
+  esquemaCobro,
   type CategoriaDeVenta,
   type EstadoDeVenta,
   type ProductoParaVender,
+  type ResultadoDeCobro,
   type RespuestaIpc,
   type TurnoAbierto,
 } from '@shared/types/ipc';
 import { cantidadACadena, montoACadena } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
 import { requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
+import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import type { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
+import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
+import { precioEfectivoDe } from '@main/domain/venta/precios';
 import { urlDeFoto } from '@main/domain/catalogo/almacen-de-fotos';
 import { ejecutarConRespuesta } from './respuesta';
 
-/** Dependencias que necesita el manejador de venta. */
+/** Dependencias que necesitan los manejadores de venta. */
 export interface DependenciasDeVenta {
   readonly sesion: SesionActual;
   readonly caja: ServicioDeCaja;
   readonly categorias: ServicioDeCategorias;
   readonly productos: ServicioDeProductos;
+  readonly venta: ServicioDeVenta;
+  readonly autenticacion: ServicioDeAutenticacion;
+  readonly preciosEspeciales: RepositorioDePreciosEspeciales;
   readonly usuarios: RepositorioDeUsuarios;
+  /** Reloj inyectable: decide qué precios especiales están vigentes. */
+  readonly ahora?: () => number;
 }
 
-/** Registra el canal de la pantalla de venta. */
+/** Registra los canales de la pantalla de venta. */
 export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): void {
-  const { sesion, caja, categorias, productos, usuarios } = dependencias;
+  const { sesion, caja, categorias, productos, usuarios, preciosEspeciales } = dependencias;
+  const ahora = dependencias.ahora ?? ((): number => Date.now());
 
   ipcMain.handle(
     CANALES_IPC.ventaEstado,
@@ -122,20 +139,53 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
               productos: productosPorCategoria.get(categoria.id) ?? 0,
             }));
 
-          const paraLaCuadricula: ProductoParaVender[] = activos.map((producto) => ({
-            id: producto.id,
-            nombre: producto.nombre,
-            categoriaId: producto.categoriaId,
-            categoriaNombre:
-              nombresDeCategorias.get(producto.categoriaId) ?? '(categoría desconocida)',
-            tipoMedida: producto.tipoMedida,
-            unidadPeso: producto.unidadPeso,
-            cantidadPredefinidaIcono: cantidadACadena(producto.cantidadPredefinidaIcono),
-            precioBase: montoACadena(producto.precioBase),
-            inventarioDisponible: cantidadACadena(producto.inventarioDisponible),
-            fotoUrl: producto.fotoPath === null ? null : urlDeFoto(producto.fotoPath),
-            contadorVentas: producto.contadorVentas,
-          }));
+          /*
+            Los precios especiales vigentes AHORA, en una sola consulta para
+            todo el catálogo. El precio efectivo se resuelve acá, del lado del
+            proceso principal, y no en la pantalla: la ventana no tiene por qué
+            saber la regla de vigencia, y si la supiera podría equivocarse en
+            silencio y cobrar un precio que ya venció.
+
+            El total se vuelve a calcular igual al cobrar, contra los precios
+            vigentes en ESE momento. Esto es lo que se MUESTRA.
+          */
+          const vigentes = preciosEspeciales.vigentesPorProductoEn(
+            new Date(ahora()).toISOString(),
+          );
+
+          const paraLaCuadricula: ProductoParaVender[] = activos.map((producto) => {
+            const efectivo = precioEfectivoDe(
+              producto.precioBase,
+              vigentes.get(producto.id) ?? [],
+            );
+            const especial = efectivo.especialAplicado;
+
+            return {
+              id: producto.id,
+              nombre: producto.nombre,
+              categoriaId: producto.categoriaId,
+              categoriaNombre:
+                nombresDeCategorias.get(producto.categoriaId) ?? '(categoría desconocida)',
+              tipoMedida: producto.tipoMedida,
+              unidadPeso: producto.unidadPeso,
+              cantidadPredefinidaIcono: cantidadACadena(producto.cantidadPredefinidaIcono),
+              precioBase: montoACadena(producto.precioBase),
+              precioEfectivo: montoACadena(efectivo.precio),
+              precioEspecial:
+                especial === null
+                  ? null
+                  : {
+                      id: especial.id,
+                      tipo: especial.tipo,
+                      valor: montoACadena(especial.valor),
+                      vigenteDesde: especial.vigenteDesde,
+                      vigenteHasta: especial.vigenteHasta,
+                    },
+              inventarioDisponible: cantidadACadena(producto.inventarioDisponible),
+              fotoUrl: producto.fotoPath === null ? null : urlDeFoto(producto.fotoPath),
+              contadorVentas: producto.contadorVentas,
+            };
+          });
 
           const listo: EstadoDeVenta = {
             puedeVender: true,
@@ -145,6 +195,117 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
             productos: paraLaCuadricula,
           };
           return listo;
+        }),
+      ),
+  );
+
+  // =========================================================================
+  // venta:cobrar — el canal que escribe
+  // =========================================================================
+  ipcMain.handle(
+    CANALES_IPC.ventaCobrar,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeCobro>> =>
+      ejecutarConRespuesta('COBRO_FALLIDO', () =>
+        requiereSesion(sesion, () => {
+          const pedido = esquemaCobro.parse(payload);
+          const enSesion = sesion.obtener();
+          if (enSesion === null) {
+            throw new ErrorDeNegocio(
+              'PERMISO_DENEGADO',
+              'No hay ninguna sesión iniciada. Ingresá con tu usuario para continuar.',
+              'Se llegó al canal de cobro sin sesión.',
+            );
+          }
+
+          /*
+            EL DESCUENTO, EN DOS PASOS.
+
+            Primer paso, sin PIN: si excede el tope del rol NO se cobra y se
+            devuelve cuánto es el tope y cuánto el exceso, para que la pantalla
+            lo muestre. Quien autoriza tiene que ver qué está aprobando ANTES
+            de teclear su código; es el mismo criterio del cierre con
+            diferencia (§4.9).
+
+            Segundo paso, con PIN: se verifica contra la superficie
+            `descuento_excedente`, con su propio candado de intentos.
+          */
+          let autorizadoPor: string | null = null;
+
+          if (pedido.descuento !== null) {
+            const veredicto = dependencias.venta.veredictoDeDescuento(
+              enSesion.rol,
+              pedido.descuento.tipo,
+              pedido.descuento.valor,
+            );
+
+            if (veredicto.excede) {
+              if (pedido.pinDescuento === undefined) {
+                const aviso: ResultadoDeCobro = {
+                  registrada: false,
+                  codigo: 'REQUIERE_AUTORIZACION_DE_DESCUENTO',
+                  mensaje:
+                    'Ese descuento pasa el límite de tu rol. Un administrador tiene que autorizarlo con su PIN.',
+                  requiereAutorizacion: true,
+                  tope: montoACadena(veredicto.tope),
+                  exceso: montoACadena(veredicto.exceso),
+                  segundosParaReintentar: null,
+                };
+                return aviso;
+              }
+
+              /*
+                NO ACEPTA EL PIN REMOTO. Ese PIN se pidió para una sola cosa,
+                autorizar diferencias de caja por teléfono. Dárselo además al
+                descuento sería ampliarle el alcance más allá de lo pedido, y
+                un permiso creado para un caso que termina sirviendo para
+                varios deja de ser un permiso acotado. Cada superficie nueva
+                que lo acepte se pide y se decide aparte (§4.9).
+              */
+              const permiso = dependencias.autenticacion.autorizarComoAdministrador(
+                pedido.pinDescuento,
+                'descuento_excedente',
+                { aceptaPinRemoto: false },
+              );
+
+              if (!permiso.autenticado || permiso.usuario === null) {
+                const rechazo: ResultadoDeCobro = {
+                  registrada: false,
+                  codigo: permiso.codigo,
+                  mensaje: permiso.mensaje,
+                  requiereAutorizacion: true,
+                  tope: montoACadena(veredicto.tope),
+                  exceso: montoACadena(veredicto.exceso),
+                  segundosParaReintentar: permiso.segundosParaReintentar,
+                };
+                return rechazo;
+              }
+              autorizadoPor = permiso.usuario.id;
+            }
+          }
+
+          const resultado = dependencias.venta.registrar(enSesion.id, enSesion.rol, {
+            lineas: pedido.lineas,
+            descuento:
+              pedido.descuento === null
+                ? null
+                : { ...pedido.descuento, autorizadoPor },
+            formaPago: pedido.formaPago,
+            numBoleta: pedido.numBoleta,
+          });
+
+          const registrada: ResultadoDeCobro = {
+            registrada: true,
+            ventaId: resultado.venta.id,
+            fecha: resultado.venta.fecha,
+            subtotal: resultado.subtotal,
+            descuentoAplicado: resultado.descuentoAplicado,
+            total: resultado.total,
+            formaPago: resultado.venta.formaPago,
+            numBoleta: resultado.venta.numBoleta,
+            lineas: resultado.lineas,
+            lineasConPrecioEspecial: resultado.lineasConPrecioEspecial,
+          };
+          return registrada;
         }),
       ),
   );

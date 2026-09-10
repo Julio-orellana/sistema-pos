@@ -27,6 +27,9 @@ import sqlCategoriasActivo from './migrations/009_categorias_activo.sql?raw';
 import sqlUnaCajaPorSistema from './migrations/010_una_caja_por_sistema.sql?raw';
 import sqlSuperficieCajaAjena from './migrations/011_superficie_cierre_de_caja_ajena.sql?raw';
 import sqlCajaCerradaPor from './migrations/012_caja_cerrada_por.sql?raw';
+import sqlSuperficieDescuento from './migrations/013_superficie_descuento_excedente.sql?raw';
+import sqlBoletaSoloConTarjeta from './migrations/014_boleta_solo_con_tarjeta.sql?raw';
+import sqlCantidadVendida from './migrations/015_cantidad_vendida.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -66,6 +69,13 @@ export const MIGRACIONES: readonly Migracion[] = [
     sql: sqlSuperficieCajaAjena,
   },
   { orden: 12, nombre: '012_caja_cerrada_por', sql: sqlCajaCerradaPor },
+  {
+    orden: 13,
+    nombre: '013_superficie_descuento_excedente',
+    sql: sqlSuperficieDescuento,
+  },
+  { orden: 14, nombre: '014_boleta_solo_con_tarjeta', sql: sqlBoletaSoloConTarjeta },
+  { orden: 15, nombre: '015_cantidad_vendida', sql: sqlCantidadVendida },
 ];
 
 /** Tabla de control. La crea el propio migrador antes que nada. */

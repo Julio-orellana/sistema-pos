@@ -1,10 +1,14 @@
 /**
  * El panel del ticket: las líneas de la venta en curso y su total.
  *
- * NO REGISTRA NADA. Muestra y edita el carrito en memoria. El botón de cobrar
- * existe para que la pantalla se sienta completa, pero avisa que el cobro
- * llega en otro módulo: simular un cobro exitoso sería mentirle al cajero, y
- * dejarlo sin reacción, hacerle creer que la pantalla se colgó.
+ * NO ESCRIBE NADA. Muestra y edita el carrito en memoria; el botón de cobrar
+ * abre el diálogo que sí registra la venta, en el proceso principal.
+ *
+ * CUANDO UNA LÍNEA LLEVA PRECIO ESPECIAL SE VE. Se marca la línea y se muestra
+ * el precio de lista tachado al lado del que se está cobrando. Aplicar una
+ * rebaja en silencio dejaría al cajero sin poder explicarle al cliente de
+ * dónde salió el precio, y sin poder notar que una promoción vencida sigue
+ * puesta.
  */
 
 import { formatearQuetzales } from '@shared/money';
@@ -12,6 +16,7 @@ import { MiniaturaDeProducto } from './MiniaturaDeProducto';
 import {
   avisoDeInventario,
   cantidadLegible,
+  descripcionDePrecioEspecial,
   subtotalDeLineaParaMostrar,
   totalDelTicketParaMostrar,
   unidadDe,
@@ -61,11 +66,13 @@ export function TicketDeVenta({
               return (
                 <li
                   key={linea.productoId}
-                  className={
-                    lineaEnEdicion === linea.productoId
-                      ? 'ticket__linea ticket__linea--activa'
-                      : 'ticket__linea'
-                  }
+                  className={[
+                    'ticket__linea',
+                    lineaEnEdicion === linea.productoId ? 'ticket__linea--activa' : '',
+                    linea.precioEspecial === null ? '' : 'ticket__linea--especial',
+                  ]
+                    .filter((clase) => clase !== '')
+                    .join(' ')}
                   data-prueba="linea-de-ticket"
                   data-producto={linea.productoId}
                 >
@@ -91,6 +98,22 @@ export function TicketDeVenta({
                       {formatearQuetzales(subtotalDeLineaParaMostrar(linea))}
                     </span>
                   </button>
+
+                  {/*
+                    El distintivo de precio especial va en su PROPIA fila, a lo
+                    ancho de la línea, y no dentro de la columna del nombre: ahí
+                    compite por espacio con el subtotal y se parte en cuatro
+                    renglones. Se vio manejando la aplicación real.
+                  */}
+                  {linea.precioEspecial !== null && (
+                    <p className="ticket__especial" data-prueba="precio-especial">
+                      Precio especial · {descripcionDePrecioEspecial(linea.precioEspecial)} ·{' '}
+                      antes{' '}
+                      <s className="ticket__precio-viejo" data-prueba="precio-de-lista">
+                        {formatearQuetzales(linea.precioBase)}
+                      </s>
+                    </p>
+                  )}
 
                   {/*
                     Aviso de inventario: es de INTERFAZ solamente. Compara

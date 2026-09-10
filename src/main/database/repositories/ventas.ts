@@ -161,4 +161,29 @@ export class RepositorioDeVentas extends RepositorioBase {
       .filter((venta) => venta.estado === 'completada')
       .map((venta) => venta.total);
   }
+
+  /**
+   * Los totales de las ventas EN EFECTIVO y completadas de un turno.
+   *
+   * Es la base de `monto_esperado` del corte de caja: lo que debería haber en
+   * el cajón. Las ventas con tarjeta quedan fuera a propósito —ese dinero
+   * nunca entró al cajón, entra por el banco— y las anuladas también.
+   *
+   * El filtro se hace en SQL porque `forma_pago` y `estado` son texto de
+   * verdad, no decimales. La SUMA, en cambio, se hace afuera con Decimal.js:
+   * `total` es TEXT canónico y un `SUM()` de SQLite lo convertiría a punto
+   * flotante, que es exactamente lo que descuadraría el corte.
+   */
+  public totalesEnEfectivoDeSesion(cajaSesionId: string): Decimal[] {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM ventas
+          WHERE caja_sesion_id = ?
+            AND forma_pago = 'efectivo'
+            AND estado = 'completada'
+          ORDER BY fecha`,
+      )
+      .all(cajaSesionId) as FilaVenta[];
+    return filas.map((fila) => aEntidad(fila).total);
+  }
 }

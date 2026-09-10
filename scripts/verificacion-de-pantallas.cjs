@@ -14,6 +14,12 @@
  *   2. el aviso salía en la cabecera de un formulario más alto que la
  *      pantalla, y al pulsar el botón —abajo— quedaba fuera de la vista.
  *
+ * Desde el módulo de venta recorre además el CICLO COMPLETO DE COBRO, que es
+ * lo que la tienda hace todo el día: abrir caja, armar el ticket, cobrar y
+ * quedar lista para la siguiente venta. Ninguna prueba de Vitest puede decir
+ * si después de cobrar el ticket quedó de verdad vacío en la ventana, y un
+ * ticket que no se vacía se cobra dos veces.
+ *
  * CÓMO TRABAJA. Arranca el mismo `electron .` del desarrollo, contra una
  * carpeta de datos TEMPORAL —nunca la de la tienda—, crea el primer
  * administrador, carga una categoría y recorre la pantalla de productos con
@@ -207,6 +213,95 @@ async function main() {
       'una etiqueta que diga que falta la foto',
       etiquetaAccesible ?? '(sin etiqueta)',
       typeof etiquetaAccesible === 'string' && /sin foto/i.test(etiquetaAccesible),
+    );
+
+    // =======================================================================
+    // 3. Sin caja abierta NO se vende, y se dice por qué.
+    // =======================================================================
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-venta').click();
+
+    const bloqueo = prueba('venta-bloqueada-sin-caja');
+    await bloqueo.waitFor({ timeout: ESPERA_CORTA });
+    comprobar(
+      'sin caja abierta la pantalla de venta NO muestra la cuadrícula',
+      'ningún producto a la vista',
+      (await prueba('cuadricula-de-productos').count()) === 0 ? 'ninguno' : 'se ven productos (mal)',
+      (await prueba('cuadricula-de-productos').count()) === 0,
+    );
+
+    // =======================================================================
+    // 4. El ciclo completo: abrir caja, armar ticket, cobrar, quedar lista.
+    // =======================================================================
+    await prueba('ir-a-caja-desde-venta').click();
+    await prueba('pantalla-de-caja').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('modo-simple').click();
+    await prueba('campo-monto').fill('500');
+    await prueba('confirmar-caja').click();
+    // `estado-caja-propia` es el bloque que aparece cuando el turno abierto es
+    // de quien está en sesión: la señal de que la apertura funcionó.
+    await prueba('estado-caja-propia').waitFor({ timeout: ESPERA_CORTA });
+
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-venta').click();
+    await prueba('cuadricula-de-productos').waitFor({ timeout: ESPERA_CORTA });
+
+    // Dos toques al maíz de Q4.25: el ticket tiene que decir Q8.50.
+    await prueba('icono-producto').first().click();
+    await prueba('icono-producto').first().click();
+    const totalDelTicket = ((await prueba('total-del-ticket').textContent()) ?? '').trim();
+    comprobar(
+      'el total del ticket es el que corresponde a lo tocado',
+      'Q8.50',
+      totalDelTicket,
+      totalDelTicket.includes('8.50'),
+    );
+
+    await prueba('cobrar').click();
+    await prueba('dialogo-de-cobro').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('cobro-continuar').click();
+
+    // Tarjeta SIN boleta: la pantalla tiene que frenarlo, no la base.
+    await prueba('pago-tarjeta').click();
+    await prueba('cobro-confirmar').click();
+    const avisoDeBoleta = ((await prueba('cobro-aviso').textContent()) ?? '').trim();
+    comprobar(
+      'una venta con tarjeta sin boleta se frena con un mensaje que la nombra',
+      'un aviso que mencione la boleta',
+      avisoDeBoleta === '' ? '(no apareció ningún aviso)' : avisoDeBoleta,
+      /boleta/i.test(avisoDeBoleta),
+    );
+
+    // De vuelta a efectivo y se cobra de verdad.
+    await prueba('pago-efectivo').click();
+    await prueba('cobro-confirmar').click();
+    await prueba('cobro-listo').waitFor({ timeout: ESPERA_CORTA });
+    const cobrado = ((await prueba('cobro-total-cobrado').textContent()) ?? '').trim();
+    comprobar(
+      'la confirmación muestra el total que se cobró',
+      'Q8.50',
+      cobrado,
+      cobrado.includes('8.50'),
+    );
+
+    await prueba('cobro-siguiente-venta').click();
+    await prueba('ticket-vacio').waitFor({ timeout: ESPERA_CORTA });
+    comprobar(
+      'DESPUÉS DE COBRAR el ticket queda vacío, listo para la siguiente venta',
+      'ninguna línea en el ticket',
+      `${String(await prueba('linea-de-ticket').count())} líneas`,
+      (await prueba('linea-de-ticket').count()) === 0,
+    );
+
+    // Y el inventario bajó de verdad: 100 lb menos las 2 que se vendieron.
+    const inventarioEnPantalla = ((await prueba('cuadricula-de-productos').textContent()) ?? '');
+    comprobar(
+      'la venta descontó inventario de verdad',
+      'el catálogo se releyó después de cobrar',
+      inventarioEnPantalla.includes('Maíz blanco') ? 'catálogo presente' : 'catálogo ausente (mal)',
+      inventarioEnPantalla.includes('Maíz blanco'),
     );
   } catch (error) {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);

@@ -29,7 +29,8 @@ import {
   sumar,
   sumarLista,
 } from '@shared/money';
-import type { ProductoParaVender } from '@shared/types/ipc';
+import { montoDelDescuento, totalConDescuento, type DescuentoPedido } from '@shared/descuento';
+import type { PrecioEspecialVigente, ProductoParaVender } from '@shared/types/ipc';
 
 /**
  * Una línea del ticket.
@@ -46,8 +47,15 @@ export interface LineaDeTicket {
   readonly unidadPeso: 'lb' | 'kg' | null;
   /** Cantidad, cadena canónica de tres decimales. */
   readonly cantidad: string;
-  /** Precio unitario congelado, cadena canónica de dos decimales. */
+  /**
+   * Precio unitario congelado, YA CON EL PRECIO ESPECIAL APLICADO. Cadena
+   * canónica de dos decimales. Es por este que se cobra.
+   */
   readonly precioUnitario: string;
+  /** Precio de lista, para poder mostrar de cuánto bajó. */
+  readonly precioBase: string;
+  /** El precio especial que rebajó la línea, o `null` si se cobra el de lista. */
+  readonly precioEspecial: PrecioEspecialVigente | null;
   /** Inventario conocido al cargar la pantalla. Solo para advertir. */
   readonly inventarioConocido: string;
   readonly fotoUrl: string | null;
@@ -92,7 +100,11 @@ export function agregarAlTicket(
         tipoMedida: producto.tipoMedida,
         unidadPeso: producto.unidadPeso,
         cantidad: cantidadACadena(producto.cantidadPredefinidaIcono),
-        precioUnitario: montoACadena(producto.precioBase),
+        // El EFECTIVO, no el de lista: si hay un precio especial vigente, el
+        // cliente paga ese. El de lista se guarda al lado solo para mostrarlo.
+        precioUnitario: montoACadena(producto.precioEfectivo),
+        precioBase: montoACadena(producto.precioBase),
+        precioEspecial: producto.precioEspecial,
         inventarioConocido: cantidadACadena(producto.inventarioDisponible),
         fotoUrl: producto.fotoUrl,
       },
@@ -169,6 +181,62 @@ export function totalDelTicket(lineas: readonly LineaDeTicket[]): Decimal {
 /** El total, como cadena canónica lista para mostrar. */
 export function totalDelTicketParaMostrar(lineas: readonly LineaDeTicket[]): string {
   return montoACadena(totalDelTicket(lineas));
+}
+
+/** La suma de los subtotales EXACTOS, sin redondear y sin descuento. */
+export function subtotalExactoDelTicket(lineas: readonly LineaDeTicket[]): Decimal {
+  if (lineas.length === 0) {
+    return CERO;
+  }
+  return sumarLista(lineas.map(subtotalExactoDeLinea));
+}
+
+/**
+ * Cuánto rebaja el descuento discrecional sobre este ticket.
+ *
+ * Se calcula con la MISMA función que usa el proceso principal al cobrar
+ * (`@shared/descuento`), no con una copia: si fueran dos implementaciones, el
+ * número que ve el cajero podría no ser el que termina cobrándose.
+ */
+export function descuentoDelTicket(
+  lineas: readonly LineaDeTicket[],
+  descuento: DescuentoPedido | null,
+): Decimal {
+  if (descuento === null) {
+    return CERO;
+  }
+  return montoDelDescuento(subtotalExactoDelTicket(lineas), descuento);
+}
+
+/** El total con el descuento aplicado, redondeado una sola vez. */
+export function totalDelTicketConDescuento(
+  lineas: readonly LineaDeTicket[],
+  descuento: DescuentoPedido | null,
+): Decimal {
+  if (lineas.length === 0) {
+    return CERO;
+  }
+  return totalConDescuento(subtotalExactoDelTicket(lineas), descuento);
+}
+
+/** ¿Alguna línea se está cobrando con un precio especial vigente? */
+export function hayPrecioEspecial(lineas: readonly LineaDeTicket[]): boolean {
+  return lineas.some((linea) => linea.precioEspecial !== null);
+}
+
+/**
+ * Cómo se describe un precio especial en el ticket: «10 % menos», «Q2 menos».
+ *
+ * Dice CUÁNTO BAJÓ y no el nombre de la promoción, porque no hay ninguno: la
+ * tabla `precios_especiales` guarda un tipo y un valor, no una etiqueta. Poner
+ * un texto inventado le atribuiría a la tienda una promoción con nombre que
+ * nadie configuró.
+ */
+export function descripcionDePrecioEspecial(especial: PrecioEspecialVigente): string {
+  if (especial.tipo === 'porcentaje') {
+    return `${cantidadLegible(especial.valor)} % menos`;
+  }
+  return `Q${cantidadLegible(especial.valor)} menos`;
 }
 
 /** Cuántas unidades de producto distintas lleva el ticket. */

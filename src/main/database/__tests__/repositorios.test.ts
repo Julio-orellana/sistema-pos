@@ -50,6 +50,26 @@ function sembrarCatalogo(): { usuarioId: string; categoriaId: string; productoId
 }
 
 // ===========================================================================
+
+/**
+ * Anota una venta de un producto, leyendo antes su acumulado.
+ *
+ * `registrarVentaDeProducto` es un comparar-y-cambiar: necesita saber contra
+ * qué valor escribe. En producción ese valor lo tiene el servicio de venta,
+ * que ya leyó el producto; acá se lee al vuelo.
+ */
+function anotarVenta(id: string, cantidad: string): void {
+  const producto = repos.productos.obtenerPorId(id);
+  if (producto === null) {
+    throw new Error(`No existe el producto ${id}.`);
+  }
+  const nuevo = producto.cantidadVendida.plus(cantidad);
+  const anotado = repos.productos.registrarVentaDeProducto(id, producto.cantidadVendida, nuevo);
+  if (!anotado) {
+    throw new Error(`No se pudo anotar la venta de ${id}.`);
+  }
+}
+
 describe('Los identificadores son UUID generados en el cliente', () => {
   it('cada registro nuevo nace con un UUID versión 4', () => {
     const usuario = repos.usuarios.crear({ nombre: 'Cajero', rol: 'venta', pinHash: 'hash' });
@@ -145,11 +165,14 @@ describe('Productos e inventario acumulado', () => {
       inventarioDisponible: '20',
     });
 
-    repos.productos.incrementarContadorVentas(frijol.id);
-    repos.productos.incrementarContadorVentas(frijol.id);
-    repos.productos.incrementarContadorVentas(productoId);
+    anotarVenta(frijol.id, '1');
+    anotarVenta(frijol.id, '2.500');
+    anotarVenta(productoId, '1');
 
     expect(repos.productos.obtenerPorId(frijol.id)?.contadorVentas).toBe(2);
+    // Dos ventas, pero 3.5 libras: las dos medidas son distintas y por eso
+    // conviven en dos columnas.
+    expect(repos.productos.obtenerPorId(frijol.id)?.cantidadVendida.toFixed(3)).toBe('3.500');
     const populares = repos.productos.listarMasVendidos(2);
     expect(populares[0]?.nombre).toBe('Frijol');
   });
@@ -346,6 +369,8 @@ describe('Caja, ventas y detalle', () => {
       subtotal: '10.00',
       total: '10.00',
       formaPago: 'tarjeta',
+      // Desde la migración 014 la base exige el número de boleta con tarjeta.
+      numBoleta: '004512',
     });
 
     repos.ventas.anular(venta.id);
@@ -458,7 +483,7 @@ describe('Transacciones: una venta se guarda entera o no se guarda', () => {
         total: '10.00',
         formaPago: 'efectivo',
       });
-      repos.productos.incrementarContadorVentas(productoId);
+      anotarVenta(productoId, '1');
       // Falla al final: la línea apunta a un producto que no existe.
       repos.ventaDetalle.crear({
         ventaId: venta.id,

@@ -34,7 +34,7 @@ espeja.**
    existiera en la nube sin sincronizarse nunca, quien consultara Postgres
    vería `0` para todos y podría concluir que nadie falló jamás un ingreso.
 
-## Los números 0002, 0003, 0006 y 0011 NO existen aquí, y es a propósito
+## Los números 0002, 0003, 0006, 0011 y 0013 NO existen aquí, y es a propósito
 
 **No falta nada ni se rompió nada.** El número de cada archivo de esta carpeta
 corresponde al de su migración local en `src/main/database/migrations/`. Un
@@ -54,15 +54,19 @@ hueco en la numeración significa que **esa migración local no tiene espejo**.
 | `010_una_caja_por_sistema` | `0010_una_caja_por_sistema.sql` | Corte de caja: dato de negocio |
 | `011_superficie_cierre_de_caja_ajena` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja |
 | `012_caja_cerrada_por` | `0012_caja_cerrada_por.sql` | Corte de caja: dato de negocio |
+| `013_superficie_descuento_excedente` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja |
+| `014_boleta_solo_con_tarjeta` | `0014_boleta_solo_con_tarjeta.sql` | Regla sobre `ventas`: dato de negocio |
+| `015_cantidad_vendida` | `0015_cantidad_vendida.sql` | Columna de `productos`: dato de negocio |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
 
-Son **cuatro números** omitidos pero **dos casos**: el 0003, el 0006 y el 0011
-son la misma tabla, `bloqueos_de_autorizacion` —la 006 y la 011 solo le amplían
-el CHECK de superficies—, así que si la tabla no se espeja, ninguna migración
-que la toque se espeja tampoco. Ese es todo el motivo de esos tres huecos: no
-hay ninguna razón adicional, ni nada pendiente de decidir sobre ellos.
+Son **cinco números** omitidos pero **dos casos**: el 0003, el 0006, el 0011 y
+el 0013 son la misma tabla, `bloqueos_de_autorizacion` —la 006, la 011 y la 013
+solo le amplían el CHECK de superficies—, así que si la tabla no se espeja,
+ninguna migración que la toque se espeja tampoco. Ese es todo el motivo de esos
+cuatro huecos: no hay ninguna razón adicional, ni nada pendiente de decidir
+sobre ellos.
 
 Los dos casos **no son equivalentes**, aunque hoy tomen la misma decisión:
 
@@ -94,12 +98,19 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | `0010_una_caja_por_sistema.sql` | Sí — `20260910040514` |
 | *(no hay 0011: ver la sección anterior)* | — |
 | `0012_caja_cerrada_por.sql` | Sí — `20260910040526` |
+| *(no hay 0013: ver la sección anterior)* | — |
+| `0014_boleta_solo_con_tarjeta.sql` | **No — PENDIENTE** |
+| `0015_cantidad_vendida.sql` | **No — PENDIENTE** |
 
-**No queda ninguna migración pendiente de aplicar en la nube.** Las dos últimas
-—`0010` y `0012`— se aplicaron el 2026-09-09 por la vía de siempre, y se
-verificaron contra el catálogo del proyecto: `idx_caja_sesiones_una_abierta`
-quedó sobre `(estado)` y ya no sobre `(usuario_id)`, y `cerrada_por` existe como
-`uuid` nulable con llave foránea `ON DELETE SET NULL` hacia `usuarios`.
+**Quedan DOS migraciones pendientes de aplicar en la nube: `0014` y `0015`**,
+las dos del módulo de venta. Se aplican como todas: mostrando antes el SQL
+exacto y con la aprobación explícita de Julio.
+
+Las dos anteriores —`0010` y `0012`— se aplicaron el 2026-09-09 por la vía de
+siempre, y se verificaron contra el catálogo del proyecto:
+`idx_caja_sesiones_una_abierta` quedó sobre `(estado)` y ya no sobre
+`(usuario_id)`, y `cerrada_por` existe como `uuid` nulable con llave foránea
+`ON DELETE SET NULL` hacia `usuarios`.
 
 La `0009` se
 aplicó el 2026-09-08 por la vía de siempre —SQL a la vista y aprobación
