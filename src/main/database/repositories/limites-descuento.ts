@@ -102,4 +102,21 @@ export class RepositorioDeLimitesDescuento extends RepositorioBase {
       .all() as FilaLimiteDescuento[];
     return filas.map(aEntidad);
   }
+
+  /**
+   * Quita el límite de un rol y devuelve si había alguno que quitar.
+   *
+   * ES UNA DE LAS POCAS OPERACIONES DEL PROYECTO QUE BORRA DE VERDAD, y se
+   * sostiene por la misma razón que la limpieza del catálogo de ejemplo: esta
+   * fila es CONFIGURACIÓN, no historial. Sin ella el rol vuelve a su estado de
+   * fábrica —tope cero, todo descuento pide autorización— y lo que ocurrió
+   * mientras estuvo puesta sigue guardado en `ventas` y en `auditoria_log`,
+   * que no se tocan.
+   */
+  public borrarPorRol(rol: Rol): boolean {
+    return this.ejecutar(() => {
+      const resultado = this.base.prepare('DELETE FROM limites_descuento WHERE rol = ?').run(rol);
+      return resultado.changes > 0;
+    });
+  }
 }

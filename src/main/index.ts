@@ -34,6 +34,12 @@ import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categori
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import {
+  limpiarLimiteDeDescuento,
+  sembrarLimiteDeDescuento,
+  topesActuales,
+  ROL_SEMBRADO,
+} from '@main/domain/venta/limites-de-ejemplo';
+import {
   AlmacenDeFotos,
   ESQUEMA_DE_FOTOS,
   rutaRelativaDesdeUrl,
@@ -44,6 +50,8 @@ import {
   sembrarDatosDeEjemplo,
 } from '@main/domain/catalogo/datos-de-ejemplo';
 import { generarHashDePin } from '@shared/auth';
+import { montoACadena } from '@shared/money';
+import { ROLES } from '@shared/types/ipc';
 import { quitarManejadoresIpc, registrarManejadoresIpc } from '@main/ipc/register-handlers';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import { cargarInterfaz, crearVentanaPrincipal, describirEstadoKiosko } from '@main/windows/main-window';
@@ -92,6 +100,27 @@ const modoDatosDeEjemplo =
   process.argv.find((argumento) => argumento.startsWith(BANDERA_DATOS_DE_EJEMPLO))?.slice(
     BANDERA_DATOS_DE_EJEMPLO.length,
   ) ?? '';
+
+/**
+ * Modo semilla del TOPE DE DESCUENTO, por la misma vía y por la misma razón.
+ *
+ * `limites_descuento` arranca vacía y sin fila el tope es cero, así que no se
+ * puede probar un descuento dentro del límite sin poner la fila a mano. Es un
+ * guion APARTE del catálogo de ejemplo porque son dos cosas distintas: uno
+ * siembra mercadería inventada, este siembra configuración. Quien limpie el
+ * catálogo no debería perder su tope de descuento de paso.
+ *
+ * NO reemplaza la pantalla de configuración, que es un pendiente propio.
+ * Ver src/main/domain/venta/limites-de-ejemplo.ts.
+ */
+const BANDERA_LIMITES = '--limites-descuento=';
+const modoLimitesDeDescuento =
+  process.argv.find((argumento) => argumento.startsWith(BANDERA_LIMITES))?.slice(
+    BANDERA_LIMITES.length,
+  ) ?? '';
+
+/** ¿Se arrancó en alguno de los modos de semilla, sin abrir ventana? */
+const modoSemilla = modoDatosDeEjemplo !== '' || modoLimitesDeDescuento !== '';
 
 /** Evita que el cierre ordenado se ejecute dos veces. */
 let cierreEnCurso = false;
@@ -210,6 +239,59 @@ function ejecutarModoDatosDeEjemplo(modo: string, repositorios: Repositorios): v
 }
 
 /**
+ * Siembra o limpia el tope de descuento y cierra la aplicación.
+ *
+ * Imprime SIEMPRE el tope de cada rol después de trabajar, y no solo lo que
+ * hizo: lo que importa saber antes de ir a probar un descuento es contra qué
+ * número se va a comparar, y un rol sin fila —que es el caso del
+ * administrativo— se lee mal como «no tiene tope» cuando significa lo
+ * contrario, que su tope es cero.
+ */
+function ejecutarModoLimitesDeDescuento(modo: string, repositorios: Repositorios): void {
+  try {
+    if (modo === 'sembrar') {
+      const informe = sembrarLimiteDeDescuento(repositorios);
+      console.info(
+        `[limites-descuento] ${informe.reemplazo ? 'Reemplazado' : 'Sembrado'} el tope del rol ` +
+          `"${ROL_SEMBRADO}": ${montoACadena(informe.limite.descuentoMaxPorcentaje)} % o ` +
+          `Q${montoACadena(informe.limite.descuentoMaxMontoFijo)} fijos.`,
+      );
+    } else if (modo === 'limpiar') {
+      const informe = limpiarLimiteDeDescuento(repositorios);
+      console.info(
+        informe.borro
+          ? `[limites-descuento] Quitado el tope del rol "${ROL_SEMBRADO}". Vuelve a cero.`
+          : `[limites-descuento] No había ningún tope del rol "${ROL_SEMBRADO}" que quitar.`,
+      );
+    } else {
+      console.error(
+        `[limites-descuento] Modo desconocido: "${modo}". Se esperaba "sembrar" o "limpiar".`,
+      );
+    }
+
+    const topes = topesActuales(repositorios);
+    for (const rol of ROLES) {
+      const tope = topes.find((limite) => limite.rol === rol);
+      console.info(
+        tope === undefined
+          ? `[limites-descuento] Rol "${rol}": SIN FILA, o sea tope CERO. Todo descuento que ` +
+              'pida necesita el PIN de un administrador.'
+          : `[limites-descuento] Rol "${rol}": hasta ${montoACadena(tope.descuentoMaxPorcentaje)} % ` +
+              `o Q${montoACadena(tope.descuentoMaxMontoFijo)} sin autorización.`,
+      );
+    }
+  } catch (error) {
+    const detalle = error instanceof Error ? error.message : String(error);
+    console.error(`[limites-descuento] Falló: ${detalle}`);
+  }
+
+  quitarManejadoresIpc();
+  const cierre = cerrarBaseDeDatosOrdenadamente();
+  console.info(`[cierre] ${cierre.mensaje}`);
+  app.exit(0);
+}
+
+/**
  * Instancia única: dos copias del POS abiertas sobre la misma base de datos
  * serían una fuente segura de descuadres en el corte de caja.
  */
@@ -226,9 +308,9 @@ if (!obtuvoElCandado) {
     segunda copia le pasa el foco a la primera (ver `second-instance`) y no
     tiene nada que decirle al cajero.
   */
-  if (modoDatosDeEjemplo !== '') {
+  if (modoSemilla) {
     console.error(
-      '[datos-de-ejemplo] NO se hizo nada: el punto de venta ya está abierto y ' +
+      '[semilla] NO se hizo nada: el punto de venta ya está abierto y ' +
         'la aplicación es de instancia única. Cerralo y volvé a correr el guion.',
     );
     app.exit(1);
@@ -318,6 +400,10 @@ app.whenReady().then(
     // cosa de interfaz.
     if (modoDatosDeEjemplo !== '') {
       ejecutarModoDatosDeEjemplo(modoDatosDeEjemplo, repositorios);
+      return;
+    }
+    if (modoLimitesDeDescuento !== '') {
+      ejecutarModoLimitesDeDescuento(modoLimitesDeDescuento, repositorios);
       return;
     }
 

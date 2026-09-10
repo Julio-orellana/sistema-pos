@@ -30,6 +30,8 @@
     "verify:pantallas": "npm run build && node scripts/verificacion-de-pantallas.cjs",
     "seed:ejemplo": "npm run build && electron . --datos-de-ejemplo=sembrar",
     "seed:limpiar": "npm run build && electron . --datos-de-ejemplo=limpiar",
+    "seed:limites": "npm run build && electron . --limites-descuento=sembrar",
+    "seed:limites:limpiar": "npm run build && electron . --limites-descuento=limpiar",
     "diagnostico:kiosko-macos": "mkdir -p node_modules/.tmp && swiftc -O scripts/sonda-presentacion-macos.swift -o node_modules/.tmp/sonda-presentacion && electron scripts/diagnostico-kiosko-macos.cjs kiosk node_modules/.tmp/sonda-presentacion && electron scripts/diagnostico-kiosko-macos.cjs corregido node_modules/.tmp/sonda-presentacion",
     "postinstall": "electron-builder install-app-deps"
   },
