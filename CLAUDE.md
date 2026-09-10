@@ -329,8 +329,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja) y 2026-09-08 (`categorias.activo`) |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`) y 2026-09-09 (las dos de la caja única) |
 | Plan | gratuito |
 
 Estado verificado contra el proyecto, no contra el script: **12 tablas**, RLS
@@ -352,15 +352,16 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**Hay DOS migraciones pendientes de aplicar en la nube: `0010_una_caja_por_sistema`
-y `0012_caja_cerrada_por`**, las dos del corte de caja. Se aplican como todas:
-mostrando antes el SQL exacto y con la aprobación explícita de Julio.
-
-La última aplicada fue `0009_categorias_activo`, el 2026-09-08.
+**No hay ninguna migración pendiente de aplicar en la nube.** Las dos últimas
+fueron `0010_una_caja_por_sistema` y `0012_caja_cerrada_por`, el 2026-09-09:
+`idx_caja_sesiones_una_abierta` pasó a `(estado) WHERE estado = 'abierta'` y
+`cerrada_por` quedó como `uuid` nulable con `ON DELETE SET NULL` hacia
+`usuarios`, verificado contra `pg_indexes`, `information_schema` y
+`pg_constraint`.
 
 Las migraciones locales 002 (bloqueo por intentos), 003 (candado por superficie)
-y 006 (que solo amplía el CHECK de superficies de esa misma tabla) **no tienen
-espejo a propósito**: son estado operativo de una terminal, no datos de negocio.
+y 006 y 011 (que solo amplían el CHECK de superficies de esa misma tabla) **no
+tienen espejo a propósito**: son estado operativo de una terminal, no datos de negocio.
 Ver `supabase/migrations/README.md` y la fila correspondiente del registro de
 decisiones.
 

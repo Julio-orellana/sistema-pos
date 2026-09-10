@@ -91,13 +91,15 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | `0007_autorizacion_de_diferencia.sql` | Sí — `20260907002212` |
 | `0008_autorizacion_solo_con_diferencia.sql` | Sí — `20260907002231` |
 | `0009_categorias_activo.sql` | Sí — `20260908121557` |
-| `0010_una_caja_por_sistema.sql` | **No — pendiente de aplicar** |
+| `0010_una_caja_por_sistema.sql` | Sí — `20260910040514` |
 | *(no hay 0011: ver la sección anterior)* | — |
-| `0012_caja_cerrada_por.sql` | **No — pendiente de aplicar** |
+| `0012_caja_cerrada_por.sql` | Sí — `20260910040526` |
 
-**Hay dos migraciones pendientes de aplicar en la nube: `0010` y `0012`.** Como
-todas, se aplican solo con la aprobación explícita de Julio y después de
-mostrarle el SQL exacto.
+**No queda ninguna migración pendiente de aplicar en la nube.** Las dos últimas
+—`0010` y `0012`— se aplicaron el 2026-09-09 por la vía de siempre, y se
+verificaron contra el catálogo del proyecto: `idx_caja_sesiones_una_abierta`
+quedó sobre `(estado)` y ya no sobre `(usuario_id)`, y `cerrada_por` existe como
+`uuid` nulable con llave foránea `ON DELETE SET NULL` hacia `usuarios`.
 
 La `0009` se
 aplicó el 2026-09-08 por la vía de siempre —SQL a la vista y aprobación
