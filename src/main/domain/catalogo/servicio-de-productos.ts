@@ -547,6 +547,14 @@ export class ServicioDeProductos {
     return this.productos.listarActivos();
   }
 
+  /**
+   * Lo mismo, pero EN EL ORDEN DE LA CUADRÍCULA de venta: los más vendidos
+   * primero, con el nombre como desempate determinista.
+   */
+  public listarParaVenta(): readonly Producto[] {
+    return this.productos.listarParaVenta();
+  }
+
   public obtener(id: string): Producto {
     return this.exigirProducto(id);
   }

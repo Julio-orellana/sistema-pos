@@ -1068,6 +1068,107 @@ desactivados seguiría ocupando los nombres por el UNIQUE de la tabla, y el
 "Maíz blanco" real de Jimmy chocaría con el de mentira. Si algún producto de
 ejemplo llegara a tener ventas, **no se borra nada** y se informa cuál.
 
+### 4.12 Pantalla de venta (el ticket, no el cobro)
+
+#### Qué hace y qué NO hace todavía
+
+Arma el ticket **en memoria**: agrega productos, corrige cantidades, quita
+líneas y calcula el total. **No registra la venta, no descuenta inventario, no
+aplica descuentos, no pide forma de pago y no imprime.** El botón de cobrar
+existe y avisa que el cobro llega en otro módulo; ni simula un cobro exitoso
+—sería mentirle al cajero— ni se queda mudo, que se leería como que la pantalla
+se colgó.
+
+La lógica del ticket vive en `src/renderer/src/venta/ticket.ts`, en funciones
+puras: así se prueba sin DOM y sin base de datos.
+
+#### Acceso condicionado a la caja: tres estados
+
+| Estado | Qué se ve |
+|---|---|
+| No hay caja abierta | No se dibuja la cuadrícula. Se explica y se ofrece abrir la caja. |
+| La caja la abrió **otra persona** | Tampoco se vende. Se dice quién la abrió y se manda a cerrar ese turno. |
+| La caja la abrió quien está en sesión | Se vende con normalidad. |
+
+**NO SE PUEDE VENDER EN LA CAJA DE OTRO, ni con autorización de administrador.**
+Es una regla nueva, distinta de la de cerrar una caja ajena, y la diferencia
+tiene una razón: una venta se registra contra `caja_sesion_id`, así que vender
+en el turno ajeno metería el dinero en el corte de una persona que no lo
+recibió. **Cerrar** la caja de otro sí se autoriza con PIN porque es un acto
+único y auditado, con su asiento; **vender** es continuo, y autorizar una vez
+dejaría toda una tarde de ventas atribuidas a quien no estaba. La salida
+correcta ya existe y la pantalla lleva a ella: cerrar ese turno —con el PIN del
+administrador— y abrir el propio.
+
+Cuando no se puede vender, el proceso principal **no manda el catálogo**. No es
+solo ahorro: la pantalla no debe poder dibujar la cuadrícula «por si acaso».
+
+#### El aviso de inventario es de INTERFAZ, no la fuente de verdad
+
+Si la cantidad de una línea supera el inventario, aparece un aviso —«Solo hay 8
+lb en el inventario registrado»— y **no pasa nada más**: la línea se sigue
+editando y el ticket se sigue armando.
+
+Es deliberado. El saldo con el que se compara es una **foto tomada al cargar la
+pantalla**, y mientras el cajero arma el ticket ese número puede haber
+cambiado. Bloquear con un dato viejo impediría vender mercadería que sí está en
+la bodega. **La comprobación real es el piso `>= 0` de la base dentro de la
+transacción atómica que registra la venta** (§4.3), y esa todavía no existe:
+llega con el módulo de registro. El comentario que lo dice está en
+`excedeInventarioConocido`, junto al código.
+
+#### El orden de la cuadrícula es determinista
+
+`contador_ventas DESC, nombre ASC`. El desempate por nombre no es decorativo:
+hoy **nada incrementa `contador_ventas`**, así que todos los productos están en
+cero y sin desempate SQLite podría devolverlos en cualquier orden; la
+cuadrícula se reacomodaría entre recargas y el cajero que ya sabe dónde está el
+maíz tendría que volver a buscarlo. Mismo criterio de «nunca dejar un orden
+ambiguo» del reparto de centavos.
+
+Por lo mismo, la insignia de «más vendido» **solo aparece en productos con
+ventas reales**. Hoy no la ve ninguno: poner el número igual sería decorar la
+pantalla con un dato falso.
+
+#### Qué se tomó del diseño importado y qué se ajustó
+
+El diseño viene del proyecto de Claude Design **«Mockup POS agrícola táctil»**,
+pantalla `01 · Venta`. Se adaptó, no se copió: el prototipo es HTML plano con
+estilos en línea y componentes propios (`<image-slot>`, `<sc-if>`), y la
+aplicación lo reconstruye con sus propios componentes React y su IPC tipado.
+
+**Se tomó tal cual:** la estructura de tres columnas (categorías · cuadrícula ·
+ticket), la paleta completa en `oklch`, las proporciones y radios, las tarjetas
+con sombra sólida desplazada, la insignia ámbar de más vendido, el pie del
+ticket con el total grande y el botón COBRAR, y los objetivos táctiles de 64 px
+o más.
+
+**Se ajustó, y por qué:**
+
+| Del diseño | Qué se hizo | Por qué |
+|---|---|---|
+| Tipografías Archivo e IBM Plex Mono desde Google Fonts | Se nombran primero, con una pila del sistema detrás; **no se cargan de la red** | La política de seguridad de contenido prohíbe conexiones salientes desde el renderer, y **la tienda tiene que funcionar sin internet**. Empaquetar los archivos de fuente es posible —las dos son de licencia abierta— y sería un cambio de una línea. |
+| Paleta clara en toda la aplicación | Acotada a la pantalla de venta | Las otras cinco pantallas siguen oscuras. Migrarlas es una decisión aparte, no algo que deba colarse en el prompt de la venta. |
+| Anchos fijos: 244 px de categorías, 552 px de ticket | `clamp()` | El diseño está dibujado a 1920 px. En una pantalla menor los dos paneles fijos se comían la cuadrícula y la dejaban **en una sola columna**; se vio corriendo la aplicación. |
+| Cliente, selector detalle/mayoreo, descuento, formas de pago, número de ticket | **No se implementaron** | Son módulos que no existen. Dibujarlos vacíos sería prometer funciones que no están. |
+| Nombre de la tienda, «CAJA 1», reloj | No se muestran | No hay de dónde sacarlos: no existe configuración de tienda ni de terminal. Inventarlos sería atribuirle datos a Jimmy. |
+
+Además, corriendo la aplicación apareció un defecto que ninguna prueba veía: el
+pie del ticket, con el botón de cobrar, quedaba **debajo de la barra de estado
+fija** del kiosko. La pantalla de venta reserva ahora ese alto
+(`--alto-barra-estado`). Vale para cualquier pantalla futura que use
+`position: fixed`.
+
+#### El teclado táctil es el mismo, con dos modos
+
+`TecladoNumerico` gana un modo `cantidad` junto al de `pin`. En modo PIN nada
+cambió —enmascarado y de largo exacto, y las cuatro pantallas que ya lo usaban
+no pasan ningún modo—; en modo cantidad **el número sí se muestra**, porque
+ocultar una cantidad que el cliente está mirando pesar no protege nada e
+impediría corregir un error de tecleo. El punto decimal solo existe donde
+significa algo: tres decimales para el peso, ninguno para lo que se vende por
+unidad.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -1136,6 +1237,9 @@ ejemplo llegara a tener ventas, **no se borra nada** y se informa cuál.
 | **CORREGIDO: la caja es UNA EN TODO EL SISTEMA, no una por usuario.** El índice único parcial pasa de `(usuario_id) WHERE estado='abierta'` a `(estado) WHERE estado='abierta'` (migración 010 y su espejo 0010). | Dejar la restricción por usuario; no restringir y confiar en que nadie abra dos; restringir por terminal | El alcance original estaba mal, no corto: permitía que **dos personas distintas abrieran cada una su turno sobre el mismo cajón físico de dinero**, y con dos turnos simultáneos ninguno de los dos cortes significa nada, porque lo que entra por uno sale contado en el otro. Jimmy tiene una sola caja y una sola pantalla. Se indexa la propia columna `estado` porque dentro de la condición su valor es siempre el mismo, así que la unicidad sobre ella permite una sola fila. El mensaje de `CAJA_YA_ABIERTA` deja de decir «ya tenés» y pasa a «ya hay»: la caja abierta puede ser de cualquiera, y atribuírsela a quien intenta abrir lo manda a buscar un turno propio que no existe. | Prompt 17 — 2026-09-08 |
 | **Cerrar una caja que abrió otra persona exige el PIN normal de un administrador, SIN excepción por rol.** Superficie de candado propia, `cierre_de_caja_ajena` (migración 011, no espejada). | Dejar cerrar a cualquiera; permitírselo libre a quien tenga rol administrativo; reusar la superficie `cierre_con_diferencia` | Si la caja es una sola, al turno de la tarde le toca cerrar el de la mañana, y ese cierre mueve dinero que el que cierra no contó al abrir. Se exige autorización **siempre** que quien cierra no sea quien abrió, incluso si quien cierra es administrador: la excepción «salvo que sea administrador» es la misma clase de caso especial que ya costó una vuelta con la intercepción de `Cmd+Q`, parece inofensiva y abre el hueco; además, con ella el cierre ajeno de un administrador no quedaría registrado como tal. No se reusa la superficie de la diferencia porque un mismo cierre puede necesitar las dos autorizaciones y compartir candado haría que fallar una bloqueara la otra; y porque el PIN remoto vale para la diferencia y **no** para esto. | Prompt 17 — 2026-09-08 |
 | **`caja_sesiones.cerrada_por` guarda a QUIEN CERRÓ, no a quien autorizó, y va NULL cuando cerró quien abrió** (migración 012 y su espejo 0012). | Guardar al administrador que autorizó; repetir siempre el `usuario_id` de quien cerró; no guardar nada y deducirlo de la auditoría | Son tres personas posibles y distintas: quien abrió, quien cerró y quien autorizó. Guardar al autorizante haría que el corte pareciera hecho por un administrador que quizá ni estaba en la tienda. Dejarlo NULL cuando coincide con quien abrió hace que `WHERE cerrada_por IS NOT NULL` sean exactamente los cierres que necesitaron autorización, sin comparar dos columnas. Quién autorizó sí queda, en el asiento de auditoría del cierre, junto con los otros dos. | Prompt 17 — 2026-09-08 |
+| **NO se puede vender en la caja de otra persona, y a diferencia de cerrarla, NINGÚN PIN lo desbloquea.** | Dejar vender en la caja ajena sin más; pedir el PIN de un administrador una vez, como para cerrarla; pedirlo en cada venta | Una venta se registra contra `caja_sesion_id`: vendiendo en el turno ajeno, el dinero entra al corte de alguien que no lo recibió. La asimetría con el cierre es deliberada y es lo que hace consistente el conjunto: **cerrar** es un acto único y supervisado, con su asiento y su autorizante, así que un PIN alcanza para dejarlo trazado; **vender** es continuo, y una autorización única dejaría toda una tarde de ventas atribuidas a quien no estaba, mientras que pedir el PIN en cada venta es inviable con un cliente enfrente. No es un callejón sin salida: cerrar el turno ajeno ya tiene su flujo autorizado, y la pantalla lleva ahí. | Prompt 18 — 2026-09-09 |
+| **El aviso de inventario de la pantalla de venta es de INTERFAZ y no bloquea.** La fuente de verdad sigue siendo el piso `>= 0` de la base dentro de la transacción de la venta. | Impedir agregar más de lo disponible; no avisar nada | El saldo que la pantalla compara es una foto tomada al cargarla, y puede haber cambiado mientras el cajero arma el ticket: bloquear con un dato viejo impediría vender mercadería que sí está en la bodega, con el cliente enfrente. No avisar nada, en cambio, dejaría que el descuadre se descubriera recién al cobrar. Avisar sin bloquear es la única de las tres que no miente ni estorba. Queda dicho en un comentario junto al código y en §4.12, para que el módulo de registro de venta no dé por hecho que esta comprobación ya protege algo. | Prompt 18 — 2026-09-09 |
+| **El diseño importado de Claude Design se ADAPTA a los patrones del proyecto, no se copia**, y su paleta queda acotada a la pantalla de venta. | Pegar el HTML del prototipo dentro de la aplicación; migrar toda la interfaz a la paleta clara de una vez | El prototipo es HTML plano con estilos en línea y componentes propios (`<image-slot>`, `<sc-if>`) que dependen del runtime del lienzo de diseño: dentro de Electron no tendría IPC tipado, ni los componentes ya construidos, ni las reglas de arquitectura. Se extrajo la dirección visual —estructura, paleta `oklch`, proporciones, jerarquía— y se reconstruyó con React. Tres puntos del diseño chocaron con reglas técnicas y ganó la regla, documentado en §4.12: las fuentes de Google no se cargan porque el renderer no sale a la red y la tienda funciona sin internet; los anchos fijos de 1920 px pasan a `clamp()` porque en pantallas menores dejaban la cuadrícula en una sola columna; y lo que corresponde a módulos inexistentes —cliente, mayoreo, descuentos, formas de pago— no se dibuja, para no prometer funciones que no están. | Prompt 18 — 2026-09-09 |
 | **La coherencia entre `diferencia` y sus columnas de autorización la aplica la base, no solo el servicio** (migración 008 y su espejo 0008). | Dejarla solo en `ServicioDeCaja`; un trigger; recrear la tabla con el procedimiento de doce pasos | Un cierre descuadrado sin autorizante es el agujero que todo el flujo de PIN existe para tapar, y hasta ahora lo tapaba solo la aplicación: una consulta SQL a mano o un respaldo restaurado a medias lo dejaban pasar. Se usa `ALTER TABLE ... ADD CONSTRAINT ... CHECK`, que **no está en la gramática documentada de SQLite** pero que en la versión empaquetada (3.53.4) se midió que se aplica de verdad, en INSERT y en UPDATE, sobrevive a reabrir el archivo y no crea columna fantasma. Se descartó recrear `caja_sesiones`: guarda dato de negocio, `ventas` la referencia, y el paso que apaga las llaves foráneas es ignorado dentro de una transacción, que es donde corre cada migración. El riesgo de usar gramática no documentada lo cubre una prueba que reconstruye la base desde cero: si una versión futura de SQLite deja de aceptarla, `npm test` se cae en desarrollo y no en el mostrador. En Postgres es un `ADD CONSTRAINT` normal, contra el número `0` en vez de la cadena `'0.00'`, porque allí la columna es NUMERIC. | Prompt 14 — 2026-09-06 |
 | **Los UUID de las denominaciones son fijos en la migración**, no generados en el cliente. | Sortearlos por instalación, como el resto de los id | Es la excepción correcta a la regla de UUID en el cliente: las denominaciones del quetzal son las mismas en toda instalación. Si cada terminal sorteara los suyos, el mismo billete de Q20 tendría identidades distintas y la sincronización los duplicaría. | Prompt 13 — 2026-09-06 |
 | **El estado de bloqueo NO se espeja en Supabase.** Ni la tabla `bloqueos_de_autorizacion` ni las columnas `usuarios.intentos_fallidos` / `bloqueado_hasta`. La nube lleva datos de negocio; el estado operativo de una terminal se queda en SQLite. | Espejar todo el esquema por simetría, que fue el reflejo inicial | Un candado deja de significar nada 30 segundos después de escribirse: con sincronización diferida llegaría vencido. Nadie lo consultaría desde la nube, y el hecho auditable sí viaja, porque `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada. Con más de una terminal, sincronizarlo sería activamente dañino: el bloqueo de una caja dejaría bloqueada la otra. Y unas columnas que existieran en Postgres sin sincronizarse nunca mostrarían `0` para todos y harían creer al auditor que nadie falló jamás un ingreso. Mismo criterio que ya se había aplicado a `sync_cola`. Ver `supabase/migrations/README.md`. | Prompt 12 — 2026-09-06 |
@@ -1214,7 +1318,10 @@ negocio:
 - **Sí existe** un catálogo de ejemplo sembrable y borrable
   (`npm run seed:ejemplo` / `npm run seed:limpiar`), que **no** es parte de las
   migraciones. El catálogo real de Jimmy todavía no llegó.
-- No existe la pantalla de ventas, ni el cálculo real de `monto_esperado` (ver
+- **Sí existe** la pantalla de venta, pero SOLO arma el ticket en memoria: no
+  registra la venta, no descuenta inventario, no aplica descuentos, no pide
+  forma de pago y no imprime. Ver la sección 4.12.
+- No existe el registro de la venta ni el cálculo real de `monto_esperado` (ver
   la sección 4.10).
 - No hay lógica de ventas ni de descuentos. Tampoco hay **mermas ni ajustes de
   inventario a la baja**: el ajuste que existe solo suma mercadería recibida, y
@@ -1264,6 +1371,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
   windows/      creación y bloqueos de la ventana kiosko
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
+  src/venta/    lógica pura del ticket en memoria (sin DOM, sin IPC)
 src/shared/     código compartido main <-> renderer
   adapters/     interfaces de integración + implementaciones seguras
   types/        contrato IPC y DTOs con Zod

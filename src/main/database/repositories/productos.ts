@@ -135,6 +135,31 @@ export class RepositorioDeProductos extends RepositorioBase {
     return filas.map(aEntidad);
   }
 
+  /**
+   * Los productos que se pueden vender hoy, EN EL ORDEN DE LA CUADRÍCULA.
+   *
+   * `contador_ventas DESC` pone arriba lo que más se mueve, que es lo que el
+   * cajero busca primero. `nombre ASC` desempata, y no es decorativo: sin él,
+   * con todos los contadores en cero —que es el estado de hoy, porque nada
+   * incrementa ese campo todavía— SQLite podría devolver las filas en
+   * cualquier orden y la cuadrícula se reacomodaría sola entre recargas. Es el
+   * mismo criterio de «nunca dejar un orden ambiguo» del reparto de centavos.
+   *
+   * El desempate usa la comparación binaria de SQLite, que ordena por punto de
+   * código: determinista, aunque ponga 'Ñ' después de 'Z'. Lo que importa aquí
+   * es que dos corridas den siempre lo mismo.
+   */
+  public listarParaVenta(): Producto[] {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM productos
+          WHERE activo = 1
+          ORDER BY contador_ventas DESC, nombre ASC`,
+      )
+      .all() as FilaProducto[];
+    return filas.map(aEntidad);
+  }
+
   /** Los más vendidos primero: es el orden de los íconos en la caja. */
   public listarMasVendidos(limite: number): Producto[] {
     const filas = this.base

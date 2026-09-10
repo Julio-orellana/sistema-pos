@@ -18,6 +18,7 @@ import {
   type EfectivoDeclaradoIpc,
   type EstadoDeCaja,
   type EstadoDeSesion,
+  type EstadoDeVenta,
   type FotoElegidaIpc,
   type ProductoEditadoIpc,
   type ProductoIpc,
@@ -156,6 +157,11 @@ const apiPos: ApiPos = {
       ipcRenderer.invoke(CANALES_IPC.productosElegirFoto) as Promise<
         RespuestaIpc<FotoElegidaIpc>
       >,
+  },
+
+  venta: {
+    estado: (): Promise<RespuestaIpc<EstadoDeVenta>> =>
+      ipcRenderer.invoke(CANALES_IPC.ventaEstado) as Promise<RespuestaIpc<EstadoDeVenta>>,
   },
 
   kiosko: {

@@ -636,3 +636,63 @@ describe('La caja abierta es LA del sistema, no la de un usuario', () => {
     expect(() => caja.abrir(idJimmy, { modo: 'simple', monto: '800' })).not.toThrow();
   });
 });
+
+// ===========================================================================
+/**
+ * Quién puede VENDER, y contra cuál caja.
+ *
+ * Vender exige una caja abierta POR QUIEN VENDE. La regla no admite el rodeo
+ * que sí tiene cerrar una caja ajena: una venta se registra contra
+ * `caja_sesion_id`, así que vender en el turno de otro metería el dinero en el
+ * corte de una persona que no lo recibió.
+ */
+describe('Estado para vender', () => {
+  it('SIN caja abierta no se puede vender', () => {
+    const estado = caja.estadoParaVender(idCajera);
+
+    expect(estado.puede).toBe(false);
+    expect(!estado.puede && estado.motivo).toBe('SIN_CAJA_ABIERTA');
+  });
+
+  it('con la caja abierta POR UNO MISMO sí se puede vender', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    const estado = caja.estadoParaVender(idCajera);
+
+    expect(estado.puede).toBe(true);
+    expect(estado.puede && estado.turno.id).toBe(sesion.id);
+  });
+
+  it('con la caja abierta POR OTRO no se puede vender, y se dice de quién es', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    const estado = caja.estadoParaVender(idJimmy);
+
+    expect(estado.puede).toBe(false);
+    expect(!estado.puede && estado.motivo).toBe('CAJA_DE_OTRO_USUARIO');
+    // Se devuelve el turno para poder mostrar quién lo abrió y desde cuándo.
+    expect(
+      !estado.puede && estado.motivo === 'CAJA_DE_OTRO_USUARIO' && estado.turno.id,
+    ).toBe(sesion.id);
+  });
+
+  it('ser ADMINISTRADOR no habilita a vender en la caja de otro', () => {
+    // Misma regla, sin excepción por rol, que para cerrar una caja ajena. Pero
+    // acá ni siquiera hay un PIN que lo desbloquee: cerrar es un acto único y
+    // auditado; vender es continuo, y una autorización dejaría toda la tarde
+    // atribuida a quien no estaba.
+    caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    const estado = caja.estadoParaVender(idJimmy);
+
+    expect(estado.puede).toBe(false);
+  });
+
+  it('después de cerrar la caja, tampoco se puede vender hasta abrir otra', () => {
+    const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    caja.intentarCerrar(
+      sesion.id,
+      { modo: 'simple', monto: '500' },
+      { usuarioQueCierra: idCajera },
+    );
+
+    expect(caja.estadoParaVender(idCajera).puede).toBe(false);
+  });
+});

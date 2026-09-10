@@ -13,6 +13,7 @@ import { PantallaDeCaja } from './PantallaDeCaja';
 import { PantallaDeCategorias } from './PantallaDeCategorias';
 import { PantallaDePinRemoto } from './PantallaDePinRemoto';
 import { PantallaDeProductos } from './PantallaDeProductos';
+import { PantallaDeVenta } from './PantallaDeVenta';
 
 export interface PantallaDeSesionProps {
   readonly sesion: SesionIniciada;
@@ -20,7 +21,7 @@ export interface PantallaDeSesionProps {
 }
 
 /** Dónde está parado el usuario dentro de la sesión. */
-type Vista = 'menu' | 'caja' | 'pin-remoto' | 'categorias' | 'productos';
+type Vista = 'menu' | 'venta' | 'caja' | 'pin-remoto' | 'categorias' | 'productos';
 
 export function PantallaDeSesion({
   sesion,
@@ -28,6 +29,14 @@ export function PantallaDeSesion({
 }: PantallaDeSesionProps): React.JSX.Element {
   const [vista, setVista] = useState<Vista>('menu');
 
+  if (vista === 'venta') {
+    return (
+      <PantallaDeVenta
+        alVolver={() => { setVista('menu'); }}
+        alIrACaja={() => { setVista('caja'); }}
+      />
+    );
+  }
   if (vista === 'caja') {
     return <PantallaDeCaja alVolver={() => { setVista('menu'); }} />;
   }
@@ -51,6 +60,9 @@ export function PantallaDeSesion({
       </header>
 
       <div className="menu">
+        <button type="button" data-prueba="ir-a-venta" onClick={() => { setVista('venta'); }}>
+          Vender
+        </button>
         <button type="button" data-prueba="ir-a-caja" onClick={() => { setVista('caja'); }}>
           Caja
         </button>
@@ -94,7 +106,8 @@ export function PantallaDeSesion({
           Cerrar sesión
         </button>
         <p className="nota">
-          La pantalla de ventas llega en un prompt futuro y va a reemplazar este menú.
+          El cobro todavía no está habilitado: la pantalla de venta arma el ticket pero no
+          registra nada.
         </p>
       </div>
     </div>

@@ -475,3 +475,81 @@ describe('Desactivar un producto no borra ni rompe referencias', () => {
     expect(asiento?.valorNuevo).toContain('75.000');
   });
 });
+
+// ===========================================================================
+/**
+ * El orden de la cuadrícula de venta.
+ *
+ * No es cosmético: si el orden fuera ambiguo, la cuadrícula se reacomodaría
+ * sola entre una recarga y otra, y el cajero que ya sabe dónde está el maíz
+ * tendría que volver a buscarlo. Es el mismo criterio de «nunca dejar un orden
+ * ambiguo» del reparto de centavos del comprobante.
+ */
+describe('La cuadrícula de venta tiene un orden determinista', () => {
+  /** Crea un producto con el contador de ventas indicado. */
+  function sembrar(nombre: string, ventas: number): string {
+    const creado = productos.crear(idAdmin, maiz({ nombre }));
+    for (let venta = 0; venta < ventas; venta += 1) {
+      repos.productos.incrementarContadorVentas(creado.id);
+    }
+    return creado.id;
+  }
+
+  it('los más vendidos van primero', () => {
+    sembrar('Poco vendido', 1);
+    sembrar('Muy vendido', 9);
+    sembrar('Vendido a medias', 5);
+
+    expect(productos.listarParaVenta().map((p) => p.nombre)).toEqual([
+      'Muy vendido',
+      'Vendido a medias',
+      'Poco vendido',
+    ]);
+  });
+
+  it('CON EL CONTADOR EMPATADO, desempata el nombre', () => {
+    // Es el estado de HOY: nada incrementa `contador_ventas` todavía, así que
+    // todos los productos están en cero y sin desempate el orden sería el que
+    // SQLite tuviera ganas de devolver.
+    sembrar('Zanahoria', 0);
+    sembrar('Arroz', 0);
+    sembrar('Maíz', 0);
+
+    expect(productos.listarParaVenta().map((p) => p.nombre)).toEqual([
+      'Arroz',
+      'Maíz',
+      'Zanahoria',
+    ]);
+  });
+
+  it('el mismo catálogo consultado diez veces devuelve el MISMO orden', () => {
+    for (const nombre of ['Arroz', 'Frijol', 'Maíz', 'Azúcar', 'Sal']) {
+      sembrar(nombre, 0);
+    }
+
+    const primera = productos.listarParaVenta().map((p) => p.id);
+    for (let corrida = 0; corrida < 10; corrida += 1) {
+      expect(productos.listarParaVenta().map((p) => p.id)).toEqual(primera);
+    }
+  });
+
+  it('el empate solo desempata DENTRO del mismo contador', () => {
+    sembrar('Zeta pero muy vendida', 7);
+    sembrar('Arroz sin ventas', 0);
+    sembrar('Banano sin ventas', 0);
+
+    expect(productos.listarParaVenta().map((p) => p.nombre)).toEqual([
+      'Zeta pero muy vendida',
+      'Arroz sin ventas',
+      'Banano sin ventas',
+    ]);
+  });
+
+  it('los productos DESACTIVADOS no llegan a la cuadrícula', () => {
+    const id = sembrar('Retirado', 3);
+    sembrar('Vigente', 1);
+    productos.fijarActivo(idAdmin, id, false);
+
+    expect(productos.listarParaVenta().map((p) => p.nombre)).toEqual(['Vigente']);
+  });
+});

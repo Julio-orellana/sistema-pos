@@ -2,6 +2,10 @@
    el módulo de interfaz; nada de esto es definitivo. */
 
 :root {
+  /* Alto de la barra de estado fija: 6+6 de relleno, ~15 de línea y el borde.
+     Vive acá porque la pantalla de venta necesita reservar exactamente ese
+     espacio para que su pie no quede tapado. */
+  --alto-barra-estado: 30px;
   --fondo: #0f172a;
   --superficie: #1e293b;
   --borde: #334155;
@@ -713,4 +717,564 @@ button:disabled {
 
 .foto .acciones {
   margin-top: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   PANTALLA DE VENTA — dirección visual importada de Claude Design
+   ("Mockup POS agrícola táctil", pantalla 01 · Venta).
+
+   LA PALETA ESTÁ ACOTADA A ESTA PANTALLA, a propósito. El diseño es CLARO
+   —fondo cálido, verde de acento— y el resto de la aplicación sigue siendo
+   oscuro. Migrar las otras cinco pantallas al diseño nuevo es una decisión
+   aparte, no algo que deba colarse dentro del prompt de la venta.
+
+   TIPOGRAFÍA: el diseño pide Archivo e IBM Plex Mono desde Google Fonts. NO se
+   cargan desde la red: la política de seguridad de contenido lo prohíbe y la
+   tienda tiene que funcionar sin internet. Se nombran igual, de primeras, para
+   que se usen si algún día se empaquetan con la aplicación, y detrás va una
+   pila del sistema que existe en Windows.
+   --------------------------------------------------------------------------- */
+
+.venta {
+  --venta-fondo: oklch(0.96 0.014 92);
+  --venta-superficie: oklch(0.99 0.006 92);
+  --venta-superficie-alt: oklch(0.955 0.014 92);
+  --venta-borde: oklch(0.88 0.015 92);
+  --venta-texto: oklch(0.24 0.02 155);
+  --venta-texto-tenue: oklch(0.55 0.02 150);
+  --venta-verde: oklch(0.5 0.1 150);
+  --venta-verde-sombra: oklch(0.4 0.09 150);
+  --venta-verde-oscuro: oklch(0.3 0.045 155);
+  --venta-precio: oklch(0.45 0.1 150);
+  --venta-ambar: oklch(0.74 0.14 72);
+  --venta-ambar-texto: oklch(0.28 0.04 70);
+  --venta-aviso-fondo: oklch(0.94 0.045 82);
+  --venta-aviso-borde: oklch(0.83 0.09 78);
+  --venta-aviso-texto: oklch(0.42 0.07 62);
+
+  --venta-titulo: Archivo, 'Segoe UI', system-ui, sans-serif;
+  --venta-mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, ui-monospace, monospace;
+
+  position: fixed;
+  /*
+    La barra de estado del kiosko va fija abajo y está SIEMPRE montada, en
+    todas las pantallas: es la salida controlada. La venta ocupa el resto, no
+    toda la ventana, porque si no el pie del ticket —con el botón de cobrar—
+    queda debajo de ella y no se puede tocar.
+  */
+  inset: 0 0 var(--alto-barra-estado) 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--venta-fondo);
+  color: var(--venta-texto);
+  font-family: var(--venta-titulo);
+}
+
+.venta__barra {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  background: var(--venta-verde-oscuro);
+  color: oklch(0.96 0.014 92);
+}
+
+.venta__turno {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: oklch(0.42 0.09 150);
+  border-radius: 999px;
+  padding: 11px 18px;
+  font: 600 15px/1 var(--venta-mono);
+}
+
+.venta__punto {
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  background: oklch(0.85 0.16 130);
+}
+
+.venta__espacio {
+  flex: 1;
+}
+
+.venta__barra .boton--secundario {
+  min-height: 48px;
+}
+
+.venta__cuerpo {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.venta__catalogo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+/* --- Barra lateral de categorías ----------------------------------------- */
+
+.venta__categorias {
+  /* El diseño está dibujado a 1920 px de ancho. En una pantalla menor, los dos
+     paneles fijos se comen la cuadrícula y la dejan en una sola columna: por
+     eso ceden ancho en vez de imponerlo. A 1920 quedan en su medida original. */
+  width: clamp(180px, 15%, 244px);
+  flex: none;
+  background: var(--venta-superficie);
+  border-right: 1px solid var(--venta-borde);
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.venta__rotulo {
+  margin: 0 0 2px 6px;
+  font: 700 12px/1 var(--venta-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--venta-texto-tenue);
+}
+
+.categoria {
+  /* 96 px: muy por encima del mínimo táctil, como en el diseño. */
+  min-height: 96px;
+  flex: none;
+  border-radius: 14px;
+  border: 1px solid var(--venta-borde);
+  background: var(--venta-superficie-alt);
+  color: var(--venta-texto);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 20px;
+  cursor: pointer;
+  transition: transform 60ms ease;
+}
+
+.categoria--activa {
+  background: var(--venta-verde);
+  color: oklch(0.98 0.01 150);
+  border-color: transparent;
+  box-shadow: 0 5px 0 var(--venta-verde-sombra);
+}
+
+/* Retroalimentación de "presionado": el botón se hunde sobre su propia
+   sombra, que es el gesto que el diseño ya insinúa con el desplazamiento. */
+.categoria:active,
+.icono-producto:active {
+  transform: translateY(2px);
+}
+
+.categoria__nombre {
+  font: 700 24px/1 var(--venta-titulo);
+}
+
+.categoria__conteo {
+  font: 500 14px/1 var(--venta-mono);
+  opacity: 0.85;
+}
+
+/* --- Cuadrícula de productos --------------------------------------------- */
+
+.venta__productos {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.venta__encabezado {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.venta__vista {
+  margin: 0;
+  font: 700 30px/1 var(--venta-titulo);
+}
+
+.venta__buscador input {
+  width: 320px;
+  min-height: 56px;
+  padding: 0 20px;
+  border-radius: 12px;
+  border: 1px solid var(--venta-borde);
+  background: var(--venta-superficie);
+  color: var(--venta-texto);
+  font: 400 17px/1 var(--venta-titulo);
+  user-select: text;
+}
+
+.cuadricula {
+  flex: 1;
+  min-height: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-auto-rows: 250px;
+  gap: 16px;
+  overflow-y: auto;
+  /* Desplazamiento táctil con inercia y sin rebote hacia el resto de la app. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.icono-producto {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* Muy por encima del mínimo de 80 px pedido para el objetivo táctil. */
+  min-height: 200px;
+  background: var(--venta-superficie);
+  border: 1px solid var(--venta-borde);
+  border-radius: 16px;
+  box-shadow: 0 4px 0 oklch(0.9 0.015 92);
+  padding: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  color: var(--venta-texto);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 60ms ease;
+}
+
+.icono-producto__foto {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.icono-producto__foto .miniatura {
+  width: 100%;
+  height: 100%;
+  border-radius: 11px;
+}
+
+.icono-producto__nombre {
+  font: 700 21px/1.1 var(--venta-titulo);
+}
+
+.icono-producto__medida {
+  font: 500 14px/1 var(--venta-mono);
+  color: var(--venta-texto-tenue);
+}
+
+.icono-producto__precio {
+  font: 700 25px/1 var(--venta-mono);
+  color: var(--venta-precio);
+}
+
+.icono-producto__insignia {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--venta-ambar);
+  color: var(--venta-ambar-texto);
+  border-radius: 999px;
+  padding: 7px 13px 7px 8px;
+  font: 700 12px/1 var(--venta-titulo);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 8px oklch(0.24 0.02 155 / 0.25);
+}
+
+.icono-producto__puesto {
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--venta-ambar-texto);
+  color: oklch(0.92 0.09 78);
+  font: 700 12px/20px var(--venta-mono);
+  text-align: center;
+}
+
+/* --- Ticket --------------------------------------------------------------- */
+
+.ticket {
+  width: clamp(360px, 34%, 552px);
+  flex: none;
+  background: var(--venta-superficie);
+  border-left: 1px solid var(--venta-borde);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ticket__encabezado {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 22px;
+  background: var(--venta-superficie-alt);
+  border-bottom: 1px solid var(--venta-borde);
+}
+
+.ticket__titulo {
+  margin: 0;
+  font: 700 25px/1 var(--venta-titulo);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--venta-texto);
+}
+
+.ticket__conteo {
+  font: 500 15px/1 var(--venta-mono);
+  color: var(--venta-texto-tenue);
+}
+
+.ticket__lineas {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 22px;
+}
+
+.ticket__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ticket__linea {
+  position: relative;
+  border: 1px solid var(--venta-borde);
+  border-radius: 14px;
+  background: var(--venta-superficie);
+  padding: 11px;
+}
+
+.ticket__linea--activa {
+  border: 2px solid var(--venta-verde);
+  box-shadow: 0 4px 14px oklch(0.5 0.1 150 / 0.12);
+}
+
+.ticket__tocar {
+  width: 100%;
+  min-height: 80px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: none;
+  border: 0;
+  /* Espacio reservado para el botón de quitar, que va superpuesto arriba a la
+     derecha: sin él, el subtotal quedaba tapado justo en su último dígito. */
+  padding: 0 62px 0 0;
+  color: var(--venta-texto);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ticket__miniatura .miniatura {
+  width: 62px;
+  height: 62px;
+  border-radius: 10px;
+}
+
+.ticket__datos {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ticket__nombre {
+  font: 700 20px/1.1 var(--venta-titulo);
+}
+
+.ticket__detalle {
+  font: 500 14px/1 var(--venta-mono);
+  color: var(--venta-texto-tenue);
+}
+
+.ticket__subtotal {
+  font: 700 21px/1 var(--venta-mono);
+}
+
+.ticket__quitar {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--venta-borde);
+  background: var(--venta-superficie-alt);
+  color: var(--venta-texto-tenue);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.ticket__aviso {
+  margin: 9px 0 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--venta-aviso-fondo);
+  border: 1px solid var(--venta-aviso-borde);
+  color: var(--venta-aviso-texto);
+  font: 600 14px/1.3 var(--venta-titulo);
+}
+
+.ticket__pista {
+  margin: 12px 2px 0;
+  font: 500 15px/1 var(--venta-titulo);
+  color: var(--venta-texto-tenue);
+}
+
+.ticket__pie {
+  flex: none;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--venta-borde);
+  background: var(--venta-superficie-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.ticket__total {
+  display: flex;
+  align-items: center;
+}
+
+.ticket__total-etiqueta {
+  flex: 1;
+  font: 700 26px/1 var(--venta-titulo);
+}
+
+.ticket__total-valor {
+  font: 800 40px/1 var(--venta-mono);
+  color: oklch(0.35 0.09 150);
+  letter-spacing: -0.02em;
+}
+
+.ticket__acciones {
+  display: flex;
+  gap: 10px;
+}
+
+.ticket__cancelar {
+  flex: none;
+  width: 120px;
+  height: 96px;
+  border-radius: 14px;
+  border: 0;
+  background: oklch(0.9 0.02 92);
+  color: oklch(0.4 0.02 150);
+  font: 700 19px/1 var(--venta-titulo);
+  cursor: pointer;
+}
+
+.ticket__cobrar {
+  flex: 1;
+  height: 96px;
+  border-radius: 14px;
+  border: 0;
+  background: var(--venta-verde);
+  box-shadow: 0 6px 0 var(--venta-verde-sombra);
+  color: oklch(0.98 0.01 150);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  cursor: pointer;
+}
+
+.ticket__cobrar:active {
+  transform: translateY(3px);
+  box-shadow: 0 3px 0 var(--venta-verde-sombra);
+}
+
+.ticket__cobrar:disabled,
+.ticket__cancelar:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
+.ticket__cobrar-texto {
+  font: 800 30px/1 var(--venta-titulo);
+  letter-spacing: -0.01em;
+}
+
+.ticket__cobrar-monto {
+  font: 700 30px/1 var(--venta-mono);
+  opacity: 0.85;
+}
+
+/* --- Los diálogos de esta pantalla siguen su misma paleta clara ----------- */
+
+.venta .modal {
+  background: var(--venta-superficie);
+  border: 1px solid var(--venta-borde);
+  color: var(--venta-texto);
+}
+
+.venta .modal h2 {
+  color: var(--venta-texto);
+}
+
+.venta .modal__texto {
+  color: var(--venta-texto-tenue);
+}
+
+.venta .teclado__tecla {
+  background: var(--venta-superficie-alt);
+  border: 1px solid var(--venta-borde);
+  color: var(--venta-texto);
+}
+
+.venta .teclado__tecla--principal {
+  background: var(--venta-verde);
+  color: oklch(0.98 0.01 150);
+  border-color: transparent;
+}
+
+/* --- Teclado en modo cantidad -------------------------------------------- */
+
+.teclado__cantidad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.teclado__numero {
+  font: 800 44px/1 var(--venta-mono, ui-monospace, monospace);
+  letter-spacing: -0.02em;
+}
+
+.teclado__leyenda {
+  font: 500 15px/1 var(--venta-mono, ui-monospace, monospace);
+  opacity: 0.7;
 }

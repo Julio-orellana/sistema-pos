@@ -92,6 +92,17 @@ export const CANALES_IPC = {
    * carpeta de datos del usuario. Devuelve la ruta relativa que se guarda.
    */
   productosElegirFoto: 'catalogo:productos-elegir-foto',
+
+  // --- Venta ---------------------------------------------------------------
+  /**
+   * Todo lo que la pantalla de venta necesita para dibujarse: si se puede
+   * vender, el catálogo activo en su orden y las categorías.
+   *
+   * Es un canal APARTE de los del catálogo a propósito: aquellos exigen rol
+   * administrativo, y vender lo hace un cajero. Devuelve solo productos
+   * activos y ningún dato de administración.
+   */
+  ventaEstado: 'venta:estado',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -581,6 +592,64 @@ export interface FotoElegidaIpc {
 }
 
 // ---------------------------------------------------------------------------
+// DTO: pantalla de venta
+// ---------------------------------------------------------------------------
+
+/** Por qué no se puede vender, cuando no se puede. */
+export type MotivoParaNoVender = 'SIN_CAJA_ABIERTA' | 'CAJA_DE_OTRO_USUARIO';
+
+/** Una categoría, tal como la muestra la barra lateral de la venta. */
+export interface CategoriaDeVenta {
+  readonly id: string;
+  readonly nombre: string;
+  /** Cuántos productos ACTIVOS tiene. Se muestra bajo el nombre. */
+  readonly productos: number;
+}
+
+/**
+ * Un producto tal como lo muestra la cuadrícula de venta.
+ *
+ * Los decimales viajan como CADENA canónica, nunca como `number`: es la misma
+ * regla que rige en todo el proyecto, y la pantalla los vuelve a convertir a
+ * Decimal para calcular el ticket.
+ */
+export interface ProductoParaVender {
+  readonly id: string;
+  readonly nombre: string;
+  readonly categoriaId: string;
+  readonly categoriaNombre: string;
+  readonly tipoMedida: TipoMedidaIpc;
+  readonly unidadPeso: UnidadPesoIpc | null;
+  /** Cuánto agrega un toque al ícono. Cadena canónica de tres decimales. */
+  readonly cantidadPredefinidaIcono: string;
+  /** Precio unitario. Cadena canónica de dos decimales. */
+  readonly precioBase: string;
+  /**
+   * Inventario conocido AL MOMENTO de cargar la pantalla.
+   *
+   * Sirve para advertir, nunca para decidir: la comprobación real y atómica
+   * ocurre al registrar la venta, en su propia transacción.
+   */
+  readonly inventarioDisponible: string;
+  readonly fotoUrl: string | null;
+  /** Cuántas veces se vendió. Ordena la cuadrícula. */
+  readonly contadorVentas: number;
+}
+
+/** Lo que la pantalla de venta necesita para dibujarse. */
+export interface EstadoDeVenta {
+  /** `true` solo si hay una caja abierta POR el usuario en sesión. */
+  readonly puedeVender: boolean;
+  /** Por qué no, cuando no se puede. `null` si sí se puede. */
+  readonly motivo: MotivoParaNoVender | null;
+  /** El turno abierto del sistema, si hay alguno. */
+  readonly turnoAbierto: TurnoAbierto | null;
+  /** Vacíos cuando no se puede vender: no se filtra catálogo de más. */
+  readonly categorias: readonly CategoriaDeVenta[];
+  readonly productos: readonly ProductoParaVender[];
+}
+
+// ---------------------------------------------------------------------------
 // Superficie que el preload expone al renderer
 // ---------------------------------------------------------------------------
 
@@ -666,6 +735,17 @@ export interface ApiPos {
     ): Promise<RespuestaIpc<ResultadoDeAjusteIpc>>;
     /** Abre el diálogo nativo, valida la imagen y la copia. */
     elegirFoto(): Promise<RespuestaIpc<FotoElegidaIpc>>;
+  };
+
+  /**
+   * Pantalla de venta.
+   *
+   * Solo lectura en este módulo: arma el ticket en memoria y no persiste nada.
+   * El registro de la venta llega en su propio prompt, con su transacción.
+   */
+  readonly venta: {
+    /** Si se puede vender, el catálogo activo en su orden y las categorías. */
+    estado(): Promise<RespuestaIpc<EstadoDeVenta>>;
   };
 
   /**

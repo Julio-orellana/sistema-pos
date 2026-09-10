@@ -89,6 +89,17 @@ export interface ContextoDeCierre {
     | undefined;
 }
 
+/**
+ * Si se puede vender ahora, y si no, por cuál de los dos motivos.
+ *
+ * Es una unión discriminada para que la pantalla no pueda tratar «no hay caja»
+ * y «la caja es de otro» como el mismo caso: son mensajes y salidas distintas.
+ */
+export type EstadoParaVender =
+  | { readonly puede: true; readonly turno: CajaSesion }
+  | { readonly puede: false; readonly motivo: 'SIN_CAJA_ABIERTA' }
+  | { readonly puede: false; readonly motivo: 'CAJA_DE_OTRO_USUARIO'; readonly turno: CajaSesion };
+
 /** Dependencias del servicio. */
 export interface DependenciasDeCaja {
   readonly cajaSesiones: RepositorioDeCajaSesiones;
@@ -168,6 +179,35 @@ export class ServicioDeCaja {
    */
   public sesionAbierta(): CajaSesion | null {
     return this.cajaSesiones.obtenerAbierta();
+  }
+
+  /**
+   * ¿Se puede VENDER ahora mismo, y si no, por qué?
+   *
+   * Vender exige una caja abierta POR QUIEN ESTÁ VENDIENDO. Las tres
+   * respuestas posibles son un tipo, no un booleano con un mensaje suelto: la
+   * pantalla tiene que dibujar algo distinto en cada caso y así no puede
+   * olvidarse de ninguno.
+   *
+   * POR QUÉ NO SE PUEDE VENDER CONTRA LA CAJA DE OTRO, ni con autorización:
+   * una venta se registra contra `caja_sesion_id`, así que vendiendo en el
+   * turno ajeno el dinero entraría al corte de una persona que no lo recibió.
+   * Cerrar la caja de otro SÍ se autoriza con PIN porque es un acto único y
+   * supervisado, con su asiento; vender es continuo, y autorizar una vez
+   * dejaría toda una tarde de ventas atribuidas a quien no estaba. La salida
+   * correcta ya existe: cerrar el turno ajeno —con el PIN del administrador— y
+   * abrir el propio.
+   */
+  public estadoParaVender(usuarioId: string): EstadoParaVender {
+    const turno = this.cajaSesiones.obtenerAbierta();
+
+    if (turno === null) {
+      return { puede: false, motivo: 'SIN_CAJA_ABIERTA' };
+    }
+    if (turno.usuarioId !== usuarioId) {
+      return { puede: false, motivo: 'CAJA_DE_OTRO_USUARIO', turno };
+    }
+    return { puede: true, turno };
   }
 
   /**

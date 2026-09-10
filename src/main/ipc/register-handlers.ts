@@ -52,6 +52,7 @@ import {
   registrarManejadoresDeCatalogo,
   type DependenciasDeCatalogo,
 } from './catalogo';
+import { registrarManejadoresDeVenta } from './venta';
 
 /** Dependencias que los manejadores necesitan del resto del proceso principal. */
 export interface DependenciasDeIpc {
@@ -77,6 +78,15 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   // Los del catálogo viven en su propio archivo, como manda la convención de
   // este módulo, y comparten la misma sesión y el mismo envoltorio de respuesta.
   registrarManejadoresDeCatalogo({ sesion: dependencias.sesion, ...dependencias.catalogo });
+  // La venta comparte los servicios del catálogo y de la caja, pero su canal
+  // exige solo sesión: lo usa un cajero, no un administrador.
+  registrarManejadoresDeVenta({
+    sesion: dependencias.sesion,
+    caja: dependencias.caja,
+    categorias: dependencias.catalogo.categorias,
+    productos: dependencias.catalogo.productos,
+    usuarios: dependencias.usuarios,
+  });
 
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,
