@@ -29,6 +29,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { crearBaseMigrada } from './ayuda-base-de-datos';
 
@@ -341,5 +344,60 @@ describe('La 007 puede dar NULL, pero la TABLA no deja entrar nada incoherente',
     expect(esquema).toContain('caja_sesiones_autorizacion_solo_con_diferencia');
     expect(esquema).toMatch(/diferencia_autorizada_via IS NOT NULL/);
     expect(esquema).toMatch(/diferencia_autorizada_por IS NOT NULL/);
+  });
+});
+
+// ===========================================================================
+describe('Quien edite la migración 008 se topa con la advertencia', () => {
+  /*
+    ## POR QUÉ LA ADVERTENCIA NO ESTÁ DENTRO DEL PROPIO `.sql`
+
+    Porque no se puede. La 008 **ya está aplicada** —incluida la base de trabajo
+    de Julio, que además tiene ventas reales adentro— y el migrador guarda su
+    checksum SHA-256. Cambiarle un solo carácter, aunque sea un comentario, hace
+    que la aplicación **se niegue a abrir** esa base. Es la misma razón por la
+    que §4.2 dejó sin corregir un comentario engañoso de la migración 001.
+
+    Así que la advertencia vive en dos lugares que sí se pueden tocar: un archivo
+    `.LEER-ANTES-DE-TOCAR.md` al lado de la migración —inerte para el migrador,
+    que importa cada `.sql` por nombre y no recorre el directorio— y esta prueba,
+    que es la que de verdad frena a alguien: **editar la 008 la hace fallar**,
+    con el motivo escrito en el mensaje.
+  */
+  const CARPETA = join(__dirname, '..', 'migrations');
+  const RUTA_008 = join(CARPETA, '008_autorizacion_solo_con_diferencia.sql');
+  const RUTA_ADVERTENCIA = join(
+    CARPETA,
+    '008_autorizacion_solo_con_diferencia.LEER-ANTES-DE-TOCAR.md',
+  );
+
+  /** El checksum que el migrador tiene registrado hoy para esta migración. */
+  const CHECKSUM_FIJADO = 'e50641ea0e63a31862e42dfdc1646d426180eb0379b749c7bf459eab630e8a2d';
+
+  it('la migración 008 NO cambió de contenido', () => {
+    const actual = createHash('sha256')
+      .update(readFileSync(RUTA_008, 'utf8'), 'utf8')
+      .digest('hex');
+
+    expect(
+      actual,
+      'La migración 008 cambió. DOS COSAS, y la segunda es la que importa:\n\n' +
+        '1. Está APLICADA, y el migrador guarda su checksum: la aplicación se va a ' +
+        'negar a abrir toda base que ya la tenga, incluida la de Julio. Si el cambio ' +
+        'era un comentario, revertilo.\n\n' +
+        '2. Su restricción `caja_sesiones_autorizacion_solo_con_diferencia` es HOY lo ' +
+        'único que tapa el hueco de la migración 007, que deja pasar un autorizante ' +
+        'sin vía. Si la relajaste, comprobá primero si reabriste ese hueco; si lo ' +
+        'reabriste, hace falta una migración NUEVA con los `IS NOT NULL` adelante.\n\n' +
+        'Todo el detalle está en 008_autorizacion_solo_con_diferencia.LEER-ANTES-DE-TOCAR.md.',
+    ).toBe(CHECKSUM_FIJADO);
+  });
+
+  it('la advertencia existe al lado de la migración, y nombra la dependencia', () => {
+    const advertencia = readFileSync(RUTA_ADVERTENCIA, 'utf8');
+
+    expect(advertencia).toContain('diferencia_autorizada_via IS NOT NULL');
+    expect(advertencia).toContain('007');
+    expect(advertencia).toContain('checksum');
   });
 });
