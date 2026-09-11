@@ -329,8 +329,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única) y 2026-09-11 (las dos del módulo de venta y la de `configuracion_negocio`) |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única) y 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio` y la de `descuento_autorizado_via`) |
 | Plan | gratuito |
 
 Estado verificado contra el catálogo del proyecto, no contra el script, el
@@ -357,14 +357,33 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**HAY UNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE: `0017_descuento_autorizado_via`**,
-la columna que registra si un descuento excedente se autorizó en persona o por
-teléfono. Se aplica como todas: mostrando antes el SQL exacto y con la
-aprobación explícita de Julio.
+**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE.**
 
-La última aplicada fue `0016_configuracion_negocio`, el 2026-09-11, por la vía
-de siempre: SQL completo a la vista, aprobación explícita de Julio y evidencia
+La última fue `0017_descuento_autorizado_via`, el 2026-09-11, por la vía de
+siempre: SQL completo a la vista, aprobación explícita de Julio y evidencia
 consultada después contra el catálogo del proyecto.
+
+- `ventas` pasó de 15 a **16 columnas**. `descuento_autorizado_via` quedó `text`
+  nulable, sin `DEFAULT`, con su `COMMENT`, leído de `information_schema.columns`.
+  Nulable es lo correcto: la mayoría de las ventas no lleva autorización.
+- El CHECK `ventas_autorizacion_de_descuento_coherente` quedó con
+  `convalidated = true`, leído de `pg_get_constraintdef`, y **con los `IS NOT
+  NULL` adelante**, que es lo que lo hace morder en las dos direcciones.
+  Convive con los cuatro CHECK que `ventas` ya tenía —`descuento_completo`,
+  `autorizacion_requiere_descuento`, `boleta_solo_con_tarjeta` y los de valores
+  enumerados—, los ocho validados.
+- **La lógica de tres valores quedó medida EN EL POSTGRES REAL**, evaluando las
+  dos formas del CHECK sobre los mismos seis casos sin escribir ninguna fila.
+  Con «autorizante sin vía», la forma de la 0007 devuelve `NULL` —y un CHECK
+  deja pasar el NULL— mientras que la forma aplicada devuelve `false`. Cierra la
+  mitad de esa comprobación que hasta ahora solo estaba medida en SQLite.
+- `idx_ventas_descuento_autorizado` quedó como índice parcial sobre
+  `descuento_autorizado_por`, leído de `pg_indexes`.
+- Las tablas siguen siendo **13**, con RLS activo y **cero políticas**. `ventas`,
+  `venta_detalle` y `productos` siguen en 0 filas; `denominaciones`, con sus 11.
+
+Antes de ella se aplicó `0016_configuracion_negocio`, el mismo día y por la
+misma vía.
 
 - Las **seis columnas** quedaron como manda el espejo, leídas de
   `information_schema.columns`: `id` TEXT `NOT NULL`, las cuatro del negocio

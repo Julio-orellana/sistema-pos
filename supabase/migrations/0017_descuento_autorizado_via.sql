@@ -31,7 +31,15 @@
 -- cortocircuitan a FALSO y hacen que el CHECK muerda en las dos direcciones.
 --
 -- ---------------------------------------------------------------------------
--- Estado: PENDIENTE de aplicar contra `pos-jimmy-cano`.
+-- Estado: APLICADA contra `pos-jimmy-cano` el 2026-09-11, como
+-- `20260911182553_descuento_autorizado_via`. Evidencia consultada después
+-- contra el catálogo del proyecto, no contra este archivo. Ver CLAUDE.md §4.4.
+--
+-- La diferencia entre las dos formas del CHECK quedó además MEDIDA EN EL
+-- POSTGRES REAL, evaluando las dos expresiones sobre los mismos seis casos sin
+-- escribir ninguna fila. Con «autorizante sin vía», la forma de la 0007 da NULL
+-- —y un CHECK deja pasar el NULL— mientras que esta da FALSE. Es la misma
+-- lógica de tres valores que se había medido en SQLite.
 -- ===========================================================================
 
 ALTER TABLE public.ventas
