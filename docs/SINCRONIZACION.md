@@ -160,7 +160,7 @@ original:**
 
 | Acción | ¿Era posible? | Qué tan grave, y por qué |
 |---|---|---|
-| **Sobrescribir `pin_hash` o `pin_remoto_hash` de un administrador** | Sí, con `UPDATE` | **Menos grave de lo que parece, por una razón que obliga a otra regla.** El ladrón ya tiene el archivo SQLite, y con él los hashes de todos; un PIN de cuatro dígitos se fuerza en minutos (8.2). Es decir: **después de un robo, TODOS los PIN están comprometidos, haya o no tocado la nube.** Por lo tanto la restauración tras un robo **tiene que resetear todos los PIN y borrar todos los PIN remotos**, siempre (6.5). Con esa regla, lo que el ladrón haya escrito en `pin_hash` en la nube se descarta sin mirarlo. El vector existe; su efecto es nulo. |
+| **Sobrescribir `pin_hash` o `pin_remoto_hash` de un administrador** | Sí, con `UPDATE` | **Menos grave de lo que parece, por una razón que obliga a otra regla.** El ladrón ya tiene el archivo SQLite, y con él los hashes de todos; un PIN de cuatro dígitos se fuerza en minutos (8.2). Es decir: **después de un robo, TODOS los PIN están comprometidos, haya o no tocado la nube.** Por lo tanto la restauración **resetea todos los PIN y borra todos los PIN remotos, siempre y en toda restauración, no solo tras un robo** (6.1). Con esa regla, lo que el ladrón haya escrito en `pin_hash` en la nube se descarta sin mirarlo. El vector existe; su efecto es nulo. Y si los hashes dejan de sincronizarse (decisión 17), el vector desaparece. |
 | **Cambiar `rol` de un cajero a `administrativo`** | Sí | **Grave, y el reset de PIN no lo neutraliza.** Restaurado, ese cajero es administrador. |
 | **Poner `activo = 0` a todos los administradores** | Sí | **Grave: es una negación de servicio contra la restauración.** El primer arranque solo se ofrece con la tabla vacía (§4.7), así que una terminal restaurada sin ningún administrador activo queda sin forma de administrarse. |
 | **Cambiar `nombre`** | Sí | Menor: rompe la atribución, no da acceso. |
@@ -304,7 +304,7 @@ una:
 
 | Tabla | ¿Cambia después de creada? | ¿Tiene `actualizado_en`? | Cómo se sube | Unidad de trabajo |
 |---|---|---|---|---|
-| `usuarios` | Sí: nombre, rol, PIN, activo | Sí | Insertar y actualizar, **solo por función** (1.5.1) | Sola, con su asiento de auditoría en la misma llamada |
+| `usuarios` | Sí: nombre, rol, activo. **El PIN cambia localmente pero, si se adopta la decisión 17, su hash no viaja** | Sí | Insertar y actualizar, **solo por función** (1.5.1) | Sola, con su asiento de auditoría en la misma llamada |
 | `categorias` | Sí | Sí | Insertar y actualizar | Sola |
 | `productos` | Sí: catálogo, **inventario**, contadores | Sí | Insertar y actualizar | Sola, **y también dentro de cada venta** (el inventario baja) |
 | `precios_especiales` | Sí | Sí | Insertar y actualizar | Sola |
@@ -837,6 +837,37 @@ todo lo anterior, y por eso es otra cosa: baja en vez de subir, lee todo en vez
 de escribir poco, la corre una persona con su propia credencial en vez del
 sistema solo, y **solo corre sobre una base vacía**.
 
+**EL RESET DE PIN ES AUTOMÁTICO, SIEMPRE, SIN PREGUNTAR.** Toda restauración
+—por robo, por falla, por reemplazo— termina con **todos los PIN reseteados y
+todos los PIN remotos borrados**, y ningún usuario puede entrar a la terminal
+nueva hasta recibir un PIN nuevo desde la pantalla de usuarios. No depende de
+ninguna marca que ponga quien restaura, y las razones para no dejarlo a
+elección son cuatro:
+
+1. **«Falla» no es «no expuesto».** Una computadora que falló va a un taller,
+   o se guarda en un cajón, o se vende. En cualquiera de esos caminos alguien
+   tiene el disco, y en el disco están los hashes, y un PIN de cuatro dígitos
+   se fuerza en minutos (8.2). La única situación en que los hashes no están
+   expuestos es que el disco haya sido destruido físicamente, y quien restaura
+   no puede saberlo con certeza.
+2. **Cuesta minutos.** La tienda tiene dos o tres usuarios. Ponerles PIN nuevo
+   es menos trabajo que decidir si hacía falta.
+3. **Le quita una decisión a alguien que está restaurando bajo presión**, y
+   una decisión que, si se toma mal, deja a un tercero con acceso de
+   administrador.
+4. **Quita una rama del código.** Una restauración que a veces resetea y a
+   veces no es dos restauraciones que probar.
+
+La pregunta «¿es un robo?» **sigue existiendo en 6.2, pero para otra cosa**:
+sirve para fechar la revisión de lo que el ladrón pudo escribir en la nube
+(6.5). No gobierna el reset.
+
+**Consecuencia que mejora otro riesgo:** si la terminal restaurada **nunca**
+confía en los hashes que vienen de la nube, **no hay motivo para que estén
+en la nube**. La sección 7, decisión 17, propone dejar de sincronizar
+`pin_hash` y `pin_remoto_hash` y quitarlos de Postgres, lo que cierra el
+riesgo 8.2 entero.
+
 **Cuándo no:** nunca sobre una terminal que ya tiene datos. Si la base local
 tiene una sola venta, la restauración se niega. Mezclar lo que hay con lo
 que baja es el escenario multi-escritor que este documento no diseña. La
@@ -852,7 +883,7 @@ del archivo local hecho antes, y **no se propone construirla ahora**.
 | **El esquema local y el de la nube coinciden** | Se lee el conjunto de columnas de cada tabla espejada por PostgREST (`OPTIONS` / el esquema OpenAPI) y se compara con `PRAGMA table_info` local | Se niega y nombra la diferencia. Restaurar con esquemas distintos es cómo se restaura mal en silencio. |
 | **El proyecto no está pausado** | La capa 2 de la sección 5 | Se muestra un mensaje que dice exactamente qué hacer: «Entrá al panel de Supabase y reanudá el proyecto». Ver 8.3: una terminal rota dos semanas es tiempo suficiente para que el proyecto se haya pausado. |
 | Hay credencial de restauración | Vos iniciás sesión en la pantalla con **tu** usuario, el que tiene `app_metadata.rol = 'restauracion'` | — |
-| **Se sabe por qué se restaura** | La pantalla pregunta: ¿falla del equipo, o robo? Si es robo, pide **la fecha y hora aproximadas** del robo | Sin esa fecha no se puede filtrar lo que el ladrón hizo (6.5). Ante la duda, se elige robo y una fecha anterior: sobra revisión, no falta. |
+| **Se sabe por qué se restaura** | La pantalla pregunta: ¿falla del equipo, o robo? Si es robo, pide **la fecha y hora aproximadas** del robo. **Esta pregunta solo fecha la revisión de 6.5; el reset de PIN no depende de ella, es siempre (6.1).** | Sin esa fecha no se puede filtrar lo que el ladrón hizo (6.5). Ante la duda, se elige robo y una fecha anterior: sobra revisión, no falta. |
 
 **La credencial de restauración no se guarda.** Es una sesión que vive
 mientras la pantalla está abierta y se cierra al terminar, con `signOut`.
@@ -866,7 +897,7 @@ catálogo**: cada tabla después de las que referencia.
 
 | Paso | Tabla | Referencia a | Qué se hace con lo que ya existe localmente |
 |---|---|---|---|
-| 1 | `usuarios` | — | Insertar. `intentos_fallidos = 0`, `bloqueado_hasta = NULL`: esas columnas no vienen de la nube y no deben venir. **Si la restauración es por robo: `pin_hash` se reemplaza por un valor que no coincide con ningún PIN, `pin_remoto_hash` queda en `NULL`, y todo usuario tiene que recibir un PIN nuevo desde la pantalla de usuarios antes de poder entrar** (1.5.1: los hashes están en el disco robado y se fuerzan en minutos; lo que diga la nube no importa). |
+| 1 | `usuarios` | — | Insertar. `intentos_fallidos = 0`, `bloqueado_hasta = NULL`: esas columnas no vienen de la nube y no deben venir. **Siempre, en toda restauración (6.1): `pin_hash` se escribe con un centinela que no coincide con ningún PIN y que `verificarPin` rechaza sin lanzar, `pin_remoto_hash` queda en `NULL`, y todo usuario tiene que recibir un PIN nuevo desde la pantalla de usuarios antes de poder entrar.** Si la decisión 17 se adopta, los hashes ni siquiera vienen de la nube. |
 | 2 | `categorias` | — | Insertar |
 | 3 | `denominaciones` | — | **No se traen.** Las 11 ya las sembró la migración 004 con los mismos UUID. Se **verifica** que la nube tenga las mismas 11, y si no coinciden se detiene. |
 | 4 | `configuracion_negocio` | — | **Actualizar** la fila `'unica'`, que la migración 016 ya creó vacía. |
@@ -917,7 +948,7 @@ Son las que la sección 4 admite como posibles o el robo puede haber dejado:
 | Filas con **`recibido_en`** posterior a la fecha del robo, en cualquiera de las 13 tablas | Lo que el ladrón insertó **o modificó** con la credencial antes de la revocación (1.5). Se filtra por `recibido_en`, la marca del servidor, **nunca por `creado_en` ni `actualizado_en`**, que vienen del cliente y el ladrón las elige (1.5.1). | Se muestra aparte, **sin restaurar**, para que decidas fila por fila. Para una fila modificada no hay valor anterior que mostrar: solo que fue tocada, cuándo, y por qué usuario de Auth. |
 | **Cualquier usuario con `recibido_en` posterior al robo** | Un cajero promovido, un administrador desactivado o renombrado, un administrador nuevo | **Revisión obligatoria, uno por uno, antes de terminar.** Es la única defensa contra lo que 1.5.1 admite que no se puede impedir. |
 | **Ningún administrador activo** después de aplicar lo revisado | El ladrón desactivó a todos, o vos rechazaste al único que quedaba | La restauración **no termina** hasta que haya al menos uno: ofrece reactivar a un administrador existente, y ese administrador recibe su PIN nuevo ahí mismo. Es el mismo invariante de §4.7, aplicado en el único momento en que la tabla podría quedar sin él. |
-| **PIN sin resetear** tras un robo | — | No es una anomalía que se busque: es un paso que **no se puede saltar**. La pantalla no da por terminada una restauración por robo mientras algún usuario activo siga sin PIN nuevo. |
+| **PIN sin resetear** | — | No es una anomalía que se busque: es un paso que **no se puede saltar, en ninguna restauración** (6.1). La pantalla no da por terminada la restauración mientras algún usuario activo siga sin PIN nuevo. |
 | Un producto cuya foto no está en Storage | Se subió la fila y no el archivo | Se restaura sin foto y se lista |
 
 ### 6.6 Cómo se le comunica el progreso, con el hardware y la conexión reales
@@ -996,15 +1027,26 @@ Ninguna está tomada. Están numeradas para que puedas contestar por número.
     conservan `UPDATE` directo (1.5.1). Recomendación: dejarlos así por ahora;
     son de bajo valor, se detectan con `recibido_en`, y cada función más es
     más superficie que mantener (sección 9).
-15. **Tras un robo, la restauración resetea todos los PIN y borra los
-    remotos**, sin opción de saltarlo (6.3, 6.5). Recomendación: sí. No
-    depende de que el ladrón haya tocado la nube: depende de que tiene el
-    disco.
-16. **La prueba de deriva en dos mitades**, con `supabase/esquema-nube.json`
-    en el repositorio y `npm run verify:nube` (sección 9). Recomendación: sí.
-    Queda por decidir contra qué se prueban las funciones en sí: una rama de
-    Supabase (tiene costo y hoy el proyecto no la usa) o el proyecto real con
-    datos de prueba que después se borran (que va contra «nunca se borra»).
+15. **Toda restauración resetea todos los PIN y borra los remotos,
+    automáticamente y sin preguntar** (6.1). No depende de marcar «robo»: esa
+    marca solo fecha la revisión de 6.5. Recomendación: sí. Un disco que
+    falló también puede estar en manos de un tercero.
+16. **Las funciones se prueban en un proyecto de Supabase SEPARADO y
+    descartable, nunca contra `pos-jimmy-cano`** (9.5). Recomendación: sí.
+    **Lo que hace falta decidir es qué proyecto pausar**: la organización ya
+    tiene los dos proyectos activos que permite el plan gratuito, y uno de
+    ellos, `dembow-ay-lupita`, es ajeno a este trabajo. Sin pausarlo no se
+    puede crear el de pruebas.
+17. **Dejar de sincronizar `pin_hash` y `pin_remoto_hash`, y quitar las dos
+    columnas de Postgres con una migración.** Consecuencia directa de la
+    decisión 15: si la terminal restaurada nunca confía en los hashes de la
+    nube, no hay ninguna razón para que la nube los tenga, y el riesgo 8.2
+    desaparece entero, incluida tu propia cuenta. Cuesta una migración —hoy
+    `pin_hash` es `NOT NULL` con CHECK en la 0001 y `pin_remoto_hash` llegó en
+    la 0005— y cambia el payload de `sincronizar_usuario`. Recomendación:
+    sí. Si algún día multi-sucursal necesitara compartir PIN entre cajas, es
+    un diseño propio con su propia decisión, no una razón para guardarlos
+    hoy.
 
 ---
 
@@ -1037,9 +1079,15 @@ PIN de todos.
 por función y la terminal no tiene `SELECT` sobre ella (2.3), así que una
 credencial de terminal filtrada **no** puede leer los hashes desde la nube.
 Queda **tu usuario de restauración**, que lee todo. El riesgo pasó de dos
-puertas a una, y esa una es tu cuenta de Supabase: lo que la protege es tu
-contraseña y, si el plan lo permite, el segundo factor. **Sigue abierto**,
-más chico.
+puertas a una, y esa una es tu cuenta de Supabase.
+
+**Y con la decisión 17 se cierra del todo**: como toda restauración resetea
+los PIN sin mirar la nube (6.1), los hashes no tienen ninguna función allá.
+Si se dejan de sincronizar y se quitan de Postgres, no hay nada que leer. Las
+tres opciones de arriba quedan como registro de por qué se llegó a esa
+conclusión; la primera —«no sincronizar los hashes»— es la que se recomienda,
+y su costo, «reconstruir los PIN a mano tras restaurar», ya es obligatorio por
+6.1 de todos modos.
 
 Opciones, ninguna elegida:
 
@@ -1136,13 +1184,13 @@ medirse allí antes de dar por buenos los presupuestos de la sección 2.4.
 Con 1.5.1 hay cuatro funciones que pasan por encima de RLS: usuario,
 apertura, cierre y el contrato de 9.2. Un error en cualquiera es un error con
 privilegios de dueño de tabla. El endurecimiento de 1.5.1 es una lista, y una
-lista se puede cumplir a medias. Lo que falta decidir: **dónde se prueban
-esas funciones** (7, decisión 16), porque probarlas contra el proyecto real
-implica escribir datos de prueba en la nube y borrarlos, y este proyecto no
-borra. Y hay que aceptar que el linter de Supabase va a mostrarlas como
-avisos permanentes, con el riesgo de que alguien, dentro de un año, «los
-arregle» quitando el `DEFINER` y dejando la cola detenida sin entender por
-qué.
+lista se puede cumplir a medias. **Dónde se prueban ya tiene respuesta:** un
+proyecto separado y descartable (9.5), nunca el real. Lo que sigue abierto es
+lo que 9.5 dice al final: que ese proyecto solo puede existir activo si se
+pausa otro, y que hay que aceptar que el linter de Supabase va a mostrar
+estas funciones como avisos permanentes, con el riesgo de que alguien, dentro
+de un año, «los arregle» quitando el `DEFINER` y dejando la cola detenida sin
+entender por qué.
 
 ### 8.10 Restaurar sobre una terminal que ya tiene datos
 
@@ -1258,3 +1306,82 @@ propósito cada tipo de deriva y ver la prueba fallar con el nombre correcto:
   administradores— esté bien. Eso lo cubren pruebas propias de cada función,
   corridas con `verify:nube` contra una rama de Supabase o contra el proyecto
   con datos de prueba, que es una decisión de implementación (7, decisión 16).
+
+### 9.5 Dónde se prueban las funciones: un proyecto de Supabase aparte, y qué lo condiciona
+
+**Las cuatro funciones `SECURITY DEFINER`, los triggers de `recibido_en` y las
+políticas RLS se prueban contra un proyecto de Supabase SEPARADO y
+descartable, nunca contra `pos-jimmy-cano`.** Es la única forma de probarlas
+de verdad: hay que insertar, ver qué rechazan, y borrar, y nada de eso puede
+ocurrir en el proyecto de la tienda, donde rige «nunca se borra».
+
+#### Lo que se verificó hoy contra la organización real, no contra la página de precios
+
+| Dato | Valor | De dónde sale |
+|---|---|---|
+| Plan de la organización | **gratuito** | Consultado hoy |
+| Proyectos en la organización | **tres**: `pos-jimmy-cano` (activo), `dembow-ay-lupita` (activo, ajeno a este trabajo), `Olam Church` (pausado) | Listado hoy |
+| Costo de crear un proyecto nuevo | **$0 al mes** | La propia API de costos, consultada hoy |
+| Límite del plan gratuito | **«Dos proyectos gratuitos activos. Los proyectos pausados no cuentan.»** Y el límite se cuenta sobre todas las organizaciones donde uno es dueño o administrador. | Documentación de facturación, leída hoy |
+
+**La consecuencia, sin rodeos: hoy NO se puede crear un tercer proyecto
+activo.** Los dos lugares están ocupados, y uno de ellos lo ocupa un proyecto
+que no tiene nada que ver con este. Este documento **no decide** qué hacer con
+`dembow-ay-lupita`: no es de este proyecto. Lo que sí deja claro es que sin
+un lugar libre no hay proyecto de pruebas, y que las opciones son tres:
+
+| Opción | Qué implica | Cuándo conviene |
+|---|---|---|
+| **Pausar `dembow-ay-lupita` mientras dure la implementación** | Un clic en el panel; se reanuda igual, dentro de 90 días, con sus datos intactos. Mientras esté pausado no responde. | Si ese proyecto no está en uso activo. Es la opción más simple. |
+| **Crear el de pruebas, usarlo, y pausarlo entre sesiones** | Un proyecto pausado no cuenta, así que se puede alternar: reanudar el de pruebas (unos minutos) cuando toca probar, pausarlo al terminar. Pero **para crearlo** hace falta un lugar libre en ese momento, así que igual hay que pausar otro al menos una vez. | Si `dembow-ay-lupita` se usa, pero de forma intermitente. |
+| **Plan Pro** | Sin límite de proyectos activos y sin pausado automático. | Ya está previsto antes de la entrega (§3) y el riesgo 8.3 lo vuelve necesario para el proyecto real; adelantarlo resuelve esto de paso. |
+
+#### Cómo se monta y se usa el proyecto de pruebas
+
+1. **Se crea vacío**, en la misma región que el real (`us-east-2`), con un
+   nombre que no deje dudas: `pos-pruebas-descartable`.
+2. **Se le aplican las mismas migraciones, desde los mismos archivos** de
+   `supabase/migrations/`, con la misma herramienta y en el mismo orden que al
+   real. No hay un esquema «de pruebas»: hay un solo esquema y dos proyectos.
+   La mitad B de 9.2 (`verify:nube`) acepta el proyecto como parámetro y
+   comprueba que los dos catálogos coincidan antes de correr nada.
+3. **Se le crean los mismos dos roles de Auth** —un usuario terminal y uno de
+   restauración, con `app_metadata` como en 1.2— y un tercero que **no** tiene
+   rol, para probar que sin rol no se puede nada. Se crean desde tu máquina,
+   igual que en 1.3. Su `service_role` tampoco se guarda en el repositorio:
+   solo hace falta para crear esos usuarios, una vez.
+4. **Las pruebas de las funciones corren ahí, con red, desde
+   `npm run verify:nube --destructivo`**, y con un seguro que no es opcional:
+   **el guion se niega a correr en modo destructivo contra cualquier proyecto
+   cuya referencia no esté en una lista fija de proyectos de prueba**, escrita
+   en el propio guion. `zgsdaelmbxufgcsideep`, el real, no está en esa lista
+   y no puede estarlo. Equivocarse de proyecto tiene que ser imposible, no
+   improbable.
+
+#### Qué prueban esas pruebas, que ninguna prueba local puede probar
+
+| Qué | Por qué solo se puede probar allá |
+|---|---|
+| Que el usuario terminal puede llamar a `sincronizar_usuario`, `sincronizar_apertura_de_caja` y `sincronizar_cierre_de_caja`, y que el usuario sin rol y el de restauración **no** | El chequeo de `app_metadata` vive dentro de la función, en Postgres |
+| Que la terminal **no** puede hacer `UPDATE` ni `DELETE` directos sobre `usuarios` ni `caja_sesiones`, ni `SELECT` sobre las tablas del dinero | Son las políticas RLS reales, evaluadas por PostgREST |
+| Que `sincronizar_cierre_de_caja` rechaza cerrar una caja ya cerrada, y que `sincronizar_usuario` rechaza dejar cero administradores activos | Es la lógica estructural de las funciones |
+| Que `recibido_en` queda con la hora del servidor **aunque el payload mande otra** | Es el trigger, y la hora del servidor solo existe allá |
+| Que un `INSERT ... ON CONFLICT DO NOTHING` bajo RLS no exige política de `SELECT` | Es el riesgo 8.4, y esta es la prueba que lo cierra |
+| Que la llave publicable sola no puede leer ni escribir nada | Es el estado «RLS sin políticas para `anon`» que el proyecto real tiene desde el Prompt 5 |
+| Que repetir un lote da el mismo estado (3.1) | Idempotencia real contra Postgres real |
+
+Cada una de estas pruebas **borra lo que insertó** al terminar, y el guion
+además vacía las 13 tablas del proyecto de pruebas antes de empezar. Eso es
+exactamente lo que no se puede hacer en el real, y por eso el proyecto es
+otro.
+
+#### Lo que hay que saber sobre la vida de ese proyecto
+
+- **Se va a pausar solo** a los siete días sin actividad (8.3). Está bien:
+  se reanuda antes de probar. Pausado no cuenta contra el límite.
+- **A los 90 días pausado, se pierde.** También está bien: no hay nada en él
+  que no se pueda recrear desde las migraciones en unos minutos. Es
+  descartable por diseño; que se descarte solo no es un problema.
+- **No se mezcla con el real ni por accidente**: nombre distinto, referencia
+  distinta, lista fija en el guion, y las credenciales de uno no sirven en el
+  otro porque Auth es por proyecto.
