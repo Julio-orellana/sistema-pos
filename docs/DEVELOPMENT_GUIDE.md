@@ -43,7 +43,7 @@ financiero del proyecto, y así una prueba se lee sola:
 
 **Métodos de las interfaces de integración:** el nombre de la interfaz está en
 inglés, pero sus métodos actúan sobre entidades del dominio y van en español:
-`imprimirComprobante()`, `empujarCambios()`, `traerCambios()`.
+`imprimirComprobante()`, `empujarCambios()`, `consultarEstado()`.
 
 ### 1.3 Comentarios
 

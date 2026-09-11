@@ -87,14 +87,18 @@ describe('Sincronización: el desarrollo no consume cuota de Supabase', () => {
     expect(sincronizador.obtenerCambiosEmpujados()).toHaveLength(1);
   });
 
-  it('traer cambios no inventa datos remotos: devuelve una lista vacía', async () => {
-    const DESDE = '2026-01-01T00:00:00.000Z';
-    const resultado = await sincronizador.traerCambios(DESDE);
+  it('la interfaz YA NO tiene traerCambios: la sincronización continua es solo de subida', () => {
+    /*
+      Decisión 10 del diseño. La bajada incremental se retiró porque la
+      sincronización continua es solo de subida (§2.2): bajar cambios contra
+      una base que la terminal también escribe sería tener dos escritores. La
+      restauración es otra cosa y tendrá su propia interfaz en la fase 4.b.
 
-    expect(resultado.ok).toBe(true);
-    expect(resultado.simulado).toBe(true);
-    expect(resultado.cambios).toHaveLength(0);
-    expect(resultado.sincronizadoHasta).toBe(DESDE);
+      Se comprueba sobre el OBJETO y no solo con los tipos, porque los tipos de
+      TypeScript desaparecen al compilar y esta prueba tiene que seguir
+      mordiendo si alguien reintroduce el método en tiempo de ejecución.
+    */
+    expect((sincronizador as unknown as Record<string, unknown>).traerCambios).toBeUndefined();
   });
 
   it('la bitácora simulada se puede limpiar entre pruebas', async () => {

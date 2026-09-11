@@ -12,6 +12,29 @@
  * no modificar la lógica de ventas.
  */
 
+/*
+  ===========================================================================
+  POR QUÉ ESTA INTERFAZ YA NO TIENE `traerCambios(desde)` — decisión 10
+  ===========================================================================
+
+  La tuvo desde el Prompt 1 y **nunca la llamó nadie**: era un método de bajada
+  incremental previsto cuando todavía no se había decidido la dirección de la
+  sincronización. El diseño la decidió: `docs/SINCRONIZACION.md` §2.2 establece
+  que la sincronización continua es **solo de subida**, porque bajar cambios
+  contra una base que la terminal también escribe sería tener dos escritores, y
+  resolver esos conflictos es un problema que este sistema no necesita tener.
+
+  Dejarla en la interfaz no era gratis: un método que existe invita a usarse, y
+  el día que alguien lo llamara estaría reintroduciendo la bajada que el diseño
+  descartó, sin que nada fallara.
+
+  **La restauración desde la nube NO se pierde por esto.** Es otra cosa y va a
+  tener su propia interfaz en la fase 4.b: no es incremental sino completa, no
+  corre en segundo plano sino a pedido de un administrador, y tiene
+  precondiciones propias (§6.2). Meterla acá habría sido confundir dos
+  operaciones distintas por parecerse en la dirección.
+*/
+
 /** Operación que se replica hacia la nube. */
 export type OperacionSincronizacion = 'insertar' | 'actualizar' | 'eliminar';
 
@@ -30,7 +53,7 @@ export interface CambioSincronizable {
   readonly actualizadoEn: string;
 }
 
-/** Resultado de subir un grupo de cambios. */
+/** Resultado de subir un LOTE de cambios. Una llamada, un lote (§4.3, opción B). */
 export interface ResultadoEmpuje {
   readonly ok: boolean;
   readonly adaptador: string;
@@ -38,18 +61,18 @@ export interface ResultadoEmpuje {
   readonly cambiosRechazados: number;
   /** Descripción de cada rechazo, para que el administrador sepa qué revisar. */
   readonly errores: readonly string[];
+  /**
+   * Código HTTP de la respuesta, cuando lo hubo.
+   *
+   * **ES LO QUE DECIDE SI UN FALLO SE REINTENTA O DETIENE LA COLA.** La
+   * sección 3.2 del diseño clasifica por código —429 y 5xx son transitorios,
+   * 400/403/409/422 son determinísticos, 401 es de credencial— y esa
+   * distinción no se puede adivinar leyendo un texto de error. Va opcional
+   * porque un fallo de red no tiene código: ahí no hubo respuesta, y la
+   * ausencia se lee como transitorio, que es lo correcto.
+   */
+  readonly estadoHttp?: number;
   /** `true` si no hubo llamada de red porque el adaptador es simulado. */
-  readonly simulado: boolean;
-}
-
-/** Resultado de bajar cambios desde la nube. */
-export interface ResultadoTraida {
-  readonly ok: boolean;
-  readonly adaptador: string;
-  readonly cambios: readonly CambioSincronizable[];
-  /** Marca de tiempo hasta la cual se trajeron cambios; sirve de punto de partida
-   *  para la siguiente sincronización incremental. */
-  readonly sincronizadoHasta: string;
   readonly simulado: boolean;
 }
 
@@ -69,11 +92,13 @@ export interface EstadoSincronizacion {
 export interface SyncProvider {
   readonly nombre: string;
 
-  /** Sube al servidor un grupo de cambios locales. */
+  /**
+   * Sube UN LOTE de cambios, en el orden recibido.
+   *
+   * El orden no es una sugerencia: son padres antes que hijos, y subirlos al
+   * revés lo rechazaría la llave foránea de Postgres (§2.4).
+   */
   empujarCambios(cambios: readonly CambioSincronizable[]): Promise<ResultadoEmpuje>;
-
-  /** Baja del servidor los cambios ocurridos después de `desde` (ISO-8601 UTC). */
-  traerCambios(desde: string): Promise<ResultadoTraida>;
 
   /** Informa si la nube está alcanzable, sin intentar sincronizar. */
   consultarEstado(): Promise<EstadoSincronizacion>;
@@ -101,18 +126,6 @@ export class SimulatedSyncProvider implements SyncProvider {
       cambiosAceptados: cambios.length,
       cambiosRechazados: 0,
       errores: [],
-      simulado: true,
-    });
-  }
-
-  public traerCambios(desde: string): Promise<ResultadoTraida> {
-    // Un adaptador simulado no inventa datos remotos: devolver cambios falsos
-    // haría que el resto del sistema pareciera funcionar por razones equivocadas.
-    return Promise.resolve({
-      ok: true,
-      adaptador: this.nombre,
-      cambios: [],
-      sincronizadoHasta: desde,
       simulado: true,
     });
   }

@@ -171,6 +171,34 @@ export function armarPayload(
  * síncrono, «dentro de la transacción» significa literalmente que la llamada
  * ocurre entre el `BEGIN` y el `COMMIT` de quien la invoca.
  */
+/**
+ * A quién avisarle que se encoló un lote. Uno solo: el planificador.
+ *
+ * **EL AVISO OCURRE DENTRO DE LA TRANSACCIÓN, y hay que saberlo.** `encolarLote`
+ * corre entre el `BEGIN` y el `COMMIT`, así que el observador se entera antes
+ * de que el dato esté confirmado. Es deliberado y es seguro por una razón
+ * concreta: **lo único que el observador puede hacer es agendar un
+ * temporizador**, nunca tocar la base. Si tocara la base, su escritura entraría
+ * en esta transacción y se revertiría con ella, que es justo lo que
+ * `venta-en-curso.ts` existe para impedir.
+ *
+ * Si la transacción se revierte, el temporizador queda agendado igual y el
+ * ciclo que corra dos segundos después no va a encontrar nada que subir. El
+ * costo es una consulta que devuelve cero filas; el beneficio es que avisar
+ * desde el único lugar que escribe la cola hace imposible olvidarse de avisar.
+ */
+let observadorDeLotes: (() => void) | null = null;
+
+/**
+ * Registra a quién avisarle. Pasar `null` lo quita.
+ *
+ * Es uno y no una lista a propósito: dos observadores serían dos políticas de
+ * cuándo sincronizar, y el proyecto tiene una.
+ */
+export function observarLotesEncolados(observador: (() => void) | null): void {
+  observadorDeLotes = observador;
+}
+
 export function encolarLote(base: Database, entradas: readonly EntradaDelLote[]): LoteEncolado {
   const loteId = nuevoId();
   const momento = ahora();
@@ -210,6 +238,8 @@ export function encolarLote(base: Database, entradas: readonly EntradaDelLote[])
       orden_en_lote: indice,
     });
   }
+
+  observadorDeLotes?.();
 
   return { loteId, filas: entradas.length };
 }

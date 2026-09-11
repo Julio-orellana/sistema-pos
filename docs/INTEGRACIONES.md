@@ -69,14 +69,38 @@ avisarle al cajero antes de cobrar.
 interface SyncProvider {
   readonly nombre: string;
   empujarCambios(cambios: readonly CambioSincronizable[]): Promise<ResultadoEmpuje>;
-  traerCambios(desde: string): Promise<ResultadoTraida>;
   consultarEstado(): Promise<EstadoSincronizacion>;
 }
 ```
 
-`desde` y `actualizadoEn` son cadenas ISO-8601 en UTC. Se usa cadena y no `Date`
-porque el dato viaja por IPC y se guarda en SQLite, y una cadena ISO sobrevive
-ambos viajes sin ambigüedad de zona horaria.
+`actualizadoEn` es una cadena ISO-8601 en UTC. Se usa cadena y no `Date` porque
+el dato viaja por IPC y se guarda en SQLite, y una cadena ISO sobrevive ambos
+viajes sin ambigüedad de zona horaria.
+
+**Una llamada a `empujarCambios` es UN LOTE**, no una lista suelta de cambios:
+las filas van en el orden en que hay que subirlas, padres antes que hijos, y ese
+orden no es una sugerencia. Subir `venta_detalle` antes que `ventas` lo rechaza
+la llave foránea de Postgres.
+
+`ResultadoEmpuje` lleva además `estadoHttp` cuando hubo respuesta. **Es lo que
+decide si un fallo se reintenta o detiene la cola**, y por eso viaja en el
+contrato en vez de quedar enterrado en un texto de error: la clasificación de
+`docs/SINCRONIZACION.md` §3.2 es por código, y no se puede adivinar leyendo un
+mensaje.
+
+### `traerCambios(desde)` YA NO EXISTE — decisión 10
+
+La interfaz lo tuvo desde el Prompt 1 y **nunca lo llamó nadie**. Se retiró en
+la Fase 1.b porque el diseño decidió que la sincronización continua es **solo
+de subida** (`docs/SINCRONIZACION.md` §2.2): bajar cambios contra una base que
+la terminal también escribe sería tener dos escritores, y resolver esos
+conflictos es un problema que este sistema no necesita tener. Un método que
+existe invita a usarse, y el día que alguien lo llamara estaría reintroduciendo
+la bajada que el diseño descartó sin que nada fallara.
+
+**La restauración desde la nube no se pierde por esto**: es otra operación —no
+incremental, no en segundo plano, a pedido de un administrador y con
+precondiciones propias— y va a tener su propia interfaz en la fase 4.b.
 
 ### Implementación por defecto: `SimulatedSyncProvider`
 
@@ -96,13 +120,19 @@ Expone además dos métodos pensados para pruebas y diagnóstico:
   simulado útil y un stub vacío.
 - `limpiar()` — vacía la bitácora entre casos de prueba.
 
-`traerCambios()` devuelve una lista vacía a propósito: inventar datos remotos
-falsos haría que el resto del sistema pareciera funcionar por razones
-equivocadas.
+### Quién lo usa: el trabajador de sincronización
+
+Desde la Fase 1.b hay un **trabajador en el proceso principal**
+(`src/main/sincronizacion/`) que lee `sync_cola`, arma los lotes y llama a
+`empujarCambios`. Corre contra el adaptador simulado y ya aplica de verdad el
+orden de los lotes, el backoff de §3.2, la detención de la cola ante un error
+determinístico y el ceder ante una venta en curso. Ver CLAUDE.md §4.18.
 
 ### Implementación real (pendiente): `SupabaseSyncProvider`
 
-- **Cuándo:** en el prompt del módulo de sincronización.
+- **Cuándo:** en la fase que agregue la red, las credenciales y las políticas
+  de RLS. El trabajador ya está y no cambia: lo único que cambia es qué
+  devuelve `crearSyncProvider`.
 - **Cómo se activa:** `POS_SYNC_PROVIDER=supabase` más `SUPABASE_URL` y
   `SUPABASE_ANON_KEY` en `.env`.
 - **Regla de uso durante el desarrollo:** la sincronización real se prueba de

@@ -24,7 +24,7 @@ import { join } from 'node:path';
 export const ARCHIVO_DE_LOG = 'log-tecnico.log';
 
 /** De dónde vino el evento, para poder filtrar el archivo con un `grep`. */
-export type OrigenTecnico = 'impresion' | 'recibo';
+export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion';
 
 /** Escribe una línea en la bitácora técnica. */
 export interface LogTecnico {

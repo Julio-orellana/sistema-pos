@@ -13,14 +13,24 @@
 >   entonces.
 >
 > **Qué está implementado hoy, y qué no.** Este documento sigue describiendo el
-> diseño completo, no el estado del código. Lo único construido es la **fase
-> 1.a**: la migración `018_sync_cola_lotes` y la **bandeja de salida
-> transaccional** de la sección 2.4, que llena `sync_cola` dentro de la misma
-> transacción de cada operación de negocio. **Nada la lee todavía**: no hay
-> trabajador de sincronización, ni `SyncProvider` real, ni credenciales, ni
-> detección de conexión, ni una sola política de RLS en Supabase. Cada sección
-> de abajo que describa algo que corra —subir, reintentar, resolver
-> conflictos, restaurar— describe una fase futura.
+> diseño completo, no el estado del código.
+>
+> - **Fase 1.a — construida.** La migración `018_sync_cola_lotes` y la **bandeja
+>   de salida transaccional** de la sección 2.4: cada operación de negocio llena
+>   `sync_cola` dentro de su misma transacción.
+> - **Fase 1.b — construida.** El **trabajador** de la sección 2.4: lee la cola
+>   por lotes, respeta el orden de llegada, aplica el presupuesto por ciclo y la
+>   escalera de reintentos de la sección 3.2, detiene la cola ante un error
+>   determinístico y cede ante una venta en curso. Corre contra
+>   `SimulatedSyncProvider`. La decisión 10 se ejecutó: `traerCambios` ya no
+>   está en la interfaz.
+>
+> **Lo que sigue sin existir:** el `SyncProvider` real contra Supabase, las
+> credenciales de la sección 1, la detección de conexión de la sección 5, las
+> políticas de RLS de la 2.3, las funciones de Postgres de la 4.3, los archivos
+> de la 2.5, la pantalla de sincronización de la 3.3 y la restauración de la 6.
+> Toda sección que describa algo que hable con la nube describe una fase
+> futura.
 
 ## 0. Qué se leyó para escribir esto, y qué se encontró de entrada
 
@@ -43,7 +53,7 @@ Se señalan, no se resuelven: decidir cuál versión es la correcta es tuyo.
 | 2 | La infraestructura de sincronización «ya existe»: `sync_cola` y `ventas.estado_sincronizacion`. | **Nadie escribe en `sync_cola` fuera de las pruebas.** La transacción de venta no encola nada. `estado_sincronizacion` se pone en `'pendiente'` al insertar y ninguna otra línea del proyecto la lee ni la cambia. | Es andamiaje sin conectar. Sirve como punto de partida, pero `sync_cola` necesita columnas que no tiene (sección 2.4). |
 | 3 | El README de `supabase/migrations` lista en su tabla de «qué se espeja» **10 tablas**. | Postgres tiene **13**: faltan en esa tabla `denominaciones`, `caja_sesion_denominaciones` y `configuracion_negocio`, que sí están espejadas. | La lista definitiva de este documento (sección 2.1) sale del catálogo real, no del README. |
 | 4 | El README dice que la `0016` está **pendiente**. | Se aplicó el 2026-09-11, igual que la `0017`, que el README no menciona. | Documentación desactualizada. Se corrige aparte; no afecta el diseño. |
-| 5 | La interfaz `SyncProvider` tiene `traerCambios(desde)`: un método de **bajada** incremental. | La sincronización continua de este diseño es **solo subida** (sección 2.2). Bajar cambios sería tener dos escritores, que es el problema que el prompt excluye. | Ese método no lo usa la sincronización continua. O se retira de la interfaz, o queda reservado para la restauración con otro nombre. |
+| 5 | La interfaz `SyncProvider` tiene `traerCambios(desde)`: un método de **bajada** incremental. | La sincronización continua de este diseño es **solo subida** (sección 2.2). Bajar cambios sería tener dos escritores, que es el problema que el prompt excluye. | **RESUELTA en la fase 1.b: se retiró de la interfaz.** La restauración tendrá la suya propia en la fase 4.b. |
 
 Y un hallazgo que no es inconsistencia pero condiciona todo lo demás:
 **cuatro tablas no tienen `actualizado_en`** —`venta_detalle`, `recibos`,
@@ -1002,7 +1012,12 @@ Por eso la pantalla, que es nueva y solo de rol administrativo:
 
 ## 7. Decisiones que este diseño te pide, en una lista
 
-Ninguna está tomada. Están numeradas para que puedas contestar por número.
+> **TODAS CONTESTADAS el 2026-09-11.** Quedan adoptadas con la recomendación
+> del documento, salvo dos: la **10** se resolvió retirando `traerCambios` de
+> `SyncProvider` —hecho en la fase 1.b— y la **11** queda ABIERTA hasta medir
+> en hardware real (fase 3). La lista se conserva tal como se escribió, con su
+> numeración, para que las respuestas se puedan cotejar contra lo que se
+> preguntó. Ver CLAUDE.md §4.17.
 
 1. **Rol por `app_metadata`** en vez de `auth.role() = 'authenticated'`
    (sección 1.1). Recomendación: sí.

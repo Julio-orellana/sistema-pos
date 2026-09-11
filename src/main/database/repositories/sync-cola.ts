@@ -20,6 +20,11 @@ interface FilaSyncCola {
   readonly sincronizado_en: string | null;
   readonly error: string | null;
   readonly creado_en: string;
+  readonly lote_id: string;
+  readonly orden_en_lote: number;
+  readonly intentos: number;
+  readonly proximo_intento_en: string | null;
+  readonly bloqueante: number;
 }
 
 function aEntidad(fila: FilaSyncCola): ElementoSyncCola {
@@ -33,6 +38,11 @@ function aEntidad(fila: FilaSyncCola): ElementoSyncCola {
     sincronizadoEn: fila.sincronizado_en,
     error: fila.error,
     creadoEn: fila.creado_en,
+    loteId: fila.lote_id,
+    ordenEnLote: fila.orden_en_lote,
+    intentos: fila.intentos,
+    proximoIntentoEn: fila.proximo_intento_en,
+    bloqueante: fila.bloqueante === 1,
   };
 }
 
@@ -107,6 +117,159 @@ export class RepositorioDeSyncCola extends RepositorioBase {
   public contarPendientes(): number {
     const fila = this.base
       .prepare('SELECT COUNT(*) AS total FROM sync_cola WHERE sincronizado_en IS NULL')
+      .get() as { readonly total: number };
+    return fila.total;
+  }
+
+  // =========================================================================
+  // OPERACIONES POR LOTE — lo que el trabajador de sincronización necesita
+  // =========================================================================
+  //
+  // El trabajador nunca sube una fila suelta: sube LOTES, que son unidades de
+  // trabajo completas (una venta con su detalle y su auditoría). Todas estas
+  // operaciones trabajan sobre el lote entero, porque tratarlas fila por fila
+  // dejaría media venta marcada como subida y media no.
+
+  /**
+   * El `lote_id` del lote pendiente MÁS VIEJO, o `null` si no hay pendientes.
+   *
+   * **NO SALTEA NADA, y eso es deliberado:** devuelve el más viejo sin mirar si
+   * está bloqueado ni si su espera de reintento venció. Quien llama decide qué
+   * hacer con él. Si este método filtrara los bloqueados, la cola seguiría
+   * subiendo por detrás de un lote roto y el respaldo tendría un hueco
+   * silencioso, que es exactamente lo que §3.2 del diseño prohíbe.
+   *
+   * **El desempate es `MIN(rowid)`, no el azar.** Dos lotes escritos en el
+   * mismo milisegundo tienen el mismo `creado_en`, y sin desempate SQLite
+   * podría devolverlos en cualquier orden: el mismo «nunca dejar un orden
+   * ambiguo» del reparto de centavos (CLAUDE.md §5). `rowid` es el orden de
+   * inserción, que es exactamente el orden de llegada.
+   */
+  public siguienteLotePendiente(): string | null {
+    const fila = this.base
+      .prepare(
+        `SELECT lote_id FROM sync_cola
+          WHERE sincronizado_en IS NULL
+          GROUP BY lote_id
+          ORDER BY MIN(creado_en), MIN(rowid)
+          LIMIT 1`,
+      )
+      .get() as { readonly lote_id: string } | undefined;
+    return fila === undefined ? null : fila.lote_id;
+  }
+
+  /** Las filas pendientes de un lote, en el orden en que hay que subirlas. */
+  public leerLote(loteId: string): ElementoSyncCola[] {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM sync_cola
+          WHERE lote_id = ? AND sincronizado_en IS NULL
+          ORDER BY orden_en_lote`,
+      )
+      .all(loteId) as FilaSyncCola[];
+    return filas.map(aEntidad);
+  }
+
+  /**
+   * Marca TODAS las filas pendientes del lote como sincronizadas.
+   *
+   * **ES IDEMPOTENTE POR CONSTRUCCIÓN:** el `WHERE sincronizado_en IS NULL`
+   * hace que confirmar dos veces el mismo lote no pise la marca original ni
+   * toque nada. Confirmar dos veces no es hipotético: es lo que pasa cuando la
+   * respuesta de la nube llega después de que la terminal ya la dio por buena.
+   *
+   * Devuelve cuántas filas marcó, para que quien llame pueda distinguir «lo
+   * marqué ahora» de «ya estaba marcado» sin volver a consultar.
+   */
+  public marcarLoteSincronizado(loteId: string): number {
+    return this.ejecutar(() => {
+      const resultado = this.base
+        .prepare(
+          `UPDATE sync_cola
+              SET sincronizado_en = ?, error = NULL, bloqueante = 0, proximo_intento_en = NULL
+            WHERE lote_id = ? AND sincronizado_en IS NULL`,
+        )
+        .run(ahora(), loteId);
+      return resultado.changes;
+    });
+  }
+
+  /**
+   * Un fallo TRANSITORIO: se suma un intento y se agenda cuándo reintentar.
+   *
+   * El lote queda tal como estaba —sin `sincronizado_en`, sin `bloqueante`— y
+   * vuelve a la cola. `proximo_intento_en` se PERSISTE a propósito: si viviera
+   * en memoria, un cierre forzado —que este proyecto permite (§4.5)—
+   * reiniciaría el backoff y la aplicación martillaría un servidor que ya dijo
+   * que no puede.
+   */
+  public registrarIntentoFallido(loteId: string, error: string, proximoIntentoEn: string): void {
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE sync_cola
+              SET intentos = intentos + 1,
+                  intentado_en = ?,
+                  error = ?,
+                  proximo_intento_en = ?
+            WHERE lote_id = ? AND sincronizado_en IS NULL`,
+        )
+        .run(ahora(), error, proximoIntentoEn, loteId);
+    });
+  }
+
+  /**
+   * Un fallo DETERMINÍSTICO: el lote queda bloqueante y la cola se detiene.
+   *
+   * No se agenda ningún reintento, y no es un olvido: reintentar en bucle algo
+   * que Postgres ya dijo que es inválido es ruido. Se desbloquea únicamente a
+   * pedido de una persona, con `desbloquearLote`.
+   */
+  public marcarLoteBloqueante(loteId: string, error: string): void {
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE sync_cola
+              SET intentos = intentos + 1,
+                  intentado_en = ?,
+                  error = ?,
+                  bloqueante = 1,
+                  proximo_intento_en = NULL
+            WHERE lote_id = ? AND sincronizado_en IS NULL`,
+        )
+        .run(ahora(), error, loteId);
+    });
+  }
+
+  /**
+   * Levanta el bloqueo de un lote para que la cola vuelva a intentarlo.
+   *
+   * **HOY NO LO LLAMA NADIE EN PRODUCCIÓN, y eso es correcto:** la pantalla de
+   * sincronización que lo va a usar es de una fase posterior (§3.3 del
+   * diseño). Existe ahora porque es la otra mitad de `marcarLoteBloqueante`:
+   * sin ella, las pruebas no podrían comprobar que un lote desbloqueado deja
+   * pasar a los que estaban detrás, que es justamente lo que hay que
+   * garantizar.
+   */
+  public desbloquearLote(loteId: string): void {
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE sync_cola
+              SET bloqueante = 0, proximo_intento_en = NULL
+            WHERE lote_id = ? AND sincronizado_en IS NULL`,
+        )
+        .run(loteId);
+    });
+  }
+
+  /** Cuántos lotes distintos quedan sin subir. */
+  public contarLotesPendientes(): number {
+    const fila = this.base
+      .prepare(
+        `SELECT COUNT(DISTINCT lote_id) AS total
+           FROM sync_cola WHERE sincronizado_en IS NULL`,
+      )
       .get() as { readonly total: number };
     return fila.total;
   }

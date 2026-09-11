@@ -37,6 +37,7 @@ import {
 } from '@shared/money';
 import { ErrorDeNegocio, errorDeConflictoDeInventario } from '@main/database/errores';
 import { encolarLote, entradasDe, type EntradaDelLote } from '@main/database/bandeja-de-salida';
+import { durante } from './venta-en-curso';
 import type {
   FormaPago,
   PrecioEspecial,
@@ -436,7 +437,14 @@ export class ServicioDeVenta {
       };
     });
 
-    return transaccion();
+    /*
+      LA SEÑAL SE LEVANTA ALREDEDOR DE LA TRANSACCIÓN ENTERA, no adentro.
+      Mientras dure, el trabajador de sincronización no toca la base: no es
+      cortesía de rendimiento, es que con una sola conexión síncrona una
+      escritura suya entraría en ESTA transacción y se revertiría con ella.
+      Ver `venta-en-curso.ts`.
+    */
+    return durante(() => transaccion());
   }
 
   /**

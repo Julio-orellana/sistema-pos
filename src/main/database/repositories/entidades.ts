@@ -477,6 +477,16 @@ export interface ElementoSyncCola {
   readonly sincronizadoEn: string | null;
   readonly error: string | null;
   readonly creadoEn: string;
+  /** Agrupa las filas de UNA unidad de trabajo: o suben juntas o no sube ninguna. */
+  readonly loteId: string;
+  /** Padres antes que hijos dentro del lote. Empieza en 0. */
+  readonly ordenEnLote: number;
+  /** Cuántas veces se intentó subir este lote. Alimenta el backoff. */
+  readonly intentos: number;
+  /** Cuándo volver a intentar, ISO-8601 UTC. `null` = disponible ahora mismo. */
+  readonly proximoIntentoEn: string | null;
+  /** `true` si este lote falló con un error determinístico y detiene la cola. */
+  readonly bloqueante: boolean;
 }
 
 /** Datos para encolar un cambio. */

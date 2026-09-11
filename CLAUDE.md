@@ -2269,6 +2269,203 @@ aplicada no se edita, y porque el índice que el trabajador va a consultar
 que devolviera el motor.
 
 
+### 4.18 El trabajador de sincronización (Fase 1.b)
+
+La fase 1.a llenó la cola. **Esta es la que la lee.** Sigue sin haber red: el
+trabajador corre contra `SimulatedSyncProvider`, y lo que se construyó de
+verdad es toda la lógica que no depende de Supabase —orden, reintentos,
+detención, atomicidad frente a la venta— para que el día que exista el
+adaptador real lo único que cambie sea qué devuelve `crearSyncProvider`.
+
+#### Qué existe y qué sigue sin existir
+
+**Existe:** `src/main/sincronizacion/` con tres piezas y una señal.
+
+| Pieza | Qué decide |
+|---|---|
+| `trabajador.ts` | **Qué** se sube y **qué se hace con la respuesta**. |
+| `reintentos.ts` | De qué clase es un fallo y cuánto se espera. Funciones puras. |
+| `planificador.ts` | **Cuándo** corre el trabajador. |
+| `domain/venta/venta-en-curso.ts` | La señal con la que el trabajador sabe que tiene que apartarse. |
+
+**NO existe, y no se empezó:** el `SyncProvider` real, las credenciales, la
+detección de conexión (§5 del diseño), las políticas de RLS, las funciones de
+Postgres, los archivos (fase 3.c), la pantalla de sincronización y la
+restauración. El trabajador está entero; lo que le falta es a quién hablarle.
+
+#### `traerCambios` se retiró de `SyncProvider` — decisión 10, ejecutada
+
+La interfaz lo tuvo desde el Prompt 1 y **nunca lo llamó nadie**. El diseño
+decidió que la sincronización continua es **solo de subida** (§2.2): bajar
+cambios contra una base que la terminal también escribe sería tener dos
+escritores. Un método que existe invita a usarse, y el día que alguien lo
+llamara estaría reintroduciendo la bajada que el diseño descartó **sin que nada
+fallara**. Hay una prueba que comprueba que el método ya no está **en el
+objeto**, no solo en el tipo: los tipos desaparecen al compilar.
+
+**La restauración no se pierde por esto.** Es otra operación —completa y no
+incremental, a pedido de un administrador y no en segundo plano, con
+precondiciones propias (§6.2 del diseño)— y va a tener su propia interfaz en la
+fase 4.b.
+
+#### Las cuatro reglas del trabajador
+
+**1. NO SALTEA NINGÚN LOTE.** Orden estrictamente de llegada, `creado_en` y
+después el orden de inserción como desempate. Romperlo rompe las llaves
+foráneas de Postgres: una venta referencia a un producto que pudo haberse
+creado esa misma mañana sin conexión.
+
+**2. UN LOTE BLOQUEANTE DETIENE LA COLA ENTERA, y no se reintenta solo.**
+Saltarlo dejaría un hueco **silencioso** en el respaldo. Una cola detenida y
+visible es un problema que alguien va a ver; un hueco silencioso es un problema
+que nadie va a ver hasta el día del robo. Se desbloquea a pedido de una persona
+—`desbloquearLote`—, y la pantalla que va a pedirlo es de una fase posterior.
+
+**3. CEDE ANTE LA VENTA.** Ver abajo.
+
+**4. NUNCA BLOQUEA EL PROCESO.** Un lote por iteración, pausa real entre lotes y
+presupuesto por ciclo.
+
+#### Cómo se detecta una venta en curso, y por qué ceder no es cortesía
+
+**Una bandera en memoria que el servicio de venta levanta y baja**, como
+especifica §2.4 del diseño. `ServicioDeVenta` envuelve su transacción entera con
+`durante(...)`, que la baja en un `finally` —si no la bajara al fallar una
+venta, el trabajador cedería para siempre y la cola no volvería a subir nada, en
+silencio—. El trabajador pregunta con `hayVentaEnCurso()` **de forma síncrona y
+antes de su primer `await`**: el cuerpo de una función `async` corre síncrono
+hasta ahí, así que la pregunta se contesta en el mismo turno del bucle de
+eventos en que se la hizo.
+
+**No se usa `base.inTransaction`** aunque exista y diga exactamente eso: solo es
+verdad mientras el hilo está dentro de la transacción, y para cuando el
+trabajador pudiera leerlo desde un temporizador la transacción ya terminó.
+
+> **EL PELIGRO REAL NO ES LA CONTENCIÓN DE BLOQUEOS: ES QUE EL TRABAJADOR SUBA
+> UNA VENTA QUE NUNCA EXISTIÓ.** La aplicación tiene **una sola conexión** y
+> better-sqlite3 es síncrono, así que un ciclo lanzado dentro de una transacción
+> abierta **lee las filas que esa transacción todavía no confirmó**. Si la
+> transacción después se revierte, la nube se quedó con un cambio que en la
+> tienda no ocurrió. **Está probado, no razonado**: hay una prueba de
+> falsificación que apaga la señal a propósito, lanza el ciclo desde dentro de
+> una transacción que después falla, y comprueba las dos cosas: que la categoría
+> no existe en la base y que la nube la recibió igual.
+
+#### Clasificación de fallos: la diferencia entre esperar y detenerse
+
+| Clase | Códigos | Qué se hace |
+|---|---|---|
+| **Transitorio** | sin respuesta (red caída), 5xx, 429, 408, 425 | Se suma un intento, se agenda el reintento y **el lote queda intacto**. Sin límite de veces: una desconexión de una semana no es un error, es una desconexión. |
+| **Determinístico** | 400, 403, 409, 422 y el resto de los 4xx | `bloqueante = 1`, se guarda el error completo y **la cola se detiene ahí**. |
+| **De credencial** | 401 | **La cola NO se toca**: no se suma intento, no se agenda nada y no se bloquea. El lote es válido; lo que falta es una credencial. |
+
+**La ausencia de código HTTP se lee como transitorio**, y es el caso más común
+de todos: no hubo respuesta porque no hubo red. Clasificarlo al revés detendría
+la cola cada vez que se cae el internet de la tienda.
+
+#### La escalera de espera es la del diseño, con ±20 % de variación
+
+5 s, 30 s, 2 min, 10 min, 30 min y de ahí en adelante **cada hora**. Crece de
+forma exponencial pero con techo: una exponencial pura llegaría a días, y una
+tienda que estuvo una semana sin internet tiene que volver a subir dentro de la
+hora siguiente a que vuelva la conexión.
+
+**La variación es de ±20 %, no «full jitter».** Con full jitter el primer
+reintento podría caer a los pocos milisegundos, o sea no esperar nada, que es lo
+contrario de lo que un backoff existe para hacer.
+
+`intentos` y `proximo_intento_en` **se persisten** en `sync_cola`. Si vivieran
+en memoria, un cierre forzado —que este proyecto permite a propósito (§4.5)—
+reiniciaría el backoff y la aplicación martillaría un servidor que ya dijo que
+no puede.
+
+#### Todo el estado vive en la base, ninguno en memoria
+
+Es lo que hace que cortar el proceso a mitad de un lote no pierda ni duplique
+nada. No hay contador de intentos en memoria, ni lote «en vuelo» recordado, ni
+temporizador cuyo vencimiento se pierda: al arrancar, el trabajador lee la cola
+y retoma exactamente donde estaba.
+
+**La confirmación de un lote es idempotente por construcción**: el `UPDATE`
+lleva `WHERE sincronizado_en IS NULL`, así que confirmar dos veces el mismo lote
+no pisa la marca original ni toca nada. Confirmar dos veces no es hipotético: es
+lo que pasa cuando la respuesta de la nube llega después de que la terminal la
+dio por perdida. Del lado de la nube, el upsert por clave primaria hace el resto
+(§3.1 del diseño).
+
+#### El presupuesto por ciclo y la cadencia
+
+| Límite | Valor | De dónde sale |
+|---|---|---|
+| Lotes por ciclo | 20 | §2.4 |
+| Duración del ciclo | 30 s | §2.4 |
+| Pausa entre lotes | 250 ms | §2.4 |
+| Descanso tras agotarlo | 60 s | §2.4 |
+| Filas por lote, de referencia | 50 | §2.4 |
+
+> **UN LOTE DE NEGOCIO MÁS GRANDE QUE 50 FILAS SE SUBE ENTERO IGUAL.** Partirlo
+> reintroduciría la ventana que la opción B de §4.3 eliminó: la nube podría
+> quedar con una venta sin la mitad de sus líneas, indefinidamente, si la
+> segunda llamada fallara. El número queda como referencia para el día que
+> existan lotes de agrupación —los archivos de la fase 3.c— que sí se pueden
+> partir. Hay una prueba con un lote de 60 filas.
+
+**No hay intervalo fijo**, y esa es la decisión (§5.3): un ciclo corre **cuando
+tiene sentido**. Con la cola vacía no se agenda nada, porque una máquina al día
+no tiene por qué gastar un ciclo —ni un byte, cuando haya red— en preguntar si
+podría subir algo que no tiene.
+
+| Disparador | Espera | Estado |
+|---|---|---|
+| Al confirmar una transacción local | 2 s, agrupando las ráfagas | implementado |
+| Al arrancar la aplicación | 30 s tras abrir la ventana | implementado |
+| Respaldo mientras haya pendientes | 5 min como tope | implementado |
+| Tras agotar el presupuesto | 60 s | implementado |
+| Al despertar de suspensión | 15 s | **el método existe; nadie lo llama** |
+| Al detectar conexión | — | **fase con red** |
+
+Los dos últimos dependen de piezas que esta fase no construye, y se dicen así en
+vez de simularlos: un disparador falso que parece funcionar es peor que uno que
+falta y se ve que falta.
+
+**Los 2 segundos tras el COMMIT son para no competir con el recibo**, que se
+está generando en ese mismo momento (§4.14). Y **agrupan**: tres ventas seguidas
+disparan un ciclo, no tres, porque cada aviso reinicia la cuenta.
+
+**El aviso sale de un solo lugar**, `observarLotesEncolados` en la bandeja de
+salida, que es el único código que escribe la cola. El observador corre **dentro
+de la transacción**, así que lo único que puede hacer es agendar un
+temporizador: si tocara la base, su escritura entraría en esa transacción. Si la
+transacción se revierte, el ciclo agendado no encuentra nada y termina; el costo
+es una consulta que devuelve cero filas, y el beneficio es que avisar desde el
+único lugar que escribe hace imposible olvidarse de avisar.
+
+**Al cerrar, la sincronización se DETIENE, no se apura.** Intentar vaciar la
+cola antes de cerrar dejaría la salida controlada esperando a una red que puede
+no estar, justo cuando alguien pidió cerrar el punto de venta. No hace falta:
+la cola vive en SQLite y el trabajador retoma en el próximo arranque.
+
+#### Cómo se probó que no bloquea la interfaz
+
+**Con un latido, no con una afirmación.** Durante un ciclo de 20 lotes corre un
+`setInterval` de 1 ms que anota la hora de cada latido, y la prueba mide el
+**hueco más largo** entre dos latidos consecutivos. En el proceso principal de
+Electron, el mismo hilo que corre el ciclo atiende el IPC de la ventana: si el
+ciclo lo ocupara sin soltar, el latido se detendría y la caja quedaría
+congelada.
+
+Un ciclo sano da **2 ms** de hueco máximo, de forma reproducible; el umbral se
+fijó en 15 ms. **Se comprobó que muerde**: reemplazando la pausa por una espera
+ocupada de 20 ms —el bucle girando sin soltar— la prueba falla con
+«expected 21 to be less than 15».
+
+> **LO QUE NO ESTÁ VERIFICADO:** que un ciclo corra dentro del proceso real de
+> Electron. El cableado de `src/main/index.ts` compila, pasa el lint y
+> `npm run verify:pantallas` confirma que no rompe el arranque ni ninguna de las
+> 34 comprobaciones, pero el primer ciclo se agenda 30 segundos después de abrir
+> la ventana y esa verificación dura menos. Lo probado es el trabajador, con 74
+> pruebas. Y vale la regla de siempre: nada de esto está verificado en Windows.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -2410,6 +2607,12 @@ que devolviera el motor.
 | **La Fase 1.a le agregó su PRIMERA transacción a SEIS servicios que no tenían ninguna.** Caja, categorías, productos, usuarios, límites de descuento y configuración del negocio. | Encolar sin transacción en esos seis; envolver solo la venta, que ya la tenía | El prompt pedía «reutilizá el punto de transacción existente en cada servicio» y **ese punto no existía**: medido antes de tocar nada, el único servicio que recibía la conexión y abría una transacción era `ServicioDeVenta`; los otros seis escribían su fila de negocio y su asiento de auditoría como sentencias sueltas. Sin transacción, la bandeja de salida no ofrece ninguna garantía, que es su única razón de ser. Agregarla **cerró además un hueco de atomicidad preexistente que nadie había mirado**: hasta hoy, matar el proceso entre las dos escrituras dejaba una caja abierta sin el arqueo con que se abrió, o un usuario dado de baja sin el asiento que dice quién lo hizo. El envoltorio es uno solo, `conBandejaDeSalida`, para que los seis tengan la misma forma; la venta y los recibos no lo usan, y se explica por qué en §4.17. | Prompt 29 — 2026-09-11 |
 | **`configuracion_negocio` se encola con `operacion = 'actualizar'`, no `'update'` como decía el prompt.** | Escribir `'update'` y ampliar el CHECK para aceptarlo | No es una decisión de diseño distinta: es el nombre correcto de la misma. El CHECK de `sync_cola` acepta `'insertar'`, `'actualizar'` y `'eliminar'` desde la migración 001, en español como todo el vocabulario de dominio del proyecto. Ampliar el CHECK para meter un cuarto valor en inglés que significa lo mismo que uno que ya existe habría dejado dos formas de decir lo mismo en la misma columna. | Prompt 29 — 2026-09-11 |
 | **`precios_especiales` NO se encola en esta fase, porque en producción nada la escribe.** | Inventar un servicio de precios especiales para poder encolar algo; encolar desde las pruebas | El diseño la lista entre las tablas sincronizables y el prompt pedía encolar «crear/editar precio especial», pero **no hay servicio, ni canal IPC, ni pantalla** que cree uno: la tabla se llena solo desde las pruebas. La venta sí los lee y los aplica, así que la funcionalidad existe a medias. Inventar el servicio para cumplir la letra del prompt habría sido construir un módulo que nadie pidió, con sus reglas de vigencia y autorización decididas por cuenta propia. La tabla queda declarada como sincronizable, lista para el día que exista la pantalla, y el hueco queda anotado como pendiente. | Prompt 29 — 2026-09-11 |
+| **DECISIÓN 10 EJECUTADA: `traerCambios(desde)` se retira de la interfaz `SyncProvider`.** La restauración tendrá la suya propia en la fase 4.b. | Dejarlo por si algún día hace falta; renombrarlo a `traerTodoParaRestaurar` y reusarlo | El método existía desde el Prompt 1 y **nunca lo llamó nadie**: era una bajada incremental prevista cuando todavía no se había decidido la dirección de la sincronización. El diseño la decidió —solo subida (§2.2)—, porque bajar cambios contra una base que la terminal también escribe sería tener dos escritores, y resolver esos conflictos es un problema que este sistema no necesita tener. **Dejarlo no era gratis:** un método que existe invita a usarse, y el día que alguien lo llamara estaría reintroduciendo la bajada descartada sin que nada fallara. Renombrarlo tampoco servía: la restauración no es incremental, no corre en segundo plano y tiene precondiciones propias (§6.2 del diseño); meterla en la misma interfaz sería confundir dos operaciones distintas por parecerse en la dirección. Hay una prueba que comprueba que el método ya no está **en el objeto**, no solo en el tipo, porque los tipos desaparecen al compilar. | Prompt 30 — 2026-09-11 |
+| **Un lote determinístico DETIENE la cola entera y no se reintenta solo; uno transitorio espera la escalera de §3.2 y no deja pasar a nadie por delante.** | Saltar el lote roto y seguir con los siguientes; reintentar el determinístico con backoff, como cualquier otro fallo | Saltarlo dejaría un hueco **silencioso** en el respaldo: parecería completo y no lo estaría, y con las llaves foráneas es probable que las siguientes también fallaran o, peor, que subieran referenciando algo que no llegó. Una cola detenida y **visible** es un problema que alguien va a ver; un hueco silencioso es un problema que nadie va a ver hasta el día del robo. Es el mismo criterio de «cero reintentos automáticos» del conflicto de inventario (§4.3): no tapar el defecto, mostrarlo. Y reintentar en bucle algo que la nube ya dijo que es inválido es ruido que además consume la cuota del plan gratuito. **El transitorio tampoco deja pasar al de atrás**, por la misma razón del orden: el lote que falló es el más viejo, y adelantar al siguiente sería saltearlo. Hay pruebas de las dos mitades, incluida una que deja pasar un año de reloj y comprueba que el lote bloqueante sigue sin reintentarse. | Prompt 30 — 2026-09-11 |
+| **La clasificación de fallos viaja por CÓDIGO HTTP, no por el texto del error**, y por eso `ResultadoEmpuje` gana `estadoHttp`. La ausencia de código se lee como transitorio. | Clasificar leyendo el mensaje de error; que el adaptador devuelva ya clasificado el fallo | Un texto de error no se puede clasificar sin adivinar, y adivinar mal en una dirección detiene la cola por una caída de internet, y en la otra la deja reintentando en bucle algo inválido. El código lo dice sin ambigüedad y es lo que §3.2 usa. **La ausencia de código es el caso más común de todos** —no hubo respuesta porque no hubo red— y por eso su lectura por omisión es «transitorio»: leerlo al revés detendría la cola cada vez que se cae el internet de la tienda, que es justamente el escenario para el que la cola existe. No se le delega la clasificación al adaptador porque es una política del negocio —qué se considera recuperable— y no un detalle de transporte: dos adaptadores podrían clasificar distinto y la cola se comportaría distinto según con quién hablara. | Prompt 30 — 2026-09-11 |
+| **El trabajador cede ante una venta en curso, detectada con una bandera en memoria que el servicio de venta levanta y baja.** No con `base.inTransaction` ni con un bloqueo de SQLite. | Leer `base.inTransaction`; confiar en que better-sqlite3 serialice; una segunda conexión para el trabajador | `base.inTransaction` dice exactamente lo que hace falta saber, pero **solo es verdad mientras el hilo está dentro de la transacción**: para cuando el trabajador lo leyera desde un temporizador, la transacción ya terminó. Y el peligro no es la contención de bloqueos: **la aplicación tiene UNA sola conexión**, así que un ciclo lanzado dentro de una transacción abierta lee las filas que esa transacción todavía no confirmó, y si después se revierte la nube se queda con un cambio que en la tienda no ocurrió. **Está probado por falsificación**, no razonado: una prueba apaga la señal a propósito, lanza el ciclo desde dentro de una transacción que después falla, y comprueba que la fila no existe en la base y que la nube la recibió igual. Una segunda conexión cambiaría el problema por otro peor —dos escritores sobre el mismo archivo, que es lo que la instancia única del proyecto evita desde el Prompt 1—. La bandera se baja en un `finally`: si no lo hiciera, una venta fallida dejaría al trabajador cediendo para siempre y la cola no volvería a subir nada, en silencio. | Prompt 30 — 2026-09-11 |
+| **«No bloquea la interfaz» se PRUEBA con un latido que mide el hueco más largo del bucle de eventos, no se afirma.** | Confiar en que `async` alcanza; medir solo la duración total del ciclo | La duración total no dice nada: un ciclo de tres segundos que suelta el bucle cada 200 ms es inofensivo, y uno de un segundo que no lo suelta congela la caja. Lo que importa es el hueco MÁS LARGO entre dos oportunidades de atender el IPC de la ventana, porque en el proceso principal de Electron es el mismo hilo. Un `setInterval` de 1 ms durante un ciclo de 20 lotes mide justamente eso. **Un ciclo sano da 2 ms de forma reproducible y el umbral quedó en 15**; se comprobó que la prueba muerde reemplazando la pausa por una espera ocupada de 20 ms. | Prompt 30 — 2026-09-11 |
+| **La sincronización corre CUANDO TIENE SENTIDO, sin intervalo fijo, y al cerrar la aplicación se DETIENE en vez de apurarse.** | Un `setInterval` cada N minutos; vaciar la cola antes de cerrar | Con la cola vacía no se agenda nada: una máquina al día no tiene por qué gastar un ciclo —ni un byte, cuando haya red— en preguntar si podría subir algo que no tiene, y menos en un i3 de 2011. Los disparadores son los de §2.4, y los 2 segundos tras el COMMIT existen para **no competir con el recibo**, que se está generando en ese mismo instante (§4.14); además agrupan, así que una ráfaga de ventas dispara un ciclo y no cinco. **Vaciar la cola al cerrar sería un error**: dejaría la salida controlada esperando a una red que puede no estar, justo cuando alguien pidió cerrar el punto de venta, y no hace falta porque la cola vive en SQLite y el trabajador retoma exacto donde quedó. El aviso de «hay algo que subir» sale de un solo lugar, la bandeja de salida, que es el único código que escribe la cola; corre dentro de la transacción y por eso lo único que puede hacer es agendar un temporizador. | Prompt 30 — 2026-09-11 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -2515,16 +2718,21 @@ negocio:
   implementación segura por defecto intacta: sin `impresora.json` configurado se
   usa `NullPrinterProvider` y el recibo queda solo en PDF. No hay adaptador real
   de Supabase: ahí sigue solo el contrato y la implementación simulada.
-- **La sincronización con la nube NO funciona todavía, pero su diseño está
-  APROBADO y la primera fase está construida.** El diseño completo vive en
-  `docs/SINCRONIZACION.md` (Prompt 28), aprobado el 2026-09-11 con dos
-  excepciones anotadas en §4.17. **Lo único implementado es la Fase 1.a**: la
-  migración `018_sync_cola_lotes` y la **bandeja de salida transaccional**, que
-  escribe en `sync_cola` dentro de la misma transacción de cada operación de
-  negocio. **Nadie lee esa cola**: no hay trabajador de sincronización, ni
-  `SyncProvider` real, ni credenciales, ni detección de conexión, ni una sola
-  política de RLS en Supabase. La cola se llena y no pasa nada más, que es
-  exactamente lo que se buscó para esta fase. Ver §4.17.
+- **La sincronización con la nube TODAVÍA NO HABLA CON LA NUBE, pero su diseño
+  está aprobado y sus dos primeras fases están construidas.** El diseño completo
+  vive en `docs/SINCRONIZACION.md` (Prompt 28), aprobado el 2026-09-11 con dos
+  excepciones anotadas en §4.17.
+  - **Fase 1.a** (§4.17): la migración `018_sync_cola_lotes` y la **bandeja de
+    salida transaccional**, que escribe en `sync_cola` dentro de la misma
+    transacción de cada operación de negocio.
+  - **Fase 1.b** (§4.18): el **trabajador**, que lee esa cola por lotes,
+    respeta el orden de llegada, aplica el presupuesto por ciclo y la escalera
+    de reintentos, detiene la cola ante un error determinístico y cede ante una
+    venta en curso. Corre contra `SimulatedSyncProvider`.
+  **Lo que sigue sin existir:** el `SyncProvider` real contra Supabase, las
+  credenciales, la detección de conexión, las políticas de RLS, las funciones de
+  Postgres, la sincronización de archivos, la pantalla de sincronización y la
+  restauración. **No se ha hecho ni una llamada de red.**
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
   canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.
@@ -2585,9 +2793,11 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     caja/       apertura y cierre del turno, arqueo por denominaciones
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
     venta/      precio efectivo, descuento, topes por rol y la transacción de la venta
+                (venta-en-curso.ts: la señal con la que el trabajador cede)
     reportes/   los tres reportes y el período en hora de Guatemala. NUNCA agrega en SQL
     negocio/    los datos de la tienda que encabezan el recibo
     recibo/     modelo, plantilla, ESC/POS y emisión del comprobante
+  sincronizacion/  el trabajador que lee sync_cola, sus reintentos y su cadencia
   adapters/     implementaciones reales: impresión térmica por ESC/POS
   recibo/       HTML a PDF con el Chromium que Electron ya trae
   log-tecnico.ts  bitácora de eventos técnicos; NO es la de auditoría

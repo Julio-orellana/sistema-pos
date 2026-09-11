@@ -62,6 +62,13 @@ import { ROLES } from '@shared/types/ipc';
 import { quitarManejadoresIpc, registrarManejadoresIpc } from '@main/ipc/register-handlers';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import { cargarInterfaz, crearVentanaPrincipal, describirEstadoKiosko } from '@main/windows/main-window';
+import {
+  crearSyncProvider,
+  leerConfiguracionAdaptadoresDelEntorno,
+} from '@shared/adapters';
+import { observarLotesEncolados } from '@main/database/bandeja-de-salida';
+import { TrabajadorDeSincronizacion } from '@main/sincronizacion/trabajador';
+import { PlanificadorDeSincronizacion } from '@main/sincronizacion/planificador';
 import { ATAJO_SALIDA_CONTROLADA, describirAtajo } from '@shared/kiosk-input';
 
 /** Ruta al preload compilado, relativa a dist-electron/main. */
@@ -150,6 +157,9 @@ let controladorDeSalidaActivo: ControladorDeSalidaControlada | null = null;
  * recién entonces se cierra la conexión y la aplicación. Es exactamente lo que
  * NO ocurre cuando se mata el proceso desde el Administrador de tareas.
  */
+/** El planificador vivo, para poder detenerlo en el cierre ordenado. */
+let planificadorDeSincronizacion: PlanificadorDeSincronizacion | null = null;
+
 function cerrarAplicacionOrdenadamente(): void {
   if (cierreEnCurso) {
     return;
@@ -161,7 +171,18 @@ function cerrarAplicacionOrdenadamente(): void {
 
   // TODO(caja): cuando exista el módulo de caja, avisarle aquí para que
   // persista el turno abierto antes de cerrar.
-  // TODO(sincronizacion): vaciar la cola de cambios pendientes si hay red.
+
+  /*
+    LA SINCRONIZACIÓN SE DETIENE, NO SE APURA. Se podría intentar vaciar la cola
+    antes de cerrar, y sería un error: dejaría la salida controlada esperando a
+    la red —que puede no estar— justo cuando alguien pidió cerrar el punto de
+    venta. No hace falta: la cola vive en SQLite y el trabajador retoma exacto
+    donde quedó en el próximo arranque, que es para lo que la bandeja de salida
+    guarda TODO su estado en la base y nada en memoria.
+  */
+  observarLotesEncolados(null);
+  planificadorDeSincronizacion?.detener();
+  planificadorDeSincronizacion = null;
 
   quitarManejadoresIpc();
   ultimoCierre = cerrarBaseDeDatosOrdenadamente();
@@ -548,6 +569,40 @@ app.whenReady().then(
       });
       return;
     }
+
+    /*
+      ===================================================================
+      TRABAJADOR DE SINCRONIZACIÓN (fase 1.b)
+      ===================================================================
+      Corre contra `SimulatedSyncProvider`: **no toca la red, no usa
+      credenciales y no habla con Supabase.** Lo que sí hace de verdad es leer
+      `sync_cola`, respetar el orden de los lotes, aplicar el backoff y detener
+      la cola ante un error determinístico. El día que exista el adaptador real
+      lo único que cambia es qué devuelve `crearSyncProvider`.
+
+      Va DESPUÉS de crear la ventana porque el primer ciclo se agenda 30
+      segundos más tarde, contados desde acá: es lo que §2.4 pide para no
+      competir con el arranque en un i3.
+    */
+    const trabajadorDeSincronizacion = new TrabajadorDeSincronizacion({
+      cola: repositorios.syncCola,
+      proveedor: crearSyncProvider(leerConfiguracionAdaptadoresDelEntorno(process.env)),
+      registrar: (mensaje: string): void => {
+        logTecnico.registrar('sincronizacion', mensaje);
+      },
+    });
+    planificadorDeSincronizacion = new PlanificadorDeSincronizacion({
+      trabajador: trabajadorDeSincronizacion,
+      registrar: (mensaje: string): void => {
+        logTecnico.registrar('sincronizacion', mensaje);
+      },
+    });
+    // El único aviso de «hay algo que subir» sale de la bandeja de salida, que
+    // es el único lugar que escribe la cola. Ver `observarLotesEncolados`.
+    observarLotesEncolados(() => {
+      planificadorDeSincronizacion?.alConfirmarTransaccion();
+    });
+    planificadorDeSincronizacion.arrancar();
 
     // En macOS es normal que la aplicación siga viva sin ventanas; se recrea
     // la ventana al reactivarla desde el Dock.
