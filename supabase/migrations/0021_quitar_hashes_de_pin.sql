@@ -1,0 +1,72 @@
+-- ===========================================================================
+-- 0021_quitar_hashes_de_pin.sql — Decisión 17 del diseño
+-- ===========================================================================
+--
+-- **SIN ESPEJO LOCAL a propósito.** `pin_hash` y `pin_remoto_hash` SIGUEN
+-- existiendo en SQLite: son lo que hace funcionar el ingreso y el diálogo de
+-- autorización. Lo que se quita es la copia de la nube. No hay migración local
+-- 021.
+--
+-- ---------------------------------------------------------------------------
+-- POR QUÉ SE QUITAN: EL RIESGO 8.2 DESAPARECE ENTERO
+-- ---------------------------------------------------------------------------
+-- Un PIN de este sistema tiene CUATRO DÍGITOS: 10 000 valores posibles. El hash
+-- es scrypt, que es lento a propósito, pero contra un espacio de 10 000 eso
+-- alcanza para horas, no para años. Es decir: **quien consiga leer la tabla
+-- `usuarios` de la nube saca todos los PIN de la tienda**, incluido el del
+-- dueño. Esa es la exposición, y existe mientras las columnas existan.
+--
+-- La pregunta correcta no es «¿está bien protegido?», es «¿para qué están
+-- allá?». Y la respuesta es: para nada. La decisión 15 del diseño ya
+-- establecía que **toda restauración resetea todos los PIN y borra todos los
+-- PIN remotos, siempre, no solo después de un robo**. Una terminal restaurada
+-- nunca va a confiar en un hash que baje de la nube, así que la nube no tiene
+-- ninguna razón para tenerlo.
+--
+-- Y cierra además un vector de §1.5.1: con la credencial robada se podía
+-- sobrescribir el `pin_hash` de un administrador. Sin columna, no hay qué
+-- sobrescribir.
+--
+-- Desde la fase 1.a la bandeja de salida ya **no los manda**: están en la lista
+-- de columnas excluidas de `bandeja-de-salida.ts`, junto con
+-- `intentos_fallidos` y `bloqueado_hasta`, que nunca se espejaron.
+--
+-- ---------------------------------------------------------------------------
+-- EL PROBLEMA CONCRETO: pin_hash ES NOT NULL CON CHECK DESDE LA 0001
+-- ---------------------------------------------------------------------------
+-- La 0001 la declaró así:
+--
+--     pin_hash TEXT NOT NULL CHECK (length(pin_hash) > 0)
+--
+-- Escrito en línea, Postgres crea con eso DOS cosas atadas a la columna: el
+-- `NOT NULL` (un atributo de la columna) y una restricción de tabla llamada
+-- `usuarios_pin_hash_check` que depende **únicamente** de esa columna.
+--
+-- **`DROP COLUMN` se lleva las dos, y por eso no hay que quitarlas antes.**
+-- Postgres elimina automáticamente las restricciones que dependen solo de la
+-- columna que se borra. Intentar un `ALTER COLUMN ... DROP NOT NULL` o un
+-- `DROP CONSTRAINT` previo no sería más seguro: sería dejar la tabla en un
+-- estado intermedio donde un INSERT podría meter un usuario sin PIN, y ese
+-- estado no tiene por qué existir ni un instante.
+--
+-- **Lo que sí importa es que NO SE USA `CASCADE`.** Si alguna vista, índice o
+-- función dependiera de `pin_hash`, `CASCADE` la borraría en silencio. Sin
+-- `CASCADE` la migración falla, y fallar es lo correcto: significa que hay algo
+-- que nadie sabía que dependía de esto y hay que mirarlo antes de seguir.
+--
+-- Que hoy no haya ninguna dependencia así **no se da por supuesto: se comprueba
+-- aplicando esta migración contra `pos-pruebas-descartable` antes que contra el
+-- proyecto real.** Si allá pasa sin `CASCADE`, es que no hay nada colgando.
+--
+-- ---------------------------------------------------------------------------
+-- LO QUE ESTO NO ARREGLA, DICHO EN VOZ ALTA
+-- ---------------------------------------------------------------------------
+-- El archivo SQLite de la tienda sigue teniendo los hashes, y quien se lleve la
+-- computadora se los lleva. **Después de un robo físico, todos los PIN están
+-- comprometidos igual.** Lo que esta migración elimina es la segunda copia, la
+-- que estaba en internet y alcanzable con una credencial: la que podía filtrar
+-- los PIN sin que nadie entrara a la tienda.
+-- ===========================================================================
+
+ALTER TABLE public.usuarios DROP COLUMN IF EXISTS pin_hash;
+ALTER TABLE public.usuarios DROP COLUMN IF EXISTS pin_remoto_hash;

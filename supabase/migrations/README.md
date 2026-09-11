@@ -14,7 +14,25 @@ espeja.**
 | `sync_cola` | **No** | Es la lista local de qué falta subir. Subirla sería subir la lista de pendientes junto con los pendientes. |
 | `bloqueos_de_autorizacion` | **No** | Estado de seguridad de **una** terminal, válido durante 30 segundos. Ver abajo. |
 | `usuarios.intentos_fallidos`, `usuarios.bloqueado_hasta` | **No** | Mismas razones: son columnas locales de una tabla que sí se espeja. |
+| `usuarios.pin_hash`, `usuarios.pin_remoto_hash` | **No, desde la `0021`** | Un PIN de cuatro dígitos tiene 10 000 valores: quien lea esa tabla en la nube los saca todos. Y no hacen falta allá, porque toda restauración resetea los PIN sin mirarlos. Decisión 17. |
+| `ventas.estado_sincronizacion` | **No, desde la `0020`** | Dice si ESTA terminal ya subió ESTA venta: estado operativo local. En la nube una fila que está, está sincronizada. Decisión 4. |
 | `migraciones_aplicadas` | **No** | Control del migrador local. |
+
+Y al revés, una sola vez: **`recibido_en` existe solo en la nube**, en **doce**
+de las trece tablas. No se espeja hacia SQLite y no puede: es la hora del
+servidor, y su razón de ser es ser la única fecha que el cliente no controla.
+Ver la dirección 2 de los huecos, más abajo.
+
+**La tabla número trece, `denominaciones`, NO la lleva**, y no es una excepción
+arbitraria: es que ahí no hay nada que detectar. `recibido_en` existe para
+delatar lo que escribió un cliente comprometido, y en `denominaciones` no hay
+ningún cliente que escriba. Sus once filas las sembró la migración `0004` en la
+nube, con los mismos UUID que el esquema local, y la sección 2.1 del diseño la
+marca como «**No se sube.** Ya están en la nube con los mismos UUID». La bandeja
+de salida la deja fuera de las tablas sincronizables desde la fase 1.a, con una
+prueba que comprueba que nunca se encola. Una columna `recibido_en` allí no
+contestaría «¿cuándo recibimos esta fila?» sino «¿cuándo corrió la migración?»,
+que es otra pregunta y ya la contesta el registro de migraciones de Supabase.
 
 ## Por qué el estado de bloqueo no sube a la nube
 
@@ -34,11 +52,30 @@ espeja.**
    existiera en la nube sin sincronizarse nunca, quien consultara Postgres
    vería `0` para todos y podría concluir que nadie falló jamás un ingreso.
 
-## Los números 0002, 0003, 0006, 0011, 0013 y 0018 NO existen aquí, y es a propósito
+## Los huecos de numeración, y sus DOS direcciones
 
-**No falta nada ni se rompió nada.** El número de cada archivo de esta carpeta
-corresponde al de su migración local en `src/main/database/migrations/`. Un
-hueco en la numeración significa que **esa migración local no tiene espejo**.
+**No falta nada ni se rompió nada.** Hay **un solo espacio de numeración
+compartido** entre las dos carpetas: un número identifica un cambio de esquema,
+y cada cambio existe de un lado, del otro, o de los dos. Por eso el número de
+`0016_configuracion_negocio.sql` es el mismo que el de la local
+`016_configuracion_negocio`.
+
+De ahí salen dos clases de hueco, y **significan cosas distintas**:
+
+| Dónde falta el número | Qué significa | Ejemplos |
+|---|---|---|
+| **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018 |
+| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022 |
+
+La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
+2026-09-11. Antes todos los huecos eran de la primera clase, y por eso este
+archivo decía que un hueco significaba «esa migración local no tiene espejo».
+**Ya no alcanza con esa frase**: hay que mirar de qué lado falta el número.
+
+**No renumerar nunca** para «tapar» los que faltan, en ninguna de las dos
+carpetas: el hueco es información, y renumerar la destruye.
+
+### Dirección 1 — el cambio es solo local, y aquí no hay archivo
 
 | Migración local | Archivo aquí | Por qué |
 |---|---|---|
@@ -85,6 +122,29 @@ Los dos casos **no son equivalentes**, aunque hoy tomen la misma decisión:
 
 El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 
+### Dirección 2 — el cambio es solo de la nube, y allá no hay archivo
+
+**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020 y 021.** Las tres
+de esta dirección llegaron juntas, con la fase 2.a de la sincronización, y las
+tres nacen de la misma pregunta: qué tiene que haber en la nube que no tiene por
+qué estar en la terminal, y qué hay hoy en la nube que nunca debió estar.
+
+| Archivo aquí | Migración local | Por qué no la hay, en concreto |
+|---|---|---|
+| `0019_recibido_en.sql` | **(ninguna, a propósito)** | Agrega `recibido_en` a doce de las trece tablas —todas menos `denominaciones`, que no recibe escrituras de la terminal—: la hora del SERVIDOR en que la nube recibió cada fila, fijada por un trigger que ignora lo que venga en el payload. **En SQLite no puede existir por diseño, no por comodidad:** su razón de ser es ser la única fecha que el cliente no controla, y en la base del cliente *toda* fecha la controla el cliente. Una columna así en SQLite sería una marca que el ladrón elige, o sea exactamente lo que esta columna existe para no ser. Ver `docs/SINCRONIZACION.md` §1.5.1, mitigación 1. |
+| `0020_quitar_estado_sincronizacion.sql` | **(ninguna, a propósito)** | Quita `ventas.estado_sincronizacion` **de Postgres**. La columna **sigue existiendo y sigue usándose en SQLite**: dice si esta terminal ya subió esta venta, que es estado operativo local. En la nube no significaba nada —una fila que está en Postgres está, por definición, sincronizada— y mostraba siempre su `DEFAULT`, que es el mismo error que este README describe arriba para `intentos_fallidos`. Es la inconsistencia 1 del diseño, resuelta. Decisión 4. |
+| `0022_fijar_search_path_auditoria.sql` | **(ninguna, a propósito)** | Le fija `search_path = ''` a `auditoria_log_es_inmutable`. En SQLite no existe el concepto. **Este cambio ya estaba aplicado en `pos-jimmy-cano` desde el 2026-09-05, pero nunca se había escrito el archivo**: se aplicó directamente para callar un aviso del linter. Lo detectó el proyecto de pruebas al comparar los dos catálogos, que es exactamente para lo que existe (§9.5). Sin este archivo, aplicar esta carpeta sobre un proyecto vacío no reproducía el esquema real. |
+| `0021_quitar_hashes_de_pin.sql` | **(ninguna, a propósito)** | Quita `usuarios.pin_hash` y `pin_remoto_hash` **de Postgres**. Las dos columnas **siguen existiendo en SQLite**, donde son lo que hace funcionar el ingreso y el diálogo de autorización: quitarlas allá dejaría a la tienda sin poder abrir. Se quitan acá porque un PIN de cuatro dígitos tiene 10 000 valores y quien lea esa tabla en la nube los saca todos, y porque **no hacen falta**: toda restauración resetea los PIN sin mirarlos (decisión 15). Decisión 17. |
+
+**Las tres tienen la misma forma y conviene verla:** ninguna es «la nube va
+atrasada respecto de lo local». Dos de ellas *quitan* de la nube algo que lo
+local conserva, y la tercera *agrega* a la nube algo que lo local no puede
+tener. Es decir, los esquemas dejaron de ser espejos exactos a propósito, y
+estas tres son la lista completa de en qué difieren.
+
+Si algún día hace falta una cuarta, va en esta tabla con su razón escrita, y el
+número que use queda reservado también del lado local.
+
 > No confundir estos números con las versiones de migración que registra
 > Supabase (`20260905143642`, etc.): esas las genera la propia plataforma al
 > aplicar, y son independientes del nombre del archivo.
@@ -111,8 +171,39 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | `0016_configuracion_negocio.sql` | Sí — aplicada el 2026-09-11 |
 | `0017_descuento_autorizado_via.sql` | Sí — aplicada el 2026-09-11 |
 | *(no hay 0018: ver la sección anterior)* | — |
+| `0019_recibido_en.sql` | **No — PENDIENTE de aprobación** |
+| `0020_quitar_estado_sincronizacion.sql` | **No — PENDIENTE de aprobación** |
+| `0021_quitar_hashes_de_pin.sql` | **No — PENDIENTE de aprobación** |
+| `0022_fijar_search_path_auditoria.sql` | Sí, **desde el 2026-09-05 pero sin archivo**; el archivo se escribió el 2026-09-11 y es idempotente |
 
-**No queda ninguna migración pendiente de aplicar en la nube.** Las dos últimas
+**QUEDAN TRES MIGRACIONES PENDIENTES**, las tres de la fase 2.a de la
+sincronización y las tres escritas pero **sin aplicar en ningún proyecto**. Se
+aplican como todas: primero contra `pos-pruebas-descartable`, después el SQL
+completo a la vista, y recién con la aprobación explícita de Julio contra
+`pos-jimmy-cano`.
+
+**Son las primeras que solo existen de este lado.** Dos de ellas QUITAN
+columnas, que es una operación que este proyecto no había hecho nunca en la
+nube, y por eso el orden de trabajo es más estricto que de costumbre.
+
+### Estado en `pos-pruebas-descartable` (referencia `ztidrshifrblhfraiowg`)
+
+Creado el 2026-09-11 en `us-east-2`, plan gratuito, para lo que manda §9.5 del
+diseño. **Tiene aplicadas las dieciséis migraciones**: las doce del esquema, la
+`0022` y las tres de la fase 2.a. Es el único proyecto donde estas tres se
+probaron antes de existir en la tienda.
+
+Comparado con `pos-jimmy-cano` **antes** de aplicarle las tres nuevas, los ocho
+contadores del catálogo daban idénticos —13 tablas, 118 columnas, 49 índices, 52
+CHECK, 15 foráneas, 1 trigger, 13 con RLS, 0 políticas— con dos únicas
+diferencias, una esperada y otra no:
+
+| Diferencia | ¿Esperada? | Qué se hizo |
+|---|---|---|
+| `auditoria_log_es_inmutable` sin `search_path` en el de pruebas | **No** | Se escribió la `0022`, que faltaba. Ver la dirección 2. |
+| `rls_auto_enable()` existe solo en el real | **Sí** | Es preexistente del proyecto y ajena a este esquema (CLAUDE.md §4.4). **No se replica**: replicarla sería copiar a la fuerza algo que ni siquiera es nuestro. |
+
+Antes de ellas no quedaba ninguna pendiente. Las dos últimas aplicadas
 fueron `0016` —la tabla con los datos de la tienda que encabezan el recibo— y
 `0017` —la columna `ventas.descuento_autorizado_via`—, las dos el 2026-09-11,
 por la vía de siempre: SQL a la vista, aprobación explícita de Julio y evidencia

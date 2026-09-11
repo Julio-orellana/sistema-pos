@@ -1,0 +1,40 @@
+-- ===========================================================================
+-- 0020_quitar_estado_sincronizacion.sql — Decisión 4 del diseño
+-- ===========================================================================
+--
+-- **SIN ESPEJO LOCAL a propósito.** `ventas.estado_sincronizacion` SIGUE
+-- existiendo en SQLite y se sigue usando allá; lo que se quita es la copia de
+-- la nube, que nunca tuvo sentido. No hay migración local 020.
+--
+-- ---------------------------------------------------------------------------
+-- POR QUÉ SE QUITA
+-- ---------------------------------------------------------------------------
+-- Es la inconsistencia 1 de la sección 0 del diseño, resuelta. La regla del
+-- proyecto es «la nube lleva datos de negocio; el estado operativo de una
+-- terminal se queda en SQLite» (CLAUDE.md §4.4), y esta columna es estado
+-- operativo puro: dice si ESTA terminal ya subió ESTA venta.
+--
+-- En la nube diría siempre lo que la terminal mandara, o su DEFAULT
+-- 'pendiente', que allá no significa nada: una fila que está en Postgres está,
+-- por definición, sincronizada. **Es el mismo error que el README de las
+-- migraciones ya describe para `usuarios.intentos_fallidos`**: una columna que
+-- existe en Postgres sin sincronizarse muestra siempre el mismo valor y le
+-- hace creer al auditor algo que no es.
+--
+-- Y desde la fase 1.a la bandeja de salida **no la manda**: está en la lista de
+-- columnas excluidas de `bandeja-de-salida.ts`. Así que hoy la columna de la
+-- nube recibiría siempre su DEFAULT. Quitarla no cambia ningún comportamiento;
+-- solo deja de mentir.
+--
+-- ---------------------------------------------------------------------------
+-- QUÉ SE LLEVA CONSIGO
+-- ---------------------------------------------------------------------------
+-- El `CHECK (estado_sincronizacion IN ('pendiente','sincronizado','error'))` de
+-- la 0001 es una restricción que depende solo de esta columna, así que Postgres
+-- la elimina junto con ella. No hace falta `CASCADE` y no se usa: `CASCADE`
+-- arrastraría también cualquier vista o índice que dependiera de la columna, y
+-- si hubiera alguno preferimos que la migración FALLE y se mire, en vez de que
+-- borre algo que nadie sabía que existía.
+-- ===========================================================================
+
+ALTER TABLE public.ventas DROP COLUMN IF EXISTS estado_sincronizacion;
