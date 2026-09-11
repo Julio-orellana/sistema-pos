@@ -72,10 +72,12 @@ beforeEach(() => {
   }
 
   categorias = new ServicioDeCategorias({
+    base,
     categorias: repos.categorias,
     auditoria: repos.auditoria,
   });
   productos = new ServicioDeProductos({
+    base,
     productos: repos.productos,
     categorias: repos.categorias,
     auditoria: repos.auditoria,

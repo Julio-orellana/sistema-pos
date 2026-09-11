@@ -20,7 +20,10 @@
  * mercadería de la venta sin que nadie lo haya pedido.
  */
 
+import type { Database } from 'better-sqlite3';
+
 import { ErrorDeNegocio } from '@main/database/errores';
+import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import type { Categoria } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeCategorias } from '@main/database/repositories/categorias';
@@ -44,17 +47,28 @@ export interface DatosDeCategoria {
 
 /** Dependencias del servicio. */
 export interface DependenciasDeCategorias {
+  /**
+   * La conexión, para poder envolver la escritura en UNA transacción.
+   *
+   * **Este servicio no la tenía hasta la Fase 1.a de la sincronización**, y por
+   * eso escribía su fila y su asiento de auditoría sueltos: un cierre forzado
+   * entre los dos dejaba el hecho sin su rastro. Ahora van juntos, y con ellos
+   * la entrada de la bandeja de salida (`docs/SINCRONIZACION.md` §2.4).
+   */
+  readonly base: Database;
   readonly categorias: RepositorioDeCategorias;
   readonly auditoria: RepositorioDeAuditoria;
   readonly ahora?: () => number;
 }
 
 export class ServicioDeCategorias {
+  private readonly base: Database;
   private readonly categorias: RepositorioDeCategorias;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeCategorias) {
+    this.base = dependencias.base;
     this.categorias = dependencias.categorias;
     this.auditoria = dependencias.auditoria;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
@@ -144,18 +158,26 @@ export class ServicioDeCategorias {
     const validos = this.validar(datos);
     this.exigirNombreLibre(validos.nombre, null);
 
-    const creada = this.categorias.crear(validos);
+    return conBandejaDeSalida(this.base, () => {
+      const creada = this.categorias.crear(validos);
 
-    this.auditoria.registrar({
-      usuarioId,
-      accion: ACCIONES_DE_CATEGORIA.creada,
-      entidadTipo: 'categorias',
-      entidadId: creada.id,
-      valorNuevo: { nombre: creada.nombre, orden: creada.orden },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_CATEGORIA.creada,
+        entidadTipo: 'categorias',
+        entidadId: creada.id,
+        valorNuevo: { nombre: creada.nombre, orden: creada.orden },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: creada,
+        entradas: [
+          { tabla: 'categorias', id: creada.id, operacion: 'insertar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return creada;
   }
 
   public editar(usuarioId: string, id: string, datos: DatosDeCategoria): Categoria {
@@ -163,19 +185,27 @@ export class ServicioDeCategorias {
     const validos = this.validar(datos);
     this.exigirNombreLibre(validos.nombre, id);
 
-    this.categorias.actualizar(id, validos);
+    return conBandejaDeSalida(this.base, () => {
+      this.categorias.actualizar(id, validos);
 
-    this.auditoria.registrar({
-      usuarioId,
-      accion: ACCIONES_DE_CATEGORIA.editada,
-      entidadTipo: 'categorias',
-      entidadId: id,
-      valorAnterior: { nombre: anterior.nombre, orden: anterior.orden },
-      valorNuevo: validos,
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_CATEGORIA.editada,
+        entidadTipo: 'categorias',
+        entidadId: id,
+        valorAnterior: { nombre: anterior.nombre, orden: anterior.orden },
+        valorNuevo: validos,
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: this.exigirCategoria(id),
+        entradas: [
+          { tabla: 'categorias', id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return this.exigirCategoria(id);
   }
 
   /**
@@ -193,25 +223,33 @@ export class ServicioDeCategorias {
       return anterior;
     }
 
-    this.categorias.fijarActivo(id, activo);
+    return conBandejaDeSalida(this.base, () => {
+      this.categorias.fijarActivo(id, activo);
 
-    this.auditoria.registrar({
-      usuarioId,
-      accion: activo
-        ? ACCIONES_DE_CATEGORIA.reactivada
-        : ACCIONES_DE_CATEGORIA.desactivada,
-      entidadTipo: 'categorias',
-      entidadId: id,
-      valorAnterior: { activo: anterior.activo },
-      valorNuevo: {
-        activo,
-        nombre: anterior.nombre,
-        productosQueLaSiguenUsando: this.categorias.contarProductos(id),
-      },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: activo
+          ? ACCIONES_DE_CATEGORIA.reactivada
+          : ACCIONES_DE_CATEGORIA.desactivada,
+        entidadTipo: 'categorias',
+        entidadId: id,
+        valorAnterior: { activo: anterior.activo },
+        valorNuevo: {
+          activo,
+          nombre: anterior.nombre,
+          productosQueLaSiguenUsando: this.categorias.contarProductos(id),
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: this.exigirCategoria(id),
+        entradas: [
+          { tabla: 'categorias', id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return this.exigirCategoria(id);
   }
 
   /** Para el selector al crear o editar un producto: solo las vigentes. */

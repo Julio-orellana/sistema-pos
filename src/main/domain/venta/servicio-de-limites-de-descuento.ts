@@ -28,10 +28,13 @@
  * límite de un rol sigue siendo una operación aparte, del guion de limpieza.
  */
 
+import type { Database } from 'better-sqlite3';
+
 import type Decimal from 'decimal.js';
 
 import { BASE_PORCENTAJE, decimal, esNegativo, esMayorQue, montoACadena } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
+import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import type { Rol } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeLimitesDescuento } from '@main/database/repositories/limites-descuento';
@@ -68,6 +71,15 @@ export interface CambioDeLimite {
 
 /** Dependencias del servicio. */
 export interface DependenciasDeLimites {
+  /**
+   * La conexión, para poder envolver la escritura en UNA transacción.
+   *
+   * **Este servicio no la tenía hasta la Fase 1.a de la sincronización**, y por
+   * eso escribía su fila y su asiento de auditoría sueltos: un cierre forzado
+   * entre los dos dejaba el hecho sin su rastro. Ahora van juntos, y con ellos
+   * la entrada de la bandeja de salida (`docs/SINCRONIZACION.md` §2.4).
+   */
+  readonly base: Database;
   readonly limites: RepositorioDeLimitesDescuento;
   readonly auditoria: RepositorioDeAuditoria;
   /** Para resolver el nombre de quien editó. Solo lectura. */
@@ -76,12 +88,14 @@ export interface DependenciasDeLimites {
 }
 
 export class ServicioDeLimitesDeDescuento {
+  private readonly base: Database;
   private readonly limites: RepositorioDeLimitesDescuento;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly nombreDeUsuario: (usuarioId: string) => string | null;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeLimites) {
+    this.base = dependencias.base;
     this.limites = dependencias.limites;
     this.auditoria = dependencias.auditoria;
     this.nombreDeUsuario = dependencias.nombreDeUsuario;
@@ -144,34 +158,54 @@ export class ServicioDeLimitesDeDescuento {
 
     const anterior = this.limites.obtenerPorRol(cambio.rol);
 
-    const fijado = this.limites.fijar({
-      rol: cambio.rol,
-      descuentoMaxPorcentaje: porcentaje,
-      descuentoMaxMontoFijo: montoFijo,
-      editadoPor: actorId,
-    });
+    const fijado = conBandejaDeSalida(this.base, () => {
+      const guardado = this.limites.fijar({
+        rol: cambio.rol,
+        descuentoMaxPorcentaje: porcentaje,
+        descuentoMaxMontoFijo: montoFijo,
+        editadoPor: actorId,
+      });
 
-    this.auditoria.registrar({
-      usuarioId: actorId,
-      accion: ACCIONES_DE_LIMITE.fijado,
-      entidadTipo: 'limites_descuento',
-      entidadId: fijado.id,
-      valorAnterior:
-        anterior === null
-          ? null
-          : {
-              rol: anterior.rol,
-              porcentaje: montoACadena(anterior.descuentoMaxPorcentaje),
-              montoFijo: montoACadena(anterior.descuentoMaxMontoFijo),
-              editadoPor: anterior.editadoPor,
-            },
-      valorNuevo: {
-        rol: fijado.rol,
-        porcentaje: montoACadena(fijado.descuentoMaxPorcentaje),
-        montoFijo: montoACadena(fijado.descuentoMaxMontoFijo),
-        editadoPor: fijado.editadoPor,
-      },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId: actorId,
+        accion: ACCIONES_DE_LIMITE.fijado,
+        entidadTipo: 'limites_descuento',
+        entidadId: guardado.id,
+        valorAnterior:
+          anterior === null
+            ? null
+            : {
+                rol: anterior.rol,
+                porcentaje: montoACadena(anterior.descuentoMaxPorcentaje),
+                montoFijo: montoACadena(anterior.descuentoMaxMontoFijo),
+                editadoPor: anterior.editadoPor,
+              },
+        valorNuevo: {
+          rol: guardado.rol,
+          porcentaje: montoACadena(guardado.descuentoMaxPorcentaje),
+          montoFijo: montoACadena(guardado.descuentoMaxMontoFijo),
+          editadoPor: guardado.editadoPor,
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: guardado,
+        entradas: [
+          /*
+            `fijar` es un upsert: la fila del rol puede no haber existido. Se
+            distingue con `anterior`, que ya se leyó arriba, y no adivinando:
+            una entrada mal marcada haría que la nube recibiera un `insertar`
+            sobre una fila que ya tiene, o al revés.
+          */
+          {
+            tabla: 'limites_descuento',
+            id: guardado.id,
+            operacion: anterior === null ? 'insertar' : 'actualizar',
+          },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
 
     return {

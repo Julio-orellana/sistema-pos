@@ -13,13 +13,19 @@
  * conocer las dos para decidir si pone el marcador.
  */
 
+import type { Database } from 'better-sqlite3';
+
 import { ErrorDeNegocio } from '@main/database/errores';
+import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import type {
   CambiosDeConfiguracion,
   ConfiguracionNegocio,
 } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
-import type { RepositorioDeConfiguracionDeNegocio } from '@main/database/repositories/configuracion-negocio';
+import {
+  ID_UNICO,
+  type RepositorioDeConfiguracionDeNegocio,
+} from '@main/database/repositories/configuracion-negocio';
 
 /** Acción de configuración que queda en la bitácora de auditoría. */
 export const ACCIONES_DE_NEGOCIO = {
@@ -36,17 +42,28 @@ const LARGOS_MAXIMOS = {
 
 /** Dependencias del servicio. */
 export interface DependenciasDeConfiguracion {
+  /**
+   * La conexión, para poder envolver la escritura en UNA transacción.
+   *
+   * **Este servicio no la tenía hasta la Fase 1.a de la sincronización**, y por
+   * eso escribía su fila y su asiento de auditoría sueltos: un cierre forzado
+   * entre los dos dejaba el hecho sin su rastro. Ahora van juntos, y con ellos
+   * la entrada de la bandeja de salida (`docs/SINCRONIZACION.md` §2.4).
+   */
+  readonly base: Database;
   readonly configuracion: RepositorioDeConfiguracionDeNegocio;
   readonly auditoria: RepositorioDeAuditoria;
   readonly ahora?: () => number;
 }
 
 export class ServicioDeConfiguracionDeNegocio {
+  private readonly base: Database;
   private readonly configuracion: RepositorioDeConfiguracionDeNegocio;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeConfiguracion) {
+    this.base = dependencias.base;
     this.configuracion = dependencias.configuracion;
     this.auditoria = dependencias.auditoria;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
@@ -71,29 +88,43 @@ export class ServicioDeConfiguracionDeNegocio {
       nit: this.normalizar(cambios.nit, LARGOS_MAXIMOS.nit, 'El NIT'),
     };
 
-    const guardada = this.configuracion.guardar(limpios);
+    return conBandejaDeSalida(this.base, () => {
+      const guardada = this.configuracion.guardar(limpios);
 
-    this.auditoria.registrar({
-      usuarioId: actorId,
-      accion: ACCIONES_DE_NEGOCIO.configuracionEditada,
-      entidadTipo: 'configuracion_negocio',
-      entidadId: null,
-      valorAnterior: {
-        nombreComercial: anterior.nombreComercial,
-        direccion: anterior.direccion,
-        telefono: anterior.telefono,
-        nit: anterior.nit,
-      },
-      valorNuevo: {
-        nombreComercial: guardada.nombreComercial,
-        direccion: guardada.direccion,
-        telefono: guardada.telefono,
-        nit: guardada.nit,
-      },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId: actorId,
+        accion: ACCIONES_DE_NEGOCIO.configuracionEditada,
+        entidadTipo: 'configuracion_negocio',
+        entidadId: null,
+        valorAnterior: {
+          nombreComercial: anterior.nombreComercial,
+          direccion: anterior.direccion,
+          telefono: anterior.telefono,
+          nit: anterior.nit,
+        },
+        valorNuevo: {
+          nombreComercial: guardada.nombreComercial,
+          direccion: guardada.direccion,
+          telefono: guardada.telefono,
+          nit: guardada.nit,
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: guardada,
+        entradas: [
+          /*
+            `operacion` es 'actualizar' y NO 'update': el CHECK de `sync_cola`
+            acepta 'insertar' | 'actualizar' | 'eliminar', en español como el
+            resto del dominio. La fila siempre existe —nace en la migración
+            0016— así que nunca es una inserción.
+          */
+          { tabla: 'configuracion_negocio', id: ID_UNICO, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return guardada;
   }
 
   /**

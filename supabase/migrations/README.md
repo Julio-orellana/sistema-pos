@@ -34,7 +34,7 @@ espeja.**
    existiera en la nube sin sincronizarse nunca, quien consultara Postgres
    vería `0` para todos y podría concluir que nadie falló jamás un ingreso.
 
-## Los números 0002, 0003, 0006, 0011 y 0013 NO existen aquí, y es a propósito
+## Los números 0002, 0003, 0006, 0011, 0013 y 0018 NO existen aquí, y es a propósito
 
 **No falta nada ni se rompió nada.** El número de cada archivo de esta carpeta
 corresponde al de su migración local en `src/main/database/migrations/`. Un
@@ -58,16 +58,22 @@ hueco en la numeración significa que **esa migración local no tiene espejo**.
 | `014_boleta_solo_con_tarjeta` | `0014_boleta_solo_con_tarjeta.sql` | Regla sobre `ventas`: dato de negocio |
 | `015_cantidad_vendida` | `0015_cantidad_vendida.sql` | Columna de `productos`: dato de negocio |
 | `016_configuracion_negocio` | `0016_configuracion_negocio.sql` | Datos de la tienda: salen impresos en el recibo |
+| `017_descuento_autorizado_via` | `0017_descuento_autorizado_via.sql` | Columna de `ventas`: dato de negocio |
+| `018_sync_cola_lotes` | **(ninguno, a propósito)** | Amplía `sync_cola`, que no se espeja |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
 
-Son **cinco números** omitidos pero **dos casos**: el 0003, el 0006, el 0011 y
+Son **seis números** omitidos pero **tres casos**: el 0003, el 0006, el 0011 y
 el 0013 son la misma tabla, `bloqueos_de_autorizacion` —la 006, la 011 y la 013
 solo le amplían el CHECK de superficies—, así que si la tabla no se espeja,
 ninguna migración que la toque se espeja tampoco. Ese es todo el motivo de esos
 cuatro huecos: no hay ninguna razón adicional, ni nada pendiente de decidir
-sobre ellos.
+sobre ellos. El 0002 es el suyo propio. **Y el 0018 es el tercer caso**: le
+agrega a `sync_cola` las cinco columnas de la bandeja de salida (`lote_id`,
+`orden_en_lote`, `intentos`, `proximo_intento_en`, `bloqueante`), y `sync_cola`
+es la lista local de qué falta subir, así que tampoco se espeja ninguna
+migración que la toque.
 
 Los dos casos **no son equivalentes**, aunque hoy tomen la misma decisión:
 
@@ -102,13 +108,18 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | *(no hay 0013: ver la sección anterior)* | — |
 | `0014_boleta_solo_con_tarjeta.sql` | Sí — `20260911113517` |
 | `0015_cantidad_vendida.sql` | Sí — `20260911113531` |
-| `0016_configuracion_negocio.sql` | **No — PENDIENTE** |
+| `0016_configuracion_negocio.sql` | Sí — aplicada el 2026-09-11 |
+| `0017_descuento_autorizado_via.sql` | Sí — aplicada el 2026-09-11 |
+| *(no hay 0018: ver la sección anterior)* | — |
 
-**Queda UNA migración pendiente de aplicar en la nube: `0016`**, la tabla con
-los datos de la tienda que encabezan el recibo. Se aplica como todas: mostrando
-antes el SQL exacto y con la aprobación explícita de Julio. Las dos últimas
-—`0014` y `0015`— se aplicaron el 2026-09-11 por la vía de siempre, y se
-verificaron contra el catálogo del proyecto: `ventas_boleta_solo_con_tarjeta`
+**No queda ninguna migración pendiente de aplicar en la nube.** Las dos últimas
+fueron `0016` —la tabla con los datos de la tienda que encabezan el recibo— y
+`0017` —la columna `ventas.descuento_autorizado_via`—, las dos el 2026-09-11,
+por la vía de siempre: SQL a la vista, aprobación explícita de Julio y evidencia
+consultada después contra el catálogo del proyecto, no contra el archivo.
+
+Antes de ellas, `0014` y `0015` se aplicaron el mismo día y se verificaron
+igual: `ventas_boleta_solo_con_tarjeta`
 existe con `convalidated = true`, y `productos.cantidad_vendida` quedó
 `numeric(14,3) NOT NULL DEFAULT 0` con su `CHECK (cantidad_vendida >= 0)`.
 `ventas` y `productos` siguen en 0 filas.

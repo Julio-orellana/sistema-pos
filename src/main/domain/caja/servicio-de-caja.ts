@@ -13,10 +13,13 @@
  * Decimal.js, como todo el dinero del proyecto.
  */
 
+import type { Database } from 'better-sqlite3';
+
 import Decimal from 'decimal.js';
 
 import { CERO, montoACadena, multiplicar, sumar, sumarLista } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
+import { encolarLote, entradasDe, type EntradaDelLote } from '@main/database/bandeja-de-salida';
 import type {
   CajaSesion,
   Denominacion,
@@ -103,6 +106,15 @@ export type EstadoParaVender =
 
 /** Dependencias del servicio. */
 export interface DependenciasDeCaja {
+  /**
+   * La conexión, para poder envolver la escritura en UNA transacción.
+   *
+   * **Este servicio no la tenía hasta la Fase 1.a de la sincronización**, y por
+   * eso escribía su fila y su asiento de auditoría sueltos: un cierre forzado
+   * entre los dos dejaba el hecho sin su rastro. Ahora van juntos, y con ellos
+   * la entrada de la bandeja de salida (`docs/SINCRONIZACION.md` §2.4).
+   */
+  readonly base: Database;
   readonly cajaSesiones: RepositorioDeCajaSesiones;
   readonly denominaciones: RepositorioDeDenominaciones;
   readonly desglose: RepositorioDeDesgloseDeCaja;
@@ -112,6 +124,7 @@ export interface DependenciasDeCaja {
 }
 
 export class ServicioDeCaja {
+  private readonly base: Database;
   private readonly cajaSesiones: RepositorioDeCajaSesiones;
   private readonly denominaciones: RepositorioDeDenominaciones;
   private readonly desglose: RepositorioDeDesgloseDeCaja;
@@ -120,6 +133,7 @@ export class ServicioDeCaja {
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeCaja) {
+    this.base = dependencias.base;
     this.cajaSesiones = dependencias.cajaSesiones;
     this.denominaciones = dependencias.denominaciones;
     this.desglose = dependencias.desglose;
@@ -254,25 +268,51 @@ export class ServicioDeCaja {
     }
 
     const montoInicial = this.montoDeclarado(efectivo);
-    const sesion = this.cajaSesiones.abrir({ usuarioId, montoInicial });
 
-    if (efectivo.modo === 'detallado') {
-      this.desglose.guardar(sesion.id, 'apertura', efectivo.lineas);
-    }
+    /*
+      LAS TRES ESCRITURAS VAN EN UNA TRANSACCIÓN, y hasta la Fase 1.a de la
+      sincronización NO era así: la sesión, su desglose y su asiento se
+      escribían sueltos, y matar el proceso entre dos de ellos —una vía de
+      escape que este proyecto permite a propósito (§4.5)— dejaba una caja
+      abierta sin el arqueo con que se abrió. Era un hueco de atomicidad
+      preexistente; la bandeja de salida obligó a mirarlo y se cierra acá.
+    */
+    const abrirTodo = this.base.transaction((): CajaSesion => {
+      const sesion = this.cajaSesiones.abrir({ usuarioId, montoInicial });
 
-    this.auditoria.registrar({
-      usuarioId,
-      accion: ACCIONES_DE_CAJA.aperturaDeCaja,
-      entidadTipo: 'caja_sesiones',
-      entidadId: sesion.id,
-      valorNuevo: {
-        montoInicial: montoACadena(montoInicial),
-        modo: efectivo.modo,
-      },
-      fecha: new Date(this.ahora()).toISOString(),
+      if (efectivo.modo === 'detallado') {
+        this.desglose.guardar(sesion.id, 'apertura', efectivo.lineas);
+      }
+
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_CAJA.aperturaDeCaja,
+        entidadTipo: 'caja_sesiones',
+        entidadId: sesion.id,
+        valorNuevo: {
+          montoInicial: montoACadena(montoInicial),
+          modo: efectivo.modo,
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      // Bandeja de salida: la caja antes que su desglose, porque el desglose la
+      // referencia con una llave foránea y Postgres lo exige en ese orden.
+      const entradas: EntradaDelLote[] = [
+        { tabla: 'caja_sesiones', id: sesion.id, operacion: 'insertar' },
+        ...entradasDe(
+          'caja_sesion_denominaciones',
+          this.desglose.listarPorSesion(sesion.id, 'apertura').map((linea) => linea.id),
+          'insertar',
+        ),
+        { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+      ];
+      encolarLote(this.base, entradas);
+
+      return sesion;
     });
 
-    return sesion;
+    return abrirTodo();
   }
 
   /**
@@ -366,49 +406,72 @@ export class ServicioDeCaja {
       };
     }
 
-    if (efectivo.modo === 'detallado') {
-      this.desglose.guardar(sesion.id, 'cierre', efectivo.lineas);
-    }
+    /*
+      Igual que en `abrir`: las tres escrituras del cierre —el desglose, la
+      sesión y el asiento— van en UNA transacción desde la Fase 1.a, con su
+      entrada de bandeja de salida adentro. Antes iban sueltas.
+    */
+    const cerrarTodo = this.base.transaction((): CajaSesion => {
+      if (efectivo.modo === 'detallado') {
+        this.desglose.guardar(sesion.id, 'cierre', efectivo.lineas);
+      }
 
-    const cerrada = this.cajaSesiones.cerrar(sesion.id, {
-      montoEsperado,
-      montoReal,
-      diferencia,
-      // NULL cuando cierra quien abrió, que es el caso normal: así un cierre
-      // ajeno se ve de un vistazo sin comparar dos columnas.
-      cerradaPor: esAjena ? contexto.usuarioQueCierra : null,
-      autorizadaPor: hayDiferencia ? (autorizacion?.autorizadaPor ?? null) : null,
-      autorizadaVia: hayDiferencia ? (autorizacion?.via ?? null) : null,
-    });
-
-    this.auditoria.registrar({
-      // El asiento se atribuye a QUIEN CERRÓ, que es quien hizo la acción.
-      // Quién abrió el turno queda como dato del asiento: si se atribuyera al
-      // que abrió, la bitácora diría que el cierre lo hizo alguien que quizá
-      // ya se había ido de la tienda.
-      usuarioId: contexto.usuarioQueCierra,
-      accion: ACCIONES_DE_CAJA.cierreDeCaja,
-      entidadTipo: 'caja_sesiones',
-      entidadId: sesion.id,
-      valorNuevo: {
-        montoEsperado: montoACadena(montoEsperado),
-        montoReal: montoACadena(montoReal),
-        diferencia: diferenciaTexto,
-        modo: efectivo.modo,
-        abiertaPor: sesion.usuarioId,
-        cerradaPor: contexto.usuarioQueCierra,
-        // Las tres personas posibles de un cierre quedan separadas: quien
-        // abrió, quien cerró, quien autorizó el cierre ajeno y quien autorizó
-        // la diferencia. No son la misma y confundirlas arruina la auditoría.
-        fueCajaAjena: esAjena,
-        cierreAjenoAutorizadoPor: esAjena
-          ? (contexto.autorizacionDeCajaAjena?.autorizadaPor ?? null)
-          : null,
+      const cerrada = this.cajaSesiones.cerrar(sesion.id, {
+        montoEsperado,
+        montoReal,
+        diferencia,
+        // NULL cuando cierra quien abrió, que es el caso normal: así un cierre
+        // ajeno se ve de un vistazo sin comparar dos columnas.
+        cerradaPor: esAjena ? contexto.usuarioQueCierra : null,
         autorizadaPor: hayDiferencia ? (autorizacion?.autorizadaPor ?? null) : null,
         autorizadaVia: hayDiferencia ? (autorizacion?.via ?? null) : null,
-      },
-      fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      const asiento = this.auditoria.registrar({
+        // El asiento se atribuye a QUIEN CERRÓ, que es quien hizo la acción.
+        // Quién abrió el turno queda como dato del asiento: si se atribuyera al
+        // que abrió, la bitácora diría que el cierre lo hizo alguien que quizá
+        // ya se había ido de la tienda.
+        usuarioId: contexto.usuarioQueCierra,
+        accion: ACCIONES_DE_CAJA.cierreDeCaja,
+        entidadTipo: 'caja_sesiones',
+        entidadId: sesion.id,
+        valorNuevo: {
+          montoEsperado: montoACadena(montoEsperado),
+          montoReal: montoACadena(montoReal),
+          diferencia: diferenciaTexto,
+          modo: efectivo.modo,
+          abiertaPor: sesion.usuarioId,
+          cerradaPor: contexto.usuarioQueCierra,
+          // Las tres personas posibles de un cierre quedan separadas: quien
+          // abrió, quien cerró, quien autorizó el cierre ajeno y quien autorizó
+          // la diferencia. No son la misma y confundirlas arruina la auditoría.
+          fueCajaAjena: esAjena,
+          cierreAjenoAutorizadoPor: esAjena
+            ? (contexto.autorizacionDeCajaAjena?.autorizadaPor ?? null)
+            : null,
+          autorizadaPor: hayDiferencia ? (autorizacion?.autorizadaPor ?? null) : null,
+          autorizadaVia: hayDiferencia ? (autorizacion?.via ?? null) : null,
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      // La sesión va como `actualizar`: el cierre no la creó, la cerró.
+      const entradas: EntradaDelLote[] = [
+        { tabla: 'caja_sesiones', id: cerrada.id, operacion: 'actualizar' },
+        ...entradasDe(
+          'caja_sesion_denominaciones',
+          this.desglose.listarPorSesion(cerrada.id, 'cierre').map((linea) => linea.id),
+          'insertar',
+        ),
+        { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+      ];
+      encolarLote(this.base, entradas);
+
+      return cerrada;
     });
+
+    const cerrada = cerrarTodo();
 
     return {
       cerrada: true,

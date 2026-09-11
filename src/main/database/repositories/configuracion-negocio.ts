@@ -10,7 +10,7 @@ import { RepositorioBase, ahora } from './base';
  * y como además es la llave primaria, no puede haber dos filas. Ver la cabecera
  * de la migración 016.
  */
-const ID_UNICO = 'unica';
+export const ID_UNICO = 'unica';
 
 /** Fila cruda de la tabla. Las cuatro columnas de datos pueden ser NULL. */
 interface FilaConfiguracion {

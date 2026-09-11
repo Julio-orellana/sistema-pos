@@ -428,7 +428,8 @@ con `ON DELETE SET NULL` hacia `usuarios`, verificado contra `pg_indexes`,
 `information_schema` y `pg_constraint`.
 
 Las migraciones locales 002 (bloqueo por intentos), 003 (candado por superficie)
-y 006, 011 y 013 (que solo amplían el CHECK de superficies de esa misma tabla)
+y 006, 011 y 013 (que solo amplían el CHECK de superficies de esa misma tabla),
+más la 018 (que amplía `sync_cola`, la lista local de qué falta subir),
 **no tienen espejo a propósito**: son estado operativo de una terminal, no datos
 de negocio. Ver `supabase/migrations/README.md` y la fila correspondiente del
 registro de decisiones.
@@ -2116,6 +2117,158 @@ edición** y el aviso aparece junto al botón que lo produjo, que es la regla de
 §4.11. Lo encontró `npm run verify:pantallas`, no una prueba de Vitest: es
 exactamente la clase de defecto que esa comprobación existe para atrapar.
 
+### 4.17 Bandeja de salida transaccional (Fase 1.a de la sincronización)
+
+**El diseño de `docs/SINCRONIZACION.md` quedó APROBADO el 2026-09-11** y se
+implementa **por fases**. Esta sección describe la primera, que es lo único que
+existe en el código.
+
+#### Las 17 decisiones de la sección 7 del diseño quedan adoptadas
+
+Se adoptan **con la recomendación del documento**, salvo dos:
+
+| Decisión | Qué se resolvió |
+|---|---|
+| **10** — `traerCambios(desde)` en `SyncProvider` | Se resuelve **retirando el método de la interfaz**. La sincronización continua es solo de subida; bajar cambios sería tener dos escritores. **Va en la fase 1.b, no acá**: hoy la interfaz sigue intacta. |
+| **11** — presupuesto de rendimiento | Queda **ABIERTA hasta medir en hardware real** (fase 3). Ningún número de rendimiento del documento se da por bueno antes de eso, porque la máquina de la tienda es un i3. |
+
+Las otras quince se aplican tal como están escritas. Las dos que esta fase ya
+ejecuta son la **4** (`ventas.estado_sincronizacion` no viaja) y la **17** (los
+hashes de PIN no viajan).
+
+#### Qué existe y qué NO existe
+
+**Existe:** la migración `018_sync_cola_lotes` y el módulo
+`src/main/database/bandeja-de-salida.ts`, que escribe en `sync_cola` **dentro
+de la misma transacción** de cada operación de negocio.
+
+**NO existe, y no se empezó:** el trabajador de sincronización, el
+`SyncProvider` real, las credenciales, la detección de conexión, las políticas
+de RLS y las funciones de Postgres. **Nadie lee la cola todavía**, así que la
+cola se llena y no pasa nada más. Es deliberado: mientras nada la lea, un error
+acá no puede subir un dato equivocado a ningún lado.
+
+#### La regla que justifica el módulo entero
+
+> **La fila de la cola se escribe DENTRO de la misma transacción que el dato de
+> negocio.** No después, no en otra transacción, no «en cuanto se pueda».
+
+Sin eso serían posibles las dos cosas que el patrón existe para impedir: una
+venta cobrada que nunca se va a subir, porque el proceso murió entre el
+`COMMIT` de la venta y el `INSERT` de la cola; o una entrada de cola que apunta
+a una venta que no existe, porque murió al revés. **En este proyecto eso no es
+una hipótesis remota: matar el proceso desde el sistema operativo es una vía de
+escape permitida a propósito** (§4.5).
+
+#### EL PAYLOAD SE LEE DE LA BASE, no se reconstruye desde la entidad
+
+`armarPayload` hace un `SELECT *` de la fila recién escrita y serializa lo que
+SQLite devuelve. **No** toma el objeto de dominio y lo vuelve a convertir.
+
+Reconstruirlo obligaría a acertar, en cada una de las trece tablas y columna
+por columna, cuál de las conversiones canónicas corresponde —`montoACadena`,
+`cantidadACadena` o `aColumnaExacta`—. Equivocarse en una sola mandaría a la
+nube un `2.5` donde la base tiene `2.500`, o peor, un número de JavaScript
+donde la base tiene una cadena exacta. **Leyendo de la base no hay conversión
+que pueda equivocarse, porque no hay conversión.** Los booleanos viajan como
+los guarda SQLite, `0` o `1`.
+
+#### El orden dentro del lote es PADRES ANTES QUE HIJOS, y no es cosmético
+
+Todas las filas de una operación comparten `lote_id`, y `orden_en_lote` dice en
+qué orden se van a subir. Subir `venta_detalle` antes que `ventas` lo rechaza la
+llave foránea de Postgres, y el lote quedaría detenido con un error que no dice
+nada del problema real.
+
+| Operación | Qué encola, en orden |
+|---|---|
+| Registrar una venta | `productos` (uno por línea, `actualizar`) → `ventas` → `venta_detalle` → `auditoria_log` (dos asientos si hubo descuento autorizado) |
+| Emitir un recibo | `recibos`, **una sola fila, en su propio lote** |
+| Abrir la caja | `caja_sesiones` → `caja_sesion_denominaciones` → `auditoria_log` |
+| Cerrar la caja | `caja_sesiones` (`actualizar`) → `caja_sesion_denominaciones` del cierre → `auditoria_log` |
+| Crear, editar, cambiar el PIN o dar de baja a un usuario | `usuarios` → `auditoria_log` |
+| Categoría, producto, ajuste de inventario, tope de descuento, configuración del negocio | la fila → `auditoria_log` |
+
+#### Qué NO viaja, y por qué
+
+| Se excluye | Razón |
+|---|---|
+| `usuarios.pin_hash` y `pin_remoto_hash` | Decisión 17. Un PIN de cuatro dígitos tiene 10 000 valores: quien lea la tabla en la nube los saca todos. Y no hacen falta allá, porque toda restauración resetea los PIN. |
+| `usuarios.intentos_fallidos` y `bloqueado_hasta` | Estado operativo de esta terminal (§4.4). |
+| `ventas.estado_sincronizacion` | Decisión 4. En la nube diría siempre `'pendiente'`, que allá no significa nada. |
+| `denominaciones` (la tabla entera) | Las once del quetzal ya viven en la nube con los mismos UUID desde la `0004`. Nunca cambian. |
+| `sync_cola`, `bloqueos_de_autorizacion`, `migraciones_aplicadas` | Subir la lista de pendientes junto con los pendientes no tiene sentido. |
+| **Los archivos**: la foto del producto y el PDF del recibo | **Es la fase 3.c.** Hoy viaja la RUTA como dato de la fila, y nadie va a poder resolverla desde la nube: es de este disco. |
+| Los cambios posteriores de `recibos.impreso` y `pdf_path` | El recibo se encola **una vez, al emitirse**. Si se imprimió acá y dónde quedó el archivo en ESTE disco es estado de la terminal (§2.3 del diseño). Una reimpresión no encola nada. |
+
+#### `operacion` es `'actualizar'`, NO `'update'`
+
+El diseño decía que `configuracion_negocio` se encola con `operacion='update'`.
+**Ese valor no existe**: el CHECK de `sync_cola`, desde la migración 001, acepta
+`'insertar' | 'actualizar' | 'eliminar'`, en español como el resto del dominio.
+Se usa `'actualizar'`, que es lo mismo con el nombre que la base acepta. No es
+una decisión de diseño distinta, es el nombre correcto de la misma.
+
+#### ESTA FASE AGREGÓ LA PRIMERA TRANSACCIÓN A SEIS SERVICIOS
+
+**El prompt pedía «reutilizá el punto de transacción existente en cada
+servicio». Ese punto no existía en casi ninguno.** Medido antes de tocar nada:
+el único servicio que recibía la conexión y abría una transacción era
+`ServicioDeVenta`. Los otros seis —caja, categorías, productos, usuarios,
+límites de descuento, configuración del negocio— escribían **su fila de negocio
+y su asiento de auditoría como sentencias sueltas**, sin transacción.
+
+Se les agregó una. Sin ella el patrón de bandeja de salida no ofrece ninguna
+garantía, que es su única razón de ser. Y de paso **cierra un hueco de
+atomicidad preexistente que nadie había mirado**: hasta hoy, matar el proceso
+entre las dos escrituras dejaba una caja abierta sin el arqueo con que se
+abrió, o un usuario dado de baja sin el asiento que dice quién lo hizo.
+
+El envoltorio común es `conBandejaDeSalida`, para que los seis tengan
+exactamente la misma forma. `ServicioDeVenta` **no lo usa**, y es correcto: su
+transacción hace siete pasos antes de llegar a la cola, con reverificación de
+caja y comparar-y-cambiar de inventario, y meterla en ese molde la haría menos
+legible. `ServicioDeRecibos` tampoco: su transacción cubre el número y la fila,
+y **deja el PDF y la impresión afuera a propósito** (§4.14).
+
+#### `precios_especiales` no se encola, porque nada la escribe
+
+El diseño la lista entre las tablas que se sincronizan y el prompt pedía
+encolar «crear/editar precio especial». **En producción no hay nada que cree un
+precio especial**: no hay servicio, ni canal IPC, ni pantalla. La tabla se llena
+solo desde las pruebas. La venta SÍ los lee y los aplica (§4.13), así que la
+funcionalidad existe a medias: se pueden consumir precios especiales, no
+crearlos.
+
+No se inventó un servicio para poder encolar algo. `precios_especiales` está en
+la lista de tablas sincronizables del módulo, lista para el día que exista la
+pantalla, y **queda anotado como pendiente** (punto 18 de §6.2).
+
+#### `PRAGMA synchronous` está en FULL, verificado — y cómo NO verificarlo
+
+El diseño asume `FULL` para que la cola sobreviva un corte de energía. **Lo
+está.** `configurarConexion` lo fija en `src/main/database/connection.ts` y hay
+una prueba que lo comprueba leyéndolo de una base real.
+
+> **CUIDADO CON CÓMO SE MIDE, porque la medición ingenua da la respuesta
+> equivocada.** `synchronous` es un pragma **POR CONEXIÓN** y **no se guarda en
+> el archivo**. Abrir el `.db` de la tienda con una conexión nueva devuelve
+> siempre `1` (NORMAL), que es el valor por omisión de SQLite, **sin importar
+> qué use la aplicación**. `journal_mode` sí se persiste; `synchronous` no. Lo
+> único que responde la pregunta es leerlo de la conexión que la aplicación
+> abre.
+
+#### Las cinco columnas de la migración 018
+
+`lote_id`, `orden_en_lote`, `intentos`, `proximo_intento_en` y `bloqueante`,
+cada una con su CHECK con nombre. **Las tres últimas no las usa nadie todavía**:
+son para el trabajador de la fase 1.b. Se agregaron ahora porque una migración
+aplicada no se edita, y porque el índice que el trabajador va a consultar
+—`(creado_en, orden_en_lote) WHERE sincronizado_en IS NULL`— reemplaza al de la
+001, que ordenaba solo por `creado_en` y dejaba el orden dentro del lote a lo
+que devolviera el motor.
+
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -2251,6 +2404,12 @@ exactamente la clase de defecto que esa comprobación existe para atrapar.
 | Limitador de intentos del PIN: 3 intentos y 30 segundos de bloqueo | Sin límite de intentos | Un PIN de cuatro dígitos sin límite se adivina por fuerza bruta en minutos, y hoy el PIN es lo único que separa a un cajero de cerrar el punto de venta. Un PIN con formato inválido no consume intentos, para que nadie se autobloquee por un error de tecleo. | Prompt 2 — 2026-09-04 |
 | Solo se acepta un PIN si hay una solicitud de salida viva (2 minutos) | Aceptar el PIN en cualquier momento | Sin esa ventana, una interfaz comprometida podría usar el canal IPC como oráculo para adivinar el PIN sin que nadie toque el teclado. | Prompt 2 — 2026-09-04 |
 | El cierre ordenado consolida el WAL con `wal_checkpoint(TRUNCATE)` | Cerrar la conexión sin consolidar | Con WAL, las escrituras recientes viven en un archivo `-wal` aparte. Cerrar sin consolidar deja la base correcta pero repartida en dos archivos, lo que complica los respaldos y la revisión del archivo por parte del auditor. | Prompt 2 — 2026-09-04 |
+| **El diseño de `docs/SINCRONIZACION.md` queda APROBADO y se implementa POR FASES. Las 17 decisiones de su sección 7 se adoptan con la recomendación del documento, salvo la 10 y la 11.** | Implementarlo todo de una vez; dejarlo en diseño hasta tener respuesta a las 17 | El documento es grande y toca la nube, la seguridad y el dinero: implementarlo entero en un prompt haría imposible verificar qué anda y qué no, que es el único mecanismo de confianza de este proyecto. Por fases, cada pedazo se prueba solo. **La 10 se resuelve retirando `traerCambios` de `SyncProvider`** —la sincronización continua es solo de subida, y bajar cambios sería tener dos escritores—, pero eso es la fase 1.b y hoy la interfaz sigue intacta. **La 11 queda ABIERTA hasta medir en hardware real**: la máquina de la tienda es un i3 y ningún número de rendimiento escrito sin medirlo ahí se da por bueno. | Prompt 29 — 2026-09-11 |
+| **Bandeja de salida transaccional: la fila de `sync_cola` se escribe DENTRO de la misma transacción que el dato de negocio, con un `lote_id` compartido y `orden_en_lote` de padres a hijos.** | Encolar después del `COMMIT`; encolar desde un disparador de SQLite; recorrer las tablas buscando lo no sincronizado | Encolar después abre exactamente los dos huecos que este patrón existe para cerrar: una venta cobrada que nunca se va a subir, si el proceso muere entre el `COMMIT` y el `INSERT` de la cola, o una entrada de cola que apunta a una venta que no existe, si muere al revés. En este proyecto no es una hipótesis remota: **matar el proceso desde el sistema operativo es una vía de escape permitida a propósito** (§4.5). Un disparador habría metido la lógica de qué se sincroniza dentro del esquema, donde no se puede probar con Vitest ni leer junto al servicio que la provoca. Y recorrer tablas buscando cambios exige una marca de «sincronizado» por tabla —trece columnas nuevas espejadas en Postgres— y no sabe agrupar una venta con su detalle. El orden padres→hijos no es cosmético: al revés lo rechaza la llave foránea de Postgres y el lote queda detenido con un error que no habla del problema real. | Prompt 29 — 2026-09-11 |
+| **El payload se lee de la base con `SELECT *` de la fila recién escrita, NO se reconstruye desde la entidad de dominio.** Los decimales viajan como la cadena canónica exacta y los booleanos como `0`/`1`. | Serializar el objeto de dominio; convertir cada campo con la función canónica que le toque | Reconstruirlo obligaría a acertar, en cada una de las trece tablas y columna por columna, cuál de las tres conversiones canónicas corresponde —`montoACadena`, `cantidadACadena` o `aColumnaExacta`—, y equivocarse en una sola mandaría a la nube un `2.5` donde la base tiene `2.500`, o un número de JavaScript donde la base tiene una cadena exacta. Leyendo de la base **no hay conversión que pueda equivocarse, porque no hay conversión**: el payload es byte a byte lo que quedó guardado. Es el mismo criterio por el que `decimal-columns.ts` es la única vía para leer y escribir columnas decimales, llevado un paso más lejos. | Prompt 29 — 2026-09-11 |
+| **La Fase 1.a le agregó su PRIMERA transacción a SEIS servicios que no tenían ninguna.** Caja, categorías, productos, usuarios, límites de descuento y configuración del negocio. | Encolar sin transacción en esos seis; envolver solo la venta, que ya la tenía | El prompt pedía «reutilizá el punto de transacción existente en cada servicio» y **ese punto no existía**: medido antes de tocar nada, el único servicio que recibía la conexión y abría una transacción era `ServicioDeVenta`; los otros seis escribían su fila de negocio y su asiento de auditoría como sentencias sueltas. Sin transacción, la bandeja de salida no ofrece ninguna garantía, que es su única razón de ser. Agregarla **cerró además un hueco de atomicidad preexistente que nadie había mirado**: hasta hoy, matar el proceso entre las dos escrituras dejaba una caja abierta sin el arqueo con que se abrió, o un usuario dado de baja sin el asiento que dice quién lo hizo. El envoltorio es uno solo, `conBandejaDeSalida`, para que los seis tengan la misma forma; la venta y los recibos no lo usan, y se explica por qué en §4.17. | Prompt 29 — 2026-09-11 |
+| **`configuracion_negocio` se encola con `operacion = 'actualizar'`, no `'update'` como decía el prompt.** | Escribir `'update'` y ampliar el CHECK para aceptarlo | No es una decisión de diseño distinta: es el nombre correcto de la misma. El CHECK de `sync_cola` acepta `'insertar'`, `'actualizar'` y `'eliminar'` desde la migración 001, en español como todo el vocabulario de dominio del proyecto. Ampliar el CHECK para meter un cuarto valor en inglés que significa lo mismo que uno que ya existe habría dejado dos formas de decir lo mismo en la misma columna. | Prompt 29 — 2026-09-11 |
+| **`precios_especiales` NO se encola en esta fase, porque en producción nada la escribe.** | Inventar un servicio de precios especiales para poder encolar algo; encolar desde las pruebas | El diseño la lista entre las tablas sincronizables y el prompt pedía encolar «crear/editar precio especial», pero **no hay servicio, ni canal IPC, ni pantalla** que cree uno: la tabla se llena solo desde las pruebas. La venta sí los lee y los aplica, así que la funcionalidad existe a medias. Inventar el servicio para cumplir la letra del prompt habría sido construir un módulo que nadie pidió, con sus reglas de vigencia y autorización decididas por cuenta propia. La tabla queda declarada como sincronizable, lista para el día que exista la pantalla, y el hueco queda anotado como pendiente. | Prompt 29 — 2026-09-11 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -2289,6 +2448,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 17 | **¿Un tope de descuento en porcentaje mayor que 100 debería rechazarse?** | Hoy **se acepta y la pantalla avisa sin bloquear** (§4.16). No es peligroso —`totalConDescuento` tiene piso en cero, así que 150 % no autoriza nada que 100 % no autorice ya— pero es un valor inútil y un tecleo plausible: confundir el campo del porcentaje con el de quetzales. Rechazarlo sería inventar una regla que Jimmy no confirmó, así que se avisa y se deja pasar. Si él prefiere que el sistema lo impida, es un cambio de tres líneas en `ServicioDeLimitesDeDescuento.leerNumero`. | Abierto — de bajo riesgo, se decide cuando haya ocasión |
 | 18 | **¿Qué umbral de «stock bajo» tiene cada producto, y quién lo define?** | El reporte de inventario muestra la fotografía de hoy y **no tiene umbral ni alertas, a propósito** (§4.15): cuál es el mínimo de cada producto es una definición de negocio, y un umbral inventado convertiría una suposición nuestra en un aviso que parece una regla de la tienda. Hace falta saber si el mínimo es por producto, por categoría o uno solo para todo, y si depende de la temporada. Es un módulo futuro con su propio prompt. | Abierto — bloquea las alertas de stock, no el reporte |
 | 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
+| 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -2355,13 +2515,20 @@ negocio:
   implementación segura por defecto intacta: sin `impresora.json` configurado se
   usa `NullPrinterProvider` y el recibo queda solo en PDF. No hay adaptador real
   de Supabase: ahí sigue solo el contrato y la implementación simulada.
-- **La sincronización con la nube NO existe. Existe su DISEÑO**, en
-  `docs/SINCRONIZACION.md` (Prompt 28), **pendiente de revisión de Julio antes
-  de implementar nada**. `sync_cola` y `ventas.estado_sincronizacion` están en
-  el esquema desde el Prompt 5 pero **nadie los escribe fuera de las pruebas**:
-  son andamiaje sin conectar. El diseño además encontró cinco inconsistencias
-  entre lo documentado y lo que existe (sección 0 de ese documento), que hay que
-  resolver antes o durante la implementación.
+- **La sincronización con la nube NO funciona todavía, pero su diseño está
+  APROBADO y la primera fase está construida.** El diseño completo vive en
+  `docs/SINCRONIZACION.md` (Prompt 28), aprobado el 2026-09-11 con dos
+  excepciones anotadas en §4.17. **Lo único implementado es la Fase 1.a**: la
+  migración `018_sync_cola_lotes` y la **bandeja de salida transaccional**, que
+  escribe en `sync_cola` dentro de la misma transacción de cada operación de
+  negocio. **Nadie lee esa cola**: no hay trabajador de sincronización, ni
+  `SyncProvider` real, ni credenciales, ni detección de conexión, ni una sola
+  política de RLS en Supabase. La cola se llena y no pasa nada más, que es
+  exactamente lo que se buscó para esta fase. Ver §4.17.
+- **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
+  precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
+  canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.
+  Ver el punto 18 de §6.2.
 
 ## 8. Comandos
 
@@ -2408,6 +2575,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
                       restricción tapa un hueco de la 007)
     repositories/    una clase por tabla; la única puerta hacia los datos
     decimal-columns.ts  única vía para leer/escribir dinero, peso y cantidad
+    bandeja-de-salida.ts  llena sync_cola DENTRO de la transacción de negocio
     migrator.ts      aplica las migraciones y verifica sus checksums
   ipc/          manejadores IPC, con validación Zod de cada payload
     respuesta.ts   envoltorio único de respuesta; todo manejador pasa por aquí
@@ -2436,7 +2604,7 @@ src/shared/     código compartido main <-> renderer
   __tests__/    pruebas automatizadas
 supabase/       espejo del esquema en Postgres (migraciones para la nube)
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
-  SINCRONIZACION.md  diseño de la sincronización con la nube. SOLO DISEÑO, pendiente de revisión
+  SINCRONIZACION.md  diseño de la sincronización. APROBADO; solo la fase 1.a está construida
 ```
 
 ## 10. Antes de cerrar cualquier sesión de trabajo

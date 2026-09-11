@@ -373,6 +373,7 @@ app.whenReady().then(
     });
     const sesion = new SesionActual();
     const caja = new ServicioDeCaja({
+      base: baseDeDatos,
       cajaSesiones: repositorios.cajaSesiones,
       denominaciones: repositorios.denominaciones,
       desglose: repositorios.desgloseDeCaja,
@@ -381,10 +382,12 @@ app.whenReady().then(
     });
 
     const servicioDeCategorias = new ServicioDeCategorias({
+      base: baseDeDatos,
       categorias: repositorios.categorias,
       auditoria: repositorios.auditoria,
     });
     const servicioDeProductos = new ServicioDeProductos({
+      base: baseDeDatos,
       productos: repositorios.productos,
       categorias: repositorios.categorias,
       auditoria: repositorios.auditoria,
@@ -394,11 +397,13 @@ app.whenReady().then(
     // Gestión de usuarios: cierra el hueco que dejaba el primer arranque, que
     // solo sabía crear al primer administrador y solo con la tabla vacía.
     const servicioDeUsuarios = new ServicioDeUsuarios({
+      base: baseDeDatos,
       usuarios: repositorios.usuarios,
       auditoria: repositorios.auditoria,
     });
 
     const servicioDeNegocio = new ServicioDeConfiguracionDeNegocio({
+      base: baseDeDatos,
       configuracion: repositorios.configuracionNegocio,
       auditoria: repositorios.auditoria,
     });
@@ -421,6 +426,7 @@ app.whenReady().then(
     // Los topes de descuento, ya configurables desde la aplicación y no solo
     // con el guion `seed:limites`.
     const servicioDeLimites = new ServicioDeLimitesDeDescuento({
+      base: baseDeDatos,
       limites: repositorios.limitesDescuento,
       auditoria: repositorios.auditoria,
       nombreDeUsuario: (usuarioId): string | null => repositorios.usuarios.obtenerPorId(usuarioId)?.nombre ?? null,
@@ -444,6 +450,7 @@ app.whenReady().then(
     const impresora = crearImpresoraConfigurada(app.getPath('userData'), logTecnico);
 
     const servicioDeRecibos = new ServicioDeRecibos({
+      base: baseDeDatos,
       ventas: repositorios.ventas,
       ventaDetalle: repositorios.ventaDetalle,
       recibos: repositorios.recibos,

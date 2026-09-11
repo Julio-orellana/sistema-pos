@@ -147,6 +147,7 @@ describe('Con los topes sembrados, un descuento dentro del límite deja de pedir
   /** Registra una venta de Q100 con el descuento y el rol indicados. */
   function venderConDescuento(rol: Rol, porcentaje: string): string {
     const caja = new ServicioDeCaja({
+      base,
       cajaSesiones: repos.cajaSesiones,
       denominaciones: repos.denominaciones,
       desglose: repos.desgloseDeCaja,

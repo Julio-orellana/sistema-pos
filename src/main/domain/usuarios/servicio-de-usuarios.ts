@@ -30,7 +30,10 @@
  *      está donde parece.
  */
 
+import type { Database } from 'better-sqlite3';
+
 import { ErrorDeNegocio } from '@main/database/errores';
+import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import { generarHashDePin } from '@shared/auth';
 import { tieneFormatoDePinValido } from '@shared/pin';
 import type { Rol, Usuario } from '@main/database/repositories/entidades';
@@ -70,17 +73,28 @@ export interface CambiosDeUsuario {
 
 /** Dependencias del servicio. */
 export interface DependenciasDeUsuarios {
+  /**
+   * La conexión, para poder envolver la escritura en UNA transacción.
+   *
+   * **Este servicio no la tenía hasta la Fase 1.a de la sincronización**, y por
+   * eso escribía su fila y su asiento de auditoría sueltos: un cierre forzado
+   * entre los dos dejaba el hecho sin su rastro. Ahora van juntos, y con ellos
+   * la entrada de la bandeja de salida (`docs/SINCRONIZACION.md` §2.4).
+   */
+  readonly base: Database;
   readonly usuarios: RepositorioDeUsuarios;
   readonly auditoria: RepositorioDeAuditoria;
   readonly ahora?: () => number;
 }
 
 export class ServicioDeUsuarios {
+  private readonly base: Database;
   private readonly usuarios: RepositorioDeUsuarios;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeUsuarios) {
+    this.base = dependencias.base;
     this.usuarios = dependencias.usuarios;
     this.auditoria = dependencias.auditoria;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
@@ -104,22 +118,30 @@ export class ServicioDeUsuarios {
     this.validarPin(datos.pin);
     exigirPinNoUsado(this.usuarios, datos.pin, null);
 
-    const creado = this.usuarios.crear({
-      nombre,
-      rol,
-      pinHash: generarHashDePin(datos.pin),
-    });
+    return conBandejaDeSalida(this.base, () => {
+      const creado = this.usuarios.crear({
+        nombre,
+        rol,
+        pinHash: generarHashDePin(datos.pin),
+      });
 
-    this.auditoria.registrar({
-      usuarioId: actorId,
-      accion: ACCIONES_DE_USUARIO.creado,
-      entidadTipo: 'usuarios',
-      entidadId: creado.id,
-      valorNuevo: { nombre: creado.nombre, rol: creado.rol, activo: creado.activo },
-      fecha: new Date(this.ahora()).toISOString(),
-    });
+      const asiento = this.auditoria.registrar({
+        usuarioId: actorId,
+        accion: ACCIONES_DE_USUARIO.creado,
+        entidadTipo: 'usuarios',
+        entidadId: creado.id,
+        valorNuevo: { nombre: creado.nombre, rol: creado.rol, activo: creado.activo },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
 
-    return creado;
+      return {
+        resultado: creado,
+        entradas: [
+          { tabla: 'usuarios', id: creado.id, operacion: 'insertar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
+    });
   }
 
   /**
@@ -148,20 +170,28 @@ export class ServicioDeUsuarios {
       }
     }
 
-    this.usuarios.actualizar(id, { nombre, rol });
-    const actualizado = this.exigirUsuario(id);
+    return conBandejaDeSalida(this.base, () => {
+      this.usuarios.actualizar(id, { nombre, rol });
+      const actualizado = this.exigirUsuario(id);
 
-    this.auditoria.registrar({
-      usuarioId: actorId,
-      accion: ACCIONES_DE_USUARIO.editado,
-      entidadTipo: 'usuarios',
-      entidadId: id,
-      valorAnterior: { nombre: usuario.nombre, rol: usuario.rol },
-      valorNuevo: { nombre: actualizado.nombre, rol: actualizado.rol },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId: actorId,
+        accion: ACCIONES_DE_USUARIO.editado,
+        entidadTipo: 'usuarios',
+        entidadId: id,
+        valorAnterior: { nombre: usuario.nombre, rol: usuario.rol },
+        valorNuevo: { nombre: actualizado.nombre, rol: actualizado.rol },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: actualizado,
+        entradas: [
+          { tabla: 'usuarios', id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return actualizado;
   }
 
   /**
@@ -184,18 +214,26 @@ export class ServicioDeUsuarios {
     // «ese PIN ya está en uso» sería desconcertante.
     exigirPinNoUsado(this.usuarios, pinNuevo, id);
 
-    this.usuarios.actualizarPinHash(id, generarHashDePin(pinNuevo));
+    return conBandejaDeSalida(this.base, () => {
+      this.usuarios.actualizarPinHash(id, generarHashDePin(pinNuevo));
 
-    this.auditoria.registrar({
-      usuarioId: actorId,
-      accion: ACCIONES_DE_USUARIO.pinCambiado,
-      entidadTipo: 'usuarios',
-      entidadId: id,
-      valorNuevo: { nombre: usuario.nombre, cambiadoPorOtraPersona: actorId !== id },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId: actorId,
+        accion: ACCIONES_DE_USUARIO.pinCambiado,
+        entidadTipo: 'usuarios',
+        entidadId: id,
+        valorNuevo: { nombre: usuario.nombre, cambiadoPorOtraPersona: actorId !== id },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: this.exigirUsuario(id),
+        entradas: [
+          { tabla: 'usuarios', id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return this.exigirUsuario(id);
   }
 
   /**
@@ -225,19 +263,27 @@ export class ServicioDeUsuarios {
       );
     }
 
-    this.usuarios.fijarActivo(id, activo);
+    return conBandejaDeSalida(this.base, () => {
+      this.usuarios.fijarActivo(id, activo);
 
-    this.auditoria.registrar({
-      usuarioId: actorId,
-      accion: activo ? ACCIONES_DE_USUARIO.reactivado : ACCIONES_DE_USUARIO.desactivado,
-      entidadTipo: 'usuarios',
-      entidadId: id,
-      valorAnterior: { activo: usuario.activo },
-      valorNuevo: { nombre: usuario.nombre, rol: usuario.rol, activo },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId: actorId,
+        accion: activo ? ACCIONES_DE_USUARIO.reactivado : ACCIONES_DE_USUARIO.desactivado,
+        entidadTipo: 'usuarios',
+        entidadId: id,
+        valorAnterior: { activo: usuario.activo },
+        valorNuevo: { nombre: usuario.nombre, rol: usuario.rol, activo },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: this.exigirUsuario(id),
+        entradas: [
+          { tabla: 'usuarios', id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return this.exigirUsuario(id);
   }
 
   // -------------------------------------------------------------------------

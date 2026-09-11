@@ -22,6 +22,8 @@
  * duplicado inútil en el catálogo.
  */
 
+import type { Database } from 'better-sqlite3';
+
 import type Decimal from 'decimal.js';
 
 import {
@@ -36,6 +38,7 @@ import {
   sumar,
 } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
+import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import type {
   Producto,
   TipoMedida,
@@ -119,6 +122,15 @@ interface DatosVerificados {
 
 /** Dependencias del servicio. */
 export interface DependenciasDeProductos {
+  /**
+   * La conexión, para poder envolver la escritura en UNA transacción.
+   *
+   * **Este servicio no la tenía hasta la Fase 1.a de la sincronización**, y por
+   * eso escribía su fila y su asiento de auditoría sueltos: un cierre forzado
+   * entre los dos dejaba el hecho sin su rastro. Ahora van juntos, y con ellos
+   * la entrada de la bandeja de salida (`docs/SINCRONIZACION.md` §2.4).
+   */
+  readonly base: Database;
   readonly productos: RepositorioDeProductos;
   readonly categorias: RepositorioDeCategorias;
   readonly auditoria: RepositorioDeAuditoria;
@@ -126,12 +138,14 @@ export interface DependenciasDeProductos {
 }
 
 export class ServicioDeProductos {
+  private readonly base: Database;
   private readonly productos: RepositorioDeProductos;
   private readonly categorias: RepositorioDeCategorias;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeProductos) {
+    this.base = dependencias.base;
     this.productos = dependencias.productos;
     this.categorias = dependencias.categorias;
     this.auditoria = dependencias.auditoria;
@@ -338,35 +352,43 @@ export class ServicioDeProductos {
       );
     }
 
-    const creado = this.productos.crear({
-      nombre: verificados.nombre,
-      categoriaId: verificados.categoriaId,
-      fotoPath: verificados.fotoPath,
-      tipoMedida: verificados.tipoMedida,
-      unidadPeso: verificados.unidadPeso,
-      cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
-      precioBase: verificados.precioBase,
-      inventarioDisponible: inventarioInicial,
-      activo: true,
-    });
+    return conBandejaDeSalida(this.base, () => {
+      const creado = this.productos.crear({
+        nombre: verificados.nombre,
+        categoriaId: verificados.categoriaId,
+        fotoPath: verificados.fotoPath,
+        tipoMedida: verificados.tipoMedida,
+        unidadPeso: verificados.unidadPeso,
+        cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
+        precioBase: verificados.precioBase,
+        inventarioDisponible: inventarioInicial,
+        activo: true,
+      });
 
-    this.auditoria.registrar({
-      usuarioId,
-      accion: ACCIONES_DE_PRODUCTO.creado,
-      entidadTipo: 'productos',
-      entidadId: creado.id,
-      valorNuevo: {
-        nombre: creado.nombre,
-        categoriaId: creado.categoriaId,
-        tipoMedida: creado.tipoMedida,
-        unidadPeso: creado.unidadPeso,
-        precioBase: montoACadena(creado.precioBase),
-        inventarioInicial: cantidadACadena(creado.inventarioDisponible),
-      },
-      fecha: new Date(this.ahora()).toISOString(),
-    });
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_PRODUCTO.creado,
+        entidadTipo: 'productos',
+        entidadId: creado.id,
+        valorNuevo: {
+          nombre: creado.nombre,
+          categoriaId: creado.categoriaId,
+          tipoMedida: creado.tipoMedida,
+          unidadPeso: creado.unidadPeso,
+          precioBase: montoACadena(creado.precioBase),
+          inventarioInicial: cantidadACadena(creado.inventarioDisponible),
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
 
-    return creado;
+      return {
+        resultado: creado,
+        entradas: [
+          { tabla: 'productos', id: creado.id, operacion: 'insertar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
+    });
   }
 
   /**
@@ -394,41 +416,49 @@ export class ServicioDeProductos {
       );
     }
 
-    this.productos.actualizar(id, {
-      nombre: verificados.nombre,
-      categoriaId: verificados.categoriaId,
-      fotoPath: verificados.fotoPath,
-      tipoMedida: verificados.tipoMedida,
-      unidadPeso: verificados.unidadPeso,
-      cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
-      precioBase: verificados.precioBase,
-    });
-
-    this.auditoria.registrar({
-      usuarioId,
-      accion: ACCIONES_DE_PRODUCTO.editado,
-      entidadTipo: 'productos',
-      entidadId: id,
-      valorAnterior: {
-        nombre: anterior.nombre,
-        categoriaId: anterior.categoriaId,
-        tipoMedida: anterior.tipoMedida,
-        unidadPeso: anterior.unidadPeso,
-        precioBase: montoACadena(anterior.precioBase),
-        fotoPath: anterior.fotoPath,
-      },
-      valorNuevo: {
+    return conBandejaDeSalida(this.base, () => {
+      this.productos.actualizar(id, {
         nombre: verificados.nombre,
         categoriaId: verificados.categoriaId,
+        fotoPath: verificados.fotoPath,
         tipoMedida: verificados.tipoMedida,
         unidadPeso: verificados.unidadPeso,
-        precioBase: montoACadena(verificados.precioBase),
-        fotoPath: verificados.fotoPath,
-      },
-      fecha: new Date(this.ahora()).toISOString(),
-    });
+        cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
+        precioBase: verificados.precioBase,
+      });
 
-    return this.exigirProducto(id);
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_PRODUCTO.editado,
+        entidadTipo: 'productos',
+        entidadId: id,
+        valorAnterior: {
+          nombre: anterior.nombre,
+          categoriaId: anterior.categoriaId,
+          tipoMedida: anterior.tipoMedida,
+          unidadPeso: anterior.unidadPeso,
+          precioBase: montoACadena(anterior.precioBase),
+          fotoPath: anterior.fotoPath,
+        },
+        valorNuevo: {
+          nombre: verificados.nombre,
+          categoriaId: verificados.categoriaId,
+          tipoMedida: verificados.tipoMedida,
+          unidadPeso: verificados.unidadPeso,
+          precioBase: montoACadena(verificados.precioBase),
+          fotoPath: verificados.fotoPath,
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: this.exigirProducto(id),
+        entradas: [
+          { tabla: 'productos', id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
+    });
   }
 
   /**
@@ -442,26 +472,34 @@ export class ServicioDeProductos {
       return anterior;
     }
 
-    this.productos.fijarActivo(id, activo);
+    return conBandejaDeSalida(this.base, () => {
+      this.productos.fijarActivo(id, activo);
 
-    this.auditoria.registrar({
-      usuarioId,
-      accion: activo ? ACCIONES_DE_PRODUCTO.reactivado : ACCIONES_DE_PRODUCTO.desactivado,
-      entidadTipo: 'productos',
-      entidadId: id,
-      valorAnterior: { activo: anterior.activo },
-      valorNuevo: {
-        activo,
-        nombre: anterior.nombre,
-        // Se deja constancia de con cuánto inventario quedó guardado: un
-        // producto retirado con saldo es mercadería que sigue en la bodega y
-        // deja de poder venderse.
-        inventarioAlDesactivar: cantidadACadena(anterior.inventarioDisponible),
-      },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: activo ? ACCIONES_DE_PRODUCTO.reactivado : ACCIONES_DE_PRODUCTO.desactivado,
+        entidadTipo: 'productos',
+        entidadId: id,
+        valorAnterior: { activo: anterior.activo },
+        valorNuevo: {
+          activo,
+          nombre: anterior.nombre,
+          // Se deja constancia de con cuánto inventario quedó guardado: un
+          // producto retirado con saldo es mercadería que sigue en la bodega y
+          // deja de poder venderse.
+          inventarioAlDesactivar: cantidadACadena(anterior.inventarioDisponible),
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: this.exigirProducto(id),
+        entradas: [
+          { tabla: 'productos', id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return this.exigirProducto(id);
   }
 
   /**
@@ -506,31 +544,39 @@ export class ServicioDeProductos {
     const anterior = producto.inventarioDisponible;
     const nuevoSaldo = redondearCantidad(sumar(anterior, cantidad));
 
-    this.productos.fijarInventario(producto.id, nuevoSaldo);
+    return conBandejaDeSalida(this.base, () => {
+      this.productos.fijarInventario(producto.id, nuevoSaldo);
 
-    const resultado: ResultadoDeAjuste = {
-      producto: this.exigirProducto(producto.id),
-      cantidadAnterior: cantidadACadena(anterior),
-      cantidadAgregada: cantidadACadena(cantidad),
-      cantidadNueva: cantidadACadena(nuevoSaldo),
-    };
+      const resultado: ResultadoDeAjuste = {
+        producto: this.exigirProducto(producto.id),
+        cantidadAnterior: cantidadACadena(anterior),
+        cantidadAgregada: cantidadACadena(cantidad),
+        cantidadNueva: cantidadACadena(nuevoSaldo),
+      };
 
-    this.auditoria.registrar({
-      usuarioId,
-      accion: ACCIONES_DE_PRODUCTO.inventarioAjustado,
-      entidadTipo: 'productos',
-      entidadId: producto.id,
-      valorAnterior: { inventarioDisponible: resultado.cantidadAnterior },
-      valorNuevo: {
-        nombre: producto.nombre,
-        inventarioDisponible: resultado.cantidadNueva,
-        cantidadAgregada: resultado.cantidadAgregada,
-        motivo: motivo.length === 0 ? null : motivo,
-      },
-      fecha: new Date(this.ahora()).toISOString(),
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_PRODUCTO.inventarioAjustado,
+        entidadTipo: 'productos',
+        entidadId: producto.id,
+        valorAnterior: { inventarioDisponible: resultado.cantidadAnterior },
+        valorNuevo: {
+          nombre: producto.nombre,
+          inventarioDisponible: resultado.cantidadNueva,
+          cantidadAgregada: resultado.cantidadAgregada,
+          motivo: motivo.length === 0 ? null : motivo,
+        },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+
+      return {
+        resultado: resultado,
+        entradas: [
+          { tabla: 'productos', id: producto.id, operacion: 'actualizar' },
+          { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+        ],
+      };
     });
-
-    return resultado;
   }
 
   // -------------------------------------------------------------------------

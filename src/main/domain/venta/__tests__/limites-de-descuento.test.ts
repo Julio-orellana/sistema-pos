@@ -55,6 +55,7 @@ beforeEach(() => {
 
   reloj = Date.parse('2026-09-11T20:00:00.000Z');
   servicio = new ServicioDeLimitesDeDescuento({
+    base,
     limites: repos.limitesDescuento,
     auditoria: repos.auditoria,
     nombreDeUsuario: (usuarioId): string | null =>

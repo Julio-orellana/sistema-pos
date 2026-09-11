@@ -29,8 +29,11 @@
  * con los marcadores entre corchetes que tenía el original.
  */
 
+import type { Database } from 'better-sqlite3';
+
 import type { ComprobanteImprimible, ReceiptPrinterProvider } from '@shared/adapters';
 import { ErrorDeNegocio } from '@main/database/errores';
+import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import type { Recibo } from '@main/database/repositories/entidades';
 import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import type { LogTecnico } from '@main/log-tecnico';
@@ -68,6 +71,17 @@ export interface ResultadoDeRecibo {
 
 /** Dependencias del servicio. */
 export interface DependenciasDeRecibos extends DependenciasDelModelo {
+  /**
+   * La conexión, para escribir la fila del recibo y su entrada de bandeja de
+   * salida en UNA transacción.
+   *
+   * **Chiquita a propósito: NO envuelve la generación del PDF.** Abrir una
+   * ventana de Chromium y hablar con una impresora dentro de una transacción
+   * mantendría una escritura de SQLite esperando a un aparato, y una impresora
+   * sin papel revertiría una venta ya cobrada (§4.14). La transacción cubre
+   * exactamente dos `INSERT`, y el PDF ocurre después.
+   */
+  readonly base: Database;
   readonly impresora: ReceiptPrinterProvider;
   readonly generarPdf: GeneradorDePdf;
   readonly ubicacion: UbicacionDePdf;
@@ -106,11 +120,33 @@ export class ServicioDeRecibos {
       renombrar el archivo o inventarle un nombre provisional, y un fallo a la
       mitad dejaría PDF huérfanos que nadie sabría a qué venta pertenecen.
     */
-    const numero = this.recibos.siguienteNumero();
-    const nombre = this.nombreDeArchivo(numero);
-    const rutaPdf = this.dependencias.ubicacion.unir(this.dependencias.ubicacion.carpeta, nombre);
+    /*
+      LA TRANSACCIÓN CUBRE EL NÚMERO Y LA FILA, Y NADA MÁS. El PDF y la
+      impresión quedan FUERA a propósito: son lentos y fallan por motivos
+      ajenos a la venta, y meterlos adentro mantendría abierta una escritura de
+      SQLite esperando a un aparato (§4.14). Lo que sí entra es la entrada de la
+      bandeja de salida, porque tiene que compartir transacción con la fila que
+      respalda.
 
-    const recibo = this.recibos.crear({ ventaId, numeroRecibo: numero, pdfPath: rutaPdf });
+      EL RECIBO SE ENCOLA UNA SOLA VEZ, al emitirse. Los cambios posteriores de
+      `impreso` y `pdf_path` NO se encolan: son estado de ESTA terminal —si el
+      papel salió acá y dónde quedó el archivo en ESTE disco— y no significan
+      nada en la nube (`docs/SINCRONIZACION.md` §2.3). Una reimpresión tampoco
+      encola: ni siquiera llega hasta acá.
+    */
+    const recibo = conBandejaDeSalida(this.dependencias.base, () => {
+      const numero = this.recibos.siguienteNumero();
+      const nombre = this.nombreDeArchivo(numero);
+      const rutaPdf = this.dependencias.ubicacion.unir(this.dependencias.ubicacion.carpeta, nombre);
+
+      const creado = this.recibos.crear({ ventaId, numeroRecibo: numero, pdfPath: rutaPdf });
+
+      return {
+        resultado: creado,
+        entradas: [{ tabla: 'recibos' as const, id: creado.id, operacion: 'insertar' as const }],
+      };
+    });
+
     return this.producir(recibo, { reimpresion: false });
   }
 

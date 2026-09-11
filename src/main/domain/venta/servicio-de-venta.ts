@@ -36,6 +36,7 @@ import {
   sumarLista,
 } from '@shared/money';
 import { ErrorDeNegocio, errorDeConflictoDeInventario } from '@main/database/errores';
+import { encolarLote, entradasDe, type EntradaDelLote } from '@main/database/bandeja-de-salida';
 import type {
   FormaPago,
   PrecioEspecial,
@@ -247,6 +248,9 @@ export class ServicioDeVenta {
       }
 
       // ---- 5. Cabecera y detalle ------------------------------------------
+      // Los ids se guardan para la bandeja de salida del paso 8: encolar una
+      // fila exige saber cuál es, y el reparto de centavos ya fijó su orden.
+      const idsDeDetalle: string[] = [];
       const venta = this.ventas.crear({
         cajaSesionId: caja.id,
         usuarioId,
@@ -292,7 +296,7 @@ export class ServicioDeVenta {
               `${String(resueltas.length)} líneas.`,
           );
         }
-        this.ventaDetalle.crear({
+        const linea_ = this.ventaDetalle.crear({
           ventaId: venta.id,
           productoId: linea.producto.id,
           // FOTO del producto al momento de vender: si mañana cambia de nombre
@@ -307,6 +311,7 @@ export class ServicioDeVenta {
           // recibo y el que hace determinista el reparto de centavos.
           ordenLinea: linea.ordenLinea,
         });
+        idsDeDetalle.push(linea_.id);
       }
 
       // ---- 6. Contadores del producto, en la MISMA transacción ------------
@@ -327,7 +332,9 @@ export class ServicioDeVenta {
       }
 
       // ---- 7. Auditoría ---------------------------------------------------
-      this.auditoria.registrar({
+      const idsDeAuditoria: string[] = [];
+      idsDeAuditoria.push(
+        this.auditoria.registrar({
         usuarioId,
         accion: ACCIONES_DE_VENTA.ventaRegistrada,
         entidadTipo: 'ventas',
@@ -358,7 +365,8 @@ export class ServicioDeVenta {
           })),
         },
         fecha: momento,
-      });
+        }).id,
+      );
 
       if (descuento !== null && descuento.autorizacion !== null) {
         /*
@@ -372,7 +380,8 @@ export class ServicioDeVenta {
           teléfono sin verlo son dos hechos distintos, y la columna de la venta
           guarda el estado final mientras el asiento guarda el hecho.
         */
-        this.auditoria.registrar({
+        idsDeAuditoria.push(
+          this.auditoria.registrar({
           usuarioId: descuento.autorizacion.autorizadoPor,
           accion: ACCIONES_DE_VENTA.descuentoAutorizado,
           entidadTipo: 'ventas',
@@ -388,8 +397,33 @@ export class ServicioDeVenta {
             exceso: montoACadena(descuento.veredicto.exceso),
           },
           fecha: momento,
-        });
+          }).id,
+        );
       }
+
+      // ---- 8. Bandeja de salida, DENTRO de esta misma transacción ---------
+      /*
+        El paso que convierte esta transacción en un respaldo confiable. Si se
+        escribiera después del COMMIT, un cierre forzado entre los dos dejaría
+        una venta cobrada que nunca se va a subir, y este proyecto permite a
+        propósito matar el proceso desde el sistema operativo (§4.5).
+
+        EL ORDEN ES EL DE LAS LLAVES FORÁNEAS, padres antes que hijos: los
+        productos no dependen de nada, la venta depende de la caja y del
+        usuario —que ya subieron en sus propios lotes—, el detalle depende de
+        la venta, y los asientos dependen de todo lo anterior. Subirlo al revés
+        lo rechazaría Postgres.
+
+        Los productos van como `actualizar` y no como `insertar`: la venta no
+        los creó, les bajó el inventario y les movió los contadores.
+      */
+      const entradas: EntradaDelLote[] = [
+        ...entradasDe('productos', resueltas.map((linea) => linea.producto.id), 'actualizar'),
+        { tabla: 'ventas', id: venta.id, operacion: 'insertar' },
+        ...entradasDe('venta_detalle', idsDeDetalle, 'insertar'),
+        ...entradasDe('auditoria_log', idsDeAuditoria, 'insertar'),
+      ];
+      encolarLote(this.base, entradas);
 
       return {
         venta,

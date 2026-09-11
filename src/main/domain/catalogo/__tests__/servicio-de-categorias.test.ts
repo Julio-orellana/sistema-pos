@@ -28,6 +28,7 @@ beforeEach(() => {
   repos = crearRepositorios(base);
 
   servicio = new ServicioDeCategorias({
+    base,
     categorias: repos.categorias,
     auditoria: repos.auditoria,
   });

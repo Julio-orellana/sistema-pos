@@ -56,6 +56,7 @@ beforeEach(() => {
   reloj = HOY_TARDE;
 
   const caja = new ServicioDeCaja({
+    base,
     cajaSesiones: repos.cajaSesiones,
     denominaciones: repos.denominaciones,
     desglose: repos.desgloseDeCaja,

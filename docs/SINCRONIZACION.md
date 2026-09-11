@@ -1,10 +1,26 @@
 # Sincronización con la nube — documento de diseño
 
-> **ESTADO: DISEÑO, PENDIENTE DE REVISIÓN. NO HAY NADA IMPLEMENTADO.**
-> Este documento existe para que Julio lo revise antes de autorizar una sola
-> línea de código. Ninguna sección de abajo describe algo que ya funcione;
-> describe lo que se propone construir y por qué. Cuando algo no tiene una
-> respuesta sólida, lo dice, en la sección 8.
+> **ESTADO: APROBADO, EN IMPLEMENTACIÓN POR FASES. Aprobado por Julio el
+> 2026-09-11.**
+>
+> Las 17 decisiones de la sección 7 quedan adoptadas con la recomendación del
+> documento, salvo dos:
+>
+> - **Decisión 10** (`traerCambios` en `SyncProvider`): se resuelve
+>   **retirando el método de la interfaz**. Va en la fase 1.b, no antes.
+> - **Decisión 11**: queda **abierta hasta medir en hardware real** (fase 3).
+>   Ningún número de rendimiento de este documento se da por bueno hasta
+>   entonces.
+>
+> **Qué está implementado hoy, y qué no.** Este documento sigue describiendo el
+> diseño completo, no el estado del código. Lo único construido es la **fase
+> 1.a**: la migración `018_sync_cola_lotes` y la **bandeja de salida
+> transaccional** de la sección 2.4, que llena `sync_cola` dentro de la misma
+> transacción de cada operación de negocio. **Nada la lee todavía**: no hay
+> trabajador de sincronización, ni `SyncProvider` real, ni credenciales, ni
+> detección de conexión, ni una sola política de RLS en Supabase. Cada sección
+> de abajo que describa algo que corra —subir, reintentar, resolver
+> conflictos, restaurar— describe una fase futura.
 
 ## 0. Qué se leyó para escribir esto, y qué se encontró de entrada
 

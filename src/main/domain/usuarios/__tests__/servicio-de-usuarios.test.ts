@@ -50,6 +50,7 @@ beforeEach(() => {
   repos = crearRepositorios(base);
 
   usuarios = new ServicioDeUsuarios({
+    base,
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
   });

@@ -94,6 +94,7 @@ beforeEach(() => {
   repos = crearRepositorios(base);
 
   caja = new ServicioDeCaja({
+    base,
     cajaSesiones: repos.cajaSesiones,
     denominaciones: repos.denominaciones,
     desglose: repos.desgloseDeCaja,

@@ -60,6 +60,7 @@ beforeEach(() => {
   elPdfFalla = false;
 
   caja = new ServicioDeCaja({
+    base,
     cajaSesiones: repos.cajaSesiones,
     denominaciones: repos.denominaciones,
     desglose: repos.desgloseDeCaja,
@@ -77,6 +78,7 @@ beforeEach(() => {
     auditoria: repos.auditoria,
   });
   recibos = new ServicioDeRecibos({
+    base,
     ventas: repos.ventas,
     ventaDetalle: repos.ventaDetalle,
     recibos: repos.recibos,
@@ -549,6 +551,7 @@ describe('La venta sobrevive a cualquier problema de impresión', () => {
   /** El servicio de recibos con la impresora indicada. */
   function conImpresora(impresora: typeof impresoraRota): ServicioDeRecibos {
     return new ServicioDeRecibos({
+      base,
       ventas: repos.ventas,
       ventaDetalle: repos.ventaDetalle,
       recibos: repos.recibos,
