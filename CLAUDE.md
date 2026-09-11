@@ -2355,6 +2355,13 @@ negocio:
   implementación segura por defecto intacta: sin `impresora.json` configurado se
   usa `NullPrinterProvider` y el recibo queda solo en PDF. No hay adaptador real
   de Supabase: ahí sigue solo el contrato y la implementación simulada.
+- **La sincronización con la nube NO existe. Existe su DISEÑO**, en
+  `docs/SINCRONIZACION.md` (Prompt 28), **pendiente de revisión de Julio antes
+  de implementar nada**. `sync_cola` y `ventas.estado_sincronizacion` están en
+  el esquema desde el Prompt 5 pero **nadie los escribe fuera de las pruebas**:
+  son andamiaje sin conectar. El diseño además encontró cinco inconsistencias
+  entre lo documentado y lo que existe (sección 0 de ese documento), que hay que
+  resolver antes o durante la implementación.
 
 ## 8. Comandos
 
@@ -2429,6 +2436,7 @@ src/shared/     código compartido main <-> renderer
   __tests__/    pruebas automatizadas
 supabase/       espejo del esquema en Postgres (migraciones para la nube)
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
+  SINCRONIZACION.md  diseño de la sincronización con la nube. SOLO DISEÑO, pendiente de revisión
 ```
 
 ## 10. Antes de cerrar cualquier sesión de trabajo
