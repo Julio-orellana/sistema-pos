@@ -149,9 +149,16 @@ export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): 
     La forma correcta con estos datos es: las líneas suman el TOTAL, y el
     descuento se informa como lo que es, un dato de la venta, no un paso de la
     resta. El monto rebajado sigue a la vista, y también quién lo autorizó.
+
+    LA ACLARACIÓN SE CONSERVA, aunque desde que el precio unitario impreso es
+    el EFECTIVO cada renglón ya multiplica solo. Se conserva por dos cosas que
+    la aritmética de la línea no dice: que el renglón «Descuento -1.63» es un
+    DATO y no un paso más de resta sobre el TOTAL de abajo —sin la aclaración,
+    quien lo lea va a intentar restarlo otra vez—, y que el precio unitario que
+    ve no es el precio de lista del producto. Cuesta un renglón de papel.
   */
   if (modelo.descuento !== null) {
-    lineas.push(centrado('Los importes ya incluyen el descuento.', ancho));
+    lineas.push(centrado('Precios e importes ya incluyen el descuento.', ancho));
     lineas.push(
       aDosColumnas(`Descuento ${modelo.descuento.descripcion}`, `-${modelo.descuento.rebaja}`, ancho),
     );
@@ -229,7 +236,7 @@ export function reciboComoHtml(modelo: ModeloDeRecibo): string {
       ? ''
       : `
       <tr>
-        <td colspan="2" class="aclaracion">Los importes ya incluyen el descuento.</td>
+        <td colspan="2" class="aclaracion">Precios e importes ya incluyen el descuento.</td>
       </tr>
       <tr>
         <td>Descuento ${escapar(modelo.descuento.descripcion)}</td>

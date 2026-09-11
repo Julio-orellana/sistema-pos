@@ -28,7 +28,7 @@
 
 import type Decimal from 'decimal.js';
 
-import { montoACadena, restar } from '@shared/money';
+import { dividir, montoACadena, redondearMonto, restar } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
 import type {
   ConfiguracionNegocio,
@@ -76,7 +76,14 @@ export interface LineaDeRecibo {
   /** Cantidad legible, sin ceros decorativos: «2» y no «2.000». */
   readonly cantidad: string;
   readonly unidad: string;
-  /** Precio unitario congelado al momento de vender. */
+  /**
+   * El precio unitario que SE IMPRIME.
+   *
+   * Sin descuento es `precio_unitario_snap` tal cual. Con descuento es el
+   * precio EFECTIVO —`subtotal_impreso ÷ cantidad`, redondeado a dos
+   * decimales—, para que la línea multiplique de verdad. Es un valor de
+   * PRESENTACIÓN y no se guarda en ningún lado. Ver `precioParaImprimir`.
+   */
   readonly precioUnitario: string;
   /** El importe que sale impreso. Su suma es EXACTAMENTE el total. */
   readonly subtotal: string;
@@ -161,6 +168,44 @@ export function describirDescuento(tipo: TipoValor, valor: Decimal): string {
   return `Q${montoACadena(valor)}`;
 }
 
+/**
+ * El precio unitario que sale impreso. **Es presentación, no dato.**
+ *
+ * SIN DESCUENTO se imprime `precio_unitario_snap` tal cual, porque ahí
+ * `cantidad × precio` ya da el importe de la línea y no hace falta calcular
+ * nada.
+ *
+ * CON DESCUENTO no se puede: `subtotal_impreso` es la parte que le toca a la
+ * línea del total YA DESCONTADO, así que imprimir el precio de lista daría un
+ * renglón que no multiplica —«2 lb × 8.00» al lado de «14.80»— y un recibo que
+ * el cliente no puede verificar de cabeza. Se imprime entonces el precio
+ * EFECTIVO: `subtotal_impreso ÷ cantidad`.
+ *
+ * NO SE GUARDA EN NINGÚN LADO. `venta_detalle.precio_unitario_snap` sigue
+ * siendo la foto del precio al momento de vender, que es el dato del negocio:
+ * lo que el producto costaba. Este número solo existe mientras se dibuja el
+ * papel.
+ *
+ * > **EL MARGEN, DICHO EN VOZ ALTA.** El precio impreso lleva dos decimales,
+ * > así que `cantidad × precio_impreso` puede diferir del importe hasta en
+ * > **medio centavo por unidad**. Con 2 lb es medio centavo y no se nota; con
+ * > **100 lb de maíz puede llegar a Q0.50**, y ahí sí se ve en el papel. Es el
+ * > precio inevitable de imprimir un unitario de dos decimales, y aun así es
+ * > mucho menos que la diferencia que había antes —Q1.20 en una venta de Q20—.
+ * > La prueba «el renglón multiplica» fija esa cota y la deja medida.
+ */
+export function precioParaImprimir(
+  precioSnap: Decimal,
+  cantidad: Decimal,
+  subtotalImpreso: Decimal,
+  hayDescuento: boolean,
+): Decimal {
+  if (!hayDescuento || cantidad.isZero()) {
+    return redondearMonto(precioSnap);
+  }
+  return redondearMonto(dividir(subtotalImpreso, cantidad));
+}
+
 /** Fecha y hora de Guatemala, para el papel que se entrega en el mostrador. */
 function fechaYHora(iso: string): { readonly fecha: string; readonly hora: string } {
   const momento = new Date(iso);
@@ -214,6 +259,8 @@ export function armarModeloDeRecibo(
   const configuracion: ConfiguracionNegocio = dependencias.configuracion.obtener();
   const { fecha, hora } = fechaYHora(venta.fecha);
 
+  const hayDescuento = venta.descuentoTipo !== null && venta.descuentoValor !== null;
+
   const lineas: LineaDeRecibo[] = dependencias.ventaDetalle
     .listarPorVenta(venta.id)
     .map((linea) => ({
@@ -221,7 +268,9 @@ export function armarModeloDeRecibo(
       producto: linea.productoNombreSnap,
       cantidad: cantidadLegible(linea.cantidad),
       unidad: linea.unidadSnap,
-      precioUnitario: montoACadena(linea.precioUnitarioSnap),
+      precioUnitario: montoACadena(
+        precioParaImprimir(linea.precioUnitarioSnap, linea.cantidad, linea.subtotalImpreso, hayDescuento),
+      ),
       // El valor CONCILIADO, no el exacto: es el que suma exactamente el total.
       subtotal: montoACadena(linea.subtotalImpreso),
     }));

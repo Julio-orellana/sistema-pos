@@ -1588,13 +1588,63 @@ imprimía «Subtotal / Descuento / Total» encima de esas líneas y salía un pa
 donde 14.80 + 5.32 no daba 21.75 y nadie podía cuadrarlo.
 
 La forma correcta con estos datos: las líneas suman el TOTAL, y el descuento se
-informa como dato de la venta, no como paso de una resta. El papel dice «Los
-importes ya incluyen el descuento», el monto rebajado y quién lo autorizó. Hay
+informa como dato de la venta, no como paso de una resta. El papel dice «Precios
+e importes ya incluyen el descuento», el monto rebajado y quién lo autorizó. Hay
 una prueba que suma las líneas y exige que den el total.
 
 **Quién autorizó el descuento va EN EL PAPEL**, no solo en la auditoría: es la
 única copia que se lleva el cliente, y un descuento sin responsable visible es
 justo lo que el flujo de PIN existe para evitar.
+
+#### CON DESCUENTO, el precio unitario impreso es el EFECTIVO
+
+Es la segunda mitad del arreglo anterior, y cierra el renglón que todavía no
+cuadraba. Las líneas ya sumaban el total, pero **cada renglón por separado
+seguía sin multiplicar**: al lado de un importe ya descontado salía el precio de
+LISTA, así que el papel decía «0.333 lb x 6.69» junto a «2.06» y el cliente no
+podía verificar su propia compra de cabeza.
+
+| Caso | Qué se imprime en la columna de precio |
+|---|---|
+| La venta **no** tiene descuento | `precio_unitario_snap` tal cual. Ahí `cantidad × precio` ya da el importe y no hay nada que calcular. |
+| La venta **sí** tiene descuento | El precio EFECTIVO: `subtotal_impreso ÷ cantidad`, redondeado a dos decimales. |
+
+**ES PURAMENTE DE PRESENTACIÓN.** `venta_detalle.precio_unitario_snap` no
+cambia: sigue siendo la foto del precio al momento de vender, que es el dato del
+negocio —lo que el producto costaba—. El precio efectivo no se guarda en ningún
+lado y solo existe mientras se dibuja el papel. Vive en `precioParaImprimir`, en
+`modelo-de-recibo.ts`, y hay una prueba que comprueba que la fila guardada
+conserva el precio de lista.
+
+**LA DERIVACIÓN VA EN UN SOLO SENTIDO Y NO SE PUEDE INVERTIR.** El precio
+impreso sale del importe, nunca el importe del precio impreso. Al revés, las
+líneas dejarían de sumar exactamente el total y se perdería «el total manda» del
+§5, que es la regla más cara de este proyecto. Hay una prueba que vuelve a sumar
+las líneas justamente para que cualquier inversión futura se caiga ahí.
+
+> **EL MARGEN, DICHO EN VOZ ALTA.** Un unitario de dos decimales hace que
+> `cantidad × precio impreso` pueda diferir del importe hasta en **medio centavo
+> por unidad**: con 0.333 lb es invisible, con **100 lb de maíz llega a Q0.50** y
+> ahí sí se ve. Es el costo inevitable de imprimir un precio redondeado, y aun
+> así es mucho menos que la diferencia anterior —Q1.20 en una venta de Q20—. Dos
+> pruebas fijan esa cota, una de ellas con 100 libras a propósito.
+
+#### La aclaración «Precios e importes ya incluyen el descuento» SE CONSERVA
+
+Con el precio efectivo, la aritmética del renglón ya se explica sola y la nota
+dejó de ser necesaria para eso. **Se conserva igual**, y se le corrigió el texto
+—antes decía solo «Los importes…»— porque ahora el precio también viene
+descontado. Sigue haciendo falta por dos cosas que la multiplicación de la línea
+no dice:
+
+1. **Que el renglón «Descuento −1.63» es un DATO, no un paso de resta.** Está
+   arriba del TOTAL pero ya está aplicado en él. Sin la nota, quien lea el papel
+   va a intentar restarlo otra vez y le va a dar un número que no existe.
+2. **Que el precio unitario que ve no es el precio de lista del producto.** Un
+   cliente que sabe que el maíz está a Q6.69 y lee Q6.19 merece la explicación
+   en el mismo papel, no una discusión en el mostrador.
+
+Cuesta un renglón de papel. Quitarla ahorraría eso y abriría las dos confusiones.
 
 #### El PDF sale de Chromium, no de una librería nueva
 
@@ -1615,6 +1665,53 @@ del mismo archivo.** `pdf_path` es una sola columna y tiene que apuntar siempre 
 un PDF vigente. La contrapartida está aceptada y es la que se pidió: el archivo
 refleja la configuración de HOY, de modo que un recibo emitido antes de cargar
 los datos de la tienda deja de mostrar marcadores al reimprimirse.
+
+##### DECIDIDO: los datos del negocio NO se congelan por venta
+
+La pregunta es legítima y hay que dejar escrito por qué se decidió así, no solo
+qué se decidió. **Una reimpresión refleja SIEMPRE los datos vigentes de
+`configuracion_negocio`** —el comportamiento actual— y **no** se guarda un
+snapshot al momento de cada venta como sí se hace con el nombre y el precio del
+producto. **No se implementa el snapshot.**
+
+**No son la misma clase de dato, y por eso no heredan la regla del producto.**
+El nombre y el precio del producto se congelan porque son **términos de la
+operación**: es lo que el cliente aceptó pagar, y cambiarlos retroactivamente
+cambia lo que el documento dice que se acordó. El nombre, la dirección, el
+teléfono y el NIT dicen **quién emitió el papel**, no qué se acordó en él.
+Aplicarles la regla del producto sería copiarla sin el motivo que la justifica,
+que es el mismo error que este proyecto ya evitó al no copiar el patrón TEXT de
+SQLite a Postgres (§5).
+
+**Hoy el argumento apunta con fuerza en contra del snapshot.** Los cuatro campos
+están en `NULL` porque los datos de Jimmy todavía no llegaron, así que todo
+recibo emitido antes de cargarlos sale con marcadores entre corchetes. Con
+snapshot, esos recibos quedarían **con los marcadores congelados para siempre**,
+y reimprimir una venta de la primera semana daría un papel peor de lo necesario.
+Sin snapshot se reparan solos el día que se carguen los datos. Ese beneficio es
+concreto y está disponible ahora; el del snapshot es hipotético.
+
+**Y el dato cambia casi nunca.** El NIT de un contribuyente prácticamente no
+cambia, la dirección cambia si la tienda se muda y el teléfono rara vez. La
+ventana en la que un snapshot cambiaría algo es mínima.
+
+> **CUÁNDO SÍ HABRÍA QUE REVISARLO, dicho en voz alta para no esconderlo.** Si
+> el NIT o el nombre comercial cambiaran por una razón **legal** —cambio de
+> contribuyente, cambio de razón social—, una reimpresión de una venta vieja
+> mostraría como emisor a alguien que no la emitió, y **eso sí es un problema de
+> auditoría**. Hoy la exposición está acotada porque el papel dice de frente
+> «Proforma, no válido como factura fiscal» y no se sostiene como evidencia
+> fiscal de quién emitió. **Esta decisión se revisa el día que se resuelva el
+> punto 2 de §6.2** (si la tienda emite factura fiscal FEL/SAT) y el día que
+> cambie el NIT o el nombre comercial. Nótese además que una vez cargados los
+> datos reales, el argumento de los marcadores se agota y el balance se corre un
+> poco hacia el snapshot: no es una decisión permanente, es la correcta hoy.
+
+**Implementarlo después no está bloqueado por nada de lo que hay hoy**, y esa es
+parte de la razón para no hacerlo ahora: serían cuatro columnas nulables en
+`ventas` —o una tabla `ventas_negocio_snap`— llenadas dentro de la transacción
+de la venta, y el recibo preferiría el snapshot con respaldo en la fila vigente
+para las ventas anteriores. Ningún dato se pierde mientras tanto.
 
 #### El recibo se emite DESPUÉS de la transacción, nunca adentro
 
@@ -1759,7 +1856,10 @@ dejaría de ser inmediato.
 | **`configuracion_negocio` es una tabla de FILA ÚNICA con `id = 'unica'`, y rompe a propósito la regla de UUID en el cliente.** Sus cuatro campos son nulables. | Un UUID como el resto de las tablas; guardar los datos en un archivo de configuración; exigir los cuatro campos | La regla de UUID existe porque dos filas creadas sin internet en máquinas distintas colisionarían al subir, y acá la colisión es justamente lo que se busca: la configuración del negocio es UNA, y si dos terminales la editan tienen que estar hablando de la misma fila. Un archivo no serviría porque esto SÍ es dato de negocio —sale impreso en un documento que se le entrega al cliente— y por lo tanto se espeja en Postgres. Y los cuatro son nulables porque los datos reales de Jimmy todavía no llegaron: obligar a llenarlos impediría cargar lo que sí se sabe. `NULL` es «sin configurar» y el esquema prohíbe la cadena vacía, para que no haya dos formas de estar vacío. Queda anotado que con multi-sucursal esta tabla necesitaría una fila por sucursal (§6.2, punto 10). | Prompt 23 — 2026-09-11 |
 | **Lo que falta configurar sale en el recibo como un marcador ENTRE CORCHETES, nunca en blanco ni con un valor de ejemplo.** | Dejar el renglón vacío; poner un nombre de ejemplo; impedir vender hasta configurar | Un renglón en blanco o un nombre inventado harían que un recibo sin configurar pasara por uno configurado, y el comprobante es lo único que se lleva el cliente. Entre corchetes, quien lo mire sabe de inmediato que falta cargar el dato. Impedir vender era la otra opción y es peor: dejaría la tienda sin poder cobrar por un dato administrativo que se puede cargar después. Es la misma regla que ya rige para los mensajes: no se inventan datos que parezcan confirmados por Jimmy. | Prompt 23 — 2026-09-11 |
 | **El recibo NO recalcula nada: muestra lo guardado. La única cifra derivada es la rebaja, y sale de `subtotal − total`.** | Recalcular el subtotal de cada línea; reaplicar el porcentaje de descuento sobre el subtotal | Todo el cálculo ocurrió una vez, en la transacción de la venta. Si el recibo recalculara, bastaría que una regla cambiara el año que viene para que reimprimir un comprobante viejo diera otro número, y un documento histórico que cambia retroactivamente es lo que una auditoría no tolera. La rebaja se deriva de una resta entre dos valores guardados en vez de reaplicar el porcentaje porque con otro modo de redondeo el porcentaje daría un centavo distinto del que el cliente pagó; la resta no puede discrepar con lo cobrado. | Prompt 23 — 2026-09-11 |
-| **CORREGIDO: el recibo no imprime «Subtotal / Descuento / Total». Las líneas suman el TOTAL y el descuento se informa.** | Dejar el bloque de resta como estaba; mostrar en cada línea su importe antes del descuento | Se descubrió manejando la aplicación real. `subtotal_impreso` es la parte que le toca a cada línea **del total ya descontado** —eso es lo que garantiza «el total manda» del §5—, así que las líneas NO suman el subtotal: el papel decía «Subtotal 21.75» encima de importes que sumaban 20.12 y no había forma de cuadrarlo. Mostrar en cada línea el importe previo al descuento tampoco servía: obligaría a recalcular, y las líneas dejarían de sumar lo que el cliente paga. La salida correcta con estos datos es que las líneas sumen el TOTAL y el descuento se informe como dato de la venta, con su monto y su autorizante, bajo la aclaración «Los importes ya incluyen el descuento». Hay una prueba que suma las líneas y exige que den el total. | Prompt 23 — 2026-09-11 |
+| **CORREGIDO: el recibo no imprime «Subtotal / Descuento / Total». Las líneas suman el TOTAL y el descuento se informa.** | Dejar el bloque de resta como estaba; mostrar en cada línea su importe antes del descuento | Se descubrió manejando la aplicación real. `subtotal_impreso` es la parte que le toca a cada línea **del total ya descontado** —eso es lo que garantiza «el total manda» del §5—, así que las líneas NO suman el subtotal: el papel decía «Subtotal 21.75» encima de importes que sumaban 20.12 y no había forma de cuadrarlo. Mostrar en cada línea el importe previo al descuento tampoco servía: obligaría a recalcular, y las líneas dejarían de sumar lo que el cliente paga. La salida correcta con estos datos es que las líneas sumen el TOTAL y el descuento se informe como dato de la venta, con su monto y su autorizante, bajo la aclaración «Los importes ya incluyen el descuento». Hay una prueba que suma las líneas y exige que den el total. **El renglón individual todavía no multiplicaba; eso lo cierra la fila siguiente, del Prompt 24, que además le corrigió el texto a la aclaración.** | Prompt 23 — 2026-09-11 |
+| **CON DESCUENTO, la columna de precio unitario del recibo imprime el precio EFECTIVO (`subtotal_impreso ÷ cantidad`), no `precio_unitario_snap`. Es presentación: no cambia nada de lo que se guarda.** Sin descuento se sigue imprimiendo el precio de lista tal cual. | Dejar el precio de lista y confiar en la aclaración; imprimir el importe previo al descuento en cada línea; guardar el precio efectivo en `venta_detalle` | Completa la corrección del Prompt 23. Las líneas ya sumaban el total, pero **cada renglón por separado seguía sin multiplicar**: al lado de un importe ya descontado salía el precio de lista, y el papel decía «0.333 lb x 6.69» junto a «2.06». Un recibo que el cliente no puede verificar de cabeza obliga a creerle al sistema, que es lo contrario de lo que un comprobante existe para hacer. Imprimir el importe previo al descuento en cada línea era la otra salida y ya estaba descartada: obligaría a recalcular y las líneas dejarían de sumar lo que el cliente paga. **Guardarlo tampoco**: `precio_unitario_snap` es la foto de lo que el producto COSTABA, un dato del negocio, y pisarlo con un número de presentación destruiría la trazabilidad del cálculo a cambio de nada. Sin descuento no se calcula nada, porque ahí `cantidad × precio` ya da el importe. **La derivación va en un solo sentido:** el precio sale del importe, nunca al revés, o se perdería «el total manda». El costo aceptado es un margen de **medio centavo por unidad** —Q0.50 en 100 libras—, inevitable al imprimir un unitario de dos decimales y mucho menor que la diferencia anterior; dos pruebas lo fijan como cota, una con 100 libras a propósito. | Prompt 24 — 2026-09-11 |
+| **La aclaración del recibo SE CONSERVA, con el texto corregido a «Precios e importes ya incluyen el descuento».** | Quitarla ahora que la aritmética se explica sola; dejarle el texto viejo | Con el precio efectivo, el renglón ya multiplica y la nota dejó de ser necesaria PARA ESO. Sigue haciendo falta por dos cosas que la multiplicación no dice: que el renglón «Descuento −1.63» es un **dato ya aplicado** y no un paso de resta sobre el TOTAL que está debajo —sin la nota, quien lea el papel lo resta otra vez y obtiene un número que no existe—, y que el precio unitario que ve **no es el precio de lista** del producto, cosa que un cliente que conoce el precio del maíz va a notar. Cuesta un renglón de papel y cierra las dos confusiones. El texto se corrigió porque ahora el precio también viene descontado, y decir solo «los importes» habría quedado incompleto justo respecto de lo que cambió. | Prompt 24 — 2026-09-11 |
+| **Una reimpresión refleja SIEMPRE los datos vigentes de `configuracion_negocio`; NO se guarda un snapshot por venta.** Decidido explícitamente, no por omisión. | Congelar los cuatro campos en `ventas` al momento de vender, igual que el nombre y el precio del producto | **No son la misma clase de dato.** El nombre y el precio del producto se congelan porque son **términos de la operación** —lo que el cliente aceptó pagar—, y cambiarlos retroactivamente cambia lo acordado. El nombre, la dirección, el teléfono y el NIT dicen **quién emitió el papel**, no qué se acordó en él: heredarles la regla del producto sería copiarla sin el motivo que la justifica. Hoy el argumento apunta con fuerza en contra del snapshot: los cuatro campos están en `NULL` porque los datos de Jimmy no llegaron, así que con snapshot **los marcadores entre corchetes quedarían congelados para siempre** en todo recibo emitido antes de cargarlos, mientras que sin snapshot se reparan solos ese día. Y el dato cambia casi nunca: el NIT prácticamente no cambia y la dirección solo si la tienda se muda. **La contrapartida se dice en voz alta:** si el NIT o la razón social cambiaran por una razón legal, una reimpresión mostraría como emisor a quien no emitió, y eso sí sería un problema de auditoría; hoy está acotado porque el papel dice de frente que es proforma y no vale como factura fiscal. **Se revisa cuando se resuelva el punto 2 de §6.2** (si la tienda emite FEL/SAT) o si cambia el NIT o el nombre comercial. No se implementa ahora también porque nada lo bloquea después: serían cuatro columnas nulables llenadas en la transacción de la venta, con el recibo prefiriendo el snapshot y respaldándose en la fila vigente para las ventas viejas. | Prompt 24 — 2026-09-11 |
 | **El PDF sale de `printToPDF` de Chromium, no de una librería de PDF.** | `pdfkit`, `jsPDF` u otra librería; generar el recibo como imagen | Electron ya empaqueta Chromium: sumar una librería sería agregar una dependencia y un segundo motor de maquetación para hacer lo mismo. Y maquetar con HTML y CSS deja el recibo legible y ajustable por alguien que no sea programador, mientras que una librería de PDF lo convierte en coordenadas. El HTML se carga por `data:` y no escribiendo un archivo temporal, para que no quede un HTML con los datos de una venta dando vueltas en el disco. La ventana va invisible, sin Node y sin preload: el recibo es contenido, no código. | Prompt 23 — 2026-09-11 |
 | **El recibo se emite DESPUÉS de la transacción de la venta, nunca adentro.** | Emitirlo dentro de la misma transacción, para que venta y recibo sean atómicos | Generar un PDF abre una ventana de Chromium e imprimir habla con un puerto: las dos cosas son lentas y fallan por motivos ajenos a la venta. Adentro, mantendrían abierta una escritura de SQLite esperando a un aparato, y una impresora sin papel revertiría una venta ya cobrada. La consecuencia se asume y se dice en voz alta: si la aplicación se cae entre la venta y el recibo, queda una venta sin recibo, que es recuperable desde el historial e infinitamente preferible a perder la venta. | Prompt 23 — 2026-09-11 |
 | **ESC/POS implementado contra el estándar más común, con la conversión a bytes como función PURA y sin dependencias nativas nuevas.** | Una librería `escpos`/`node-usb`; esperar a tener la impresora para escribir el adaptador; imprimir con el controlador del sistema | El modelo real de Jimmy llega el jueves y no está confirmado, así que se usaron solo los comandos del núcleo del estándar —inicializar, página de códigos, avanzar, corte parcial— y se evitaron los de código de barras, imagen y cajón de dinero, que es donde los fabricantes se apartan. Una librería USB obligaría a recompilar otro módulo nativo para Electron y para Windows para hacer exactamente lo que hace `node:fs`: escribir bytes en un descriptor. Dejar la parte con sustancia como función pura permite probarla byte por byte sin el aparato, y el día que llegue esas pruebas dicen exactamente qué se le está mandando. **Lo que NO está verificado es que ESA impresora los entienda.** | Prompt 23 — 2026-09-11 |
@@ -1828,7 +1928,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | # | Pregunta | Por qué importa | Estado |
 |---|---|---|---|
 | 1 | ¿Qué unidades de medida usa Jimmy y con qué factores de conversión (libra, arroba, quintal, kilogramo)? | Define la lógica de conversión de `src/shared` y cómo se captura el peso en la caja. | Abierto |
-| 2 | ¿La tienda emite factura fiscal (FEL/SAT) o solo recibo y proforma internos? | Cambia por completo el módulo de comprobantes y las obligaciones legales. | Abierto |
+| 2 | ¿La tienda emite factura fiscal (FEL/SAT) o solo recibo y proforma internos? | Cambia por completo el módulo de comprobantes y las obligaciones legales. **Y de esto depende una decisión ya tomada:** que una reimpresión muestre los datos VIGENTES del negocio en vez de un snapshot por venta (§4.14) se sostiene porque el papel dice de frente que es proforma y no vale como factura fiscal. Con facturación fiscal real, el emisor de un comprobante viejo pasa a ser un dato que no puede cambiar retroactivamente, y hay que revisar esa decisión. | Abierto |
 | 3 | ¿El precio de mayoreo se activa por cantidad comprada, por tipo de cliente, o ambos? | Define el modelo de precios del catálogo. | Abierto |
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
 | 5 | ~~¿El PIN de autorización es por usuario administrador o uno solo para la tienda?~~ | — | **RESUELTO (Prompt 10): por usuario.** Cada usuario tiene su PIN con hash scrypt y sal propia; la auditoría registra el `usuario_id` real de quien autorizó. `POS_PIN_ADMINISTRADOR` ya no existe. Ver la sección 4.7. |

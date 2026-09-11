@@ -15,7 +15,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
 
 import { generarHashDePin } from '@shared/auth';
-import { montoACadena, restar, sumarLista } from '@shared/money';
+import {
+  absoluto,
+  esMenorOIgualQue,
+  montoACadena,
+  multiplicar,
+  restar,
+  sumarLista,
+} from '@shared/money';
 import { NullPrinterProvider } from '@shared/adapters';
 import { crearRepositorios, type Repositorios } from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
@@ -178,9 +185,14 @@ describe('El recibo dice exactamente lo que quedó guardado', () => {
       const guardada = guardadas[indice];
       expect(linea.producto).toBe(guardada?.productoNombreSnap);
       expect(linea.unidad).toBe(guardada?.unidadSnap);
-      expect(linea.precioUnitario).toBe(montoACadena(guardada?.precioUnitarioSnap ?? '0'));
       // El IMPRESO, no el exacto: es el que suma exactamente el total.
       expect(linea.subtotal).toBe(montoACadena(guardada?.subtotalImpreso ?? '0'));
+      /*
+        El PRECIO UNITARIO no se compara acá contra `precio_unitario_snap`
+        porque esta venta lleva descuento, y con descuento lo que se imprime es
+        el precio EFECTIVO. Tiene su propio grupo de pruebas más abajo, «El
+        precio unitario impreso: el renglón multiplica».
+      */
     }
   });
 
@@ -252,6 +264,21 @@ describe('El recibo dice exactamente lo que quedó guardado', () => {
     expect(texto).toContain('ya incluyen el descuento');
   });
 
+  it('el precio unitario efectivo sale EN EL PAPEL y EN EL HTML DEL PDF', async () => {
+    const ventaId = ventaConDosCapas();
+    const { modelo } = await recibos.emitir(ventaId);
+
+    const html = pdfEscritos[0]?.html ?? '';
+    const texto = reciboComoTexto(modelo);
+
+    for (const linea of modelo.lineas) {
+      // El renglón entero, no el número suelto: así la prueba falla si el
+      // precio efectivo se calcula bien pero se imprime el de lista.
+      expect(texto).toContain(`${linea.cantidad} ${linea.unidad} x ${linea.precioUnitario}`);
+      expect(html).toContain(`${linea.cantidad} ${linea.unidad} &times; ${linea.precioUnitario}`);
+    }
+  });
+
   it('SIN descuento el papel no trae ninguna aclaración de más', async () => {
     const { modelo } = await recibos.emitir(ventaSimple());
     const texto = reciboComoTexto(modelo);
@@ -300,6 +327,134 @@ describe('El recibo dice exactamente lo que quedó guardado', () => {
 
     const efectivo = await recibos.emitir(ventaSimple());
     expect(reciboComoTexto(efectivo.modelo)).not.toContain('Boleta');
+  });
+});
+
+// ===========================================================================
+describe('El precio unitario impreso: el renglón multiplica', () => {
+  /*
+    QUÉ SE ESTÁ PROTEGIENDO. `subtotal_impreso` es la parte que le toca a cada
+    línea del total YA DESCONTADO. Imprimir al lado el precio de LISTA daba un
+    renglón que no multiplicaba —«0.333 lb x 6.69» junto a «2.06»— y el cliente
+    no podía verificar su propio recibo de cabeza. Con descuento se imprime
+    entonces el precio EFECTIVO, `subtotal_impreso ÷ cantidad`.
+
+    ES PURAMENTE DE PRESENTACIÓN: `venta_detalle.precio_unitario_snap` sigue
+    guardando el precio de lista, y hay una prueba abajo que lo comprueba.
+  */
+
+  it('CON descuento: cantidad × precio unitario impreso da el importe de la línea', async () => {
+    const ventaId = ventaConDosCapas();
+    const { modelo } = await recibos.emitir(ventaId);
+
+    expect(modelo.descuento).not.toBeNull();
+    expect(modelo.lineas.length).toBeGreaterThan(0);
+
+    for (const linea of modelo.lineas) {
+      const multiplicado = multiplicar(linea.cantidad, linea.precioUnitario);
+      const desvio = absoluto(restar(multiplicado, linea.subtotal));
+      /*
+        LA COTA, MEDIDA. El precio impreso lleva dos decimales, así que el
+        producto puede desviarse hasta MEDIO CENTAVO POR UNIDAD: es el margen
+        inevitable de imprimir un unitario redondeado, y no un defecto. Con
+        0.333 lb son tres milésimas de centavo; con 100 lb llega a Q0.50, y por
+        eso la cota se escribe en función de la cantidad y no como un centavo
+        fijo.
+      */
+      const tolerancia = multiplicar(linea.cantidad, '0.005');
+      expect(esMenorOIgualQue(desvio, tolerancia)).toBe(true);
+    }
+  });
+
+  it('CON descuento: el precio impreso NO es el de lista, es el efectivo', async () => {
+    const ventaId = ventaConDosCapas();
+    const { modelo } = await recibos.emitir(ventaId);
+    const guardadas = repos.ventaDetalle.listarPorVenta(ventaId);
+
+    for (const [indice, linea] of modelo.lineas.entries()) {
+      const guardada = guardadas[indice];
+      expect(linea.precioUnitario).not.toBe(montoACadena(guardada?.precioUnitarioSnap ?? '0'));
+    }
+  });
+
+  it('SIN descuento: el precio impreso es precio_unitario_snap tal cual', async () => {
+    const ventaId = ventaSimple();
+    const { modelo } = await recibos.emitir(ventaId);
+    const guardadas = repos.ventaDetalle.listarPorVenta(ventaId);
+
+    expect(modelo.descuento).toBeNull();
+    for (const [indice, linea] of modelo.lineas.entries()) {
+      expect(linea.precioUnitario).toBe(montoACadena(guardadas[indice]?.precioUnitarioSnap ?? '0'));
+    }
+  });
+
+  it('NO CAMBIA LO GUARDADO: venta_detalle conserva el precio de LISTA', async () => {
+    /*
+      Es la mitad de la regla que más fácil se rompe sin querer. El precio
+      efectivo es un número que solo existe mientras se dibuja el papel; lo que
+      queda en la base tiene que seguir siendo la foto del precio al momento de
+      vender, porque ese es el dato del negocio: lo que el producto costaba.
+    */
+    const ventaId = ventaConDosCapas();
+    await recibos.emitir(ventaId);
+
+    const guardadas = repos.ventaDetalle.listarPorVenta(ventaId);
+    const maiz = guardadas.find((linea) => linea.productoId === idMaiz);
+    // 6.69 de lista, menos el 15 % del precio especial: 5.6865, sin tocar por
+    // el descuento discrecional, que se aplica sobre el total de la venta.
+    expect(montoACadena(maiz?.precioUnitarioSnap ?? '0')).toBe('5.69');
+  });
+
+  it('EL PAPEL SIGUE CUADRANDO: los importes suman exactamente el total', async () => {
+    /*
+      La prueba que ya existía, repetida acá a propósito: el precio unitario
+      efectivo se deriva de `subtotal_impreso`, nunca al revés. Si algún día
+      alguien invirtiera la derivación —recalculando el importe a partir del
+      precio impreso— las líneas dejarían de sumar el total y esta prueba lo
+      diría.
+    */
+    const ventaId = ventaConDosCapas();
+    const { modelo } = await recibos.emitir(ventaId);
+
+    const suma = sumarLista(modelo.lineas.map((linea) => linea.subtotal));
+    expect(montoACadena(suma)).toBe(modelo.total);
+    expect(reciboComoTexto(modelo)).toContain(modelo.total);
+  });
+
+  it('CON MUCHA CANTIDAD el desvío sigue acotado a medio centavo por unidad', async () => {
+    /*
+      El caso donde el margen se ve en el papel: 100 libras de maíz. La cota es
+      Q0.50 y hay que poder afirmarla, no suponerla.
+    */
+    repos.limitesDescuento.fijar({
+      rol: 'venta',
+      descuentoMaxPorcentaje: '10',
+      descuentoMaxMontoFijo: '50',
+      editadoPor: idJimmy,
+    });
+    const ventaId = venta.registrar(idCajera, 'venta', {
+      lineas: [
+        { productoId: idMaiz, cantidad: '100' },
+        { productoId: idFrijol, cantidad: '0.777' },
+      ],
+      descuento: { tipo: 'porcentaje', valor: '7.5' },
+      formaPago: 'efectivo',
+      numBoleta: null,
+    }).venta.id;
+
+    const { modelo } = await recibos.emitir(ventaId);
+
+    for (const linea of modelo.lineas) {
+      const desvio = absoluto(
+        restar(multiplicar(linea.cantidad, linea.precioUnitario), linea.subtotal),
+      );
+      expect(esMenorOIgualQue(desvio, multiplicar(linea.cantidad, '0.005'))).toBe(true);
+    }
+    // Y aun con ese margen por línea, la suma de los importes da el total
+    // exacto, porque los importes no se derivan del precio impreso.
+    expect(montoACadena(sumarLista(modelo.lineas.map((linea) => linea.subtotal)))).toBe(
+      modelo.total,
+    );
   });
 });
 
