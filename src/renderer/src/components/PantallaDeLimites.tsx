@@ -158,10 +158,19 @@ export function PantallaDeLimites({
                   {limite.porcentaje} % · hasta Q{limite.montoFijo}
                   {limite.configurado ? '' : ' · sin configurar (tope cero)'}
                 </span>
+                {/*
+                  TRES ESTADOS DISTINTOS, no dos. «Sin fila» y «fila sembrada
+                  por el guion» comparten `editadoPor === null` pero no
+                  significan lo mismo: decirle «sembrado por el guion» a un rol
+                  que nunca se configuró sería afirmar que alguien corrió algo
+                  que nadie corrió. Se descubrió mirando la pantalla real.
+                */}
                 <span className="lista__detalle">
-                  {limite.editadoPor === null
-                    ? 'Sembrado por el guion de desarrollo, sin responsable'
-                    : `Última vez: ${limite.editadoPor}`}
+                  {!limite.configurado
+                    ? 'Todavía no lo configuró nadie'
+                    : limite.editadoPor === null
+                      ? 'Sembrado por el guion de desarrollo, sin responsable'
+                      : `Última vez: ${limite.editadoPor}`}
                 </span>
               </span>
               <span className="lista__acciones">

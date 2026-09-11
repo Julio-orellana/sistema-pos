@@ -586,6 +586,14 @@ button:disabled {
   border: 1px solid var(--borde);
   border-radius: 8px;
   background: var(--fondo);
+  /* EL COLOR VA EXPLÍCITO, y se descubrió manejando la aplicación real. La
+     regla base de `button` usa `color: #052e16`, un verde casi negro pensado
+     para leerse sobre el fondo de acento. Al usar `.opcion` en un `<button>`
+     —el selector de período de los reportes— se heredaba ese color sobre el
+     fondo oscuro y el texto quedaba prácticamente invisible. Sobre un `<label>`
+     nunca se notó porque las etiquetas heredan el color del cuerpo.
+     Cualquier clase que cambie el fondo de un botón tiene que fijar su color. */
+  color: var(--texto);
   cursor: pointer;
 }
 
@@ -1513,11 +1521,12 @@ button:disabled {
 }
 .solapa--activa {
   border-color: var(--acento);
-  background: var(--acento-suave, var(--fondo));
+  color: var(--acento);
   font-weight: 600;
 }
 .opcion--activa {
   border-color: var(--acento);
+  color: var(--acento);
   font-weight: 600;
 }
 .reporte__titulo {
