@@ -329,14 +329,15 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via` |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria` |
 | Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única) y 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio` y la de `descuento_autorizado_via`) |
 | Plan | gratuito |
 
 Estado verificado contra el catálogo del proyecto, no contra el script, el
-2026-09-11: **13 tablas**, RLS activo en las 13 sin políticas (deniega todo),
-26 índices propios, 15 llaves foráneas y el trigger
-`auditoria_log_prohibir_cambios`. La número 13 es `configuracion_negocio`, que
+2026-09-11 **después de la fase 2.a**: **13 tablas**, **127 columnas**, RLS
+activo en las 13 sin políticas (deniega todo), 49 índices, **50 restricciones
+CHECK**, 15 llaves foráneas y **13 triggers**: el viejo
+`auditoria_log_prohibir_cambios` más los doce de `recibido_en`. La número 13 es `configuracion_negocio`, que
 además sumó sus seis restricciones CHECK propias a las 46 que ya había. Los índices y las llaves foráneas subieron
 respecto de lo que decía antes esta sección (24 y 14): los agregaron las
 migraciones `0010` y `0012` del corte de caja, y el número no se había
@@ -359,9 +360,19 @@ ella.
 
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE.**
 
-La última fue `0017_descuento_autorizado_via`, el 2026-09-11, por la vía de
-siempre: SQL completo a la vista, aprobación explícita de Julio y evidencia
-consultada después contra el catálogo del proyecto.
+Las últimas fueron las **cuatro de la fase 2.a de la sincronización**, el
+2026-09-11: `0019_recibido_en`, `0020_quitar_estado_sincronizacion`,
+`0021_quitar_hashes_de_pin` y `0022_fijar_search_path_auditoria`. Son las
+primeras migraciones del proyecto que **solo existen del lado de la nube**, y
+las primeras que **quitan** columnas. Ver §4.19.
+
+Se aplicaron por una vía más estricta que de costumbre: **primero contra
+`pos-pruebas-descartable`**, un proyecto creado ese día justamente para eso
+(§9.5 del diseño), después el SQL completo a la vista, y recién con la
+aprobación explícita de Julio contra el real.
+
+Antes de ellas, la `0017_descuento_autorizado_via`, también el 2026-09-11, por
+la vía de siempre.
 
 - `ventas` pasó de 15 a **16 columnas**. `descuento_autorizado_via` quedó `text`
   nulable, sin `DEFAULT`, con su `COMMENT`, leído de `information_schema.columns`.

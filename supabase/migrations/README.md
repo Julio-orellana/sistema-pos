@@ -171,20 +171,41 @@ número que use queda reservado también del lado local.
 | `0016_configuracion_negocio.sql` | Sí — aplicada el 2026-09-11 |
 | `0017_descuento_autorizado_via.sql` | Sí — aplicada el 2026-09-11 |
 | *(no hay 0018: ver la sección anterior)* | — |
-| `0019_recibido_en.sql` | **No — PENDIENTE de aprobación** |
-| `0020_quitar_estado_sincronizacion.sql` | **No — PENDIENTE de aprobación** |
-| `0021_quitar_hashes_de_pin.sql` | **No — PENDIENTE de aprobación** |
-| `0022_fijar_search_path_auditoria.sql` | Sí, **desde el 2026-09-05 pero sin archivo**; el archivo se escribió el 2026-09-11 y es idempotente |
+| `0019_recibido_en.sql` | Sí — aplicada el 2026-09-11 |
+| `0020_quitar_estado_sincronizacion.sql` | Sí — aplicada el 2026-09-11 |
+| `0021_quitar_hashes_de_pin.sql` | Sí — aplicada el 2026-09-11 |
+| `0022_fijar_search_path_auditoria.sql` | Sí — el CAMBIO estaba desde el 2026-09-05; el archivo se escribió y se aplicó el 2026-09-11, y fue un no-op comprobado |
 
-**QUEDAN TRES MIGRACIONES PENDIENTES**, las tres de la fase 2.a de la
-sincronización y las tres escritas pero **sin aplicar en ningún proyecto**. Se
-aplican como todas: primero contra `pos-pruebas-descartable`, después el SQL
-completo a la vista, y recién con la aprobación explícita de Julio contra
-`pos-jimmy-cano`.
+**No queda ninguna migración pendiente de aplicar en la nube.** Las cuatro
+últimas son las de la fase 2.a, aplicadas el 2026-09-11 por la vía de siempre:
+primero contra `pos-pruebas-descartable`, después el SQL completo a la vista, y
+recién con la aprobación explícita de Julio contra `pos-jimmy-cano`.
 
-**Son las primeras que solo existen de este lado.** Dos de ellas QUITAN
-columnas, que es una operación que este proyecto no había hecho nunca en la
-nube, y por eso el orden de trabajo es más estricto que de costumbre.
+**Fueron las primeras que solo existen de este lado, y las primeras que QUITAN
+columnas.** Antes de quitarlas se contó qué había: `usuarios` tenía **0 filas**,
+así que no se destruyó ni un hash. Las tres sentencias `DROP COLUMN` pasaron
+**sin `CASCADE`**, que es la prueba de que nada dependía de esas columnas.
+
+Estado del catálogo real después de aplicarlas, leído de él y no del archivo:
+
+| | Antes | Después | Por qué |
+|---|---|---|---|
+| Tablas | 13 | 13 | — |
+| Columnas | 118 | **127** | +12 de `recibido_en`, −3 quitadas |
+| Índices | 49 | 49 | — |
+| CHECK | 52 | **50** | −1 de `pin_hash`, −1 de `estado_sincronizacion` |
+| Foráneas | 15 | 15 | — |
+| Triggers | 1 | **13** | +12 de `recibido_en` |
+| Con RLS / políticas | 13 / 0 | 13 / 0 | — |
+
+La huella md5 de todas las columnas con su tipo y nulabilidad da
+`d85af488732d5874cd87844d2039713d` **en los dos proyectos**: los esquemas son
+idénticos columna por columna.
+
+El linter de seguridad sigue reportando lo mismo que antes: 13 avisos INFO de
+`rls_enabled_no_policy`, que son el estado buscado, y los dos WARN de
+`rls_auto_enable`, ajenos a este esquema. **`fijar_recibido_en` no aparece**,
+porque es `SECURITY INVOKER`.
 
 ### Estado en `pos-pruebas-descartable` (referencia `ztidrshifrblhfraiowg`)
 
