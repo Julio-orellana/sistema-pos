@@ -1037,6 +1037,14 @@ describe('La autorización de un descuento va SIEMPRE con su vía, o no va', () 
       );
   }
 
+  it('la restricción tiene NOMBRE, así que el error dice cuál falló', () => {
+    // Sin nombre, el mensaje solo diría que falló algún CHECK de `ventas`, que
+    // tiene varios, y `errores.ts` no podría traducirlo a un mensaje de negocio.
+    expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, null); }).toThrow(
+      /CHECK constraint failed: ventas_autorizacion_de_descuento_coherente/,
+    );
+  });
+
   it('los dos llenos con vía PRESENCIAL se aceptan', () => {
     expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, 'presencial'); }).not.toThrow();
   });
@@ -1051,26 +1059,26 @@ describe('La autorización de un descuento va SIEMPRE con su vía, o no va', () 
 
   it('RECHAZA una vía sin autorizante', () => {
     expect(() => { insertarVentaConDescuento(null, 'remoto'); }).toThrow(
-      /CHECK constraint failed/,
+      /ventas_autorizacion_de_descuento_coherente/,
     );
   });
 
   it('RECHAZA un autorizante sin vía', () => {
     // Es la mitad que la forma de la migración 007 dejaba pasar.
     expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, null); }).toThrow(
-      /CHECK constraint failed/,
+      /ventas_autorizacion_de_descuento_coherente/,
     );
   });
 
   it('RECHAZA una vía que no es ninguna de las dos', () => {
     expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, 'telepatia'); }).toThrow(
-      /CHECK constraint failed/,
+      /ventas_autorizacion_de_descuento_coherente/,
     );
   });
 
   it('RECHAZA una vía en cadena vacía, que no es lo mismo que sin vía', () => {
     expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, ''); }).toThrow(
-      /CHECK constraint failed/,
+      /ventas_autorizacion_de_descuento_coherente/,
     );
   });
 
@@ -1083,13 +1091,13 @@ describe('La autorización de un descuento va SIEMPRE con su vía, o no va', () 
       base
         .prepare('UPDATE ventas SET descuento_autorizado_via = NULL WHERE id = ?')
         .run(IDS_DE_PRUEBA.venta);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/ventas_autorizacion_de_descuento_coherente/);
 
     expect(() => {
       base
         .prepare('UPDATE ventas SET descuento_autorizado_por = NULL WHERE id = ?')
         .run(IDS_DE_PRUEBA.venta);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/ventas_autorizacion_de_descuento_coherente/);
   });
 
   it('una venta SIN descuento tampoco puede traer vía', () => {

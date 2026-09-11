@@ -54,6 +54,9 @@
 --   RECHAZA  vía en cadena vacía
 --   RECHAZA  los dos UPDATE que romperían el par
 --
+-- La restricción lleva NOMBRE, igual que su espejo de Postgres, para que el
+-- error diga cuál falló y no solo que falló alguno.
+--
 -- ---------------------------------------------------------------------------
 -- POR QUÉ ESTE `ALTER TABLE` ES SEGURO EN UNA TIENDA YA INSTALADA
 -- ---------------------------------------------------------------------------
@@ -74,6 +77,12 @@
 
 ALTER TABLE ventas
   ADD COLUMN descuento_autorizado_via TEXT
+    -- LLEVA NOMBRE, y el mismo que en Postgres. Se midió que SQLite acepta un
+    -- `CONSTRAINT ... CHECK` dentro de un `ADD COLUMN` y que el error lo nombra:
+    -- «CHECK constraint failed: ventas_autorizacion_de_descuento_coherente».
+    -- Sin nombre, el mensaje no dice cuál de los CHECK de `ventas` falló, y
+    -- `errores.ts` no podría traducirlo a un mensaje de negocio (§5).
+    CONSTRAINT ventas_autorizacion_de_descuento_coherente
     CHECK (
       -- Sin autorización: las dos columnas vacías. Es el caso normal, porque
       -- la mayoría de las ventas no lleva descuento y las que lo llevan casi
