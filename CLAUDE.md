@@ -329,13 +329,17 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`) y 2026-09-09 (las dos de la caja única) |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única) y 2026-09-11 (las dos del módulo de venta) |
 | Plan | gratuito |
 
-Estado verificado contra el proyecto, no contra el script: **12 tablas**, RLS
-activo en las 12 sin políticas (deniega todo), 24 índices propios, 14 llaves
-foráneas, 44 restricciones CHECK y el trigger `auditoria_log_prohibir_cambios`.
+Estado verificado contra el catálogo del proyecto, no contra el script, el
+2026-09-11: **12 tablas**, RLS activo en las 12 sin políticas (deniega todo),
+26 índices propios, 15 llaves foráneas, 46 restricciones CHECK y el trigger
+`auditoria_log_prohibir_cambios`. Los índices y las llaves foráneas subieron
+respecto de lo que decía antes esta sección (24 y 14): los agregaron las
+migraciones `0010` y `0012` del corte de caja, y el número no se había
+actualizado.
 Todas las tablas están en 0 filas **salvo `denominaciones`, que tiene las 11 del
 quetzal**, con los mismos UUID que el esquema local — cotejado en la nube con un
 `FULL OUTER JOIN` contra la lista local, sin discrepancias.
@@ -352,13 +356,23 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**HAY DOS MIGRACIONES PENDIENTES DE APLICAR EN LA NUBE:
-`0014_boleta_solo_con_tarjeta` y `0015_cantidad_vendida`**, las dos del módulo
-de venta. Se aplican como todas: mostrando antes el SQL exacto y con la
-aprobación explícita de Julio, y trayendo después la evidencia consultada contra
-el proyecto real.
+**No queda ninguna migración pendiente de aplicar en la nube.**
 
-Las dos últimas aplicadas fueron `0010_una_caja_por_sistema` y
+Las dos últimas fueron `0014_boleta_solo_con_tarjeta` y `0015_cantidad_vendida`,
+el 2026-09-11, por la vía de siempre: SQL a la vista, aprobación explícita de
+Julio y evidencia consultada después contra el catálogo del proyecto.
+
+- `ventas_boleta_solo_con_tarjeta` existe con `convalidated = true`, leído de
+  `pg_get_constraintdef`, y convive con los dos CHECK del descuento que ya venían
+  de la `0001`: `ventas_descuento_completo` y
+  `ventas_autorizacion_requiere_descuento`. Los tres validados.
+- `productos.cantidad_vendida` quedó `numeric(14,3) NOT NULL DEFAULT 0` con
+  `CHECK (cantidad_vendida >= 0)` y su `COMMENT`, leído de
+  `information_schema.columns` y `pg_constraint`.
+- `ventas`, `venta_detalle` y `productos` siguen en 0 filas; `denominaciones`
+  sigue con sus 11.
+
+Antes de ellas se aplicaron `0010_una_caja_por_sistema` y
 `0012_caja_cerrada_por`, el 2026-09-09: `idx_caja_sesiones_una_abierta` pasó a
 `(estado) WHERE estado = 'abierta'` y `cerrada_por` quedó como `uuid` nulable
 con `ON DELETE SET NULL` hacia `usuarios`, verificado contra `pg_indexes`,

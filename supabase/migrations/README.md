@@ -99,12 +99,15 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | *(no hay 0011: ver la sección anterior)* | — |
 | `0012_caja_cerrada_por.sql` | Sí — `20260910040526` |
 | *(no hay 0013: ver la sección anterior)* | — |
-| `0014_boleta_solo_con_tarjeta.sql` | **No — PENDIENTE** |
-| `0015_cantidad_vendida.sql` | **No — PENDIENTE** |
+| `0014_boleta_solo_con_tarjeta.sql` | Sí — `20260911113517` |
+| `0015_cantidad_vendida.sql` | Sí — `20260911113531` |
 
-**Quedan DOS migraciones pendientes de aplicar en la nube: `0014` y `0015`**,
-las dos del módulo de venta. Se aplican como todas: mostrando antes el SQL
-exacto y con la aprobación explícita de Julio.
+**No queda ninguna migración pendiente de aplicar en la nube.** Las dos últimas
+—`0014` y `0015`— se aplicaron el 2026-09-11 por la vía de siempre, y se
+verificaron contra el catálogo del proyecto: `ventas_boleta_solo_con_tarjeta`
+existe con `convalidated = true`, y `productos.cantidad_vendida` quedó
+`numeric(14,3) NOT NULL DEFAULT 0` con su `CHECK (cantidad_vendida >= 0)`.
+`ventas` y `productos` siguen en 0 filas.
 
 Las dos anteriores —`0010` y `0012`— se aplicaron el 2026-09-09 por la vía de
 siempre, y se verificaron contra el catálogo del proyecto:
