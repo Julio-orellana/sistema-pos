@@ -34,10 +34,9 @@ import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categori
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import {
-  limpiarLimiteDeDescuento,
-  sembrarLimiteDeDescuento,
+  limpiarLimitesDeDescuento,
+  sembrarLimitesDeDescuento,
   topesActuales,
-  ROL_SEMBRADO,
 } from '@main/domain/venta/limites-de-ejemplo';
 import {
   AlmacenDeFotos,
@@ -250,18 +249,21 @@ function ejecutarModoDatosDeEjemplo(modo: string, repositorios: Repositorios): v
 function ejecutarModoLimitesDeDescuento(modo: string, repositorios: Repositorios): void {
   try {
     if (modo === 'sembrar') {
-      const informe = sembrarLimiteDeDescuento(repositorios);
-      console.info(
-        `[limites-descuento] ${informe.reemplazo ? 'Reemplazado' : 'Sembrado'} el tope del rol ` +
-          `"${ROL_SEMBRADO}": ${montoACadena(informe.limite.descuentoMaxPorcentaje)} % o ` +
-          `Q${montoACadena(informe.limite.descuentoMaxMontoFijo)} fijos.`,
-      );
+      const informe = sembrarLimitesDeDescuento(repositorios);
+      for (const aplicado of informe.aplicados) {
+        console.info(
+          `[limites-descuento] ${aplicado.reemplazo ? 'Reemplazado' : 'Sembrado'} el tope del ` +
+            `rol "${aplicado.rol}": ${montoACadena(aplicado.limite.descuentoMaxPorcentaje)} % o ` +
+            `Q${montoACadena(aplicado.limite.descuentoMaxMontoFijo)} fijos.`,
+        );
+      }
     } else if (modo === 'limpiar') {
-      const informe = limpiarLimiteDeDescuento(repositorios);
+      const informe = limpiarLimitesDeDescuento(repositorios);
       console.info(
-        informe.borro
-          ? `[limites-descuento] Quitado el tope del rol "${ROL_SEMBRADO}". Vuelve a cero.`
-          : `[limites-descuento] No había ningún tope del rol "${ROL_SEMBRADO}" que quitar.`,
+        informe.borrados.length === 0
+          ? '[limites-descuento] No había ningún tope sembrado que quitar.'
+          : `[limites-descuento] Quitados los topes de: ${informe.borrados.join(', ')}. ` +
+              'Esos roles vuelven a cero.',
       );
     } else {
       console.error(

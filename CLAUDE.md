@@ -1307,15 +1307,45 @@ Todavía no hay pantalla para configurarlos —es un pendiente propio, el punto 
 de §6.2— y mientras tanto hay un andamio de desarrollo:
 
 ```bash
-npm run seed:limites          # rol `venta`: hasta 10 % o Q20 sin autorización
-npm run seed:limites:limpiar  # lo quita, y el tope vuelve a cero
+npm run seed:limites          # siembra el tope de los dos roles
+npm run seed:limites:limpiar  # los quita, y los dos vuelven a cero
 ```
 
-**Toca SOLO el rol `venta`.** Cuánto puede descontar un administrador sin
-autorizarse a sí mismo es una definición de negocio que Jimmy no confirmó, y
-ponerle un número en un guion se la atribuiría. El guion imprime el tope de cada
-rol después de trabajar, justamente para que un rol sin fila se lea como lo que
-es —tope cero— y no como «sin límite». Ver `limites-de-ejemplo.ts`.
+| Rol | Porcentaje | Monto fijo |
+|---|---|---|
+| `venta` | 10 % | Q20 |
+| `administrativo` | 100 % | Q1 000 |
+
+**LOS DOS ROLES PASAN POR EL MISMO MECANISMO.** No hay ninguna excepción por rol
+en el código: un administrador no se salta la comprobación, simplemente tiene un
+tope más alto. La diferencia entre los dos es un NÚMERO en una tabla, no una
+rama en el servicio. Es la misma forma que tomó el cierre de caja ajena (§4.9) y
+evita el caso especial «salvo que sea administrador», que en este proyecto ya
+costó una vuelta con la intercepción de `Cmd+Q`.
+
+**Por qué 100 % y no «ilimitado».** El esquema no tiene forma de decir
+ilimitado: las dos columnas son decimales `NOT NULL` con piso cero, y la
+ausencia de fila significa CERO, no infinito. Un tope sin límite habría que
+escribirlo como un número mágico enorme, y un número mágico en una tabla de
+configuración termina leyéndose dentro de un año como una decisión de negocio
+que alguien tomó a propósito. **100 % sí es un techo honesto**: significa
+«puede descontar la venta entera», y el total ya tiene piso en cero. En la
+práctica un administrador nunca llega a autorizarse a sí mismo por la vía del
+porcentaje. El Q1 000 del monto fijo sí es una cifra redonda y provisional, y
+casi nunca es la que topa.
+
+> **SALVEDAD QUE HAY QUE REVISAR, NO OLVIDAR.** Este tope **asume que el rol
+> `administrativo` lo tiene el DUEÑO del negocio**, que hoy es el caso: la
+> instalación de Jimmy tiene un solo usuario y es él. Si algún día ese rol se le
+> asigna a un **empleado de confianza que no es el dueño**, un tope del 100 % le
+> da la capacidad de regalar mercadería sin que nadie más se entere, y el número
+> correcto pasa a ser otro. **Este número debe revisarse en ese momento.**
+> Depende del **punto 6 de §6.2** —qué roles existen de verdad en la tienda—,
+> que sigue abierto.
+
+El guion imprime el tope de cada rol después de trabajar, justamente para que un
+rol sin fila se lea como lo que es —tope cero— y no como «sin límite». Ver
+`limites-de-ejemplo.ts`.
 
 Si el descuento **no** excede el tope, **no se guarda autorizante aunque venga**.
 Registrar una autorización que no hizo falta ensuciaría la auditoría con
@@ -1457,7 +1487,8 @@ medida comparable entre productos.
 | **`playwright-core` como devDependency, en modo Electron, para `npm run verify:pantallas`.** | No verificar la interfaz automáticamente y confiar en pruebas manuales; usar el paquete `playwright` completo; escribir un arnés propio sobre el protocolo de depuración de Chrome | Hay defectos que ninguna prueba de Vitest puede ver: si el mensaje correcto LLEGA a la ventana y si quedó dentro de la parte visible. Los dos que se encontraron eran de esa clase y aparecieron a mano. Se eligió `playwright-core` y no `playwright` porque el primero **no tiene guiones de instalación ni dependencias** y por lo tanto no descarga navegadores —medido: tras instalarlo y usarlo no existe ninguna carpeta `ms-playwright`—, y su modo `_electron` maneja el binario de Electron que el proyecto ya tiene. **No viaja en el instalador de Jimmy**, comprobado empaquetando: `electron-builder` reescribe el `package.json` que va dentro del asar dejando solo `dependencies`, y una búsqueda de «playwright» en los 935 archivos del paquete y en todo el `.app` no devuelve nada. | Prompt 16 — 2026-09-08 |
 | **Los mensajes al usuario no inventan razones de negocio.** «El precio no puede ser negativo», no «…Se permite 0, para muestras y regalos». | Explicar en el mensaje para qué sirve cada regla | Que un precio 0 se acepte es una decisión técnica del esquema; PARA QUÉ le sirve a la tienda es una definición de negocio que Jimmy no confirmó. Un mensaje que se la atribuya convierte una suposición nuestra en algo que parece decidido por él, y eso es exactamente lo que este proyecto no puede hacer: el resto de la documentación distingue con cuidado lo confirmado de lo supuesto. La regla vale para todo texto que vea una persona. | Prompt 16 — 2026-09-08 |
 | **El orden de la cuadrícula de venta lo decide `contador_ventas` (VECES vendido), y `cantidad_vendida` queda para reportes.** Cerrado sin consultar a Jimmy. | Ordenar por `cantidad_vendida`; ofrecer las dos y dejar elegir en configuración | Contar transacciones es la **única medida comparable entre productos**: las libras de maíz y las unidades de huevo no se pueden sumar en un mismo número, así que ordenar por cantidad pondría el maíz —que sale de a cien libras— por encima de todo lo que se vende por unidad, y la cuadrícula dejaría de reflejar lo que el cajero busca. La pregunta había quedado abierta como punto 14 de §6.2; Julio la cerró en el Prompt 20 sin necesidad de consultarla, porque no es una preferencia del negocio sino una consecuencia de que las unidades no sean conmensurables. `cantidad_vendida` sigue existiendo y sigue subiendo con cada venta: su destino son los reportes y el futuro módulo de mermas, no el orden de los íconos. | Prompt 20 — 2026-09-10 |
-| **El tope de descuento se siembra con un guion aparte, `seed:limites`, y NO con una migración ni junto al catálogo de ejemplo.** Solo toca el rol `venta`. | Sembrarlo en una migración; incluirlo en `seed:ejemplo`; poner un valor por omisión en el código cuando falta la fila | Una migración es historial permanente del esquema, y un tope de descuento es **configuración** que un administrador cambia cuando quiere: sembrarlo ahí dejaría el valor de un guion de desarrollo metido para siempre en la base de la tienda. Meterlo en `seed:ejemplo` juntaría dos cosas distintas —mercadería inventada y configuración— y haría que limpiar el catálogo le quitara el tope a alguien de paso. Y un valor por omisión en el código sería lo peor de todo: convertiría un olvido de configuración en un permiso, que es exactamente lo que el tope cero evita. Toca solo el rol `venta` porque cuánto puede descontar un administrador sin autorizarse a sí mismo es una definición de negocio que Jimmy no confirmó. El guion imprime el tope de cada rol al terminar, para que un rol sin fila se lea como «tope cero» y no como «sin límite». **No reemplaza la pantalla de configuración**, que sigue pendiente. | Prompt 20 — 2026-09-10 |
+| **El tope de descuento se siembra con un guion aparte, `seed:limites`, y NO con una migración ni junto al catálogo de ejemplo.** | Sembrarlo en una migración; incluirlo en `seed:ejemplo`; poner un valor por omisión en el código cuando falta la fila | Una migración es historial permanente del esquema, y un tope de descuento es **configuración** que un administrador cambia cuando quiere: sembrarlo ahí dejaría el valor de un guion de desarrollo metido para siempre en la base de la tienda. Meterlo en `seed:ejemplo` juntaría dos cosas distintas —mercadería inventada y configuración— y haría que limpiar el catálogo le quitara el tope a alguien de paso. Y un valor por omisión en el código sería lo peor de todo: convertiría un olvido de configuración en un permiso, que es exactamente lo que el tope cero evita. El guion imprime el tope de cada rol al terminar, para que un rol sin fila se lea como «tope cero» y no como «sin límite». **No reemplaza la pantalla de configuración**, que sigue pendiente. | Prompt 20 — 2026-09-10 |
+| **El rol `administrativo` NO se salta el mecanismo de descuento: tiene un tope más alto.** Se siembra en 100 % y Q1 000; el de `venta` queda en 10 % y Q20. | Una excepción por rol en el servicio, para que un administrador nunca pase por la comprobación; dejarlo sin fila, o sea tope cero; sembrarle un tope «ilimitado» | Una excepción en el código es el patrón «salvo que sea administrador» que §4.9 ya rechazó para el cierre de caja ajena, y que en este proyecto costó una vuelta con la intercepción de `Cmd+Q`: parece inofensiva y abre el hueco. Con un tope alto se obtiene el mismo resultado práctico —un administrador no se autoriza a sí mismo en el uso normal— y la regla sigue siendo una sola, legible en una tabla en vez de en una rama del servicio. Dejarlo en cero era peor ergonomía de la que parecía: no bastaba con que topara en los descuentos grandes, topaba en TODOS, incluido uno de Q1. Y «ilimitado» no se puede expresar: las dos columnas son decimales `NOT NULL` con piso cero y la ausencia de fila significa CERO, no infinito, así que habría que escribir un número mágico enorme que dentro de un año se leería como una decisión deliberada del negocio. **100 % sí es un techo honesto** —significa «puede descontar la venta entera», y el total ya tiene piso en cero—, de modo que por la vía del porcentaje el PIN nunca aparece; el Q1 000 del monto fijo es una cifra redonda y provisional que casi nunca es la que topa. **SALVEDAD: este número asume que el rol `administrativo` lo tiene el DUEÑO**, que hoy es el caso. Si se le asigna a un empleado de confianza que no es Jimmy, el 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere y **hay que revisarlo**. Depende del punto 6 de §6.2, que sigue abierto. | Prompt 21 — 2026-09-11 |
 | **Precio especial (por PRODUCTO, preconfigurado) y descuento discrecional (por VENTA, en el momento) son dos cosas distintas y no se mezclan.** Un ticket puede llevar los dos, en ese orden. | Un solo mecanismo de descuento que sirviera para las dos cosas; aplicar el precio especial como un descuento más sobre el total | Se decide en momentos distintos, por personas distintas y con controles distintos: el precio especial lo deja puesto un administrador de antemano y ya tuvo su autorización al configurarse; el descuento lo decide quien vende con el cliente enfrente y por eso tiene tope por rol y PIN. Fundirlos obligaría a elegir un solo control para los dos casos: o el administrador tendría que autorizar cada venta de un producto en promoción, o el vendedor podría rebajar la venta entera sin tope. Además se guardan en lugares distintos —`precios_especiales` contra `ventas`— y un auditor necesita poder separarlos: una promoción de temporada y un favor a un cliente no son el mismo hecho. Si hay varios precios especiales vigentes gana el más reciente y **no se acumulan**, porque dos promociones encimadas darían un precio que nadie configuró. | Prompt 19 — 2026-09-10 |
 | **La vigencia de un precio especial se compara POR DÍA, no por instante.** Una promoción cuyo `vigente_hasta` es hoy vale todo el día. | Comparar el instante completo, como hacía `listarVigentes` | El último día de una promoción es un día de promoción. Con comparación por instante, una promoción que vence «hoy» deja de aplicarse a las 00:00 y el cliente paga de más justo el día en que el cartel del mostrador todavía dice que está rebajado. Queda anotada la salvedad de zona horaria: `date()` trabaja sobre cadenas UTC y Guatemala es UTC−6, así que el «hoy» de la base se adelanta a las 18:00 locales. Para una promoción de varios días es indiferente; para una de un solo día habrá que decidirlo cuando exista una real, y es definición de negocio. | Prompt 19 — 2026-09-10 |
 | **`descuento_excedente` es una superficie de candado propia y NO acepta el PIN remoto** (migración 013, no espejada). | Reusar `cierre_con_diferencia`; aceptar el PIN remoto para poder autorizar por teléfono | La razón es de alcance, la misma de siempre: el PIN remoto se pidió para autorizar diferencias de caja por teléfono y nada más, y dárselo a otra acción sería ampliarlo más allá de lo pedido. Acá el argumento es incluso más fuerte que en la salida controlada: **un descuento es dinero que sale de la venta**, y autorizarlo a distancia sin ver el ticket es aprobar a ciegas; quien autoriza tiene que estar mirando la pantalla donde se le muestra el tope, el pedido y el exceso. No se reusa la superficie de la diferencia porque son candados independientes por diseño (§4.8) y fallar al autorizar un descuento no debe bloquear un corte de caja. | Prompt 19 — 2026-09-10 |
@@ -1517,14 +1548,14 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 3 | ¿El precio de mayoreo se activa por cantidad comprada, por tipo de cliente, o ambos? | Define el modelo de precios del catálogo. | Abierto |
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
 | 5 | ~~¿El PIN de autorización es por usuario administrador o uno solo para la tienda?~~ | — | **RESUELTO (Prompt 10): por usuario.** Cada usuario tiene su PIN con hash scrypt y sal propia; la auditoría registra el `usuario_id` real de quien autorizó. `POS_PIN_ADMINISTRADOR` ya no existe. Ver la sección 4.7. |
-| 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? | Define la matriz de permisos (RBAC). | Abierto |
+| 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? **Y quién tiene en la práctica el rol `administrativo`: solo el dueño, o también un encargado de confianza?** | Define la matriz de permisos (RBAC). **Y de esto depende el tope de descuento del rol administrativo**, que hoy se siembra en 100 % asumiendo que lo tiene el dueño (§4.13): si lo tuviera un empleado, ese 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere, y el número habría que revisarlo. | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? ¿Hace falta autorización de administrador para bajar inventario, como la hay para un descuadre de caja? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. **Ya hay un hueco concreto esperándola:** `ServicioDeProductos.ajustarInventario` solo SUMA y rechaza cualquier cantidad no positiva, a propósito, para no convertir la recepción de mercadería en una vía de bajar inventario sin controles. El módulo de mermas tiene que traer su propia regla de autorización. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
 | 13 | **El catálogo real de Jimmy.** Nombres, categorías, precios, unidades e inventario inicial de verdad. Iba a entregarlo al día siguiente del Prompt 15. | Mientras no llegue, la tienda corre con el catálogo de ejemplo (`npm run seed:ejemplo`), que está marcado con el prefijo `[Ejemplo] ` justamente para que nadie lo confunda con el real. El día que llegue: `npm run seed:limpiar` y cargar el verdadero. | Abierto — **es lo próximo que hace falta del cliente** |
 | 14 | ~~¿Qué debe ordenar los íconos de la pantalla de venta: `contador_ventas` o `cantidad_vendida`?~~ | — | **RESUELTO (Prompt 20): ordena `contador_ventas`, y no se cambia nada.** Julio lo decidió sin necesidad de consultarlo con Jimmy: contar VECES es la única medida comparable entre productos, porque las libras de maíz y las unidades de huevo no se suman en un mismo número. `cantidad_vendida` existe para **reportes futuros**, no para el orden de los íconos. |
-| 15 | **¿Qué topes de descuento quiere Jimmy, y quién los configura desde dónde?** | `limites_descuento` existe y el servicio la respeta, pero **no hay pantalla para llenarla**: es una tarea propia, para un prompt futuro. Mientras tanto hay un andamio de desarrollo, `npm run seed:limites`, que pone 10 % / Q20 al rol `venta` para poder probar descuentos; los valores son de prueba y **no** una definición del negocio. Falta que Jimmy diga los topes reales. Falta además decidir **si el rol administrativo debe tener tope propio**: hoy no tiene fila, o sea tope cero, así que un administrador que quiera descontar tiene que autorizarse a sí mismo con su PIN. | Abierto — el guion desbloquea probar, no reemplaza la definición |
+| 15 | **¿Qué topes de descuento quiere Jimmy, y quién los configura desde dónde?** | `limites_descuento` existe y el servicio la respeta, pero **no hay pantalla para llenarla**: es una tarea propia, para un prompt futuro. Mientras tanto hay un andamio de desarrollo, `npm run seed:limites`, que pone 10 % / Q20 al rol `venta` y 100 % / Q1 000 al `administrativo`; los valores son de prueba y **no** una definición del negocio. Falta que Jimmy diga los topes reales. El del rol administrativo además **asume que ese rol lo tiene el dueño**, y hay que revisarlo si se le asigna a un empleado: ver la salvedad de §4.13 y el punto 6 de esta misma lista. | Abierto — el guion desbloquea probar, no reemplaza la definición |
 | 16 | **¿Qué número de venta quiere ver el cajero en la confirmación?** | Hoy se muestra el id de la venta, que es un UUID: sirve para rastrear en la base pero no es un número que una persona pueda cantar o anotar. El correlativo vive en `recibos.numero_recibo` y llega con el módulo de recibos. Si Jimmy quiere un correlativo visible antes de eso, hay que decidir de dónde sale y si tiene que coincidir con el del comprobante impreso. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
@@ -1566,9 +1597,9 @@ negocio:
   reglas de autorización, ni devolución de inventario.
 - **No hay pantalla para configurar `limites_descuento`.** Sin fila, el tope de
   un rol es cero y cualquier descuento pide PIN. Hay un andamio de desarrollo
-  (`npm run seed:limites`) que pone 10 % / Q20 al rol `venta` para poder probar,
-  con valores de prueba y no de negocio. La pantalla es una tarea propia: ver el
-  punto 15 de la sección 6.2.
+  (`npm run seed:limites`) que pone 10 % / Q20 al rol `venta` y 100 % / Q1 000 al
+  `administrativo`, con valores de prueba y no de negocio. La pantalla es una
+  tarea propia: ver el punto 15 de la sección 6.2.
 - Tampoco hay **mermas ni ajustes de inventario a la baja**: el ajuste que
   existe solo suma mercadería recibida, y las bajas son un módulo futuro con sus
   propias reglas de autorización.
@@ -1589,8 +1620,8 @@ npm run verify       # lint + typecheck + pruebas, todo junto
 npm run verify:arranque  # arranca la app, imprime un informe de verificación y sale
 npm run seed:ejemplo     # siembra el catálogo de ejemplo (NO es una migración)
 npm run seed:limpiar     # quita el catálogo de ejemplo, sin tocar datos reales
-npm run seed:limites     # tope de descuento del rol `venta`: 10 % o Q20 (andamio)
-npm run seed:limites:limpiar  # lo quita, y el tope de ese rol vuelve a cero
+npm run seed:limites     # topes de descuento: venta 10 %/Q20, admin 100 %/Q1000
+npm run seed:limites:limpiar  # los quita, y los dos roles vuelven a cero
 npm run verify:pantallas # maneja la app real y comprueba qué se ve en pantalla
 ```
 
