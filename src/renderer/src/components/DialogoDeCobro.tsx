@@ -8,8 +8,10 @@
  *   1. `descuento` — opcional. Se puede saltar de un toque.
  *   2. `pago` — efectivo o tarjeta. Con tarjeta, el número de boleta.
  *   3. `autorizacion` — SOLO si el descuento pasó el tope del rol. Muestra
- *      CUÁNTO se está por autorizar antes de pedir el PIN, igual que el cierre
- *      de caja descuadrado (§4.9). El PIN lo verifica el proceso principal.
+ *      CUÁNTO se está por autorizar antes de pedir el código, igual que el
+ *      cierre de caja descuadrado (§4.9). El código lo verifica el proceso
+ *      principal, que además determina si fue el PIN normal o el remoto: al
+ *      cajero nunca se le pregunta cuál de los dos le dictaron.
  *   4. `listo` — la venta quedó registrada. Muestra el total cobrado.
  *
  * NO CALCULA EL TOTAL QUE SE COBRA. Muestra el que resulta de las funciones
@@ -236,9 +238,20 @@ export function DialogoDeCobro({
             </div>
           </dl>
 
+          {/*
+            SE PIDE «EL CÓDIGO DE AUTORIZACIÓN», sin preguntar cuál de los dos
+            es. Desde el 2026-09-11 esta superficie acepta el PIN normal y el
+            remoto, y **quién decide cuál coincidió es el proceso principal**,
+            nunca el cajero: pedirle que declare si el código que le dictaron
+            es el normal o el remoto sería pedirle un dato que no puede saber y
+            abriría la puerta a que la auditoría registre una vía equivocada.
+
+            Es el mismo texto que el cierre de caja descuadrado, que resolvió
+            esto mismo en el Prompt 13.
+          */}
           <p className="modal__texto">
-            Un administrador tiene que autorizarlo con su PIN. Este código no se puede dar
-            por teléfono: el PIN remoto sirve solo para las diferencias de caja.
+            Un administrador debe autorizarlo con su PIN, en persona o dictándolo por
+            teléfono.
           </p>
 
           {aviso !== null && (

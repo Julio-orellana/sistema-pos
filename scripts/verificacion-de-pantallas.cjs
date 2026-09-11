@@ -48,6 +48,7 @@ const PROYECTO = join(__dirname, '..');
 const MARCA_INFORME = 'INFORME_DE_PANTALLAS';
 
 /** PIN del administrador de prueba. Solo vive en la base temporal. */
+const PIN_REMOTO = '8642';
 const PIN = '2468';
 
 /** Milisegundos de espera para que la ventana aparezca. */
@@ -493,7 +494,83 @@ async function main() {
     );
 
     // =======================================================================
-    // 8. Gestión de usuarios: el hueco que cerró el Prompt 21.
+    // 8. Autorizar un descuento excedente CON EL PIN REMOTO, de punta a punta.
+    // =======================================================================
+    /*
+      Es la comprobación que da sentido al cambio: que un descuento que pasa el
+      tope se pueda autorizar con el código que Jimmy dicta por teléfono, y que
+      la venta quede registrada diciendo que fue por esa vía y no presencial.
+    */
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+
+    // El administrador se configura un PIN remoto, que se teclea dos veces.
+    await prueba('ir-a-pin-remoto').click();
+    await prueba('pantalla-de-pin-remoto').waitFor({ timeout: ESPERA_CORTA });
+    await teclearPin(PIN_REMOTO);
+    await teclearPin(PIN_REMOTO);
+    await prueba('pin-remoto-guardado').waitFor({ timeout: ESPERA_CORTA });
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+
+    // Un tope bajo para el rol administrativo, que es el que está vendiendo:
+    // así cualquier descuento del 50 % lo pasa y obliga a autorizar.
+    await prueba('ir-a-limites').click();
+    await prueba('limite-administrativo').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('editar-limite-administrativo').click();
+    await prueba('limite-porcentaje').fill('5');
+    await prueba('limite-monto').fill('1');
+    await prueba('limite-guardar').click();
+    await prueba('limite-confirmar').click();
+    await prueba('limites-aviso').waitFor({ timeout: ESPERA_CORTA });
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+
+    // Una venta con un descuento que pasa el tope.
+    await prueba('ir-a-venta').click();
+    await prueba('cuadricula-de-productos').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('icono-producto').first().click();
+    await prueba('cobrar').click();
+    await prueba('dialogo-de-cobro').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('descuento-porcentaje').click();
+    await prueba('descuento-valor').fill('50');
+    await prueba('cobro-continuar').click();
+    await prueba('cobro-confirmar').click();
+    await prueba('cobro-autorizacion').waitFor({ timeout: ESPERA_CORTA });
+
+    const textoDeAutorizacion = ((await prueba('cobro-autorizacion').textContent()) ?? '').trim();
+    comprobar(
+      'el diálogo pide «el código», sin preguntar si es el PIN normal o el remoto',
+      'menciona que puede dictarse por teléfono',
+      /por tel[eé]fono/i.test(textoDeAutorizacion) ? 'lo dice' : 'no lo dice (mal)',
+      /por tel[eé]fono/i.test(textoDeAutorizacion),
+    );
+    comprobar(
+      'y YA NO dice que el código no se puede dar por teléfono',
+      'sin la frase vieja',
+      /no se puede dar\s+por tel[eé]fono/i.test(textoDeAutorizacion)
+        ? 'todavía la dice (mal)'
+        : 'ya no la dice',
+      !/no se puede dar\s+por tel[eé]fono/i.test(textoDeAutorizacion),
+    );
+
+    // Y se autoriza con el PIN REMOTO, que antes de este cambio habría fallado.
+    await teclearPin(PIN_REMOTO);
+    await prueba('cobro-listo').waitFor({ timeout: ESPERA_LARGA });
+    comprobar(
+      'EL PIN REMOTO AUTORIZA el descuento excedente y la venta se cobra',
+      'la venta llega a la confirmación',
+      'se cobró',
+      true,
+    );
+
+    await prueba('cobro-siguiente-venta').click();
+    await prueba('ticket-vacio').waitFor({ timeout: ESPERA_CORTA });
+    // Se queda en la pantalla de venta: el tramo siguiente arranca con su
+    // propio «Volver», igual que todos los demás.
+
+    // =======================================================================
+    // 9. Gestión de usuarios: el hueco que cerró el Prompt 21.
     // =======================================================================
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor();

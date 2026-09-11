@@ -43,7 +43,14 @@ export type TipoDeDenominacion = 'billete' | 'moneda';
 /** En qué momento del turno se contó el efectivo. */
 export type MomentoDeArqueo = 'apertura' | 'cierre';
 
-/** Cómo autorizó un administrador un cierre descuadrado. */
+/**
+ * Cómo autorizó un administrador: presente frente a la pantalla con su PIN
+ * normal, o a distancia con su PIN de autorización remota.
+ *
+ * Lo determina el sistema según cuál hash coincidió, **nunca se le pregunta al
+ * cajero**. Vale para el cierre descuadrado y, desde el 2026-09-11, también
+ * para el descuento que excede el tope del rol.
+ */
 export type ViaDeAutorizacion = 'presencial' | 'remoto';
 
 /** Estado de sincronización de un registro con la nube. */
@@ -317,6 +324,11 @@ export interface Venta {
   readonly descuentoTipo: TipoValor | null;
   readonly descuentoValor: Decimal | null;
   readonly descuentoAutorizadoPor: string | null;
+  /**
+   * Por cuál vía se autorizó. Va SIEMPRE junto con `descuentoAutorizadoPor`:
+   * los dos llenos o los dos vacíos, y lo hace cumplir la base (migración 017).
+   */
+  readonly descuentoAutorizadoVia: ViaDeAutorizacion | null;
   readonly total: Decimal;
   readonly formaPago: FormaPago;
   readonly numBoleta: string | null;
@@ -335,6 +347,7 @@ export interface NuevaVenta {
   readonly descuentoTipo?: TipoValor | null;
   readonly descuentoValor?: Decimal | string | null;
   readonly descuentoAutorizadoPor?: string | null;
+  readonly descuentoAutorizadoVia?: ViaDeAutorizacion | null;
   readonly total: Decimal | string;
   readonly formaPago: FormaPago;
   readonly numBoleta?: string | null;

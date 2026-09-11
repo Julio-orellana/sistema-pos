@@ -988,3 +988,130 @@ describe('La autorización de un descuadre solo existe si hay descuadre', () => 
     }).not.toThrow();
   });
 });
+
+// ===========================================================================
+describe('La autorización de un descuento va SIEMPRE con su vía, o no va', () => {
+  /*
+    Migración 017. `descuento_autorizado_por` guarda QUIÉN autorizó un descuento
+    que excedía el tope del rol; `descuento_autorizado_via`, CÓMO: presencial
+    con su PIN normal, o remoto con el dictado por teléfono. Un registro con uno
+    solo de los dos está incompleto y la base lo rechaza.
+
+    LA FORMA DEL CHECK IMPORTA, y por eso estas pruebas van en las dos
+    direcciones. La migración 007 escribió su coherencia como
+    `(via IS NULL AND por IS NULL) OR (via IN (...) AND por IS NOT NULL)`, y esa
+    forma NO rechaza un autorizante sin vía: con `via` en NULL, `via IN (...)`
+    da NULL en vez de FALSO, la segunda rama entera da NULL, y en SQL un CHECK
+    **pasa cuando su expresión da NULL**. Acá los `IS NOT NULL` van adelante, que
+    cortocircuitan a FALSO y hacen que el CHECK muerda. Si alguien "simplifica"
+    esta restricción copiando la forma de la 007, la mitad de estas pruebas cae.
+  */
+  beforeEach(() => {
+    sembrarUsuario(base);
+    sembrarCajaSesion(base);
+  });
+
+  /** Inserta una venta con descuento y el par autorizante/vía que se le pida. */
+  function insertarVentaConDescuento(
+    autorizadoPor: string | null,
+    autorizadoVia: string | null,
+  ): void {
+    base
+      .prepare(
+        `INSERT INTO ventas (
+           id, caja_sesion_id, usuario_id, fecha, subtotal, descuento_tipo, descuento_valor,
+           descuento_autorizado_por, descuento_autorizado_via, total, forma_pago, estado,
+           estado_sincronizacion, creado_en, actualizado_en
+         ) VALUES (?, ?, ?, ?, '100.00', 'porcentaje', '25.00', ?, ?, '75.00', 'efectivo',
+                   'completada', 'pendiente', ?, ?)`,
+      )
+      .run(
+        IDS_DE_PRUEBA.venta,
+        IDS_DE_PRUEBA.cajaSesion,
+        IDS_DE_PRUEBA.usuario,
+        FECHA_DE_PRUEBA,
+        autorizadoPor,
+        autorizadoVia,
+        FECHA_DE_PRUEBA,
+        FECHA_DE_PRUEBA,
+      );
+  }
+
+  it('los dos llenos con vía PRESENCIAL se aceptan', () => {
+    expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, 'presencial'); }).not.toThrow();
+  });
+
+  it('los dos llenos con vía REMOTO se aceptan', () => {
+    expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, 'remoto'); }).not.toThrow();
+  });
+
+  it('los dos vacíos se aceptan: es el caso normal de una venta sin autorización', () => {
+    expect(() => { insertarVentaConDescuento(null, null); }).not.toThrow();
+  });
+
+  it('RECHAZA una vía sin autorizante', () => {
+    expect(() => { insertarVentaConDescuento(null, 'remoto'); }).toThrow(
+      /CHECK constraint failed/,
+    );
+  });
+
+  it('RECHAZA un autorizante sin vía', () => {
+    // Es la mitad que la forma de la migración 007 dejaba pasar.
+    expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, null); }).toThrow(
+      /CHECK constraint failed/,
+    );
+  });
+
+  it('RECHAZA una vía que no es ninguna de las dos', () => {
+    expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, 'telepatia'); }).toThrow(
+      /CHECK constraint failed/,
+    );
+  });
+
+  it('RECHAZA una vía en cadena vacía, que no es lo mismo que sin vía', () => {
+    expect(() => { insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, ''); }).toThrow(
+      /CHECK constraint failed/,
+    );
+  });
+
+  it('y también lo hace cumplir en UPDATE, no solo al insertar', () => {
+    // Una restricción que solo mirara el INSERT dejaría romper el par después,
+    // con una consulta a mano o un módulo futuro distraído.
+    insertarVentaConDescuento(IDS_DE_PRUEBA.usuario, 'remoto');
+
+    expect(() => {
+      base
+        .prepare('UPDATE ventas SET descuento_autorizado_via = NULL WHERE id = ?')
+        .run(IDS_DE_PRUEBA.venta);
+    }).toThrow(/CHECK constraint failed/);
+
+    expect(() => {
+      base
+        .prepare('UPDATE ventas SET descuento_autorizado_por = NULL WHERE id = ?')
+        .run(IDS_DE_PRUEBA.venta);
+    }).toThrow(/CHECK constraint failed/);
+  });
+
+  it('una venta SIN descuento tampoco puede traer vía', () => {
+    // Se cruza con el CHECK que ya venía de la 001: no puede haber autorización
+    // sin descuento. Las dos reglas conviven y ninguna tapa a la otra.
+    expect(() => {
+      base
+        .prepare(
+          `INSERT INTO ventas (
+             id, caja_sesion_id, usuario_id, fecha, subtotal, descuento_autorizado_via,
+             total, forma_pago, estado, estado_sincronizacion, creado_en, actualizado_en
+           ) VALUES (?, ?, ?, ?, '10.00', 'remoto', '10.00', 'efectivo', 'completada',
+                     'pendiente', ?, ?)`,
+        )
+        .run(
+          IDS_DE_PRUEBA.venta,
+          IDS_DE_PRUEBA.cajaSesion,
+          IDS_DE_PRUEBA.usuario,
+          FECHA_DE_PRUEBA,
+          FECHA_DE_PRUEBA,
+          FECHA_DE_PRUEBA,
+        );
+    }).toThrow(/CHECK constraint failed/);
+  });
+});

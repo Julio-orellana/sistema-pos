@@ -304,7 +304,7 @@ describe('El recibo dice exactamente lo que quedó guardado', () => {
     });
     const ventaId = venta.registrar(idCajera, 'venta', {
       lineas: [{ productoId: idMaiz, cantidad: '10' }],
-      descuento: { tipo: 'porcentaje', valor: '30', autorizadoPor: idJimmy },
+      descuento: { tipo: 'porcentaje', valor: '30', autorizacion: { autorizadoPor: idJimmy, via: 'presencial' } },
       formaPago: 'efectivo',
       numBoleta: null,
     }).venta.id;

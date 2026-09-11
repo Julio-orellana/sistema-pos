@@ -31,6 +31,7 @@ import sqlSuperficieDescuento from './migrations/013_superficie_descuento_excede
 import sqlBoletaSoloConTarjeta from './migrations/014_boleta_solo_con_tarjeta.sql?raw';
 import sqlCantidadVendida from './migrations/015_cantidad_vendida.sql?raw';
 import sqlConfiguracionNegocio from './migrations/016_configuracion_negocio.sql?raw';
+import sqlDescuentoAutorizadoVia from './migrations/017_descuento_autorizado_via.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -78,6 +79,11 @@ export const MIGRACIONES: readonly Migracion[] = [
   { orden: 14, nombre: '014_boleta_solo_con_tarjeta', sql: sqlBoletaSoloConTarjeta },
   { orden: 15, nombre: '015_cantidad_vendida', sql: sqlCantidadVendida },
   { orden: 16, nombre: '016_configuracion_negocio', sql: sqlConfiguracionNegocio },
+  {
+    orden: 17,
+    nombre: '017_descuento_autorizado_via',
+    sql: sqlDescuentoAutorizadoVia,
+  },
 ];
 
 /** Tabla de control. La crea el propio migrador antes que nada. */

@@ -9,6 +9,7 @@ import type {
   NuevaVenta,
   TipoValor,
   Venta,
+  ViaDeAutorizacion,
 } from './entidades';
 import { RepositorioBase, ahora, nuevoId } from './base';
 import { aColumnaMonto, aColumnaDecimalNulable, desdeColumnaDecimal, desdeColumnaDecimalNulable } from '../decimal-columns';
@@ -23,6 +24,7 @@ interface FilaVenta {
   readonly descuento_tipo: TipoValor | null;
   readonly descuento_valor: string | null;
   readonly descuento_autorizado_por: string | null;
+  readonly descuento_autorizado_via: ViaDeAutorizacion | null;
   readonly total: string;
   readonly forma_pago: FormaPago;
   readonly num_boleta: string | null;
@@ -42,6 +44,7 @@ function aEntidad(fila: FilaVenta): Venta {
     descuentoTipo: fila.descuento_tipo,
     descuentoValor: desdeColumnaDecimalNulable(fila.descuento_valor, 'ventas.descuento_valor'),
     descuentoAutorizadoPor: fila.descuento_autorizado_por,
+    descuentoAutorizadoVia: fila.descuento_autorizado_via,
     total: desdeColumnaDecimal(fila.total, 'ventas.total'),
     formaPago: fila.forma_pago,
     numBoleta: fila.num_boleta,
@@ -70,12 +73,12 @@ export class RepositorioDeVentas extends RepositorioBase {
         .prepare(
           `INSERT INTO ventas (
              id, caja_sesion_id, usuario_id, fecha, subtotal, descuento_tipo, descuento_valor,
-             descuento_autorizado_por, total, forma_pago, num_boleta, estado,
-             estado_sincronizacion, creado_en, actualizado_en
+             descuento_autorizado_por, descuento_autorizado_via, total, forma_pago, num_boleta,
+             estado, estado_sincronizacion, creado_en, actualizado_en
            ) VALUES (
              @id, @caja_sesion_id, @usuario_id, @fecha, @subtotal, @descuento_tipo, @descuento_valor,
-             @descuento_autorizado_por, @total, @forma_pago, @num_boleta, @estado,
-             'pendiente', @creado_en, @actualizado_en
+             @descuento_autorizado_por, @descuento_autorizado_via, @total, @forma_pago, @num_boleta,
+             @estado, 'pendiente', @creado_en, @actualizado_en
            )`,
         )
         .run({
@@ -87,6 +90,14 @@ export class RepositorioDeVentas extends RepositorioBase {
           descuento_tipo: datos.descuentoTipo ?? null,
           descuento_valor: aColumnaDecimalNulable(datos.descuentoValor, 'monto'),
           descuento_autorizado_por: datos.descuentoAutorizadoPor ?? null,
+          /*
+            LA VÍA VA SIEMPRE CON EL AUTORIZANTE. No se normaliza nada acá a
+            propósito: si llegara una sin la otra, el CHECK de la migración 017
+            rechaza la fila entera y la venta se revierte. Taparlo con un
+            `?? 'presencial'` guardaría una vía inventada, que es peor que
+            fallar ruidosamente.
+          */
+          descuento_autorizado_via: datos.descuentoAutorizadoVia ?? null,
           total: aColumnaMonto(datos.total),
           forma_pago: datos.formaPago,
           num_boleta: datos.numBoleta ?? null,

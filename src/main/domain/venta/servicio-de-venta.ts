@@ -43,6 +43,7 @@ import type {
   Rol,
   TipoValor,
   Venta,
+  ViaDeAutorizacion,
 } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeCajaSesiones } from '@main/database/repositories/caja-sesiones';
@@ -74,15 +75,37 @@ export interface LineaParaRegistrar {
   readonly cantidad: string;
 }
 
+/**
+ * La autorización de un descuento que excede el tope del rol.
+ *
+ * **LOS DOS DATOS VIAJAN JUNTOS EN UN SOLO OBJETO, y es deliberado.** La base
+ * exige desde la migración 017 que `descuento_autorizado_por` y
+ * `descuento_autorizado_via` estén los dos llenos o los dos vacíos; con dos
+ * campos sueltos, olvidarse de uno sería un error posible que solo aparecería
+ * al insertar. Con un objeto, «autorizante sin vía» **no se puede construir**.
+ * Es el mismo criterio que hace imposible declarar efectivo en los dos modos a
+ * la vez (§4.9).
+ */
+export interface AutorizacionDeDescuento {
+  /** Administrador cuyo PIN coincidió. */
+  readonly autorizadoPor: string;
+  /**
+   * Presencial si coincidió su PIN normal, remoto si el de autorización a
+   * distancia. Lo determina `autorizarComoAdministrador`, nunca quien vende.
+   */
+  readonly via: ViaDeAutorizacion;
+}
+
 /** El descuento discrecional que quien vende decidió aplicar. */
 export interface DescuentoDeLaVenta {
   readonly tipo: TipoValor;
   readonly valor: string;
   /**
-   * Administrador que autorizó exceder el tope del rol, si hizo falta. Su PIN
-   * lo verifica quien llama, con la superficie `descuento_excedente`.
+   * La autorización, si hizo falta. Su PIN lo verifica quien llama, con la
+   * superficie `descuento_excedente`, que **acepta el PIN normal y el remoto**
+   * desde el 2026-09-11.
    */
-  readonly autorizadoPor?: string | null;
+  readonly autorizacion?: AutorizacionDeDescuento | null;
 }
 
 /** Todo lo que hace falta para registrar una venta. */
@@ -136,8 +159,8 @@ interface DescuentoResuelto {
   readonly tipo: TipoValor;
   readonly valor: Decimal;
   readonly veredicto: VeredictoDeDescuento;
-  /** Quién autorizó el exceso. `null` cuando el descuento cupo en el tope. */
-  readonly autorizadoPor: string | null;
+  /** Quién autorizó el exceso y cómo. `null` cuando el descuento cupo en el tope. */
+  readonly autorizacion: AutorizacionDeDescuento | null;
 }
 
 export class ServicioDeVenta {
@@ -231,7 +254,8 @@ export class ServicioDeVenta {
         subtotal: redondearMonto(subtotalExacto),
         descuentoTipo: descuento?.tipo ?? null,
         descuentoValor: descuento?.valor ?? null,
-        descuentoAutorizadoPor: descuento?.autorizadoPor ?? null,
+        descuentoAutorizadoPor: descuento?.autorizacion?.autorizadoPor ?? null,
+        descuentoAutorizadoVia: descuento?.autorizacion?.via ?? null,
         total,
         formaPago: datos.formaPago,
         numBoleta: datos.numBoleta,
@@ -336,17 +360,26 @@ export class ServicioDeVenta {
         fecha: momento,
       });
 
-      if (descuento !== null && descuento.autorizadoPor !== null) {
-        // Asiento PROPIO para la autorización: es un hecho distinto de la
-        // venta, con otro responsable, y un auditor va a querer listar las
-        // autorizaciones solas, sin abrir el contenido de cada venta.
+      if (descuento !== null && descuento.autorizacion !== null) {
+        /*
+          Asiento PROPIO para la autorización: es un hecho distinto de la
+          venta, con otro responsable, y un auditor va a querer listar las
+          autorizaciones solas, sin abrir el contenido de cada venta.
+
+          LLEVA LA VÍA, no solo el autorizante. Desde que `descuento_excedente`
+          acepta el PIN remoto, «Jimmy autorizó Q40» dejó de ser una sola cosa:
+          autorizarlo frente al mostrador viendo el ticket y autorizarlo por
+          teléfono sin verlo son dos hechos distintos, y la columna de la venta
+          guarda el estado final mientras el asiento guarda el hecho.
+        */
         this.auditoria.registrar({
-          usuarioId: descuento.autorizadoPor,
+          usuarioId: descuento.autorizacion.autorizadoPor,
           accion: ACCIONES_DE_VENTA.descuentoAutorizado,
           entidadTipo: 'ventas',
           entidadId: venta.id,
           valorNuevo: {
-            autorizadoPor: descuento.autorizadoPor,
+            autorizadoPor: descuento.autorizacion.autorizadoPor,
+            via: descuento.autorizacion.via,
             solicitadoPor: usuarioId,
             rolDeQuienVende: rol,
             tipo: descuento.tipo,
@@ -514,9 +547,9 @@ export class ServicioDeVenta {
       { tipo: descuento.tipo, valor },
       topeDelRol(this.limitesDescuento.obtenerPorRol(rol), rol),
     );
-    const autorizadoPor = descuento.autorizadoPor ?? null;
+    const autorizacion = descuento.autorizacion ?? null;
 
-    if (veredicto.excede && autorizadoPor === null) {
+    if (veredicto.excede && autorizacion === null) {
       throw new ErrorDeNegocio(
         'PERMISO_DENEGADO',
         'Ese descuento pasa el límite de tu rol. Un administrador tiene que autorizarlo con su PIN.',
@@ -532,9 +565,11 @@ export class ServicioDeVenta {
         Si NO excede, no se guarda autorizante aunque venga. Registrar una
         autorización que no hizo falta ensuciaría la auditoría con permisos que
         nadie usó, y `WHERE descuento_autorizado_por IS NOT NULL` dejaría de ser
-        la lista de las excepciones reales.
+        la lista de las excepciones reales. Se descartan LAS DOS mitades a la
+        vez, porque van juntas en el mismo objeto: dejar la vía suelta habría
+        hecho que la base rechazara la venta entera.
       */
-      autorizadoPor: veredicto.excede ? autorizadoPor : null,
+      autorizacion: veredicto.excede ? autorizacion : null,
     };
   }
 

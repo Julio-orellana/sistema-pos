@@ -322,34 +322,89 @@ describe('Descuento discrecional: el tope del rol decide si hace falta PIN', () 
     const maiz = producto('Maíz', '10.00', '20');
     abrirCaja();
 
-    const permiso = autenticacion.autorizarComoAdministrador(PIN_DE_JIMMY, 'descuento_excedente', {
-      aceptaPinRemoto: false,
-    });
+    const permiso = autenticacion.autorizarComoAdministrador(PIN_DE_JIMMY, 'descuento_excedente');
     expect(permiso.autenticado).toBe(true);
     expect(permiso.viaDeAutorizacion).toBe('presencial');
 
     const resultado = venta.registrar(idCajera, 'venta', {
       lineas: [{ productoId: maiz, cantidad: '10' }],
-      descuento: { tipo: 'porcentaje', valor: '25', autorizadoPor: permiso.usuario?.id ?? null },
+      descuento: {
+        tipo: 'porcentaje',
+        valor: '25',
+        autorizacion: {
+          autorizadoPor: permiso.usuario?.id ?? '',
+          via: permiso.viaDeAutorizacion ?? 'presencial',
+        },
+      },
       formaPago: 'efectivo',
       numBoleta: null,
     });
 
     expect(resultado.total).toBe('75.00');
     expect(resultado.venta.descuentoAutorizadoPor).toBe(idJimmy);
+    expect(resultado.venta.descuentoAutorizadoVia).toBe('presencial');
   });
 
-  it('el PIN REMOTO NO autoriza un descuento: esa superficie no lo acepta', () => {
+  it('EL PIN REMOTO AHORA SÍ autoriza un descuento, y queda como «remoto»', () => {
+    /*
+      CAMBIO DE COMPORTAMIENTO DELIBERADO, del 2026-09-11. Esta prueba antes
+      afirmaba lo contrario: que el PIN remoto NO autorizaba un descuento.
+      Aquella era la decisión correcta en su momento —alcance mínimo por
+      omisión— y el propio código decía que ampliarla exigía una decisión
+      explícita. Julio la tomó: Jimmy no siempre está en la tienda y un cliente
+      no puede esperar en el mostrador a que vuelva.
+
+      Se conserva el rastro del cambio acá a propósito, para que nadie lo lea
+      como que la regla de alcance mínimo se aflojó: sigue vigente, y
+      `salida_controlada` y `cierre_de_caja_ajena` lo comprueban abajo.
+    */
     fijarTopes();
 
     const intento = autenticacion.autorizarComoAdministrador(
       PIN_REMOTO_DE_JIMMY,
       'descuento_excedente',
-      { aceptaPinRemoto: false },
     );
 
-    expect(intento.autenticado).toBe(false);
-    expect(intento.usuario).toBeNull();
+    expect(intento.autenticado).toBe(true);
+    expect(intento.usuario?.id).toBe(idJimmy);
+    expect(intento.viaDeAutorizacion).toBe('remoto');
+  });
+
+  it('y las otras dos superficies SIGUEN sin aceptarlo: la ampliación fue acotada', () => {
+    fijarTopes();
+
+    for (const superficie of ['salida_controlada', 'cierre_de_caja_ajena'] as const) {
+      const intento = autenticacion.autorizarComoAdministrador(PIN_REMOTO_DE_JIMMY, superficie);
+      expect(intento.autenticado, `${superficie} no debe aceptar el PIN remoto`).toBe(false);
+      expect(intento.usuario).toBeNull();
+    }
+  });
+
+  it('la venta autorizada con el PIN REMOTO guarda la vía «remoto»', () => {
+    fijarTopes();
+    const maiz = producto('Maíz', '10.00', '20');
+    abrirCaja();
+
+    const permiso = autenticacion.autorizarComoAdministrador(
+      PIN_REMOTO_DE_JIMMY,
+      'descuento_excedente',
+    );
+    const resultado = venta.registrar(idCajera, 'venta', {
+      lineas: [{ productoId: maiz, cantidad: '10' }],
+      descuento: {
+        tipo: 'porcentaje',
+        valor: '25',
+        autorizacion: {
+          autorizadoPor: permiso.usuario?.id ?? '',
+          via: permiso.viaDeAutorizacion ?? 'presencial',
+        },
+      },
+      formaPago: 'efectivo',
+      numBoleta: null,
+    });
+
+    expect(resultado.venta.descuentoAutorizadoPor).toBe(idJimmy);
+    expect(resultado.venta.descuentoAutorizadoVia).toBe('remoto');
   });
 
   it('sin límite configurado para el rol, el tope es CERO: cualquier descuento pide PIN', () => {
@@ -389,7 +444,7 @@ describe('Descuento discrecional: el tope del rol decide si hace falta PIN', () 
     const resultado = venta.registrar(idCajera, 'venta', {
       lineas: [{ productoId: maiz, cantidad: '10' }],
       // 5 % cabe en el tope de 10 %: el autorizante sobra y no debe quedar.
-      descuento: { tipo: 'porcentaje', valor: '5', autorizadoPor: idJimmy },
+      descuento: { tipo: 'porcentaje', valor: '5', autorizacion: { autorizadoPor: idJimmy, via: 'presencial' } },
       formaPago: 'efectivo',
       numBoleta: null,
     });
@@ -886,7 +941,7 @@ describe('La auditoría deja rastro de la venta y de la autorización', () => {
 
     venta.registrar(idCajera, 'venta', {
       lineas: [{ productoId: maiz, cantidad: '10' }],
-      descuento: { tipo: 'porcentaje', valor: '30', autorizadoPor: idJimmy },
+      descuento: { tipo: 'porcentaje', valor: '30', autorizacion: { autorizadoPor: idJimmy, via: 'presencial' } },
       formaPago: 'efectivo',
       numBoleta: null,
     });

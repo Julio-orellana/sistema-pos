@@ -41,6 +41,62 @@ import type {
   SuperficieDeAutorizacion,
 } from '@main/database/repositories/bloqueos-de-autorizacion';
 
+/**
+ * QUÉ SUPERFICIE ACEPTA EL PIN REMOTO, Y CUÁL NO. Una sola tabla, acá.
+ *
+ * ## Por qué es una tabla y no un argumento de quien llama
+ *
+ * La verificación dual —probar el PIN normal de todos los administradores y
+ * después los remotos, y reportar cuál coincidió— vive desde el Prompt 13 en
+ * `autorizarComoAdministrador` y nunca estuvo duplicada. Lo que SÍ estaba
+ * repetido era **la política**: cada uno de los cuatro lugares que autoriza
+ * escribía `{ aceptaPinRemoto: true }` o `false` a mano, junto al nombre de la
+ * superficie. Dos datos que tienen que concordar siempre, decididos en archivos
+ * distintos, es una discrepancia esperando a ocurrir: alcanzaba con que alguien
+ * copiara un bloque y cambiara el nombre de la superficie sin cambiar el
+ * booleano para que una superficie empezara a aceptar un PIN que la
+ * documentación dice que no acepta, **sin que nada fallara**.
+ *
+ * Ahora la política viaja con la superficie y quien llama no puede
+ * contradecirla: no hay dónde escribir el booleano.
+ *
+ * ## Qué acepta cada una, y por qué
+ *
+ * | Superficie | ¿PIN remoto? | Razón |
+ * |---|---|---|
+ * | `salida_controlada` | **No** | El PIN remoto se pidió para autorizar diferencias de caja por teléfono. Dárselo además a cerrar la aplicación sería ampliarle el alcance más allá de lo pedido (§4.9). |
+ * | `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
+ * | `cierre_con_diferencia` | **Sí** | Es el caso para el que el PIN remoto se creó: un descuadre que hay que autorizar por teléfono. |
+ * | `descuento_excedente` | **Sí**, desde el 2026-09-11 | **DECISIÓN EXPLÍCITA DE JULIO, no una corrección.** Ver abajo. |
+ *
+ * ## `descuento_excedente`: por qué cambió, y por qué eso no afloja la regla
+ *
+ * Nació en el Prompt 19 aceptando **solo** el PIN normal, con este argumento:
+ * un permiso creado para un caso que termina sirviendo para varios deja de ser
+ * un permiso acotado, así que cada superficie nueva que lo acepte se pide y se
+ * decide aparte. El argumento era —y sigue siendo— correcto, y el código decía
+ * textualmente que ampliarlo exigía una decisión explícita.
+ *
+ * **Esa decisión se tomó el 2026-09-11**: Jimmy no siempre está en la tienda y
+ * un cliente no puede quedarse esperando en el mostrador a que el dueño
+ * vuelva. Así que esto **no corrige un error**: es exactamente el mecanismo que
+ * el diseño anterior previó, funcionando como se esperaba. El valor por omisión
+ * sigue siendo NO aceptar el remoto, y `salida_controlada` y
+ * `cierre_de_caja_ajena` siguen sin aceptarlo.
+ *
+ * Queda una contrapartida dicha en voz alta: **un descuento es dinero que sale
+ * de la venta**, y autorizarlo por teléfono es aprobarlo sin ver el ticket.
+ * Contra eso juega que el monto que se autoriza queda registrado con su vía, su
+ * autorizante y su asiento de auditoría, y que la alternativa real no era
+ * «autorizarlo mirando» sino «no poder venderlo».
+ */
+export const ACEPTA_PIN_REMOTO: Readonly<Record<SuperficieDeAutorizacion, boolean>> = {
+  salida_controlada: false,
+  cierre_de_caja_ajena: false,
+  cierre_con_diferencia: true,
+  descuento_excedente: true,
+};
+
 /** Intentos fallidos permitidos antes del bloqueo. */
 export const INTENTOS_MAXIMOS = 3;
 
@@ -201,24 +257,34 @@ export class ServicioDeAutenticacion {
 
   /**
    * Autoriza una acción administrativa con un PIN, sin saber de antemano qué
-   * administrador lo va a teclear.
+   * administrador lo va a teclear ni cuál de sus dos PIN va a usar.
    *
-   * Es lo que necesita la salida controlada: aparece un diálogo, alguien
-   * teclea cuatro dígitos y hay que averiguar si corresponden a ALGÚN
-   * administrador activo. Se prueba contra cada uno hasta encontrarlo, con el
-   * mismo limitador de intentos por usuario.
+   * **ES LA ÚNICA PUERTA DE AUTORIZACIÓN DEL SISTEMA**, y la usan las cuatro
+   * superficies. Aparece un diálogo, alguien teclea cuatro dígitos, y esta
+   * función averigua si corresponden a algún administrador activo y **por cuál
+   * vía**: presencial si coincidió su PIN normal, remoto si coincidió el de
+   * autorización a distancia.
+   *
+   * QUÉ SUPERFICIE ACEPTA EL PIN REMOTO NO SE LE PREGUNTA A QUIEN LLAMA: sale
+   * de `ACEPTA_PIN_REMOTO`, que está arriba en este mismo archivo. Antes era un
+   * argumento, y eso permitía que el nombre de la superficie y su política se
+   * escribieran por separado y terminaran discrepando sin que nada fallara.
+   *
+   * **CADA SUPERFICIE CONSERVA SU PROPIO CANDADO**, y eso no cambia porque dos
+   * de ellas acepten ahora el mismo PIN: `cierre_con_diferencia` y
+   * `descuento_excedente` comparten qué PIN aceptan y **no** comparten el
+   * contador de intentos. Bloquear una no bloquea la otra (§4.8), y hay pruebas
+   * de las diez combinaciones cruzadas.
    *
    * Probar contra varios usuarios es deliberado y no debilita nada: el PIN
    * solo autoriza si coincide con el de un administrador real, y el intento
-   * fallido se le cuenta a todos los administradores contra los que se probó,
-   * lo que hace que la fuerza bruta bloquee la cuenta en tres intentos igual.
+   * fallido cuenta UNA vez para la superficie, no una por administrador.
    */
   public autorizarComoAdministrador(
     pin: string,
     superficie: SuperficieDeAutorizacion = 'salida_controlada',
-    opciones: { readonly aceptaPinRemoto?: boolean } = {},
   ): ResultadoDeAutenticacion {
-    const aceptaPinRemoto = opciones.aceptaPinRemoto ?? false;
+    const aceptaPinRemoto = ACEPTA_PIN_REMOTO[superficie];
     const administradores = this.usuarios.listarPorRol('administrativo');
 
     if (administradores.length === 0) {

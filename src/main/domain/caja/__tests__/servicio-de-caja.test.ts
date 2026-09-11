@@ -327,8 +327,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
     const autorizacion = autenticacion.autorizarComoAdministrador(
       PIN_DE_JIMMY,
       'cierre_con_diferencia',
-      { aceptaPinRemoto: true },
-    );
+);
 
     expect(autorizacion.autenticado).toBe(true);
     expect(autorizacion.viaDeAutorizacion).toBe('presencial');
@@ -349,8 +348,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
     const autorizacion = autenticacion.autorizarComoAdministrador(
       PIN_REMOTO_DE_JIMMY,
       'cierre_con_diferencia',
-      { aceptaPinRemoto: true },
-    );
+);
 
     expect(autorizacion.autenticado).toBe(true);
     expect(autorizacion.viaDeAutorizacion).toBe('remoto');
@@ -369,8 +367,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
     const rechazo = autenticacion.autorizarComoAdministrador(
       PIN_DE_LA_CAJERA,
       'cierre_con_diferencia',
-      { aceptaPinRemoto: true },
-    );
+);
     expect(rechazo.autenticado).toBe(false);
   });
 
@@ -482,8 +479,7 @@ describe('Cerrar una caja que abrió OTRA persona', () => {
     const permiso = autenticacion.autorizarComoAdministrador(
       PIN_DE_JIMMY,
       'cierre_de_caja_ajena',
-      { aceptaPinRemoto: false },
-    );
+);
     expect(permiso.autenticado).toBe(true);
 
     const resultado = caja.intentarCerrar(
@@ -521,8 +517,7 @@ describe('Cerrar una caja que abrió OTRA persona', () => {
     const rechazo = autenticacion.autorizarComoAdministrador(
       PIN_REMOTO_DE_JIMMY,
       'cierre_de_caja_ajena',
-      { aceptaPinRemoto: false },
-    );
+);
     expect(rechazo.autenticado).toBe(false);
   });
 

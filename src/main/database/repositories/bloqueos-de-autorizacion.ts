@@ -25,9 +25,14 @@ export type SuperficieDeAutorizacion =
    */
   | 'cierre_de_caja_ajena'
   /**
-   * Aplicar un descuento que excede el tope del rol de quien vende. Acepta
-   * ÚNICAMENTE el PIN normal de un administrador, nunca el remoto: ese se pidió
-   * para autorizar diferencias de caja y extenderlo exige decisión explícita.
+   * Aplicar un descuento que excede el tope del rol de quien vende.
+   *
+   * **Acepta el PIN normal Y el remoto** desde el 2026-09-11. No siempre fue
+   * así: nació aceptando solo el normal, por el principio de alcance mínimo, y
+   * Julio decidió explícitamente ampliarlo para los casos en que Jimmy no está
+   * en la tienda y hay un cliente esperando. Qué superficie acepta qué está en
+   * una sola tabla, `ACEPTA_PIN_REMOTO` de `autenticacion.ts`; no se decide en
+   * quien llama.
    */
   | 'descuento_excedente';
 

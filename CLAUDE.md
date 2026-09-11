@@ -357,10 +357,13 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE.**
+**HAY UNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE: `0017_descuento_autorizado_via`**,
+la columna que registra si un descuento excedente se autorizó en persona o por
+teléfono. Se aplica como todas: mostrando antes el SQL exacto y con la
+aprobación explícita de Julio.
 
-La última fue `0016_configuracion_negocio`, el 2026-09-11, por la vía de
-siempre: SQL completo a la vista, aprobación explícita de Julio y evidencia
+La última aplicada fue `0016_configuracion_negocio`, el 2026-09-11, por la vía
+de siempre: SQL completo a la vista, aprobación explícita de Julio y evidencia
 consultada después contra el catálogo del proyecto.
 
 - Las **seis columnas** quedaron como manda el espejo, leídas de
@@ -875,10 +878,20 @@ Sincronizar el candado sería dañino con más de una terminal: el bloqueo de un
 caja dejaría bloqueada la otra, que es la negación de servicio que esta
 separación vino a eliminar.
 
-**Al agregar una superficie nueva** (por ejemplo, la autorización de descuentos
-de la decisión 6) hay que ampliar el `CHECK` de `bloqueos_de_autorizacion` con
-una migración nueva. Es deliberado: así el conjunto de superficies protegidas
-queda siempre a la vista y auditable.
+**Al agregar una superficie nueva** hay que ampliar el `CHECK` de
+`bloqueos_de_autorizacion` con una migración nueva. Es deliberado: así el
+conjunto de superficies protegidas queda siempre a la vista y auditable. Y hay
+que decidir explícitamente si acepta el PIN remoto, porque
+`ACEPTA_PIN_REMOTO` es un `Record` de todas las superficies y el compilador no
+deja agregar una sin contestar esa pregunta (§4.9).
+
+> **DOS SUPERFICIES QUE ACEPTAN EL MISMO PIN NO COMPARTEN CANDADO.** Desde el
+> 2026-09-11, `cierre_con_diferencia` y `descuento_excedente` aceptan las dos el
+> PIN remoto, y aun así cada una lleva su propio contador. Si lo compartieran,
+> un cajero que fallara tres veces al pedir un descuento dejaría a la tienda sin
+> poder cerrar una caja descuadrada, que es exactamente la negación de servicio
+> que esta separación vino a eliminar. Es un caso que antes no podía existir
+> —solo una superficie aceptaba el remoto— y tiene sus propias pruebas.
 
 ### 4.9 Caja: dos modos de contar efectivo y autorización dual
 
@@ -980,15 +993,28 @@ presencial, que es la más conservadora para la auditoría.
 en `ServicioDeAutenticacion.configurarPinRemoto`, no en la pantalla: una
 validación que vive en la interfaz se salta llamando al canal directamente.
 
-**La salida controlada NO acepta el PIN remoto**, solo el cierre con
-diferencia. La razón no es que cerrar la aplicación sea una acción física: es
-que el PIN remoto se pidió para UNA sola cosa, autorizar diferencias de caja
-por teléfono. Dárselo además a la salida controlada sería ampliarle el alcance
-más allá de lo que se pidió, y un permiso creado para un caso que termina
-sirviendo para varios deja de ser un permiso acotado. Cada superficie nueva que
-lo acepte tiene que pedirse y decidirse aparte. Es un parámetro por llamada
-(`aceptaPinRemoto`), así que ampliarlo más adelante es cambiar un argumento —
-pero es una decisión, no un descuido que haya que corregir.
+**QUÉ SUPERFICIE ACEPTA EL PIN REMOTO ESTÁ EN UNA SOLA TABLA**,
+`ACEPTA_PIN_REMOTO` en `src/main/domain/usuarios/autenticacion.ts`:
+
+| Superficie | ¿PIN remoto? | Razón |
+|---|---|---|
+| `cierre_con_diferencia` | **Sí** | Es el caso para el que el PIN remoto se creó. |
+| `descuento_excedente` | **Sí**, desde el 2026-09-11 | Decisión explícita de Julio. Ver §4.13. |
+| `salida_controlada` | **No** | El PIN remoto se pidió para una sola cosa, autorizar diferencias de caja por teléfono; dárselo además a cerrar la aplicación lo ampliaría más allá de lo pedido. |
+| `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
+
+**LA POLÍTICA VIVE EN LA TABLA, NO EN QUIEN LLAMA.** Antes era un parámetro
+(`aceptaPinRemoto`) que cada uno de los cuatro lugares de autorización escribía
+a mano junto al nombre de la superficie: dos datos que tienen que concordar
+siempre, decididos en archivos distintos. Alcanzaba con copiar un bloque y
+cambiar el nombre de la superficie sin tocar el booleano para que una superficie
+empezara a aceptar un PIN que la documentación dice que no acepta, **sin que
+nada fallara**. Ahora la política viaja con la superficie y quien llama no tiene
+dónde contradecirla.
+
+**El valor por omisión de una superficie nueva es NO aceptarlo**, y ampliarlo
+sigue exigiendo una decisión explícita: que se haya concedido para el descuento
+no es precedente para la próxima.
 
 #### Autorización del cierre descuadrado
 
@@ -1495,16 +1521,40 @@ Registrar una autorización que no hizo falta ensuciaría la auditoría con
 permisos que nadie usó, y `WHERE descuento_autorizado_por IS NOT NULL` dejaría
 de ser la lista de las excepciones reales.
 
-#### La autorización del descuento: superficie propia, sin PIN remoto
+#### La autorización del descuento: superficie propia, y desde el 2026-09-11 acepta el PIN remoto
 
 Superficie `descuento_excedente` (migración 013, no espejada), con su propio
-candado de intentos. **No acepta el PIN remoto**, por la misma razón de alcance
-de siempre: ese PIN se pidió para autorizar diferencias de caja por teléfono y
-nada más. Dárselo además al descuento sería ampliarle el alcance más allá de lo
-pedido, y un permiso creado para un caso que termina sirviendo para varios deja
-de ser un permiso acotado. Y acá el argumento es más fuerte que en la salida
-controlada: **un descuento es dinero que sale de la venta**, y autorizarlo a
-distancia sin ver el ticket es aprobar a ciegas.
+candado de intentos. **Acepta el PIN normal y el PIN remoto**, y el sistema
+determina cuál coincidió.
+
+> **ESTO CAMBIÓ, Y CAMBIÓ POR UNA DECISIÓN EXPLÍCITA DE JULIO DEL 2026-09-11,
+> NO PORQUE LA REGLA ANTERIOR ESTUVIERA MAL.**
+>
+> La superficie nació en el Prompt 19 aceptando **solo** el PIN normal, con este
+> argumento: ese PIN se pidió para autorizar diferencias de caja por teléfono, y
+> un permiso creado para un caso que termina sirviendo para varios deja de ser
+> un permiso acotado, así que **cada superficie nueva que lo acepte se pide y se
+> decide aparte**. El código decía textualmente que ampliarlo exigía una
+> decisión explícita.
+>
+> **Esa decisión se tomó.** El motivo del negocio es concreto: Jimmy no siempre
+> está en la tienda, y un cliente parado en el mostrador no puede esperar a que
+> vuelva para que le autoricen un descuento. Es decir: **el mecanismo funcionó
+> como estaba diseñado.** El valor por omisión siguió siendo «no», la ampliación
+> tuvo que pedirse, y se pidió.
+>
+> **EL PRINCIPIO DE ALCANCE MÍNIMO SIGUE VIGENTE Y NO SE AFLOJÓ.** Ninguna
+> superficie futura hereda esto. `salida_controlada` y `cierre_de_caja_ajena`
+> siguen sin aceptar el PIN remoto, cada una por su razón, y hay pruebas que lo
+> comprueban en el mismo archivo que comprueba la ampliación. Que esta se haya
+> concedido no es precedente para conceder la próxima sin pedirla.
+
+**La contrapartida, dicha en voz alta:** un descuento es dinero que sale de la
+venta, y autorizarlo por teléfono es aprobarlo **sin ver el ticket**. Es un
+riesgo real y se acepta a sabiendas. Lo que juega en contra de ese riesgo es que
+el monto queda registrado con su autorizante, **su vía** y su asiento de
+auditoría, y que la alternativa verdadera no era «autorizarlo mirando» sino «no
+poder vender».
 
 **Se muestra CUÁNTO se está por autorizar antes de pedir el código**: el
 descuento pedido, el tope del rol y el exceso. Mismo criterio que el cierre de
@@ -2131,7 +2181,12 @@ exactamente la clase de defecto que esa comprobación existe para atrapar.
 | **El rol `administrativo` NO se salta el mecanismo de descuento: tiene un tope más alto.** Se siembra en 100 % y Q1 000; el de `venta` queda en 10 % y Q20. | Una excepción por rol en el servicio, para que un administrador nunca pase por la comprobación; dejarlo sin fila, o sea tope cero; sembrarle un tope «ilimitado» | Una excepción en el código es el patrón «salvo que sea administrador» que §4.9 ya rechazó para el cierre de caja ajena, y que en este proyecto costó una vuelta con la intercepción de `Cmd+Q`: parece inofensiva y abre el hueco. Con un tope alto se obtiene el mismo resultado práctico —un administrador no se autoriza a sí mismo en el uso normal— y la regla sigue siendo una sola, legible en una tabla en vez de en una rama del servicio. Dejarlo en cero era peor ergonomía de la que parecía: no bastaba con que topara en los descuentos grandes, topaba en TODOS, incluido uno de Q1. Y «ilimitado» no se puede expresar: las dos columnas son decimales `NOT NULL` con piso cero y la ausencia de fila significa CERO, no infinito, así que habría que escribir un número mágico enorme que dentro de un año se leería como una decisión deliberada del negocio. **100 % sí es un techo honesto** —significa «puede descontar la venta entera», y el total ya tiene piso en cero—, de modo que por la vía del porcentaje el PIN nunca aparece; el Q1 000 del monto fijo es una cifra redonda y provisional que casi nunca es la que topa. **SALVEDAD: este número asume que el rol `administrativo` lo tiene el DUEÑO**, que hoy es el caso. Si se le asigna a un empleado de confianza que no es Jimmy, el 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere y **hay que revisarlo**. Depende del punto 6 de §6.2, que sigue abierto. | Prompt 21 — 2026-09-11 |
 | **Precio especial (por PRODUCTO, preconfigurado) y descuento discrecional (por VENTA, en el momento) son dos cosas distintas y no se mezclan.** Un ticket puede llevar los dos, en ese orden. | Un solo mecanismo de descuento que sirviera para las dos cosas; aplicar el precio especial como un descuento más sobre el total | Se decide en momentos distintos, por personas distintas y con controles distintos: el precio especial lo deja puesto un administrador de antemano y ya tuvo su autorización al configurarse; el descuento lo decide quien vende con el cliente enfrente y por eso tiene tope por rol y PIN. Fundirlos obligaría a elegir un solo control para los dos casos: o el administrador tendría que autorizar cada venta de un producto en promoción, o el vendedor podría rebajar la venta entera sin tope. Además se guardan en lugares distintos —`precios_especiales` contra `ventas`— y un auditor necesita poder separarlos: una promoción de temporada y un favor a un cliente no son el mismo hecho. Si hay varios precios especiales vigentes gana el más reciente y **no se acumulan**, porque dos promociones encimadas darían un precio que nadie configuró. | Prompt 19 — 2026-09-10 |
 | **La vigencia de un precio especial se compara POR DÍA, no por instante.** Una promoción cuyo `vigente_hasta` es hoy vale todo el día. | Comparar el instante completo, como hacía `listarVigentes` | El último día de una promoción es un día de promoción. Con comparación por instante, una promoción que vence «hoy» deja de aplicarse a las 00:00 y el cliente paga de más justo el día en que el cartel del mostrador todavía dice que está rebajado. Queda anotada la salvedad de zona horaria: `date()` trabaja sobre cadenas UTC y Guatemala es UTC−6, así que el «hoy» de la base se adelanta a las 18:00 locales. Para una promoción de varios días es indiferente; para una de un solo día habrá que decidirlo cuando exista una real, y es definición de negocio. | Prompt 19 — 2026-09-10 |
-| **`descuento_excedente` es una superficie de candado propia y NO acepta el PIN remoto** (migración 013, no espejada). | Reusar `cierre_con_diferencia`; aceptar el PIN remoto para poder autorizar por teléfono | La razón es de alcance, la misma de siempre: el PIN remoto se pidió para autorizar diferencias de caja por teléfono y nada más, y dárselo a otra acción sería ampliarlo más allá de lo pedido. Acá el argumento es incluso más fuerte que en la salida controlada: **un descuento es dinero que sale de la venta**, y autorizarlo a distancia sin ver el ticket es aprobar a ciegas; quien autoriza tiene que estar mirando la pantalla donde se le muestra el tope, el pedido y el exceso. No se reusa la superficie de la diferencia porque son candados independientes por diseño (§4.8) y fallar al autorizar un descuento no debe bloquear un corte de caja. | Prompt 19 — 2026-09-10 |
+| **`descuento_excedente` es una superficie de candado propia y NO acepta el PIN remoto** (migración 013, no espejada). **AMPLIADA en el Prompt 26 — ver la fila siguiente. NO revertida: la mitad de la superficie propia sigue vigente tal cual.** | Reusar `cierre_con_diferencia`; aceptar el PIN remoto para poder autorizar por teléfono | La razón es de alcance, la misma de siempre: el PIN remoto se pidió para autorizar diferencias de caja por teléfono y nada más, y dárselo a otra acción sería ampliarlo más allá de lo pedido. Acá el argumento es incluso más fuerte que en la salida controlada: **un descuento es dinero que sale de la venta**, y autorizarlo a distancia sin ver el ticket es aprobar a ciegas; quien autoriza tiene que estar mirando la pantalla donde se le muestra el tope, el pedido y el exceso. No se reusa la superficie de la diferencia porque son candados independientes por diseño (§4.8) y fallar al autorizar un descuento no debe bloquear un corte de caja. | Prompt 19 — 2026-09-10 |
+| **AMPLIACIÓN DECIDIDA, NO CORRECCIÓN: `descuento_excedente` acepta también el PIN remoto.** La superficie propia y su candado independiente siguen exactamente igual; lo único que cambia es qué PIN acepta. | Dejarla como estaba y que el cliente espere a que Jimmy vuelva a la tienda; ampliar de paso las otras dos superficies «por coherencia» | **LA FILA DE ARRIBA NO ESTABA EQUIVOCADA.** Decía que ampliar el alcance del PIN remoto exigía una decisión explícita, y el código lo repetía en un comentario. **Julio tomó esa decisión el 2026-09-11**, con un motivo de negocio concreto: Jimmy no siempre está en la tienda y un cliente parado en el mostrador no puede esperar a que vuelva. Es el mecanismo previsto funcionando —el valor por omisión fue «no», la ampliación tuvo que pedirse, y se pidió— y por eso se anota como ampliación y no como reversión. **EL PRINCIPIO DE ALCANCE MÍNIMO POR OMISIÓN SIGUE VIGENTE PARA CUALQUIER AMPLIACIÓN FUTURA NO SOLICITADA**, y se acotó a propósito: `salida_controlada` y `cierre_de_caja_ajena` siguen sin aceptarlo, con pruebas que lo comprueban en el mismo archivo que comprueba la ampliación, para que ninguna sesión futura lea esto como permiso para conceder la próxima sin pedirla. La contrapartida se asume a sabiendas: autorizar por teléfono es aprobar un descuento sin ver el ticket, y lo que juega en contra es que queda registrado con autorizante, vía y asiento de auditoría, y que la alternativa real no era «autorizarlo mirando» sino «no poder vender». | Prompt 26 — 2026-09-11 |
+| **Qué superficie acepta el PIN remoto pasa a ser una TABLA (`ACEPTA_PIN_REMOTO`), no un argumento de quien llama.** | Dejar el parámetro `aceptaPinRemoto` en cada llamada; un `if` por superficie dentro del servicio | La verificación dual —probar los PIN normales, después los remotos, y reportar cuál coincidió— **nunca estuvo duplicada**: vive en `autorizarComoAdministrador` desde el Prompt 13. Lo que sí estaba repetido era la POLÍTICA: los cuatro lugares que autorizan escribían `{ aceptaPinRemoto: true/false }` a mano al lado del nombre de la superficie. Dos datos que tienen que concordar siempre, decididos en archivos distintos, es una discrepancia esperando a ocurrir: alcanzaba con copiar un bloque y cambiar el nombre de la superficie sin tocar el booleano para que una superficie empezara a aceptar un PIN que la documentación dice que no acepta, **sin que nada fallara**. Con la tabla, quien llama no tiene dónde contradecir la política, y `Record<SuperficieDeAutorizacion, boolean>` obliga a decidir explícitamente qué acepta cada superficie nueva. Al hacer el cambio, el compilador marcó los cuatro llamados, que es exactamente la señal que se buscaba. **Cada superficie conserva su propio candado**: compartir qué PIN aceptan no es compartir contador, y hay pruebas nuevas del par `cierre_con_diferencia` ↔ `descuento_excedente`, un caso que antes no podía existir porque solo una superficie aceptaba el remoto. | Prompt 26 — 2026-09-11 |
+| **`ventas.descuento_autorizado_via` registra CÓMO se autorizó un descuento, y va siempre con el autorizante** (migración 017 y su espejo 0017). El asiento de auditoría también lleva la vía. | Deducir la vía de otro dato; no registrarla y quedarse solo con quién autorizó | Mientras la superficie aceptaba un solo PIN, la respuesta era siempre «presencial» y la columna habría sido ruido. Desde que acepta los dos, **«Jimmy autorizó Q40» dejó de ser una sola cosa**: autorizarlo frente al mostrador viendo el ticket y autorizarlo por teléfono sin verlo son dos hechos distintos, y es exactamente lo que un auditor va a querer separar. No se puede deducir de ningún otro dato guardado. La columna de la venta guarda el ESTADO final y el asiento guarda el HECHO, igual que con el cierre de caja. El par autorizante/vía se hace inseparable en las **tres** capas: un solo objeto en el tipo (`AutorizacionDeDescuento`, imposible construir uno sin el otro), el servicio descarta las dos mitades juntas cuando el descuento no excedía, y el CHECK de la base rechaza la fila. | Prompt 26 — 2026-09-11 |
+| **El CHECK de coherencia NO copia la forma de la migración 007: los `IS NOT NULL` van ADELANTE.** | Copiar literalmente `(via IS NULL AND por IS NULL) OR (via IN (...) AND por IS NOT NULL)`, que es la forma que ya estaba en el proyecto | **Se midió antes de escribir la migración, y la forma de la 007 NO rechaza un autorizante sin vía.** El motivo es la lógica de tres valores de SQL: con `via` en NULL, `via IN ('presencial','remoto')` no da FALSO sino NULL, la segunda rama entera da NULL, y **un CHECK pasa cuando su expresión da NULL**; solo falla cuando da FALSO. Así que `por` lleno con `via` vacía entraba sin protestar, justo la mitad que el comentario de la 007 decía proteger. En `caja_sesiones` el hueco está tapado por otra vía —el CHECK de la migración 008 exige `diferencia_autorizada_via IS NOT NULL` de forma explícita— así que **no hay ningún dato mal guardado hoy**, pero la forma de la 007 por sí sola es más débil de lo que aparenta. Acá no hay una segunda restricción que salve, así que se escribe con los `IS NOT NULL` adelante, que cortocircuitan a FALSO. Verificado con las ocho combinaciones, incluidos los dos UPDATE que romperían el par. | Prompt 26 — 2026-09-11 |
+| **El diálogo de descuento pide «el código de autorización», sin preguntar cuál de los dos PIN es.** | Que el cajero elija «normal» o «remoto» antes de teclear | Es el mismo texto que el cierre de caja descuadrado, que resolvió esto en el Prompt 13. **El cajero no puede saber cuál le dictaron**: le pasan cuatro dígitos por teléfono y los teclea. Pedirle que lo declare sería pedirle un dato que no tiene, y abriría la puerta a que la auditoría registre una vía equivocada por un error de quien atiende el mostrador. Lo determina el proceso principal, según cuál hash coincidió, probando primero todos los PIN normales para que ante una coincidencia improbable gane la lectura presencial, que es la más conservadora. | Prompt 26 — 2026-09-11 |
 | **`monto_esperado = monto_inicial + Σ ventas en efectivo COMPLETADAS de la sesión`.** Cierra el `TODO(ventas)` que estaba abierto desde el Prompt 13. | Sumar todas las ventas del turno; sumar por fecha en vez de por `caja_sesion_id`; sumar los subtotales | Las ventas con tarjeta nunca entran al cajón: ese dinero llega por el banco. Sumarlas haría que toda caja con ventas con tarjeta apareciera faltante por exactamente ese monto, y el cajero tendría que pedir una autorización de descuadre por un dinero que nadie perdió. Se filtra por `caja_sesion_id` y no por fecha porque un turno es un turno aunque cruce la medianoche. Se suman los TOTALES y no los subtotales porque el descuento ya está aplicado en el total, que es lo que el cliente pagó. La suma se hace con Decimal.js y no con `SUM()` de SQL: `ventas.total` es TEXT canónico y SQLite lo convertiría a punto flotante, que es justo lo que descuadraría el corte. | Prompt 19 — 2026-09-10 |
 | **El cálculo del descuento vive en `@shared/descuento`, compartido por las dos capas.** | Que el renderer calcule su propia versión para mostrar y el proceso principal la suya para guardar | Las dos capas necesitan el mismo número: la pantalla para mostrarle al cajero cuánto rebaja antes de cobrar, y el proceso principal para calcular el total que se guarda. Dos implementaciones discrepan tarde o temprano, y el síntoma sería el peor posible: el cliente paga un total distinto del que vio en pantalla. Lo que NO se comparte es la autorización —el tope por rol y el PIN—, que vive solo en el proceso principal, porque una validación que viviera en la ventana se saltaría llamando al canal directamente. | Prompt 19 — 2026-09-10 |
 | **`productos.cantidad_vendida` es una COLUMNA NUEVA (migración 015), no un cambio de `contador_ventas`.** Una cuenta veces, la otra cantidad, y las dos suben en el mismo `UPDATE`. | Hacer que `contador_ventas` subiera por la cantidad, como pedía el prompt; cambiarle el tipo a TEXT canónico; guardar la cantidad en milésimas dentro del mismo entero | `contador_ventas` es INTEGER y una venta a granel de 2.5 lb no cabe en un entero sin mentir: truncarla pierde media libra por venta, redondearla inventa media libra que nadie compró, y guardar milésimas dentro de una columna llamada «contador» engañaría a cualquiera que la lea. Cambiarle el tipo exigiría el rebuild de doce pasos de `productos` —que este proyecto ya descartó por el mismo motivo que en la migración 008: `venta_detalle` y `precios_especiales` la referencian y `PRAGMA foreign_keys=OFF` es ignorado dentro de una transacción—, mientras que `ADD COLUMN` no tiene ninguno de esos problemas. Y hay una razón de fondo: **las libras de maíz y las unidades de huevo no se pueden sumar en un mismo número**, así que ordenar la cuadrícula por cantidad pondría el maíz siempre arriba. Contar transacciones es la única medida comparable entre productos. Cuál de las dos debe ordenar la cuadrícula queda como definición de negocio abierta (§6.2, punto 14). | Prompt 19 — 2026-09-10 |

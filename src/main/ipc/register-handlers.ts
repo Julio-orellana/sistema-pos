@@ -415,8 +415,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             const permiso = dependencias.autenticacion.autorizarComoAdministrador(
               datos.pinCajaAjena,
               'cierre_de_caja_ajena',
-              { aceptaPinRemoto: false },
-            );
+);
             if (!permiso.autenticado || permiso.usuario === null) {
               return {
                 cerrada: false,
@@ -452,8 +451,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           const autorizacion = dependencias.autenticacion.autorizarComoAdministrador(
             datos.pin,
             'cierre_con_diferencia',
-            { aceptaPinRemoto: true },
-          );
+);
 
           if (!autorizacion.autenticado || autorizacion.usuario === null) {
             return {

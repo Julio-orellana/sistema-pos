@@ -21,6 +21,7 @@ import {
 } from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import {
+  ACEPTA_PIN_REMOTO,
   INTENTOS_MAXIMOS,
   SEGUNDOS_DE_BLOQUEO,
   ServicioDeAutenticacion,
@@ -476,20 +477,13 @@ describe('PIN de autorización remota', () => {
 
   it('el PIN normal autoriza como PRESENCIAL y el remoto como REMOTO', () => {
     servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-    const opciones = { aceptaPinRemoto: true };
 
-    const presencial = servicio.autorizarComoAdministrador(
-      PIN_DE_JIMMY,
-      'cierre_con_diferencia',
-      opciones,
-    );
+    // Ya no se le pasa ningún `aceptaPinRemoto`: la política sale de la
+    // superficie, y quien llama no tiene dónde contradecirla.
+    const presencial = servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'cierre_con_diferencia');
     expect(presencial.viaDeAutorizacion).toBe('presencial');
 
-    const remoto = servicio.autorizarComoAdministrador(
-      PIN_REMOTO,
-      'cierre_con_diferencia',
-      opciones,
-    );
+    const remoto = servicio.autorizarComoAdministrador(PIN_REMOTO, 'cierre_con_diferencia');
     expect(remoto.viaDeAutorizacion).toBe('remoto');
     expect(remoto.usuario?.id).toBe(idJimmy);
   });
@@ -573,8 +567,79 @@ describe('Las superficies de autorización tienen candados INDEPENDIENTES entre 
  * recuento crece rápido: cada superficie nueva agrega tantos pares como
  * superficies había, así que se generan en un bucle y no a mano.
  */
+describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
+  /*
+    Antes esto era un argumento que escribía quien llamaba, junto al nombre de
+    la superficie. Dos datos que tienen que concordar siempre, decididos en
+    archivos distintos, es una discrepancia esperando a ocurrir: alcanzaba con
+    copiar un bloque y cambiar el nombre de la superficie sin tocar el booleano
+    para que una superficie empezara a aceptar un PIN que la documentación dice
+    que no acepta, sin que nada fallara. Ahora la política viaja con la
+    superficie y no hay dónde contradecirla.
+  */
+  const PIN_REMOTO = '8642';
+
+  beforeEach(() => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+  });
+
+  it('la tabla cubre las CUATRO superficies, sin huecos', () => {
+    // El tipo `Record<SuperficieDeAutorizacion, boolean>` ya lo exige al
+    // compilar; esto lo comprueba también en ejecución, por si alguien agregara
+    // una superficie con un `as` de por medio.
+    expect(Object.keys(ACEPTA_PIN_REMOTO).sort()).toEqual([
+      'cierre_con_diferencia',
+      'cierre_de_caja_ajena',
+      'descuento_excedente',
+      'salida_controlada',
+    ]);
+  });
+
+  it('las DOS que lo aceptan son el cierre descuadrado y el descuento excedente', () => {
+    expect(ACEPTA_PIN_REMOTO.cierre_con_diferencia).toBe(true);
+    expect(ACEPTA_PIN_REMOTO.descuento_excedente).toBe(true);
+  });
+
+  it('las DOS que NO lo aceptan siguen sin aceptarlo', () => {
+    expect(ACEPTA_PIN_REMOTO.salida_controlada).toBe(false);
+    expect(ACEPTA_PIN_REMOTO.cierre_de_caja_ajena).toBe(false);
+  });
+
+  it('y el comportamiento real coincide con la tabla, superficie por superficie', () => {
+    // La mitad que de verdad importa: que la tabla no sea una declaración
+    // decorativa sino lo que el servicio hace.
+    for (const [superficie, acepta] of Object.entries(ACEPTA_PIN_REMOTO)) {
+      const intento = servicio.autorizarComoAdministrador(
+        PIN_REMOTO,
+        superficie as SuperficieDeAutorizacion,
+      );
+      expect(intento.autenticado, `${superficie} debería ${acepta ? 'aceptar' : 'rechazar'}`).toBe(
+        acepta,
+      );
+      if (acepta) {
+        expect(intento.viaDeAutorizacion).toBe('remoto');
+      }
+    }
+  });
+
+  it('el PIN NORMAL autoriza en las cuatro, acepten o no el remoto', () => {
+    // Ampliar qué acepta una superficie no le quitó nada a lo que ya aceptaba.
+    for (const superficie of Object.keys(ACEPTA_PIN_REMOTO)) {
+      const intento = servicio.autorizarComoAdministrador(
+        PIN_DE_JIMMY,
+        superficie as SuperficieDeAutorizacion,
+      );
+      expect(intento.autenticado, `${superficie} debe aceptar el PIN normal`).toBe(true);
+      expect(intento.viaDeAutorizacion).toBe('presencial');
+    }
+  });
+});
+
+// ===========================================================================
 describe('Los cinco candados son independientes: las diez combinaciones cruzadas', () => {
   const PIN_MALO = '0000';
+  /** El PIN de autorización a distancia de Jimmy, para los casos con remoto. */
+  const PIN_REMOTO = '8642';
 
   /** Las cuatro superficies de autorización. */
   const SUPERFICIES: readonly SuperficieDeAutorizacion[] = [
@@ -642,6 +707,63 @@ describe('Los cinco candados son independientes: las diez combinaciones cruzadas
       expect(bloqueada(superficie)).toBe(false);
     });
   }
+
+  // ---- EL CASO NUEVO: dos superficies que aceptan el MISMO PIN remoto ----
+  /*
+    Hasta el 2026-09-11 solo UNA superficie aceptaba el PIN remoto, así que este
+    caso no existía: era imposible bloquear una con el remoto y preguntarse si
+    la otra seguía aceptándolo. Ahora `cierre_con_diferencia` y
+    `descuento_excedente` aceptan los dos el mismo PIN, y la pregunta es
+    legítima: ¿compartir qué PIN aceptan hace que compartan candado?
+
+    NO. El candado es de la SUPERFICIE, no del PIN ni de la persona (§4.8). Si
+    lo compartieran, un cajero que fallara tres veces al pedir un descuento
+    dejaría a la tienda sin poder cerrar una caja descuadrada, que es
+    exactamente la negación de servicio que la separación vino a eliminar.
+  */
+  const PAREJA_QUE_ACEPTA_REMOTO: readonly SuperficieDeAutorizacion[] = [
+    'cierre_con_diferencia',
+    'descuento_excedente',
+  ];
+
+  for (const bloqueadaConRemoto of PAREJA_QUE_ACEPTA_REMOTO) {
+    const otra = PAREJA_QUE_ACEPTA_REMOTO.find((una) => una !== bloqueadaConRemoto);
+
+    it(`bloquear ${bloqueadaConRemoto} con el PIN REMOTO no bloquea ${String(otra)}`, () => {
+      servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+      agotar(bloqueadaConRemoto);
+
+      expect(bloqueada(bloqueadaConRemoto)).toBe(true);
+
+      // La otra sigue aceptando el remoto, que es la mitad que importa: no
+      // alcanza con que no esté bloqueada, tiene que seguir autorizando.
+      const permiso = servicio.autorizarComoAdministrador(PIN_REMOTO, otra ?? 'salida_controlada');
+      expect(permiso.autenticado).toBe(true);
+      expect(permiso.viaDeAutorizacion).toBe('remoto');
+    });
+
+    it(`y ${bloqueadaConRemoto} bloqueada tampoco acepta el remoto: el candado manda`, () => {
+      // La contraparte. Un candado que dejara pasar el PIN remoto no sería un
+      // candado: bastaría con tener el otro código para saltarlo.
+      servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+      agotar(bloqueadaConRemoto);
+
+      const intento = servicio.autorizarComoAdministrador(PIN_REMOTO, bloqueadaConRemoto);
+      expect(intento.autenticado).toBe(false);
+      expect(intento.codigo).toBe('AUTORIZACION_BLOQUEADA');
+    });
+  }
+
+  it('agotar las dos que aceptan el remoto NO impide iniciar sesión ni salir de la app', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    agotar('cierre_con_diferencia');
+    agotar('descuento_excedente');
+
+    expect(bloqueada('cierre_con_diferencia')).toBe(true);
+    expect(bloqueada('descuento_excedente')).toBe(true);
+    expect(bloqueada('salida_controlada')).toBe(false);
+    expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+  });
 
   it('cada una de las cuatro superficies lleva su propio contador en la base', () => {
     servicio.autorizarComoAdministrador(PIN_MALO, 'salida_controlada');

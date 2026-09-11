@@ -35,7 +35,10 @@ import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacio
 import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import type { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
-import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import type {
+  AutorizacionDeDescuento,
+  ServicioDeVenta,
+} from '@main/domain/venta/servicio-de-venta';
 import type { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
@@ -232,7 +235,12 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
             Segundo paso, con PIN: se verifica contra la superficie
             `descuento_excedente`, con su propio candado de intentos.
           */
-          let autorizadoPor: string | null = null;
+          /*
+            La autorización del descuento, si hizo falta. Es UN objeto y no dos
+            variables sueltas: el autorizante y la vía van siempre juntos, y la
+            base rechaza la venta entera si llegara uno sin el otro.
+          */
+          let autorizacion: AutorizacionDeDescuento | null = null;
 
           if (pedido.descuento !== null) {
             const veredicto = dependencias.venta.veredictoDeDescuento(
@@ -257,17 +265,20 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
               }
 
               /*
-                NO ACEPTA EL PIN REMOTO. Ese PIN se pidió para una sola cosa,
-                autorizar diferencias de caja por teléfono. Dárselo además al
-                descuento sería ampliarle el alcance más allá de lo pedido, y
-                un permiso creado para un caso que termina sirviendo para
-                varios deja de ser un permiso acotado. Cada superficie nueva
-                que lo acepte se pide y se decide aparte (§4.9).
+                ACEPTA EL PIN NORMAL Y EL REMOTO, y el sistema determina cuál
+                coincidió. No siempre fue así: la superficie nació aceptando
+                solo el normal, por el principio de alcance mínimo, y Julio
+                decidió explícitamente el 2026-09-11 ampliarla —Jimmy no siempre
+                está en la tienda y un cliente no puede esperar a que vuelva—.
+                Es el mecanismo previsto funcionando, no una corrección.
+
+                QUÉ ACEPTA CADA SUPERFICIE NO SE DECIDE ACÁ: sale de
+                `ACEPTA_PIN_REMOTO`, en `autenticacion.ts`. `salida_controlada`
+                y `cierre_de_caja_ajena` siguen sin aceptar el remoto.
               */
               const permiso = dependencias.autenticacion.autorizarComoAdministrador(
                 pedido.pinDescuento,
                 'descuento_excedente',
-                { aceptaPinRemoto: false },
               );
 
               if (!permiso.autenticado || permiso.usuario === null) {
@@ -282,7 +293,16 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
                 };
                 return rechazo;
               }
-              autorizadoPor = permiso.usuario.id;
+              /*
+                La vía la determinó la verificación, no el cajero: nunca se le
+                pregunta si el código que le dictaron es el normal o el remoto.
+                Viaja pegada al autorizante en un solo objeto, para que no se
+                pueda guardar uno sin el otro (migración 017).
+              */
+              autorizacion = {
+                autorizadoPor: permiso.usuario.id,
+                via: permiso.viaDeAutorizacion ?? 'presencial',
+              };
             }
           }
 
@@ -291,7 +311,7 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
             descuento:
               pedido.descuento === null
                 ? null
-                : { ...pedido.descuento, autorizadoPor },
+                : { ...pedido.descuento, autorizacion },
             formaPago: pedido.formaPago,
             numBoleta: pedido.numBoleta,
           });
