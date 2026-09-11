@@ -546,6 +546,10 @@ button:disabled {
 .campo input[type='text'],
 .campo input[type='search'],
 .campo input[type='number'],
+/* El de contraseña faltaba, y se vio en la pantalla de usuarios: el campo del
+   PIN quedaba diminuto y con el fondo que le pone el navegador por omisión,
+   en medio de campos altos y oscuros. */
+.campo input[type='password'],
 .campo select {
   width: 100%;
   /* 48 px de alto: objetivo táctil cómodo en la pantalla del mostrador. */

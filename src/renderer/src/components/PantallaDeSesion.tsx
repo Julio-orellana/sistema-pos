@@ -13,6 +13,7 @@ import { PantallaDeCaja } from './PantallaDeCaja';
 import { PantallaDeCategorias } from './PantallaDeCategorias';
 import { PantallaDePinRemoto } from './PantallaDePinRemoto';
 import { PantallaDeProductos } from './PantallaDeProductos';
+import { PantallaDeUsuarios } from './PantallaDeUsuarios';
 import { PantallaDeVenta } from './PantallaDeVenta';
 
 export interface PantallaDeSesionProps {
@@ -21,7 +22,14 @@ export interface PantallaDeSesionProps {
 }
 
 /** Dónde está parado el usuario dentro de la sesión. */
-type Vista = 'menu' | 'venta' | 'caja' | 'pin-remoto' | 'categorias' | 'productos';
+type Vista =
+  | 'menu'
+  | 'venta'
+  | 'caja'
+  | 'pin-remoto'
+  | 'categorias'
+  | 'productos'
+  | 'usuarios';
 
 export function PantallaDeSesion({
   sesion,
@@ -48,6 +56,9 @@ export function PantallaDeSesion({
   }
   if (vista === 'productos') {
     return <PantallaDeProductos alVolver={() => { setVista('menu'); }} />;
+  }
+  if (vista === 'usuarios') {
+    return <PantallaDeUsuarios alVolver={() => { setVista('menu'); }} />;
   }
 
   return (
@@ -86,6 +97,13 @@ export function PantallaDeSesion({
               onClick={() => { setVista('categorias'); }}
             >
               Categorías
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-usuarios"
+              onClick={() => { setVista('usuarios'); }}
+            >
+              Usuarios
             </button>
             <button
               type="button"

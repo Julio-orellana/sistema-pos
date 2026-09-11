@@ -29,6 +29,7 @@ import { obtenerBaseDeDatos } from '@main/database/connection';
 import { crearRepositorios, type Repositorios } from '@main/database/repositories';
 import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { SesionActual } from '@main/domain/usuarios/sesion';
+import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
@@ -383,6 +384,13 @@ app.whenReady().then(
     });
     const almacenDeFotos = new AlmacenDeFotos(app.getPath('userData'));
 
+    // Gestión de usuarios: cierra el hueco que dejaba el primer arranque, que
+    // solo sabía crear al primer administrador y solo con la tabla vacía.
+    const servicioDeUsuarios = new ServicioDeUsuarios({
+      usuarios: repositorios.usuarios,
+      auditoria: repositorios.auditoria,
+    });
+
     // La venta recibe la CONEXIÓN además de los repositorios: es quien delimita
     // la transacción que descuenta inventario, inserta la venta y su detalle y
     // mueve los contadores, todo o nada.
@@ -444,6 +452,7 @@ app.whenReady().then(
       usuarios: repositorios.usuarios,
       caja,
       venta: servicioDeVenta,
+      gestionDeUsuarios: servicioDeUsuarios,
       preciosEspeciales: repositorios.preciosEspeciales,
       catalogo: {
         categorias: servicioDeCategorias,

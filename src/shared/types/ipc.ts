@@ -109,6 +109,21 @@ export const CANALES_IPC = {
    * dentro de una sola transacción.
    */
   ventaCobrar: 'venta:cobrar',
+
+  // --- Gestión de usuarios --------------------------------------------------
+  /**
+   * Alta, edición, cambio de PIN y baja de usuarios.
+   *
+   * TODOS exigen rol administrativo. Hasta el Prompt 21 el sistema solo sabía
+   * crear al PRIMER administrador, y únicamente mientras la tabla estuviera
+   * vacía: no había forma de dar de alta al cajero de la tienda.
+   */
+  usuariosListar: 'usuarios:listar',
+  usuariosCrear: 'usuarios:crear',
+  usuariosEditar: 'usuarios:editar',
+  /** Acción APARTE de editar: el PIN es información sensible, no un campo más. */
+  usuariosCambiarPin: 'usuarios:cambiar-pin',
+  usuariosFijarActivo: 'usuarios:fijar-activo',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -785,6 +800,71 @@ export interface VentaRechazada {
 /** Resultado de intentar cobrar. */
 export type ResultadoDeCobro = VentaRegistrada | VentaRechazada;
 
+/** Largo máximo del nombre de un usuario. */
+const LARGO_MAXIMO_NOMBRE_USUARIO = 60;
+
+/**
+ * Payload de alta de usuario.
+ *
+ * El PIN viaja en claro por IPC, igual que en el ingreso y en el primer
+ * arranque: el renderer no puede hashear nada porque `@shared/auth` usa
+ * `node:crypto` y tiene prohibido llegar a la ventana. El hash se hace en el
+ * proceso principal y el PIN no vuelve nunca.
+ */
+export const esquemaUsuarioNuevo = z.object({
+  nombre: z.string().min(1).max(LARGO_MAXIMO_NOMBRE_USUARIO),
+  rol: z.enum(ROLES),
+  pin: z.string().min(LARGO_MINIMO_PIN_IPC).max(LARGO_MAXIMO_PIN_IPC),
+});
+
+/** Payload de alta ya validado. */
+export type UsuarioNuevoIpc = z.infer<typeof esquemaUsuarioNuevo>;
+
+/** Payload de edición. NO lleva PIN: cambiarlo es su propio canal. */
+export const esquemaUsuarioEditado = z.object({
+  id: z.string().min(1),
+  nombre: z.string().min(1).max(LARGO_MAXIMO_NOMBRE_USUARIO),
+  rol: z.enum(ROLES),
+});
+
+/** Payload de edición ya validado. */
+export type UsuarioEditadoIpc = z.infer<typeof esquemaUsuarioEditado>;
+
+/** Payload de cambio de PIN. */
+export const esquemaCambioDePin = z.object({
+  id: z.string().min(1),
+  pin: z.string().min(LARGO_MINIMO_PIN_IPC).max(LARGO_MAXIMO_PIN_IPC),
+});
+
+/**
+ * Un usuario tal como lo muestra la pantalla de gestión.
+ *
+ * NO LLEVA `pinHash` NI `pinRemotoHash`, y no es un olvido: el hash no tiene
+ * nada que hacer en la ventana. Tampoco sirve para nada allí, y exponerlo
+ * pondría al alcance de un renderer comprometido el material con el que
+ * atacar los PIN fuera de línea.
+ */
+export interface UsuarioIpc {
+  readonly id: string;
+  readonly nombre: string;
+  readonly rol: RolIpc;
+  readonly activo: boolean;
+  /** `true` si tiene configurado el PIN de autorización remota. */
+  readonly tienePinRemoto: boolean;
+  /** `true` si ahora mismo está bloqueado por intentos fallidos. */
+  readonly bloqueado: boolean;
+  /** `true` si es el usuario que está usando la aplicación en este momento. */
+  readonly esUnoMismo: boolean;
+  /**
+   * `true` si es el ÚNICO administrador activo.
+   *
+   * La pantalla lo usa para explicar por qué no se lo puede dar de baja, en vez
+   * de dejar que el intento falle con un mensaje que llega tarde.
+   */
+  readonly esElUnicoAdministrador: boolean;
+  readonly creadoEn: string;
+}
+
 // ---------------------------------------------------------------------------
 // Superficie que el preload expone al renderer
 // ---------------------------------------------------------------------------
@@ -890,6 +970,24 @@ export interface ApiPos {
      * exceso para mostrarlos, y la segunda con el PIN del administrador.
      */
     cobrar(pedido: PedidoDeCobro): Promise<RespuestaIpc<ResultadoDeCobro>>;
+  };
+
+  /**
+   * Gestión de usuarios. Todo exige rol administrativo.
+   *
+   * Cierra el hueco que existía desde el Prompt 3: hasta entonces solo se podía
+   * crear al primer administrador, y solo con la tabla vacía.
+   */
+  readonly usuarios: {
+    /** Todos, activos e inactivos, con los activos primero. */
+    listar(): Promise<RespuestaIpc<readonly UsuarioIpc[]>>;
+    crear(datos: UsuarioNuevoIpc): Promise<RespuestaIpc<UsuarioIpc>>;
+    /** Nombre y rol. El PIN NO se toca acá. */
+    editar(datos: UsuarioEditadoIpc): Promise<RespuestaIpc<UsuarioIpc>>;
+    /** Acción aparte: no pide el PIN anterior, para poder resolver un olvido. */
+    cambiarPin(id: string, pin: string): Promise<RespuestaIpc<UsuarioIpc>>;
+    /** Da de baja o vuelve a habilitar. Nunca borra. */
+    fijarActivo(id: string, activo: boolean): Promise<RespuestaIpc<UsuarioIpc>>;
   };
 
   /**

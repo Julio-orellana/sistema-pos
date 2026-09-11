@@ -87,13 +87,63 @@ export class RepositorioDeUsuarios extends RepositorioBase {
     return filas.map(aEntidad);
   }
 
-  /** Baja lógica: nunca se borra un usuario, porque sus ventas lo referencian. */
-  public desactivar(id: string): void {
+  /**
+   * TODOS los usuarios, activos e inactivos, con los activos primero.
+   *
+   * Es la vista de la pantalla de administración, la única que necesita ver a
+   * los inactivos: `listarActivos` sigue siendo lo que usa la pantalla de
+   * ingreso, que no debe ofrecer a nadie dado de baja.
+   */
+  public listarTodos(): Usuario[] {
+    const filas = this.base
+      .prepare('SELECT * FROM usuarios ORDER BY activo DESC, nombre')
+      .all() as FilaUsuario[];
+    return filas.map(aEntidad);
+  }
+
+  /**
+   * Cambia el nombre y el rol.
+   *
+   * NO toca el PIN, y no es un olvido: cambiarlo es una acción aparte
+   * (`actualizarPinHash`), con su propio flujo en la pantalla, porque es
+   * información sensible y no un campo más del formulario.
+   */
+  public actualizar(id: string, cambios: { readonly nombre: string; readonly rol: Rol }): void {
     this.ejecutar(() => {
       this.base
-        .prepare('UPDATE usuarios SET activo = 0, actualizado_en = ? WHERE id = ?')
-        .run(ahora(), id);
+        .prepare(
+          'UPDATE usuarios SET nombre = @nombre, rol = @rol, actualizado_en = @actualizado_en WHERE id = @id',
+        )
+        .run({ id, nombre: cambios.nombre, rol: cambios.rol, actualizado_en: ahora() });
     });
+  }
+
+  /**
+   * Baja o alta lógica. Nunca se borra un usuario, porque sus ventas y sus
+   * asientos de auditoría lo referencian.
+   *
+   * Al REACTIVAR se limpia el bloqueo por intentos: si alguien quedó bloqueado
+   * y después se lo dio de baja, volver a habilitarlo con el candado todavía
+   * puesto lo dejaría sin poder entrar por una razón que ya nadie recuerda.
+   */
+  public fijarActivo(id: string, activo: boolean): void {
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE usuarios
+              SET activo = @activo,
+                  intentos_fallidos = CASE WHEN @activo = 1 THEN 0 ELSE intentos_fallidos END,
+                  bloqueado_hasta   = CASE WHEN @activo = 1 THEN NULL ELSE bloqueado_hasta END,
+                  actualizado_en = @actualizado_en
+            WHERE id = @id`,
+        )
+        .run({ id, activo: aColumnaBooleana(activo), actualizado_en: ahora() });
+    });
+  }
+
+  /** Baja lógica: nunca se borra un usuario, porque sus ventas lo referencian. */
+  public desactivar(id: string): void {
+    this.fijarActivo(id, false);
   }
 
   /**

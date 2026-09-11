@@ -45,6 +45,7 @@ import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacio
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import type { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import { generarHashDePin } from '@shared/auth';
@@ -55,6 +56,7 @@ import {
   type DependenciasDeCatalogo,
 } from './catalogo';
 import { registrarManejadoresDeVenta } from './venta';
+import { registrarManejadoresDeUsuarios } from './usuarios';
 
 /** Dependencias que los manejadores necesitan del resto del proceso principal. */
 export interface DependenciasDeIpc {
@@ -72,6 +74,8 @@ export interface DependenciasDeIpc {
   readonly catalogo: Omit<DependenciasDeCatalogo, 'sesion'>;
   /** Registro de la venta: la transacción que descuenta inventario y cobra. */
   readonly venta: ServicioDeVenta;
+  /** Alta, edición, cambio de PIN y baja de usuarios. Todo con rol administrativo. */
+  readonly gestionDeUsuarios: ServicioDeUsuarios;
   /** Precios especiales vigentes, para resolver el precio efectivo. */
   readonly preciosEspeciales: RepositorioDePreciosEspeciales;
 }
@@ -95,6 +99,13 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     autenticacion: dependencias.autenticacion,
     preciosEspeciales: dependencias.preciosEspeciales,
     usuarios: dependencias.usuarios,
+  });
+  // La gestión de usuarios vive en su propio archivo y exige rol
+  // administrativo en cada canal, igual que el catálogo.
+  registrarManejadoresDeUsuarios({
+    sesion: dependencias.sesion,
+    usuarios: dependencias.gestionDeUsuarios,
+    repositorioDeUsuarios: dependencias.usuarios,
   });
 
   ipcMain.handle(

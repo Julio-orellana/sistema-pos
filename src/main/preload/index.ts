@@ -21,6 +21,9 @@ import {
   type EstadoDeVenta,
   type PedidoDeCobro,
   type ResultadoDeCobro,
+  type UsuarioEditadoIpc,
+  type UsuarioIpc,
+  type UsuarioNuevoIpc,
   type FotoElegidaIpc,
   type ProductoEditadoIpc,
   type ProductoIpc,
@@ -167,6 +170,25 @@ const apiPos: ApiPos = {
     cobrar: (pedido: PedidoDeCobro): Promise<RespuestaIpc<ResultadoDeCobro>> =>
       ipcRenderer.invoke(CANALES_IPC.ventaCobrar, pedido) as Promise<
         RespuestaIpc<ResultadoDeCobro>
+      >,
+  },
+
+  usuarios: {
+    listar: (): Promise<RespuestaIpc<readonly UsuarioIpc[]>> =>
+      ipcRenderer.invoke(CANALES_IPC.usuariosListar) as Promise<
+        RespuestaIpc<readonly UsuarioIpc[]>
+      >,
+    crear: (datos: UsuarioNuevoIpc): Promise<RespuestaIpc<UsuarioIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.usuariosCrear, datos) as Promise<RespuestaIpc<UsuarioIpc>>,
+    editar: (datos: UsuarioEditadoIpc): Promise<RespuestaIpc<UsuarioIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.usuariosEditar, datos) as Promise<RespuestaIpc<UsuarioIpc>>,
+    cambiarPin: (id: string, pin: string): Promise<RespuestaIpc<UsuarioIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.usuariosCambiarPin, { id, pin }) as Promise<
+        RespuestaIpc<UsuarioIpc>
+      >,
+    fijarActivo: (id: string, activo: boolean): Promise<RespuestaIpc<UsuarioIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.usuariosFijarActivo, { id, activo }) as Promise<
+        RespuestaIpc<UsuarioIpc>
       >,
   },
 

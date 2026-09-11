@@ -14,7 +14,7 @@
  *   2. el aviso salía en la cabecera de un formulario más alto que la
  *      pantalla, y al pulsar el botón —abajo— quedaba fuera de la vista.
  *
- * Desde el módulo de venta recorre además el CICLO COMPLETO DE COBRO, que es
+ * Recorre además el CICLO COMPLETO DE COBRO y el alta de un usuario, que es
  * lo que la tienda hace todo el día: abrir caja, armar el ticket, cobrar y
  * quedar lista para la siguiente venta. Ninguna prueba de Vitest puede decir
  * si después de cobrar el ticket quedó de verdad vacío en la ventana, y un
@@ -302,6 +302,51 @@ async function main() {
       'el catálogo se releyó después de cobrar',
       inventarioEnPantalla.includes('Maíz blanco') ? 'catálogo presente' : 'catálogo ausente (mal)',
       inventarioEnPantalla.includes('Maíz blanco'),
+    );
+    // =======================================================================
+    // 5. Gestión de usuarios: el hueco que cerró el Prompt 21.
+    // =======================================================================
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-usuarios').click();
+    await prueba('lista-de-usuarios').waitFor({ timeout: ESPERA_CORTA });
+
+    // El administrador que creó el primer arranque es el único que hay, y es
+    // uno mismo: las dos razones por las que no se lo puede dar de baja.
+    const bajaDelUnico = prueba('usuario-cambiar-estado').first();
+    comprobar(
+      'no se ofrece dar de baja al único administrador, que además es uno mismo',
+      'el botón deshabilitado',
+      (await bajaDelUnico.isDisabled()) ? 'deshabilitado' : 'habilitado (mal)',
+      await bajaDelUnico.isDisabled(),
+    );
+
+    await prueba('usuario-nombre').fill('Cajera de verificación');
+    await prueba('usuario-rol').selectOption('venta');
+    await prueba('usuario-pin').fill('1357');
+    await prueba('usuario-guardar').click();
+    await prueba('usuarios-aviso').waitFor({ timeout: ESPERA_CORTA });
+
+    const filas = await prueba('fila-de-usuario').count();
+    comprobar(
+      'se puede dar de alta a un segundo usuario después del primer arranque',
+      '2 usuarios en la lista',
+      `${String(filas)} usuarios`,
+      filas === 2,
+    );
+
+    // Y el alta sirve para algo solo si esa persona puede entrar: tiene que
+    // aparecer ofrecida en la pantalla de ingreso.
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await ventana.getByRole('button', { name: 'Cerrar sesión' }).click();
+    await prueba('pantalla-de-ingreso').waitFor({ timeout: ESPERA_CORTA });
+    const enElIngreso = (await ventana.locator('body').textContent()) ?? '';
+    comprobar(
+      'la persona recién creada se ofrece en la pantalla de ingreso',
+      'aparece "Cajera de verificación"',
+      enElIngreso.includes('Cajera de verificación') ? 'aparece' : 'no aparece (mal)',
+      enElIngreso.includes('Cajera de verificación'),
     );
   } catch (error) {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);

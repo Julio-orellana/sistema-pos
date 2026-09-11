@@ -652,6 +652,69 @@ PIN por defecto en el código**, ni siquiera "temporal". El canal
 vacía: sin esa condición sería una puerta para crearse un administrador desde
 la interfaz en cualquier momento.
 
+#### Gestión de usuarios: el hueco que el primer arranque dejaba abierto
+
+**ESTE HUECO EXISTIÓ DESDE EL PROMPT 3 Y SE CERRÓ EN EL PROMPT 21.** Durante
+todo ese tiempo el sistema sabía crear **un** usuario: el primer administrador,
+en el primer arranque, y **solo mientras la tabla estuviera completamente
+vacía**. Después de eso no había ninguna forma de agregar a nadie. El
+requerimiento pedía desde el principio «usuario de venta y usuario
+administrativo», así que la tienda no podía siquiera dar de alta a su cajero:
+el sistema no estaba completo con un solo usuario creado el primer día.
+
+Lo cierra `ServicioDeUsuarios`, con su pantalla en `PantallaDeUsuarios`. Cuatro
+operaciones: crear, editar nombre y rol, cambiar el PIN y dar de baja o
+reactivar.
+
+**EL HASH NO SE REIMPLEMENTA.** Se usa `@shared/auth`, el mismo módulo scrypt
+del primer arranque y del ingreso. Dos implementaciones de hash en el mismo
+proyecto es la forma más segura de terminar con usuarios que no pueden entrar
+porque su PIN se guardó con el otro formato.
+
+**CAMBIAR EL PIN ES UNA ACCIÓN APARTE**, con su propio canal, su propio diálogo
+y su propio nombre en la auditoría. No es un campo más del formulario de
+edición: es información sensible, y mezclarlo invitaría a tocarlo sin querer al
+corregir un acento en el nombre.
+
+**NO SE PIDE EL PIN ANTERIOR**, y es deliberado: el caso que hay que resolver es
+justamente el del cajero que lo olvidó. Exigir el viejo dejaría a esa persona
+sin forma de volver a entrar, que es el problema que la operación existe para
+arreglar. Quien la ejecuta ya es un administrador con sesión iniciada, y eso es
+lo que la autoriza. **El PIN nuevo no se registra en la auditoría**, ni en claro
+ni hasheado; lo que queda es el hecho: a quién se le cambió, quién lo cambió y
+cuándo.
+
+**NUNCA SE BORRA UN USUARIO**, igual que con productos y categorías. Se da de
+baja: deja de aparecer en la pantalla de ingreso y no entra aunque acierte el
+PIN, pero **sus ventas y sus asientos de auditoría quedan intactos**, porque son
+el historial de la tienda y no le pertenecen a la cuenta. Reactivar además
+**limpia el bloqueo por intentos**: volver a habilitar a alguien con el candado
+todavía puesto lo dejaría afuera por una razón que ya nadie recuerda.
+
+##### Dos invariantes que solo este servicio puede proteger
+
+| Invariante | Por qué no puede vivir en otro lado |
+|---|---|
+| **Siempre queda un administrador activo** | El esquema no sabe contar administradores. Y si se pierde el último, la tienda se queda sin poder abrir caja, cargar catálogo ni gestionar usuarios, **sin vuelta atrás**: el primer arranque solo se ofrece con la tabla VACÍA, y dar de baja no la vacía. Se bloquea tanto la baja como quitarle el rol. |
+| **Nadie se cambia a sí mismo el rol ni se da de baja** | Es un pie en el que dispararse sin uso legítimo: quien quiera irse lo da de baja otro administrador. Además dejaría la sesión viva con una identidad que ya no corresponde a lo que dice la base. Corregirse el PROPIO nombre sí se permite: no tiene ningún riesgo. |
+
+La pantalla esconde esos botones y explica por qué en el `title`, pero eso es
+comodidad: quien de verdad rechaza es el servicio, y una pantalla se salta
+llamando al canal.
+
+##### El guard de rol, también acá
+
+Los cinco canales de `src/main/ipc/usuarios.ts` van envueltos en
+`requiereRol(sesion, 'administrativo', …)`. Hay una prueba que **cuenta** los
+`ipcMain.handle` del archivo y exige que haya tantos guards como canales: el
+riesgo real no es que el guard esté mal escrito, es que alguien agregue un sexto
+canal el año que viene y se olvide de envolverlo.
+
+**El DTO que cruza a la ventana no lleva `pin_hash` ni `pin_remoto_hash`.** El
+hash no le sirve de nada a la interfaz, y exponerlo pondría al alcance de un
+renderer comprometido el material con el que atacar los PIN fuera de línea. Lo
+que sí viaja es si el PIN remoto está configurado, que es un sí o un no.
+
 #### Sesión
 
 Vive **en memoria del proceso principal** (`SesionActual`) y **no se
@@ -1486,6 +1549,9 @@ medida comparable entre productos.
 | **Un `ErrorDeNegocio` cruza el puente IPC con SU código y SU mensaje**, no envuelto en un genérico. | Devolver siempre «La operación no pudo completarse» y dejar el detalle en la bitácora | Los mensajes de negocio están escritos para que los lea una persona frente a la pantalla —«El precio no puede ser negativo»— y esconderlos detrás de un genérico deja a quien carga el catálogo sin saber qué corregir. Era además lo que §4.7 ya decía que pasaba («el mensaje llega a la interfaz ya traducido») y no era cierto. Cualquier otro error sí se generaliza: un fallo inesperado no debe filtrar detalles internos a la ventana. El envoltorio vive en un solo lugar, `src/main/ipc/respuesta.ts`, para que ningún módulo tenga su propia variante. | Prompt 15 — 2026-09-07 |
 | **`playwright-core` como devDependency, en modo Electron, para `npm run verify:pantallas`.** | No verificar la interfaz automáticamente y confiar en pruebas manuales; usar el paquete `playwright` completo; escribir un arnés propio sobre el protocolo de depuración de Chrome | Hay defectos que ninguna prueba de Vitest puede ver: si el mensaje correcto LLEGA a la ventana y si quedó dentro de la parte visible. Los dos que se encontraron eran de esa clase y aparecieron a mano. Se eligió `playwright-core` y no `playwright` porque el primero **no tiene guiones de instalación ni dependencias** y por lo tanto no descarga navegadores —medido: tras instalarlo y usarlo no existe ninguna carpeta `ms-playwright`—, y su modo `_electron` maneja el binario de Electron que el proyecto ya tiene. **No viaja en el instalador de Jimmy**, comprobado empaquetando: `electron-builder` reescribe el `package.json` que va dentro del asar dejando solo `dependencies`, y una búsqueda de «playwright» en los 935 archivos del paquete y en todo el `.app` no devuelve nada. | Prompt 16 — 2026-09-08 |
 | **Los mensajes al usuario no inventan razones de negocio.** «El precio no puede ser negativo», no «…Se permite 0, para muestras y regalos». | Explicar en el mensaje para qué sirve cada regla | Que un precio 0 se acepte es una decisión técnica del esquema; PARA QUÉ le sirve a la tienda es una definición de negocio que Jimmy no confirmó. Un mensaje que se la atribuya convierte una suposición nuestra en algo que parece decidido por él, y eso es exactamente lo que este proyecto no puede hacer: el resto de la documentación distingue con cuidado lo confirmado de lo supuesto. La regla vale para todo texto que vea una persona. | Prompt 16 — 2026-09-08 |
+| **Gestión de usuarios completa: crear, editar, cambiar PIN y dar de baja, en cualquier momento.** Cierra un hueco de alcance abierto desde el Prompt 3. | Dejar solo el primer arranque; permitir crear usuarios desde una pantalla sin rol; borrar usuarios en vez de darlos de baja | Hasta acá el sistema sabía crear UN usuario —el primer administrador, y solo con la tabla vacía—, así que la tienda no podía dar de alta a su propio cajero. El requerimiento pedía «usuario de venta y usuario administrativo» desde el principio: el sistema no estaba completo con un solo usuario creado el primer día. Se reutiliza `@shared/auth` para el hash y no se escribe uno nuevo, porque dos implementaciones en el mismo proyecto terminan en usuarios que no pueden entrar. **Nunca se borra**, igual que con productos y categorías: un usuario de baja conserva sus ventas y sus asientos de auditoría, que son el historial de la tienda y no le pertenecen a la cuenta. | Prompt 21 — 2026-09-11 |
+| **Cambiar el PIN es una acción APARTE de editar, y NO pide el PIN anterior.** | Un campo más en el formulario de edición; exigir el PIN viejo antes de cambiarlo | Mezclarlo con el nombre invitaría a tocarlo sin querer al corregir un acento, y además es un hecho distinto para la auditoría, con su propia acción. Y no se pide el anterior porque el caso que hay que resolver es el del cajero que lo OLVIDÓ: exigir el viejo lo dejaría sin forma de volver a entrar, que es justamente el problema que esta operación existe para arreglar. Quien la ejecuta ya es un administrador con sesión iniciada, y eso es lo que la autoriza. El PIN nuevo no se registra en la auditoría ni en claro ni hasheado: lo que queda es a quién se le cambió, quién lo cambió y cuándo. | Prompt 21 — 2026-09-11 |
+| **Siempre tiene que quedar un administrador activo, y nadie se cambia a sí mismo el rol ni se da de baja.** | Confiar en que nadie lo haga; avisar en la pantalla y dejar pasar la operación | Perder al último administrador deja la tienda sin poder abrir caja, cargar catálogo ni gestionar usuarios, y **no hay vuelta atrás**: el primer arranque solo se ofrece con la tabla VACÍA, y dar de baja no la vacía. Es un invariante que ninguna otra capa puede proteger, porque el esquema no sabe contar administradores y la pantalla se salta llamando al canal. Lo mismo vale para quitarle el rol, no solo para darlo de baja. La regla de «ni a uno mismo» evita además dejar la sesión viva con una identidad que ya no corresponde a la base; corregirse el PROPIO nombre sí se permite, porque no tiene riesgo. | Prompt 21 — 2026-09-11 |
 | **El orden de la cuadrícula de venta lo decide `contador_ventas` (VECES vendido), y `cantidad_vendida` queda para reportes.** Cerrado sin consultar a Jimmy. | Ordenar por `cantidad_vendida`; ofrecer las dos y dejar elegir en configuración | Contar transacciones es la **única medida comparable entre productos**: las libras de maíz y las unidades de huevo no se pueden sumar en un mismo número, así que ordenar por cantidad pondría el maíz —que sale de a cien libras— por encima de todo lo que se vende por unidad, y la cuadrícula dejaría de reflejar lo que el cajero busca. La pregunta había quedado abierta como punto 14 de §6.2; Julio la cerró en el Prompt 20 sin necesidad de consultarla, porque no es una preferencia del negocio sino una consecuencia de que las unidades no sean conmensurables. `cantidad_vendida` sigue existiendo y sigue subiendo con cada venta: su destino son los reportes y el futuro módulo de mermas, no el orden de los íconos. | Prompt 20 — 2026-09-10 |
 | **El tope de descuento se siembra con un guion aparte, `seed:limites`, y NO con una migración ni junto al catálogo de ejemplo.** | Sembrarlo en una migración; incluirlo en `seed:ejemplo`; poner un valor por omisión en el código cuando falta la fila | Una migración es historial permanente del esquema, y un tope de descuento es **configuración** que un administrador cambia cuando quiere: sembrarlo ahí dejaría el valor de un guion de desarrollo metido para siempre en la base de la tienda. Meterlo en `seed:ejemplo` juntaría dos cosas distintas —mercadería inventada y configuración— y haría que limpiar el catálogo le quitara el tope a alguien de paso. Y un valor por omisión en el código sería lo peor de todo: convertiría un olvido de configuración en un permiso, que es exactamente lo que el tope cero evita. El guion imprime el tope de cada rol al terminar, para que un rol sin fila se lea como «tope cero» y no como «sin límite». **No reemplaza la pantalla de configuración**, que sigue pendiente. | Prompt 20 — 2026-09-10 |
 | **El rol `administrativo` NO se salta el mecanismo de descuento: tiene un tope más alto.** Se siembra en 100 % y Q1 000; el de `venta` queda en 10 % y Q20. | Una excepción por rol en el servicio, para que un administrador nunca pase por la comprobación; dejarlo sin fila, o sea tope cero; sembrarle un tope «ilimitado» | Una excepción en el código es el patrón «salvo que sea administrador» que §4.9 ya rechazó para el cierre de caja ajena, y que en este proyecto costó una vuelta con la intercepción de `Cmd+Q`: parece inofensiva y abre el hueco. Con un tope alto se obtiene el mismo resultado práctico —un administrador no se autoriza a sí mismo en el uso normal— y la regla sigue siendo una sola, legible en una tabla en vez de en una rama del servicio. Dejarlo en cero era peor ergonomía de la que parecía: no bastaba con que topara en los descuentos grandes, topaba en TODOS, incluido uno de Q1. Y «ilimitado» no se puede expresar: las dos columnas son decimales `NOT NULL` con piso cero y la ausencia de fila significa CERO, no infinito, así que habría que escribir un número mágico enorme que dentro de un año se leería como una decisión deliberada del negocio. **100 % sí es un techo honesto** —significa «puede descontar la venta entera», y el total ya tiene piso en cero—, de modo que por la vía del porcentaje el PIN nunca aparece; el Q1 000 del monto fijo es una cifra redonda y provisional que casi nunca es la que topa. **SALVEDAD: este número asume que el rol `administrativo` lo tiene el DUEÑO**, que hoy es el caso. Si se le asigna a un empleado de confianza que no es Jimmy, el 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere y **hay que revisarlo**. Depende del punto 6 de §6.2, que sigue abierto. | Prompt 21 — 2026-09-11 |
@@ -1548,7 +1614,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 3 | ¿El precio de mayoreo se activa por cantidad comprada, por tipo de cliente, o ambos? | Define el modelo de precios del catálogo. | Abierto |
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
 | 5 | ~~¿El PIN de autorización es por usuario administrador o uno solo para la tienda?~~ | — | **RESUELTO (Prompt 10): por usuario.** Cada usuario tiene su PIN con hash scrypt y sal propia; la auditoría registra el `usuario_id` real de quien autorizó. `POS_PIN_ADMINISTRADOR` ya no existe. Ver la sección 4.7. |
-| 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? **Y quién tiene en la práctica el rol `administrativo`: solo el dueño, o también un encargado de confianza?** | Define la matriz de permisos (RBAC). **Y de esto depende el tope de descuento del rol administrativo**, que hoy se siembra en 100 % asumiendo que lo tiene el dueño (§4.13): si lo tuviera un empleado, ese 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere, y el número habría que revisarlo. | Abierto |
+| 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? **Y quién tiene en la práctica el rol `administrativo`: solo el dueño, o también un encargado de confianza?** | Define la matriz de permisos (RBAC). Desde el Prompt 21 se pueden crear usuarios de los dos roles desde la pantalla, así que la pregunta dejó de ser teórica: el día que Jimmy le dé el rol administrativo a alguien más, hay que revisar el tope de descuento. **Y de esto depende el tope de descuento del rol administrativo**, que hoy se siembra en 100 % asumiendo que lo tiene el dueño (§4.13): si lo tuviera un empleado, ese 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere, y el número habría que revisarlo. | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? ¿Hace falta autorización de administrador para bajar inventario, como la hay para un descuadre de caja? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. **Ya hay un hueco concreto esperándola:** `ServicioDeProductos.ajustarInventario` solo SUMA y rechaza cualquier cantidad no positiva, a propósito, para no convertir la recepción de mercadería en una vía de bajar inventario sin controles. El módulo de mermas tiene que traer su propia regla de autorización. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
 | 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
@@ -1572,9 +1638,12 @@ negocio:
   ni catálogo, ni usuarios.
 - Los repositorios solo leen y escriben. No contienen ninguna regla de
   negocio: eso llega módulo por módulo en los prompts siguientes.
-- **Sí existe** el módulo de usuarios: autenticación con PIN, bloqueo por
-  intentos, sesión en memoria, guard de permisos, primer arranque y pantalla de
-  ingreso. Ver la sección 4.7.
+- **Sí existe** el módulo de usuarios completo: autenticación con PIN, bloqueo
+  por intentos, sesión en memoria, guard de permisos, primer arranque, pantalla
+  de ingreso y **gestión de usuarios** —crear, editar, cambiar el PIN y dar de
+  baja o reactivar, en cualquier momento y con rol administrativo—. Ver la
+  sección 4.7. Hasta el Prompt 21 solo existía el primer arranque, así que no
+  había forma de dar de alta al cajero de la tienda: ese hueco está cerrado.
 - **Sí existe** el módulo de caja: apertura y cierre con los dos modos de
   captura, arqueo por denominaciones, autorización dual del descuadre, una sola
   caja en todo el sistema y autorización para cerrar la caja de otra persona.
@@ -1643,7 +1712,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     respuesta.ts   envoltorio único de respuesta; todo manejador pasa por aquí
   preload/      único puente hacia el renderer (expone window.pos)
   domain/       módulos de dominio
-    usuarios/   autenticación, bloqueo por intentos, sesión y permisos
+    usuarios/   autenticación, bloqueo por intentos, sesión, permisos y gestión de usuarios
     caja/       apertura y cierre del turno, arqueo por denominaciones
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
     venta/      precio efectivo, descuento y la transacción que registra la venta
