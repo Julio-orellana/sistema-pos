@@ -143,9 +143,118 @@ vulnerabilidad justo en el escenario para el que existe.
 |---|---|---|
 | **Borrar** ventas, productos o cualquier fila de la nube | **No.** No hay política de `DELETE` para el rol terminal, en ninguna tabla. | Borrar nunca es necesario: este proyecto no borra nada de negocio (§4.11). Sin política, PostgREST devuelve 403 y la fila queda. |
 | **Insertar** ventas falsas, productos falsos, asientos falsos | **Sí, hasta que se revoque.** Insertar es lo que la terminal hace. | Lo que inserte queda **atribuido a esa terminal** (`auth.uid()` en el JWT) y con fecha de servidor. Al restaurar, todo lo insertado después del robo se puede identificar y descartar por fecha. Y no puede insertar sin que quede la marca. |
-| **Modificar** filas ya subidas: cambiar un precio, un total, un nombre | **Parcialmente.** `UPDATE` se concede **solo en las tablas que lo necesitan** (sección 2.3), y **nunca** en `ventas`, `venta_detalle`, `recibos`, `auditoria_log` ni `caja_sesion_denominaciones`. | Las cinco tablas del dinero cobrado son de **solo inserción en la nube**: no hay política de `UPDATE` para la terminal. `auditoria_log` además es inmutable por trigger en los dos esquemas. El ladrón puede ensuciar el catálogo hasta la revocación; **no puede reescribir el historial de ventas**. |
-| **Leer** todo el historial desde la nube | **Solo lo que la política de `SELECT` le dé**, que es lo mínimo que `UPDATE` exige (sección 2.3). | Ya lo tiene en el disco; lo que la nube agregaría son las ventas **futuras** de la terminal de reemplazo. Ver el riesgo abierto en 8.2. |
+| **Modificar** filas ya subidas: cambiar un precio, un total, un nombre | **Parcialmente.** `UPDATE` directo se concede **solo sobre el catálogo** (sección 2.3), y **nunca** en `ventas`, `venta_detalle`, `recibos`, `auditoria_log`, `caja_sesion_denominaciones`, ni —desde 1.5.1— en `usuarios` ni `caja_sesiones`, que solo se escriben por función con una forma fija. | Las cinco tablas del dinero cobrado son de **solo inserción en la nube**: no hay política de `UPDATE` para la terminal. `auditoria_log` además es inmutable por trigger en los dos esquemas. Un cierre de caja no se puede reescribir: no existe función que lo haga. El ladrón puede ensuciar el catálogo hasta la revocación, y **toda modificación queda con `recibido_en` del servidor** (1.5.1); **no puede reescribir el historial de ventas ni de cajas**. |
+| **Leer** todo el historial desde la nube | **Solo el catálogo**: lo mínimo que el `UPDATE` directo exige (sección 2.3). Ni ventas, ni cajas, ni usuarios. | Ya lo tiene en el disco; lo que la nube agregaría son las ventas **futuras** de la terminal de reemplazo, y con 2.3 **no puede leerlas**. Los hashes de PIN tampoco (8.2). |
 | **Seguir escribiendo después de que vos te enteres** | **No, con una ventana acotada.** | Revocar es **borrar el usuario de la terminal** (`auth.admin.deleteUser`) o banearlo (`ban_duration`). El token de refresco deja de servir de inmediato; **el JWT vigente sigue siendo válido hasta que expire**, porque PostgREST solo verifica firma y vencimiento, no si la sesión existe. Por eso la sección 1.6 propone un JWT corto. |
+
+#### 1.5.1 `usuarios`: el análisis que faltaba, y un hueco en la detección
+
+La primera versión de esta sección analizó las cinco tablas del dinero y dejó
+`usuarios` fuera, con `UPDATE` concedido a la terminal en 2.3. Eso era un
+error de análisis, y al corregirlo apareció un segundo hueco, en la propia
+detección de la sección 6.5. Los dos se resuelven acá y cambian 2.3, 4.3, 6.2
+y 6.5.
+
+**Qué podía hacer la credencial robada contra `usuarios` con la tabla 2.3
+original:**
+
+| Acción | ¿Era posible? | Qué tan grave, y por qué |
+|---|---|---|
+| **Sobrescribir `pin_hash` o `pin_remoto_hash` de un administrador** | Sí, con `UPDATE` | **Menos grave de lo que parece, por una razón que obliga a otra regla.** El ladrón ya tiene el archivo SQLite, y con él los hashes de todos; un PIN de cuatro dígitos se fuerza en minutos (8.2). Es decir: **después de un robo, TODOS los PIN están comprometidos, haya o no tocado la nube.** Por lo tanto la restauración tras un robo **tiene que resetear todos los PIN y borrar todos los PIN remotos**, siempre (6.5). Con esa regla, lo que el ladrón haya escrito en `pin_hash` en la nube se descarta sin mirarlo. El vector existe; su efecto es nulo. |
+| **Cambiar `rol` de un cajero a `administrativo`** | Sí | **Grave, y el reset de PIN no lo neutraliza.** Restaurado, ese cajero es administrador. |
+| **Poner `activo = 0` a todos los administradores** | Sí | **Grave: es una negación de servicio contra la restauración.** El primer arranque solo se ofrece con la tabla vacía (§4.7), así que una terminal restaurada sin ningún administrador activo queda sin forma de administrarse. |
+| **Cambiar `nombre`** | Sí | Menor: rompe la atribución, no da acceso. |
+| **Insertar un administrador nuevo con su propio PIN** | Sí, con `INSERT` | Igual de grave que promover a uno. |
+
+**Y el hueco en la detección, que es el más serio de todos:** la sección 6.5
+proponía detectar lo insertado por el ladrón buscando filas con `creado_en`
+posterior a la fecha del robo. **`creado_en` viene en el payload que manda
+la terminal, así que el ladrón lo elige.** Puede insertar una venta falsa
+fechada el mes pasado, o modificar un usuario y dejar `actualizado_en` como
+estaba. Ninguna marca de tiempo que ponga el cliente sirve para detectar lo
+que hizo el cliente. Y un `UPDATE` ni siquiera toca `creado_en`, como vos
+señalaste.
+
+**La respuesta a las dos cosas es la misma: el servidor tiene que poner su
+propia marca de tiempo en todo lo que recibe, y el cliente no tiene que poder
+tocarla.**
+
+##### Mitigación 1: `recibido_en`, una marca del servidor en las 13 tablas
+
+Una columna **solo en la nube**, no espejada en SQLite porque no es dato de
+negocio sino metadato del respaldo:
+
+```
+recibido_en timestamptz NOT NULL DEFAULT now()
+```
+
+mantenida por un trigger `BEFORE INSERT OR UPDATE` en cada tabla que **la
+fija a `now()` e ignora cualquier valor que venga en el payload**. Así:
+
+- Toda fila insertada por el ladrón tiene `recibido_en` posterior al robo,
+  diga lo que diga su `creado_en`.
+- Toda fila modificada por el ladrón tiene `recibido_en` posterior al robo,
+  diga lo que diga su `actualizado_en`.
+- La restauración (6.5) filtra por `recibido_en`, que es la única fecha que
+  el ladrón no controla, y ya no por `creado_en`.
+
+Lo que `recibido_en` **no** da es el valor anterior de una fila modificada:
+dice que la tocaron, no qué decía antes. Para las tablas donde eso importa
+está la mitigación 2.
+
+##### Mitigación 2: `usuarios` y `caja_sesiones` no se actualizan directo, se escriben por una función
+
+Con el mismo criterio que las tablas del dinero —donde no hay `UPDATE` para
+la terminal— **se retira el `UPDATE` directo sobre `usuarios` y sobre
+`caja_sesiones`**, y los cambios legítimos pasan por funciones de Postgres
+con la forma exacta de la operación:
+
+| Función | Qué hace | Qué rechaza, aunque lo pida la credencial legítima |
+|---|---|---|
+| `sincronizar_usuario(fila jsonb)` | Inserta o actualiza **un** usuario, y en la **misma transacción** inserta el asiento de `auditoria_log` que vino en el lote | Cambiar `id` o `creado_en`. Un `rol` que no sea `venta` ni `administrativo`. **Dejar cero administradores activos**: el mismo invariante que `ServicioDeUsuarios` protege localmente (§4.7), ahora también en la nube. Una fila sin su asiento de auditoría. |
+| `sincronizar_apertura_de_caja(lote jsonb)` | Inserta la caja y su desglose de apertura | Una caja que ya exista |
+| `sincronizar_cierre_de_caja(lote jsonb)` | **La única transición permitida**: `abierta` → `cerrada`, con los montos, el desglose de cierre y la auditoría | Cerrar una caja que ya está cerrada. Cambiar `monto_inicial`, `usuario_id` o `abierta_en`. **Reescribir los números de un cierre ya hecho: no hay ninguna función que lo haga.** |
+
+**Por qué `SECURITY DEFINER` y no `SECURITY INVOKER`, dicho con cuidado.**
+Una función `INVOKER` corre como quien la llama, así que RLS le aplica
+adentro: si la terminal no tiene política de `UPDATE` sobre `usuarios`, la
+función tampoco puede actualizar. No sirve para restringir; solo para
+agrupar. Una función `DEFINER` corre con los privilegios de su dueño, el
+dueño de la tabla, que pasa por encima de RLS: **la función se vuelve la
+única puerta, y la forma de la puerta es la política.** Es exactamente lo que
+hace falta acá, y exactamente lo que hay que hacer con cuidado:
+
+| Endurecimiento obligatorio | Por qué |
+|---|---|
+| `SET search_path = ''` en la definición | Sin esto, quien llama puede hacer que la función resuelva un nombre de tabla hacia otro esquema. Es la misma corrección que ya se le hizo a `auditoria_log_es_inmutable` (§4.4). |
+| `REVOKE EXECUTE ... FROM public, anon` y `GRANT EXECUTE ... TO authenticated` | La llave publicable no debe poder ni llamarla. |
+| La primera línea comprueba `(select auth.jwt() -> 'app_metadata' ->> 'rol') = 'terminal'` y falla si no | Que `authenticated` pueda ejecutarla no significa que cualquier usuario autenticado pueda: adentro se exige el rol de terminal, y tu usuario de restauración **no** lo tiene. |
+| Nombres de tabla calificados con esquema (`public.usuarios`) | Consecuencia del `search_path` vacío. |
+| Nunca `EXECUTE` con texto armado desde el payload | El payload es entrada no confiable, igual que un payload de IPC (§5). |
+| **El linter de seguridad de Supabase va a listar cada una de estas funciones como `SECURITY DEFINER` ejecutable por `authenticated`**, igual que hoy lista `rls_auto_enable()` | Es esperado y hay que anotarlo en §4.4 como aviso conocido, con la razón, para que nadie lo «corrija» quitándole el `DEFINER`. |
+
+**Lo que estas funciones logran, y lo que no.** El ladrón tiene la misma
+credencial que la terminal legítima, así que puede llamar a las mismas
+funciones. Lo que **no** puede: reescribir un cierre de caja, dejar la
+tienda sin administradores, ni tocar `usuarios` sin dejar `recibido_en` y un
+asiento. Lo que **sí** puede todavía: promover a un cajero o insertar un
+administrador. **Eso no se puede impedir con una credencial compartida; se
+puede detectar sin excepción**, y por eso 6.5 obliga a revisar uno por uno a
+todo usuario con `recibido_en` posterior al robo, y a resetear todos los PIN.
+
+**Un efecto lateral que mejora otro riesgo.** Sin `UPDATE` directo sobre
+`usuarios`, la terminal ya no necesita `SELECT` sobre `usuarios` (2.3): la
+función lee por su cuenta. Es decir, **la credencial de la terminal deja de
+poder leer los hashes de PIN desde la nube**, que era la mitad del riesgo 8.2.
+
+##### Qué queda igual, y por qué
+
+`categorias`, `productos`, `precios_especiales`, `limites_descuento` y
+`configuracion_negocio` conservan `UPDATE` directo. Son el catálogo: de bajo
+valor para un atacante, fáciles de volver a cargar, y con `recibido_en` toda
+modificación posterior al robo queda listada para revisión. Llevarlas también
+a funciones es posible —sección 7, decisión 14— pero multiplica las funciones
+que hay que mantener (sección 9) para proteger datos que no lo necesitan.
 
 **Lo que este diseño NO limita, y hay que decirlo:** el daño entre el robo y
 el momento en que vos te enterás y revocás. Durante esa ventana el ladrón
@@ -176,8 +285,13 @@ de `supabase/migrations` para las políticas:
 3. Crear el usuario de la terminal con `app_metadata.rol = 'terminal'`.
 4. Ponerle a tu usuario `app_metadata.rol = 'restauracion'` y, si el plan lo
    permite, MFA.
-5. Aplicar la migración `0018` con las políticas RLS de la sección 2.3 y la
-   `0019` con los buckets y políticas de Storage de la sección 2.5.
+5. Aplicar, en este orden y cada una con su SQL a la vista y tu aprobación:
+   `0018` con `recibido_en` y su trigger en las 13 tablas (1.5.1); `0019` con
+   las funciones de escritura y su endurecimiento (1.5.1 y 4.3); `0020` con
+   las políticas RLS de la sección 2.3; `0021` con los buckets y políticas de
+   Storage de la sección 2.5. Las políticas van después de las funciones a
+   propósito: mientras no haya políticas, nada escribe, y así la ventana en
+   la que la nube acepta escrituras es la última en abrirse.
 
 ---
 
@@ -190,15 +304,15 @@ una:
 
 | Tabla | ¿Cambia después de creada? | ¿Tiene `actualizado_en`? | Cómo se sube | Unidad de trabajo |
 |---|---|---|---|---|
-| `usuarios` | Sí: nombre, rol, PIN, activo | Sí | Insertar y actualizar | Sola |
+| `usuarios` | Sí: nombre, rol, PIN, activo | Sí | Insertar y actualizar, **solo por función** (1.5.1) | Sola, con su asiento de auditoría en la misma llamada |
 | `categorias` | Sí | Sí | Insertar y actualizar | Sola |
 | `productos` | Sí: catálogo, **inventario**, contadores | Sí | Insertar y actualizar | Sola, **y también dentro de cada venta** (el inventario baja) |
 | `precios_especiales` | Sí | Sí | Insertar y actualizar | Sola |
 | `limites_descuento` | Sí | Sí | Insertar y actualizar | Sola |
 | `configuracion_negocio` | Sí, la única fila | Sí | **Solo actualizar** (la fila `'unica'` ya existe en la nube desde la 0016) | Sola |
 | `denominaciones` | No. Las 11 son fijas | Sí, pero irrelevante | **No se sube.** Ya están en la nube con los mismos UUID, sembradas por la 0004 | — |
-| `caja_sesiones` | Sí: se abre, después se cierra | Sí | Insertar y actualizar | Con su desglose y su auditoría |
-| `caja_sesion_denominaciones` | No | **No** | Solo insertar | Con la caja |
+| `caja_sesiones` | Sí: se abre, después se cierra | Sí | Insertar al abrir y **una sola transición** al cerrar, **solo por función** (1.5.1) | Con su desglose y su auditoría |
+| `caja_sesion_denominaciones` | No | **No** | Solo insertar, dentro de la función de la caja | Con la caja |
 | `ventas` | Hoy no. Mañana, `estado` (anulación) | Sí | Solo insertar (ver 2.3) | Con su detalle, sus productos y su auditoría |
 | `venta_detalle` | No | **No** | Solo insertar | Con la venta |
 | `recibos` | Sí: `impreso`, y `pdf_path` al reimprimir | **No** | Solo insertar (ver 2.3) | Sola, después de la venta |
@@ -230,34 +344,40 @@ vacía, una vez, a mano, y con otra credencial.
 
 Hoy las 13 tablas tienen RLS activo y **cero políticas**: nadie puede leer ni
 escribir, y eso es correcto hasta que exista esto. Las políticas van en una
-migración nueva, `0018_politicas_de_sincronizacion`, y son estas. `T` es la
+migración nueva, `0020_politicas_de_sincronizacion` (1.7), y son estas. `T` es la
 condición del rol terminal de la sección 1.2; `R` la del rol restauración.
 
 | Tabla | `INSERT` (terminal) | `UPDATE` (terminal) | `SELECT` (terminal) | `SELECT` (restauración) | `DELETE` |
 |---|---|---|---|---|---|
-| `usuarios` | `T` | `T` | `T` | `R` | nadie |
+| `usuarios` | **nadie: por función** (1.5.1) | **nadie: por función** | **nadie** | `R` | nadie |
 | `categorias` | `T` | `T` | `T` | `R` | nadie |
 | `productos` | `T` | `T` | `T` | `R` | nadie |
 | `precios_especiales` | `T` | `T` | `T` | `R` | nadie |
 | `limites_descuento` | `T` | `T` | `T` | `R` | nadie |
 | `configuracion_negocio` | nadie (la fila existe) | `T` | `T` | `R` | nadie |
 | `denominaciones` | nadie | nadie | nadie | `R` | nadie |
-| `caja_sesiones` | `T` | `T` | `T` | `R` | nadie |
-| `caja_sesion_denominaciones` | `T` | **nadie** | nadie | `R` | nadie |
+| `caja_sesiones` | **nadie: por función** (1.5.1) | **nadie: por función** | **nadie** | `R` | nadie |
+| `caja_sesion_denominaciones` | **nadie: por función** (va con la caja) | **nadie** | nadie | `R` | nadie |
 | `ventas` | `T` | **nadie, hoy** | nadie | `R` | nadie |
 | `venta_detalle` | `T` | **nadie** | nadie | `R` | nadie |
 | `recibos` | `T` | **nadie, hoy** | nadie | `R` | nadie |
 | `auditoria_log` | `T` | **nadie, y además el trigger** | nadie | `R` | nadie |
 
-Tres cosas de esta tabla que no son obvias:
+Cuatro cosas de esta tabla que no son obvias:
 
 - **`UPDATE` arrastra `SELECT`.** La documentación de Supabase es explícita:
   «para hacer un `UPDATE` hace falta una política de `SELECT`
   correspondiente; sin ella no funciona como se espera». Por eso las tablas
-  que la terminal actualiza también las puede leer. Es la razón por la que la
-  columna `SELECT (terminal)` no está vacía, y es un costo real en el
-  escenario del robo (8.2). Las cinco tablas del dinero no se actualizan, y
-  por eso **no** se pueden leer con la credencial de la terminal.
+  que la terminal actualiza **directo** también las puede leer. Es un costo
+  real en el escenario del robo, y es la razón por la que `usuarios` y
+  `caja_sesiones` **salieron** de la columna de `UPDATE` directo (1.5.1): al
+  escribirse por función, la terminal ya no las lee, y **los hashes de PIN
+  dejan de ser legibles con la credencial de la terminal**.
+- **Las filas marcadas «por función» no tienen ninguna política para la
+  terminal.** Las escribe una función `SECURITY DEFINER` (1.5.1 y 4.3) que
+  pasa por encima de RLS con la forma exacta de cada operación. La tabla de
+  arriba es literalmente lo que un `SELECT * FROM pg_policies` tiene que
+  devolver para el rol terminal: nada sobre esas tablas.
 - **`ventas` y `recibos` son de solo inserción hoy, y eso es una decisión.**
   Mañana la anulación de ventas va a necesitar cambiar `ventas.estado`, y la
   reimpresión ya cambia `recibos.impreso`. Cuando eso llegue, hay dos caminos:
@@ -514,7 +634,8 @@ un tipo de tabla:
 | Variante | SQL que Postgres ejecuta | Para qué tablas | Por qué |
 |---|---|---|---|
 | **No hacer nada si existe** (`ignoreDuplicates: true`) | `ON CONFLICT (id) DO NOTHING` | `ventas`, `venta_detalle`, `recibos`, `auditoria_log`, `caja_sesion_denominaciones` | Son de solo inserción. Si la fila ya está, es que un intento anterior llegó. **Para `auditoria_log` es obligatoria**: el trigger `auditoria_log_prohibir_cambios` es `BEFORE UPDATE`, y un `DO UPDATE` lo dispararía y fallaría; `DO NOTHING` no ejecuta ningún `UPDATE` y pasa limpio. |
-| **Actualizar si existe** (`ignoreDuplicates: false`) | `ON CONFLICT (id) DO UPDATE SET ...` | `usuarios`, `categorias`, `productos`, `precios_especiales`, `limites_descuento`, `caja_sesiones`, `configuracion_negocio` | Cambian después de creadas. Se manda la fila completa y gana la de la terminal, que es la única fuente de verdad. |
+| **Actualizar si existe** (`ignoreDuplicates: false`) | `ON CONFLICT (id) DO UPDATE SET ...` | `categorias`, `productos`, `precios_especiales`, `limites_descuento`, `configuracion_negocio` | Cambian después de creadas. Se manda la fila completa y gana la de la terminal, que es la única fuente de verdad. |
+| **Por función**, con el `ON CONFLICT` adentro | El que corresponda, dentro de la función | `usuarios`, `caja_sesiones`, `caja_sesion_denominaciones` | No hay upsert directo (1.5.1). La función hace exactamente lo mismo que las dos filas de arriba, pero además exige la forma de la operación: una transición, un invariante, un asiento. **La idempotencia es la misma**: reintentar la llamada con el mismo lote termina en el mismo estado. |
 
 **Qué pasa exactamente en cada escenario que el prompt nombra:**
 
@@ -605,7 +726,7 @@ hace **una** llamada por venta. O entra todo, o no entra nada.
 | ¿La nube puede quedar a medias? | **Sí, temporalmente**: entre peticiones, y tras un corte, hasta el próximo ciclo | **No** |
 | Complejidad en la terminal | Un ciclo por tabla, con orden | Una llamada |
 | Complejidad en la nube | Ninguna | Una función SQL por tipo de lote, con su migración, sus pruebas y su mantenimiento cuando cambie el esquema |
-| RLS | Se aplica petición por petición | Se aplica igual: la función es `SECURITY INVOKER`, corre como el usuario terminal, y cada `INSERT` adentro pasa por las políticas |
+| RLS | Se aplica petición por petición | Depende de la función. La de **venta** puede ser `SECURITY INVOKER`: solo inserta en tablas donde la terminal ya tiene `INSERT` y actualiza `productos`, donde ya tiene `UPDATE`; RLS le aplica adentro y no gana ningún privilegio. Las de **apertura y cierre de caja** y la de **usuario** tienen que ser `SECURITY DEFINER`, porque son la única puerta a tablas sin política (1.5.1), con todo el endurecimiento de esa sección |
 | Peticiones por venta | 4 | 1 |
 | Costo en un i3 | 4 `fetch` y 4 serializaciones | 1 y 1 |
 | Qué pasa si una fila del lote es inválida | Las tablas anteriores ya subieron; el lote se detiene a medias, con un hueco parcial en la nube | Nada subió; el lote se detiene entero |
@@ -624,8 +745,13 @@ Las razones, en orden de peso:
    cuatro.
 3. **El costo es una función SQL, y ese costo es visible y auditable**: vive
    en una migración, se prueba contra el proyecto real como todo lo demás, y
-   cuando el esquema cambie hay que actualizarla, lo que va a fallar ruidoso
-   y no silencioso.
+   cuando el esquema cambie hay que actualizarla. **Que ese cambio falle
+   ruidoso en una prueba y no en la primera venta real es el tema de la
+   sección 9 entera.**
+4. **Con 1.5.1 la opción B dejó de ser opcional para la caja.** `caja_sesiones`
+   ya no tiene `UPDATE` directo, así que el cierre **solo** puede subir por
+   función. La venta podría seguir siendo la opción A; se recomienda que no,
+   por las razones 1 y 2.
 
 **Si se eligiera la A**, la justificación de «temporalmente, porque el
 reintento lo completa pronto» vale **solo con estas dos garantías** escritas:
@@ -726,6 +852,7 @@ del archivo local hecho antes, y **no se propone construirla ahora**.
 | **El esquema local y el de la nube coinciden** | Se lee el conjunto de columnas de cada tabla espejada por PostgREST (`OPTIONS` / el esquema OpenAPI) y se compara con `PRAGMA table_info` local | Se niega y nombra la diferencia. Restaurar con esquemas distintos es cómo se restaura mal en silencio. |
 | **El proyecto no está pausado** | La capa 2 de la sección 5 | Se muestra un mensaje que dice exactamente qué hacer: «Entrá al panel de Supabase y reanudá el proyecto». Ver 8.3: una terminal rota dos semanas es tiempo suficiente para que el proyecto se haya pausado. |
 | Hay credencial de restauración | Vos iniciás sesión en la pantalla con **tu** usuario, el que tiene `app_metadata.rol = 'restauracion'` | — |
+| **Se sabe por qué se restaura** | La pantalla pregunta: ¿falla del equipo, o robo? Si es robo, pide **la fecha y hora aproximadas** del robo | Sin esa fecha no se puede filtrar lo que el ladrón hizo (6.5). Ante la duda, se elige robo y una fecha anterior: sobra revisión, no falta. |
 
 **La credencial de restauración no se guarda.** Es una sesión que vive
 mientras la pantalla está abierta y se cierra al terminar, con `signOut`.
@@ -739,7 +866,7 @@ catálogo**: cada tabla después de las que referencia.
 
 | Paso | Tabla | Referencia a | Qué se hace con lo que ya existe localmente |
 |---|---|---|---|
-| 1 | `usuarios` | — | Insertar. `intentos_fallidos = 0`, `bloqueado_hasta = NULL`: esas columnas no vienen de la nube y no deben venir. |
+| 1 | `usuarios` | — | Insertar. `intentos_fallidos = 0`, `bloqueado_hasta = NULL`: esas columnas no vienen de la nube y no deben venir. **Si la restauración es por robo: `pin_hash` se reemplaza por un valor que no coincide con ningún PIN, `pin_remoto_hash` queda en `NULL`, y todo usuario tiene que recibir un PIN nuevo desde la pantalla de usuarios antes de poder entrar** (1.5.1: los hashes están en el disco robado y se fuerzan en minutos; lo que diga la nube no importa). |
 | 2 | `categorias` | — | Insertar |
 | 3 | `denominaciones` | — | **No se traen.** Las 11 ya las sembró la migración 004 con los mismos UUID. Se **verifica** que la nube tenga las mismas 11, y si no coinciden se detiene. |
 | 4 | `configuracion_negocio` | — | **Actualizar** la fila `'unica'`, que la migración 016 ya creó vacía. |
@@ -787,7 +914,10 @@ Son las que la sección 4 admite como posibles o el robo puede haber dejado:
 |---|---|---|
 | Una venta sin líneas en la nube | Un lote que subió a medias (solo con la opción A) | Se lista. No se restaura como venta válida sin que vos lo veas. |
 | Una caja cerrada sin desglose, que se cerró en modo detallado | Igual | Se lista |
-| Filas con `creado_en` **posterior** a la fecha del robo que vos indiques | Basura que el ladrón pudo insertar con la credencial antes de la revocación (1.5) | La pantalla pide esa fecha si la restauración es por robo, y lo que sea posterior se muestra aparte, **sin restaurar**, para que decidas fila por fila. |
+| Filas con **`recibido_en`** posterior a la fecha del robo, en cualquiera de las 13 tablas | Lo que el ladrón insertó **o modificó** con la credencial antes de la revocación (1.5). Se filtra por `recibido_en`, la marca del servidor, **nunca por `creado_en` ni `actualizado_en`**, que vienen del cliente y el ladrón las elige (1.5.1). | Se muestra aparte, **sin restaurar**, para que decidas fila por fila. Para una fila modificada no hay valor anterior que mostrar: solo que fue tocada, cuándo, y por qué usuario de Auth. |
+| **Cualquier usuario con `recibido_en` posterior al robo** | Un cajero promovido, un administrador desactivado o renombrado, un administrador nuevo | **Revisión obligatoria, uno por uno, antes de terminar.** Es la única defensa contra lo que 1.5.1 admite que no se puede impedir. |
+| **Ningún administrador activo** después de aplicar lo revisado | El ladrón desactivó a todos, o vos rechazaste al único que quedaba | La restauración **no termina** hasta que haya al menos uno: ofrece reactivar a un administrador existente, y ese administrador recibe su PIN nuevo ahí mismo. Es el mismo invariante de §4.7, aplicado en el único momento en que la tabla podría quedar sin él. |
+| **PIN sin resetear** tras un robo | — | No es una anomalía que se busque: es un paso que **no se puede saltar**. La pantalla no da por terminada una restauración por robo mientras algún usuario activo siga sin PIN nuevo. |
 | Un producto cuya foto no está en Storage | Se subió la fila y no el archivo | Se restaura sin foto y se lista |
 
 ### 6.6 Cómo se le comunica el progreso, con el hardware y la conexión reales
@@ -853,6 +983,28 @@ Ninguna está tomada. Están numeradas para que puedas contestar por número.
     necesarias son pocas —Auth por REST, PostgREST con `Prefer`, Storage con
     `POST`— y podrían hacerse con `net.fetch` sin agregar dependencia. Es una
     decisión de superficie contra comodidad; se deja abierta (8.7).
+12. **`recibido_en` con trigger en las 13 tablas**, solo en la nube, como la
+    única fecha que la restauración usa para detectar lo que hizo el ladrón
+    (1.5.1). Recomendación: sí, y es la más importante de esta segunda
+    ronda: sin ella la detección de 6.5 no vale nada.
+13. **`usuarios` y `caja_sesiones` sin `UPDATE` directo; se escriben por
+    funciones `SECURITY DEFINER` endurecidas** (1.5.1). Recomendación: sí.
+    Trae consigo que el linter de Supabase liste esas funciones como aviso,
+    igual que hoy lista `rls_auto_enable()`, y hay que anotarlo.
+14. **¿También el catálogo por funciones?** `categorias`, `productos`,
+    `precios_especiales`, `limites_descuento` y `configuracion_negocio`
+    conservan `UPDATE` directo (1.5.1). Recomendación: dejarlos así por ahora;
+    son de bajo valor, se detectan con `recibido_en`, y cada función más es
+    más superficie que mantener (sección 9).
+15. **Tras un robo, la restauración resetea todos los PIN y borra los
+    remotos**, sin opción de saltarlo (6.3, 6.5). Recomendación: sí. No
+    depende de que el ladrón haya tocado la nube: depende de que tiene el
+    disco.
+16. **La prueba de deriva en dos mitades**, con `supabase/esquema-nube.json`
+    en el repositorio y `npm run verify:nube` (sección 9). Recomendación: sí.
+    Queda por decidir contra qué se prueban las funciones en sí: una rama de
+    Supabase (tiene costo y hoy el proyecto no la usa) o el proyecto real con
+    datos de prueba que después se borran (que va contra «nunca se borra»).
 
 ---
 
@@ -881,12 +1033,13 @@ con los parámetros actuales, recorrerlos todos contra un hash es cuestión de
 minutos en cualquier computadora. Quien lea `usuarios` en la nube tiene los
 PIN de todos.
 
-¿Quién puede leerla? Con la sección 2.3, **la terminal**, porque actualiza
-`usuarios` y `UPDATE` arrastra `SELECT`; y **tu usuario de restauración**.
-En el escenario del robo el ladrón ya tiene esos hashes en el disco, así que
-la nube no le agrega nada ahí. **Lo que la nube sí agrega es un segundo lugar
-desde donde robarlos sin robar la computadora**: una credencial de terminal
-filtrada por otra vía, o tu cuenta de Supabase.
+¿Quién puede leerla? **Ya no la terminal**: con 1.5.1, `usuarios` se escribe
+por función y la terminal no tiene `SELECT` sobre ella (2.3), así que una
+credencial de terminal filtrada **no** puede leer los hashes desde la nube.
+Queda **tu usuario de restauración**, que lee todo. El riesgo pasó de dos
+puertas a una, y esa una es tu cuenta de Supabase: lo que la protege es tu
+contraseña y, si el plan lo permite, el segundo factor. **Sigue abierto**,
+más chico.
 
 Opciones, ninguna elegida:
 
@@ -923,7 +1076,7 @@ La salida real es el plan Pro, que «no está sujeto a pausado». El proyecto
 ya prevé pasar a plan pagado antes de la entrega (§3); este riesgo dice que
 **no es opcional** si la nube tiene que ser un respaldo confiable.
 
-### 8.4 `ON CONFLICT DO NOTHING` bajo RLS, sin verificar
+### 8.4 `ON CONFLICT DO NOTHING` bajo RLS, sin verificar (ahora acotado a menos tablas)
 
 La sección 3.1 asume que un upsert con «no hacer nada si existe» **no exige
 política de `SELECT`** en Postgres, y que por eso la terminal puede reintentar
@@ -932,7 +1085,12 @@ sobre `ventas` sin poder leerla. Es lo que dice la semántica de Postgres
 PostgREST con RLS en el proyecto real**, porque hacerlo exige crear políticas
 y un usuario, y este prompt prohíbe tocar la nube. Es la **primera cosa que
 hay que medir** al implementar, antes de escribir la cola: si resultara que
-hace falta `SELECT`, la tabla de 2.3 cambia y el riesgo 8.2 crece.
+hace falta `SELECT`, la terminal necesitaría leer las tablas del dinero, que
+es justo lo que 1.5 evita, y habría que mover también esas inserciones a
+funciones `SECURITY DEFINER` (1.5.1). Con 1.5.1 la pregunta ya solo afecta a
+las tablas que conservan `INSERT` directo: las del catálogo y, si la venta
+queda como `INVOKER` (4.3), `ventas`, `venta_detalle`, `recibos` y
+`auditoria_log`.
 
 ### 8.5 El reloj de la máquina
 
@@ -973,7 +1131,20 @@ i3 de 2011. **Nada se midió en esa máquina**, porque no hay una. Es el mismo
 pendiente 12 de §6.2, extendido a esto: la primera implementación tiene que
 medirse allí antes de dar por buenos los presupuestos de la sección 2.4.
 
-### 8.9 Restaurar sobre una terminal que ya tiene datos
+### 8.9 Las funciones `SECURITY DEFINER` son la superficie más delicada del diseño
+
+Con 1.5.1 hay cuatro funciones que pasan por encima de RLS: usuario,
+apertura, cierre y el contrato de 9.2. Un error en cualquiera es un error con
+privilegios de dueño de tabla. El endurecimiento de 1.5.1 es una lista, y una
+lista se puede cumplir a medias. Lo que falta decidir: **dónde se prueban
+esas funciones** (7, decisión 16), porque probarlas contra el proyecto real
+implica escribir datos de prueba en la nube y borrarlos, y este proyecto no
+borra. Y hay que aceptar que el linter de Supabase va a mostrarlas como
+avisos permanentes, con el riesgo de que alguien, dentro de un año, «los
+arregle» quitando el `DEFINER` y dejando la cola detenida sin entender por
+qué.
+
+### 8.10 Restaurar sobre una terminal que ya tiene datos
 
 Excluido a propósito (6.1). Pero el caso existe: la terminal no se perdió,
 solo se corrompió el archivo SQLite, y hay ventas de esta mañana que no
@@ -981,3 +1152,109 @@ llegaron a subir. Restaurar desde la nube las pierde; no restaurar deja la
 base corrupta. La respuesta correcta es un **respaldo local** independiente
 —copia del archivo SQLite a otro disco o USB cada noche—, que es el pendiente
 11 de §6.2 y que este documento no cubre. Conviene decidirlo junto con esto.
+
+---
+
+## 9. Deriva entre el servicio local y las funciones de Postgres
+
+Las funciones de la opción B (4.3) y las de 1.5.1 viven en otro lenguaje y en
+otro lugar que la lógica que ya existe en la terminal. El día que una
+migración local agregue una columna a `ventas` y nadie toque la función,
+**la primera venta real que intente subir va a fallar**, o peor, va a subir
+sin esa columna y nadie se va a enterar. Esta sección diseña cómo eso falla
+antes, en una prueba, y con el nombre de la columna.
+
+### 9.1 Primero: reducir lo que puede derivar
+
+La deriva se detecta mejor cuando hay poco que derive. Tres reglas de diseño
+para las funciones, antes de cualquier prueba:
+
+| Regla | Qué evita |
+|---|---|
+| **Las funciones no calculan nada de negocio.** No redondean, no suman, no reparten centavos, no evalúan topes. Reciben valores finales, ya calculados por el servicio local con Decimal, y los escriben. Lo único que deciden es estructural: el orden de inserción, un `ON CONFLICT`, una transición (`abierta` → `cerrada`), un invariante (queda un administrador activo). | Que exista una segunda implementación de la aritmética del proyecto. Con una sola, no hay dos versiones que puedan discrepar. Es la misma razón por la que el descuento vive en `@shared/descuento` y no en dos capas (§5). |
+| **Las funciones no enumeran columnas.** Escriben con `jsonb_populate_record(NULL::public.ventas, fila)`, que asigna cada clave del JSON a la columna del mismo nombre **leyendo la definición real de la tabla en el momento de ejecutar**. | Que una columna nueva en la tabla exija tocar la función: no la exige. Lo que sí queda como riesgo es el silencio: una clave que la tabla no tiene **se ignora sin error**, y eso es exactamente lo que la prueba de 9.2 tiene que atrapar. |
+| **Cada función lleva un número de versión de contrato**, y cada lote lleva el que la terminal espera. Si no coinciden, la función falla con un error que dice los dos números. | Que la terminal y la nube cambien por separado. Es un error determinístico (3.2): detiene la cola y se ve. |
+
+### 9.2 La prueba de deriva, en dos mitades
+
+Hay una regla del proyecto que condiciona el diseño: **las pruebas no dependen
+de que Supabase esté disponible ni consumen su cuota** (CLAUDE.md §4, punto
+4). Así que una sola prueba contra el catálogo real no puede vivir en
+`npm test`. Se parte en dos, y cada mitad atrapa una forma distinta de
+deriva:
+
+```
+   esquema local (SQLite)  ──(A: npm test, sin red)──►  supabase/esquema-nube.json
+                                                              │
+                                                    (B: npm run verify:nube, con red)
+                                                              ▼
+                                                     catálogo real de pos-jimmy-cano
+```
+
+**Mitad A — sin red, en cada `npm test`.** Se agrega al repositorio un archivo
+`supabase/esquema-nube.json`: **la foto del catálogo real**, con las 13
+tablas, sus columnas, tipos y nulabilidad, las funciones de sincronización con
+su versión de contrato, y qué tablas escribe cada una. La prueba compara ese
+archivo con el esquema local que sale de aplicar las 17 migraciones (con
+`PRAGMA table_info`, como ya hace `checks-con-null.test.ts`), aplicando las
+exclusiones **explícitas y listadas** —`sync_cola` y `bloqueos_de_autorizacion`
+enteras, `usuarios.intentos_fallidos` y `bloqueado_hasta`, `recibido_en` del
+lado de la nube— y falla si:
+
+- una columna existe de un lado y no del otro, **nombrándola**;
+- una columna es nulable de un lado y `NOT NULL` del otro;
+- una tabla que la foto dice que escribe una función tiene columnas que el
+  payload local de esa operación no manda, o al revés;
+- la versión de contrato que espera el código local no es la de la foto.
+
+Es la mitad que atrapa **«cambié el esquema local y no el espejo»**, que es el
+caso frecuente, y lo atrapa sin red, en el mismo `npm test` de siempre.
+
+**Mitad B — con red, a mano: `npm run verify:nube`.** Un guion como
+`verify:pantallas`, que se corre **antes de cada aplicación de migración en la
+nube y después**, y antes de cada entrega. Llama a una función
+`contrato_de_sincronizacion()` en la nube —`SECURITY DEFINER`, endurecida
+como las demás, ejecutable solo con el rol `restauracion`— que devuelve
+`information_schema.columns` de las 13 tablas y `pg_proc` de las funciones,
+y la compara con `supabase/esquema-nube.json`. Si difieren, imprime la
+diferencia y sale con código 1; si coinciden, **regenera la foto** para que
+la mitad A trabaje contra el catálogo de hoy. Es la mitad que atrapa
+**«cambié la nube y no la foto»**, y también «alguien tocó la nube desde el
+panel sin migración».
+
+**Por qué no una sola prueba con red.** Porque entonces `npm test` fallaría
+sin internet, y un desarrollador sin conexión no podría saber si rompió algo.
+Y porque una prueba que necesita credenciales de la nube en la máquina de
+desarrollo es una credencial más que cuidar. La foto en el repositorio es
+la separación: la mitad A no necesita nada, la mitad B se corre cuando se
+toca la nube.
+
+### 9.3 Cómo se comprueba que la prueba muerde
+
+Igual que con `checks-con-null.test.ts`: **una comprobación que nunca se vio
+fallar no prueba nada** (§4.11). Al implementarla, hay que reintroducir a
+propósito cada tipo de deriva y ver la prueba fallar con el nombre correcto:
+
+| Deriva reintroducida a propósito | Qué tiene que decir la prueba |
+|---|---|
+| Migración local `ALTER TABLE ventas ADD COLUMN propina TEXT` sin espejo | «`ventas.propina` existe en SQLite y no en la foto de la nube» |
+| Editar la foto quitando `ventas.total` | «`ventas.total` existe en SQLite y no en la foto de la nube» |
+| Subir el número de contrato en la función sin tocar el cliente | Mitad B: «la nube declara el contrato 3 y la foto dice 2»; y en producción, la cola se detiene con el mismo mensaje (3.2) |
+| Quitar `SET search_path = ''` de una función | Mitad B: la foto también guarda `proconfig` de cada función, y la compara |
+
+### 9.4 Qué NO detecta esto, dicho para no confiar de más
+
+- **Un cambio de significado sin cambio de esquema.** Si `subtotal_impreso`
+  pasara a significar otra cosa manteniendo el nombre y el tipo, ninguna
+  prueba de columnas lo ve. La defensa contra eso es la regla 9.1: las
+  funciones no interpretan valores, los copian; el significado vive en un
+  solo lugar, el servicio local.
+- **Un cambio en los CHECK de Postgres.** La foto podría incluirlos, y es
+  barato agregarlo, pero un CHECK nuevo en la nube que rechace un payload
+  legítimo se manifiesta igual que cualquier error determinístico: cola
+  detenida y visible (3.2). No es silencioso, que es lo que importa.
+- **Que la función sea correcta.** Que las columnas coincidan no dice que la
+  lógica estructural —la transición de la caja, el invariante de
+  administradores— esté bien. Eso lo cubren pruebas propias de cada función,
+  corridas con `verify:nube` contra una rama de Supabase o contra el proyecto
+  con datos de prueba, que es una decisión de implementación (7, decisión 16).
