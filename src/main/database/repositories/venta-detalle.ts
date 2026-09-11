@@ -104,6 +104,33 @@ export class RepositorioDeVentaDetalle extends RepositorioBase {
     return filas.map(aEntidad);
   }
 
+  /**
+   * Las líneas de todas las ventas COMPLETADAS de un rango, para el reporte de
+   * ventas por producto.
+   *
+   * SE UNE CON `ventas` PORQUE LA FECHA ES DE LA VENTA, no de la línea.
+   * `venta_detalle.creado_en` existe y sería más cómodo, pero es el instante en
+   * que se escribió la fila: si algún día una venta se registrara en diferido,
+   * las dos fechas dejarían de coincidir y el reporte contaría la línea en un
+   * día distinto del de su propia venta. La fecha del hecho es la de la venta.
+   *
+   * Igual que en `RepositorioDeVentas.listarCompletadasEnRango`: el filtro se
+   * hace en SQL, la SUMA nunca. `cantidad` y `subtotal_impreso` son TEXT
+   * canónico y un `SUM()` los pasaría por punto flotante.
+   */
+  public listarDeVentasCompletadasEnRango(desdeIso: string, hastaIso: string): VentaDetalle[] {
+    const filas = this.base
+      .prepare(
+        `SELECT vd.* FROM venta_detalle vd
+           JOIN ventas v ON v.id = vd.venta_id
+          WHERE v.fecha >= ? AND v.fecha <= ?
+            AND v.estado = 'completada'
+          ORDER BY v.fecha, vd.orden_linea`,
+      )
+      .all(desdeIso, hastaIso) as FilaVentaDetalle[];
+    return filas.map(aEntidad);
+  }
+
   public listarPorProducto(productoId: string, limite: number): VentaDetalle[] {
     const filas = this.base
       .prepare('SELECT * FROM venta_detalle WHERE producto_id = ? ORDER BY creado_en DESC LIMIT ?')

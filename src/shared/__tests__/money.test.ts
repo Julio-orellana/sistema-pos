@@ -20,6 +20,7 @@ import {
   aNumeroSoloParaMostrar,
   absoluto,
   cantidadACadena,
+  cantidadLegible,
   comparar,
   conciliarSubtotalesConTotal,
   decimal,
@@ -871,5 +872,45 @@ describe('Escenario completo de una venta a granel (verificación de extremo a e
     const total = restar(multiplicar('12.5', '3.75'), porcentajeDe(multiplicar('12.5', '3.75'), '7'));
     const vuelto = restar(PAGO_DEL_CLIENTE, redondearMonto(total));
     expect(montoACadena(vuelto)).toBe('6.41');
+  });
+});
+
+// ===========================================================================
+describe('La cantidad como la lee una persona', () => {
+  /*
+    Es SOLO presentación: la usan el recibo y los reportes para no escribir
+    «2.000 u» donde alcanza con «2». Lo que se guarda y lo que se compara sigue
+    siendo la forma canónica de tres decimales, que es la de `cantidadACadena`.
+  */
+  it('un entero se escribe sin decimales: «2», no «2.000»', () => {
+    expect(cantidadLegible('2')).toBe('2');
+    expect(cantidadACadena('2')).toBe('2.000');
+  });
+
+  it('media libra se escribe «0.5», no «0.500»', () => {
+    expect(cantidadLegible('0.5')).toBe('0.5');
+  });
+
+  it('conserva los decimales que SÍ significan algo', () => {
+    expect(cantidadLegible('1.777')).toBe('1.777');
+    expect(cantidadLegible('0.333')).toBe('0.333');
+    expect(cantidadLegible('2.05')).toBe('2.05');
+  });
+
+  it('cero se escribe «0», no «0.000» ni cadena vacía', () => {
+    expect(cantidadLegible('0')).toBe('0');
+  });
+
+  it('redondea a tres decimales antes de limpiar, como la forma canónica', () => {
+    expect(cantidadLegible('2.0004')).toBe('2');
+    expect(cantidadLegible('2.0006')).toBe('2.001');
+  });
+
+  it('NO se come dígitos enteros que terminan en cero', () => {
+    // El riesgo evidente de limpiar ceros con una expresión regular: que «100»
+    // quede en «1». El recorte solo actúa después del punto decimal.
+    expect(cantidadLegible('100')).toBe('100');
+    expect(cantidadLegible('10.500')).toBe('10.5');
+    expect(cantidadLegible('20')).toBe('20');
   });
 });

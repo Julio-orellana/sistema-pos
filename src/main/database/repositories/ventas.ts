@@ -118,6 +118,37 @@ export class RepositorioDeVentas extends RepositorioBase {
     return filas.map(aEntidad);
   }
 
+  /**
+   * Ventas COMPLETADAS de un rango de fechas, para los reportes.
+   *
+   * EL FILTRO VA EN SQL Y LA SUMA NO, y la distinción es la regla central de
+   * los reportes de este proyecto (CLAUDE.md §4.15). `fecha` y `estado` son
+   * texto de verdad, así que compararlos en SQL es exacto y barato. `total`,
+   * `subtotal` y `descuento_valor` son TEXT canónico: un `SUM()` de SQLite los
+   * convertiría a punto flotante —medido: diez montos que suman Q13.47 exactos
+   * dan `13.459999999999999`— y el error quedaría escondido dentro de un
+   * reporte que nadie audita línea por línea. Se devuelven las FILAS y suma
+   * quien llama, con Decimal.js.
+   *
+   * `estado = 'completada'` va EXPLÍCITO aunque hoy nada produzca ventas
+   * anuladas. El día que exista el módulo de anulación, el reporte no tiene que
+   * acordarse de nada: ya está filtrando.
+   *
+   * Los dos extremos son INCLUSIVOS. Quien arma el rango pone en `hasta` el
+   * último milisegundo del día, no la medianoche siguiente.
+   */
+  public listarCompletadasEnRango(desdeIso: string, hastaIso: string): Venta[] {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM ventas
+          WHERE fecha >= ? AND fecha <= ?
+            AND estado = 'completada'
+          ORDER BY fecha`,
+      )
+      .all(desdeIso, hastaIso) as FilaVenta[];
+    return filas.map(aEntidad);
+  }
+
   /** Ventas de un turno de caja: la base del corte. */
   public listarPorSesionDeCaja(cajaSesionId: string): Venta[] {
     const filas = this.base

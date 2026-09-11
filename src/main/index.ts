@@ -31,6 +31,8 @@ import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { SesionActual } from '@main/domain/usuarios/sesion';
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
+import { ServicioDeReportes } from '@main/domain/reportes/servicio-de-reportes';
+import { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-de-limites-de-descuento';
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { generarPdfDesdeHtml } from '@main/recibo/generador-de-pdf';
 import { LogTecnicoEnArchivo } from '@main/log-tecnico';
@@ -402,6 +404,29 @@ app.whenReady().then(
     });
 
     /*
+      REPORTES: leen mucho y no escriben nada.
+
+      Reciben los cuatro repositorios que necesitan y ninguno más. No reciben la
+      conexión: a diferencia del servicio de venta, acá no hay nada que
+      delimitar en una transacción, y dársela invitaría a que algún reporte
+      futuro escribiera de paso.
+    */
+    const servicioDeReportes = new ServicioDeReportes({
+      ventas: repositorios.ventas,
+      ventaDetalle: repositorios.ventaDetalle,
+      productos: repositorios.productos,
+      categorias: repositorios.categorias,
+    });
+
+    // Los topes de descuento, ya configurables desde la aplicación y no solo
+    // con el guion `seed:limites`.
+    const servicioDeLimites = new ServicioDeLimitesDeDescuento({
+      limites: repositorios.limitesDescuento,
+      auditoria: repositorios.auditoria,
+      nombreDeUsuario: (usuarioId): string | null => repositorios.usuarios.obtenerPorId(usuarioId)?.nombre ?? null,
+    });
+
+    /*
       RECIBOS: PDF siempre, impresión si hay con qué.
 
       La carpeta de PDF y la bitácora TÉCNICA viven en `userData`, nunca en la
@@ -496,6 +521,8 @@ app.whenReady().then(
       recibos: servicioDeRecibos,
       repositorioDeRecibos: repositorios.recibos,
       preciosEspeciales: repositorios.preciosEspeciales,
+      reportes: servicioDeReportes,
+      limitesDeDescuento: servicioDeLimites,
       catalogo: {
         categorias: servicioDeCategorias,
         productos: servicioDeProductos,

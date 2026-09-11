@@ -16,6 +16,8 @@ import { PantallaDeProductos } from './PantallaDeProductos';
 import { PantallaDeUsuarios } from './PantallaDeUsuarios';
 import { PantallaDeNegocio } from './PantallaDeNegocio';
 import { PantallaDeRecibos } from './PantallaDeRecibos';
+import { PantallaDeReportes } from './PantallaDeReportes';
+import { PantallaDeLimites } from './PantallaDeLimites';
 import { PantallaDeVenta } from './PantallaDeVenta';
 
 export interface PantallaDeSesionProps {
@@ -33,7 +35,9 @@ type Vista =
   | 'productos'
   | 'usuarios'
   | 'negocio'
-  | 'recibos';
+  | 'recibos'
+  | 'reportes'
+  | 'limites';
 
 export function PantallaDeSesion({
   sesion,
@@ -69,6 +73,12 @@ export function PantallaDeSesion({
   }
   if (vista === 'recibos') {
     return <PantallaDeRecibos alVolver={() => { setVista('menu'); }} />;
+  }
+  if (vista === 'reportes') {
+    return <PantallaDeReportes alVolver={() => { setVista('menu'); }} />;
+  }
+  if (vista === 'limites') {
+    return <PantallaDeLimites alVolver={() => { setVista('menu'); }} />;
   }
 
   return (
@@ -124,6 +134,20 @@ export function PantallaDeSesion({
             </button>
             <button
               type="button"
+              data-prueba="ir-a-reportes"
+              onClick={() => { setVista('reportes'); }}
+            >
+              Reportes
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-limites"
+              onClick={() => { setVista('limites'); }}
+            >
+              Topes de descuento
+            </button>
+            <button
+              type="button"
               data-prueba="ir-a-negocio"
               onClick={() => { setVista('negocio'); }}
             >
@@ -148,8 +172,8 @@ export function PantallaDeSesion({
           Cerrar sesión
         </button>
         <p className="nota">
-          El cobro todavía no está habilitado: la pantalla de venta arma el ticket pero no
-          registra nada.
+          Todavía no existen: anular una venta ya registrada, las alertas de stock mínimo y la
+          exportación de reportes a un archivo.
         </p>
       </div>
     </div>

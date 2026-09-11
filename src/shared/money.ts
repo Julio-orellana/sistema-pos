@@ -656,6 +656,26 @@ export function cantidadACadena(valor: EntradaDecimal): string {
 }
 
 /**
+ * La cantidad como la lee una persona: sin ceros decorativos.
+ *
+ * «2» y no «2.000»; «0.5» y no «0.500». Es SOLO para mostrar: lo que se guarda
+ * y lo que se compara sigue siendo la forma canónica de `cantidadACadena`, con
+ * sus tres decimales exactos.
+ *
+ * Vive acá, y no dentro del recibo donde nació, porque la necesitan dos lugares
+ * —el comprobante y los reportes— y dos implementaciones de «cómo se escribe
+ * una cantidad» terminarían mostrando el mismo número de dos formas distintas
+ * en el mismo sistema.
+ */
+export function cantidadLegible(valor: EntradaDecimal): string {
+  const canonica = cantidadACadena(valor);
+  if (!canonica.includes('.')) {
+    return canonica;
+  }
+  return canonica.replace(/\.?0+$/, '');
+}
+
+/**
  * Conversión a `number`. USO EXCLUSIVO PARA PRESENTACIÓN (gráficas, anchos de
  * barra, componentes de UI que exigen number). Nunca para calcular ni para
  * guardar: al pasar por `number` se pierde la exactitud que da Decimal.js.

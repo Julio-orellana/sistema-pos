@@ -371,7 +371,129 @@ async function main() {
     await prueba('cerrar-vista-de-recibo').click();
 
     // =======================================================================
-    // 6. Gestión de usuarios: el hueco que cerró el Prompt 21.
+    // 6. Reportes: que los números de la pantalla sean los de la venta real.
+    // =======================================================================
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-reportes').click();
+    await prueba('reporte-resumen').waitFor({ timeout: ESPERA_CORTA });
+
+    const totalDelDia = ((await prueba('resumen-total').textContent()) ?? '').trim();
+    comprobar(
+      'el resumen de HOY muestra el total de la venta que se acaba de cobrar',
+      'Q8.50',
+      totalDelDia,
+      totalDelDia.includes('8.50'),
+    );
+
+    const efectivo = ((await prueba('resumen-efectivo').textContent()) ?? '').trim();
+    const tarjeta = ((await prueba('resumen-tarjeta').textContent()) ?? '').trim();
+    const soloNumero = (texto) => Number(texto.replace(/[^0-9.]/g, ''));
+    comprobar(
+      'EFECTIVO + TARJETA da exactamente el total vendido, en la pantalla real',
+      'la suma de los dos es el total',
+      `${efectivo} + ${tarjeta} contra ${totalDelDia}`,
+      (soloNumero(efectivo) + soloNumero(tarjeta)).toFixed(2) ===
+        soloNumero(totalDelDia).toFixed(2),
+    );
+
+    // Y el período tiene que poder cambiarse: AYER no tiene ventas.
+    await prueba('periodo-ayer').click();
+    await prueba('resumen-sin-ventas').waitFor({ timeout: ESPERA_CORTA });
+    comprobar(
+      'el reporte de AYER dice que no hubo ventas, en vez de repetir las de hoy',
+      'el aviso de período sin ventas',
+      'aparece',
+      true,
+    );
+
+    await prueba('periodo-hoy').click();
+    await prueba('resumen-total').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('solapa-productos').click();
+    await prueba('reporte-por-producto').waitFor({ timeout: ESPERA_CORTA });
+    const porProducto = ((await prueba('reporte-por-producto').textContent()) ?? '').trim();
+    // El producto se creó por UNIDAD, así que la unidad que corresponde es «u».
+    comprobar(
+      'el reporte por producto muestra el maíz con la cantidad DEL PERÍODO',
+      'Maíz blanco con 2 u, no con el acumulado',
+      porProducto.includes('Maíz blanco') && /2 u/.test(porProducto)
+        ? 'aparece con 2 u'
+        : 'no aparece o con otra cantidad (mal)',
+      porProducto.includes('Maíz blanco') && /2 u/.test(porProducto),
+    );
+
+    await prueba('solapa-inventario').click();
+    await prueba('reporte-inventario').waitFor({ timeout: ESPERA_CORTA });
+    /*
+      Solo hay UN producto activo: el otro que el recorrido intenta crear se
+      rechaza a propósito por tener precio negativo. Lo que sí se comprueba es
+      que el saldo que muestra el reporte es el que dejó la venta —100 menos 2—
+      y no el inicial.
+    */
+    const filasDeInventario = await prueba('fila-de-inventario').allTextContents();
+    comprobar(
+      'el inventario muestra el saldo que dejó la venta, no el inicial',
+      'el maíz con 98.000, no con 100.000',
+      filasDeInventario.join(' | ') || '(vacío)',
+      filasDeInventario.length === 1 &&
+        /98\.000/.test(filasDeInventario[0] ?? '') &&
+        !/100\.000/.test(filasDeInventario[0] ?? ''),
+    );
+
+    // =======================================================================
+    // 7. Topes de descuento: que el cambio quede con nombre y apellido.
+    // =======================================================================
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-limites').click();
+    await prueba('limite-venta').waitFor({ timeout: ESPERA_CORTA });
+
+    const sinConfigurar = await prueba('limites-sin-configurar').count();
+    comprobar(
+      'una instalación nueva avisa que SIN configurar el tope es CERO, no ilimitado',
+      'el aviso presente',
+      sinConfigurar > 0 ? 'aparece' : 'no aparece (mal)',
+      sinConfigurar > 0,
+    );
+
+    await prueba('editar-limite-venta').click();
+    await prueba('limite-porcentaje').fill('-5');
+    await prueba('limite-guardar').click();
+    await prueba('limite-confirmar').click();
+    const rechazo = ((await prueba('limites-error').first().textContent()) ?? '').trim();
+    comprobar(
+      'un tope negativo se rechaza con un mensaje de negocio, no con un error de la base',
+      'un mensaje que hable de negativo',
+      rechazo === '' ? '(no apareció ningún mensaje)' : rechazo,
+      /negativ/i.test(rechazo) && !/CHECK/i.test(rechazo),
+    );
+
+    await prueba('limite-porcentaje').fill('12');
+    await prueba('limite-monto').fill('25');
+    await prueba('limite-guardar').click();
+    await prueba('limite-confirmar').click();
+    await prueba('limites-aviso').waitFor({ timeout: ESPERA_CORTA });
+
+    const valoresDelRol = ((await prueba('limite-valores-venta').textContent()) ?? '').trim();
+    comprobar(
+      'el tope guardado se ve en la lista con los dos valores',
+      '12.00 % y Q25.00',
+      valoresDelRol,
+      valoresDelRol.includes('12.00') && valoresDelRol.includes('25.00'),
+    );
+
+    const filaDelRol = ((await prueba('limite-venta').textContent()) ?? '').trim();
+    comprobar(
+      'el cambio queda atribuido al administrador real, no a nadie',
+      'menciona a "Administrador de verificación"',
+      filaDelRol.includes('Administrador de verificación')
+        ? 'lo menciona'
+        : 'no lo menciona (mal)',
+      filaDelRol.includes('Administrador de verificación'),
+    );
+
+    // =======================================================================
+    // 8. Gestión de usuarios: el hueco que cerró el Prompt 21.
     // =======================================================================
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor();

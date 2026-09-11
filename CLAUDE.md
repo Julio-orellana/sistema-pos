@@ -1443,8 +1443,11 @@ práctica es que en una instalación recién montada **cualquier descuento pide
 PIN, incluso el que pide un administrador**, hasta que alguien configure los
 límites.
 
-Todavía no hay pantalla para configurarlos —es un pendiente propio, el punto 15
-de §6.2— y mientras tanto hay un andamio de desarrollo:
+**YA HAY PANTALLA PARA CONFIGURARLOS** desde el Prompt 25 (§4.16): un
+administrador los cambia desde la aplicación y el cambio queda con su nombre y
+su asiento de auditoría. El guion de desarrollo sigue existiendo para montar un
+entorno nuevo de una sola vez, y sus valores siguen siendo de prueba y no una
+definición del negocio (punto 15 de §6.2):
 
 ```bash
 npm run seed:limites          # siembra el tope de los dos roles
@@ -1813,6 +1816,224 @@ mismo texto que va a la impresora**. No es una versión bonita de los mismos
 datos: si la pantalla y el rollo se vieran distintos, cotejar uno contra otro
 dejaría de ser inmediato.
 
+### 4.15 Reportes: la regla del SUM(), y el segundo defecto que apareció con ella
+
+#### LA REGLA, EN UNA FRASE
+
+> **Ningún reporte agrega ni ordena en SQL sobre una columna decimal.** Se traen
+> las filas con un `SELECT` normal y se suma y se ordena en la aplicación, con
+> las funciones de `money.ts`.
+
+Vale para TODO reporte, presente y futuro, y no solo para los tres de este
+prompt. Filtrar en SQL sí: `fecha`, `estado`, `forma_pago` y `activo` son texto
+y enteros de verdad, y compararlos en la base es exacto y barato. Lo que no se
+puede es **sumar, promediar, ordenar o sacar un mínimo** de una columna que
+guarda dinero, peso o cantidad.
+
+#### Las dos trampas, MEDIDAS
+
+No es una precaución teórica. Está medido contra el SQLite que el proyecto
+empaqueta, y la medición vive en una prueba que corre con `npm test`, de modo
+que si una versión futura cambiara de comportamiento el proyecto se entera en
+desarrollo y no en el mostrador.
+
+| Lo que se pidió | Lo que devuelve SQLite | Lo correcto |
+|---|---|---|
+| `SUM()` de diez montos de dos decimales | `13.459999999999999` y `typeof = 'real'` | `13.46` |
+| `SUM()` de cinco `subtotal_exacto` | `18.494999999999997`, que redondea a **Q18.49** | **Q18.50** |
+| `ORDER BY` sobre cantidades | `10.000 100.000 2.500 85.000 9.000` | `2.500 9.000 10.000 85.000 100.000` |
+| `MIN()` sobre esas cantidades | `10.000` | `2.500` |
+
+**La primera trampa era conocida** y es la razón de ser de `money.ts` desde el
+Prompt 1: la columna es TEXT, SQLite la convierte a REAL para poder sumarla, y
+el punto flotante vuelve a entrar. Con montos ya redondeados a centavos el
+desvío es minúsculo; **con valores SIN redondear —`subtotal_exacto`, que tiene
+hasta diez decimales— llega a cambiar el centavo del reporte, y en contra de la
+tienda.** Ese caso concreto está en las pruebas, con sus cinco números.
+
+**La segunda trampa apareció construyendo estos reportes y no estaba anotada en
+ninguna parte.** SQLite compara TEXT byte a byte, así que `'10.000'` va antes
+que `'2.500'` porque `'1' < '2'`. El reporte de inventario se ordena ascendente
+justamente **para ver primero lo que menos queda**: ordenado en SQL habría
+puesto diez libras antes que dos y media, o sea exactamente al revés de para lo
+que sirve, **y sin ningún síntoma visible**, porque la lista se ve ordenada.
+Por eso la regla dice «ni ordena», no solo «ni agrega».
+
+Hay además una **segunda red que ya existía**: `decimal-columns.ts` es la única
+vía para leer estas columnas y se niega ruidosamente si la base devuelve un
+número en vez de texto. Un reporte escrito con `SUM()` no daría un número
+silenciosamente malo: se caería al leerlo. Pero la red no alcanza para el
+`ORDER BY`, que devuelve texto perfectamente legible en el orden equivocado.
+
+**En Postgres esto no aplica de la misma forma** —`NUMERIC` es decimal exacto
+nativo y suma bien— pero los reportes leen de SQLite local, no de la nube, así
+que la regla rige igual. El día que haya reportes del lado del servidor, esa
+será otra decisión con su propia fila.
+
+#### Qué se puede pedir: los períodos
+
+| Período | Qué abarca |
+|---|---|
+| Hoy | El día de Guatemala en curso |
+| Ayer | El día anterior, completo |
+| Últimos 7 días | Siete días **contando el de hoy**, no los siete anteriores |
+| Este mes | Del día 1 **hasta hoy**, no hasta fin de mes |
+| Rango personalizado | Dos días elegidos, los dos inclusive |
+
+**«HOY» ES EL DÍA DE GUATEMALA, NO EL DE UTC, y esto es una corrección de raíz
+de un peligro que §4.13 ya tenía anotado.** `ventas.fecha` se guarda en UTC, que
+es lo correcto para guardar, pero Guatemala es **UTC−6 todo el año** —no usa
+horario de verano; medido con `Intl` en enero, julio y septiembre—. Comparando
+sin convertir, **todas las ventas hechas después de las 18:00 se le atribuirían
+al día siguiente**: en una tienda que cierra a las 19:00, el reporte de «hoy»
+estaría bien a media tarde y mentiría de noche, que es la peor forma de estar
+mal. La conversión vive en un solo módulo puro, `reportes/periodo.ts`, con sus
+pruebas; no se escribe `date(fecha, '-6 hours')` dentro de cada consulta, porque
+eso metería una regla del negocio en una cadena SQL donde nadie la ve.
+
+El extremo `hasta` es **inclusivo hasta el último milisegundo del día**: una
+venta de las 23:59 entra en el reporte de ese día. Con un límite exclusivo habría
+que acordarse de sumar un día en cada consulta, y el día que alguien se olvidara
+el reporte perdería las ventas del final de la jornada sin que nadie lo notara.
+
+Una fecha que **no existe** —`2026-02-31`— se rechaza en vez de correrse en
+silencio al 3 de marzo, que es lo que haría `Date.UTC`. Un reporte que corre
+sobre un rango distinto del que se pidió, sin avisar, es peor que uno que se
+niega a correr.
+
+#### Los tres reportes
+
+**1. Resumen de ventas.** Total vendido, cuántas transacciones, el desglose entre
+efectivo y tarjeta, y los descuentos aplicados.
+
+> **EFECTIVO + TARJETA DA EXACTAMENTE EL TOTAL**, y hay pruebas que lo exigen en
+> cinco escenarios distintos, incluido uno con veinte ventas de montos que en
+> punto flotante no cerrarían. Cada venta aporta su total a uno solo de los dos
+> montones y las tres sumas salen de los mismos valores guardados.
+
+**LOS DESCUENTOS SON UNA REFERENCIA, NO UN SUMANDO.** `ventas.total` ya viene
+con el descuento aplicado —lo aplicó la transacción de la venta, una sola vez, y
+es lo que el cliente pagó—, así que restarlo otra vez lo contaría dos veces. El
+renglón contesta otra pregunta: cuánto se dejó de cobrar. La pantalla lo separa
+del resto y lo dice con todas las letras, por la misma razón por la que el
+recibo aclara que sus importes ya vienen descontados (§4.14).
+
+> **CUIDADO AL LEERLO:** se suma `ventas.descuento_valor`, que guarda **el valor
+> configurado**, no los quetzales que rebajó. Un descuento del 7.5 % suma 7.50 a
+> este renglón aunque haya rebajado Q1.35. Sumar porcentajes con quetzales en un
+> mismo número es una mezcla que el dato mismo arrastra; se informa tal cual
+> porque es lo que se pidió, y queda anotado acá para que nadie lo lea como
+> dinero. Si hiciera falta la rebaja real en quetzales, se deriva de
+> `subtotal − total` como hace el recibo, y es un cambio de una línea.
+
+**2. Ventas por producto.** Cantidad vendida y monto generado por cada producto
+**en el período**, ordenado por monto descendente.
+
+> **NO SE REUSAN `contador_ventas` NI `cantidad_vendida`**, y esta es la
+> distinción central del reporte. Esas dos columnas guardan exactamente estas
+> dos medidas, pero de **toda la vida del producto**, y no se pueden acotar:
+> nadie guardó su valor al empezar el período. Existen para ordenar la
+> cuadrícula de la pantalla de venta (§4.12). Usarlas acá daría el acumulado
+> histórico bajo una etiqueta que dice «este mes», que es la clase de error que
+> no se ve mirando el número: se ve recién cuando alguien suma doce reportes
+> mensuales y no dan el año. Comparten los datos de origen; no son la misma
+> pregunta. Hay pruebas que comparan las dos lecturas sobre las mismas ventas.
+
+Se agrupa por `producto_id` y se muestra el nombre **ACTUAL** del catálogo, no
+el `producto_nombre_snap` del comprobante. Es al revés que el recibo, a
+propósito: el recibo es un documento histórico y no puede cambiar, mientras que
+quien lee un reporte está mirando el catálogo de hoy y busca el producto por el
+nombre que hoy tiene. Agrupar por id y no por nombre hace que renombrar un
+producto nunca lo parta en dos filas.
+
+**3. Estado de inventario.** Los productos activos con su saldo, su unidad y su
+categoría, ordenable por nombre o por cantidad ascendente.
+
+**NO HAY UMBRAL DE «STOCK BAJO» NI ALERTAS**, y es deliberado: cuál es el mínimo
+de cada producto es una definición de negocio que Jimmy no dio, y un umbral
+inventado convertiría una suposición nuestra en un aviso que parece una regla de
+la tienda. Es un módulo futuro con su propio prompt.
+
+#### Los cinco canales exigen rol administrativo
+
+Los tres reportes y los dos de topes. Los reportes dicen cuánto entró a la
+tienda y qué hay en bodega: es información de dueño, no de mostrador, y un
+cajero necesita vender y reimprimir. Hay una prueba que **cuenta** los
+`ipcMain.handle` del archivo y exige que haya tantos guards como canales, igual
+que en el módulo de usuarios.
+
+**La pantalla no calcula NADA.** Ni una suma, ni un orden, ni un porcentaje:
+todos los números llegan resueltos del proceso principal. Si la ventana sumara,
+lo haría con aritmética de punto flotante —ahí no hay Decimal— y el reporte
+diría un número distinto del que dice la base. Es la misma razón por la que la
+pantalla de venta no decide cuánto se cobra (§4.12).
+
+**Los instantes exactos del período NO cruzan hacia la ventana**: viajan los dos
+días y una etiqueta legible. Mandar las cadenas ISO invitaría a que alguna
+pantalla futura hiciera su propia aritmética de fechas en vez de pedirle el
+período al proceso principal, que es donde vive la regla de la zona horaria.
+
+### 4.16 Topes de descuento: ya se configuran desde la aplicación
+
+`limites_descuento` existe desde el Prompt 6 y el servicio de venta la respeta
+desde el Prompt 19, pero hasta el Prompt 25 **la única forma de llenarla era
+`npm run seed:limites`**: un guion de desarrollo, con valores fijos en el
+código, que se corre desde una terminal. En la práctica eso quería decir que
+Jimmy no podía cambiar el tope de su cajero sin que alguien le tocara la
+computadora. Ahora hay pantalla, solo con rol administrativo.
+
+**EL GUION SIGUE EXISTIENDO Y YA NO ES LA ÚNICA PUERTA.** Sirve para montar un
+entorno de desarrollo nuevo de una sola vez; los valores que siembra siguen
+siendo de prueba y **no** una definición del negocio (punto 15 de §6.2).
+
+#### `editado_por` ahora se llena de verdad
+
+Las filas que sembró el guion quedaron con `editado_por = NULL` **a propósito**:
+no había ninguna persona detrás, y poner un usuario inventado habría sido
+atribuirle a alguien una decisión que no tomó. Cuando el cambio lo hace una
+persona desde la pantalla, la columna guarda su `usuario_id` real **y además**
+queda un asiento `limite_descuento_fijado` en `auditoria_log`. Los dos registros
+contestan preguntas distintas, y por eso van los dos:
+
+| Dónde | Qué contesta |
+|---|---|
+| `limites_descuento.editado_por` | **Quién lo dejó así**, hoy |
+| `auditoria_log` | **Quién lo cambió, cuándo y desde qué valor** |
+
+La primera vez que se configura un rol, el valor anterior del asiento va `null`
+y no un cero: decir «antes era 0.00» sería afirmar que alguien lo había
+configurado en cero, y no es lo mismo que no haberlo configurado nunca.
+
+#### Qué se valida, y qué NO se valida a propósito
+
+**Solo se exige que los dos valores no sean negativos**, que es lo que el
+esquema exige. El rechazo llega con mensaje de negocio antes de tocar la base
+—«El porcentaje máximo no puede ser negativo. Poné 0 si ese rol no debe dar
+descuento.»— y el CHECK sigue siendo la última red. Un rechazo **no deja la fila
+a medias**: hay una prueba que comprueba que el valor válido no se cuela cuando
+el otro se rechaza.
+
+> **UN PORCENTAJE MAYOR QUE 100 SE ACEPTA, y la pantalla avisa sin bloquear.**
+> No autoriza nada más que 100 —`totalConDescuento` ya tiene piso en cero— así
+> que no es peligroso, solo inútil; y rechazarlo sería inventar una regla de
+> negocio que Jimmy no confirmó. Se avisa con el mismo criterio del aviso de
+> inventario de §4.12: informar sin estorbar. Queda como el punto 17 de §6.2.
+
+#### La confirmación, y el defecto que apareció manejando la aplicación
+
+Guardar pide confirmación y **muestra el número que se está por dejar puesto**,
+con el mismo criterio del cierre de caja descuadrado (§4.9): subir un tope le da
+a un rol la capacidad de rebajar sin pedirle permiso a nadie.
+
+**CORREGIDO:** la primera versión se quedaba en el paso de confirmación cuando
+el servicio rechazaba el valor. Los campos seguían visibles y editables, pero el
+botón «Guardar» no existe en ese estado —ahí el botón dice «Sí, guardar este
+tope»—, así que quien corrigiera el número se quedaba mirando una confirmación
+que seguía repitiendo el valor rechazado. Ahora un rechazo **vuelve al paso de
+edición** y el aviso aparece junto al botón que lo produjo, que es la regla de
+§4.11. Lo encontró `npm run verify:pantallas`, no una prueba de Vitest: es
+exactamente la clase de defecto que esa comprobación existe para atrapar.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -1885,6 +2106,14 @@ dejaría de ser inmediato.
 | **CON DESCUENTO, la columna de precio unitario del recibo imprime el precio EFECTIVO (`subtotal_impreso ÷ cantidad`), no `precio_unitario_snap`. Es presentación: no cambia nada de lo que se guarda.** Sin descuento se sigue imprimiendo el precio de lista tal cual. | Dejar el precio de lista y confiar en la aclaración; imprimir el importe previo al descuento en cada línea; guardar el precio efectivo en `venta_detalle` | Completa la corrección del Prompt 23. Las líneas ya sumaban el total, pero **cada renglón por separado seguía sin multiplicar**: al lado de un importe ya descontado salía el precio de lista, y el papel decía «0.333 lb x 6.69» junto a «2.06». Un recibo que el cliente no puede verificar de cabeza obliga a creerle al sistema, que es lo contrario de lo que un comprobante existe para hacer. Imprimir el importe previo al descuento en cada línea era la otra salida y ya estaba descartada: obligaría a recalcular y las líneas dejarían de sumar lo que el cliente paga. **Guardarlo tampoco**: `precio_unitario_snap` es la foto de lo que el producto COSTABA, un dato del negocio, y pisarlo con un número de presentación destruiría la trazabilidad del cálculo a cambio de nada. Sin descuento no se calcula nada, porque ahí `cantidad × precio` ya da el importe. **La derivación va en un solo sentido:** el precio sale del importe, nunca al revés, o se perdería «el total manda». El costo aceptado es un margen de **medio centavo por unidad** —Q0.50 en 100 libras—, inevitable al imprimir un unitario de dos decimales y mucho menor que la diferencia anterior; dos pruebas lo fijan como cota, una con 100 libras a propósito. | Prompt 24 — 2026-09-11 |
 | **La aclaración del recibo SE CONSERVA, con el texto corregido a «Precios e importes ya incluyen el descuento».** | Quitarla ahora que la aritmética se explica sola; dejarle el texto viejo | Con el precio efectivo, el renglón ya multiplica y la nota dejó de ser necesaria PARA ESO. Sigue haciendo falta por dos cosas que la multiplicación no dice: que el renglón «Descuento −1.63» es un **dato ya aplicado** y no un paso de resta sobre el TOTAL que está debajo —sin la nota, quien lea el papel lo resta otra vez y obtiene un número que no existe—, y que el precio unitario que ve **no es el precio de lista** del producto, cosa que un cliente que conoce el precio del maíz va a notar. Cuesta un renglón de papel y cierra las dos confusiones. El texto se corrigió porque ahora el precio también viene descontado, y decir solo «los importes» habría quedado incompleto justo respecto de lo que cambió. | Prompt 24 — 2026-09-11 |
 | **Una reimpresión refleja SIEMPRE los datos vigentes de `configuracion_negocio`; NO se guarda un snapshot por venta.** Decidido explícitamente, no por omisión. | Congelar los cuatro campos en `ventas` al momento de vender, igual que el nombre y el precio del producto | **No son la misma clase de dato.** El nombre y el precio del producto se congelan porque son **términos de la operación** —lo que el cliente aceptó pagar—, y cambiarlos retroactivamente cambia lo acordado. El nombre, la dirección, el teléfono y el NIT dicen **quién emitió el papel**, no qué se acordó en él: heredarles la regla del producto sería copiarla sin el motivo que la justifica. Hoy el argumento apunta con fuerza en contra del snapshot: los cuatro campos están en `NULL` porque los datos de Jimmy no llegaron, así que con snapshot **los marcadores entre corchetes quedarían congelados para siempre** en todo recibo emitido antes de cargarlos, mientras que sin snapshot se reparan solos ese día. Y el dato cambia casi nunca: el NIT prácticamente no cambia y la dirección solo si la tienda se muda. **La contrapartida se dice en voz alta:** si el NIT o la razón social cambiaran por una razón legal, una reimpresión mostraría como emisor a quien no emitió, y eso sí sería un problema de auditoría; hoy está acotado porque el papel dice de frente que es proforma y no vale como factura fiscal. **Se revisa cuando se resuelva el punto 2 de §6.2** (si la tienda emite FEL/SAT) o si cambia el NIT o el nombre comercial. No se implementa ahora también porque nada lo bloquea después: serían cuatro columnas nulables llenadas en la transacción de la venta, con el recibo prefiriendo el snapshot y respaldándose en la fila vigente para las ventas viejas. | Prompt 24 — 2026-09-11 |
+| **PRINCIPIO GENERAL DEL PROYECTO: ningún reporte agrega ni ordena en SQL sobre una columna decimal.** Se traen las filas con `SELECT` y se suma y se ordena en la aplicación, con `money.ts`. Vale para todo reporte presente y futuro, no solo para los de este prompt. | Usar `SUM()`/`AVG()` y `ORDER BY` de SQL, que es lo evidente y lo que escribiría cualquiera; guardar además una columna numérica paralela para poder agregar | **Son dos trampas y las dos están medidas contra el SQLite que el proyecto empaqueta.** (1) `SUM()` sobre una columna TEXT canónica la convierte a REAL —`typeof` lo confirma— y devuelve punto flotante: diez montos que suman Q13.46 exactos dan `13.459999999999999`. Con montos ya redondeados el desvío es minúsculo, pero **con valores sin redondear cambia el centavo**: cinco `subtotal_exacto` cuya suma exacta es 18.495 → **Q18.50** dan por SQL 18.494999999999997 → **Q18.49**, un centavo en contra de la tienda. Es el mismo punto flotante que `money.ts` existe para eliminar, ahora escondido dentro de un reporte que nadie audita línea por línea como sí se audita una venta. (2) **`ORDER BY` compara TEXT byte a byte**, así que `'10.000'` va antes que `'2.500'`; el reporte de inventario se ordena ascendente para ver primero lo que menos queda, y en SQL habría puesto diez libras antes que dos y media, **al revés de para lo que sirve y sin ningún síntoma visible**. `MIN()` tiene el mismo defecto. La segunda trampa no estaba anotada en ninguna parte y apareció construyendo estos reportes. Filtrar en SQL SÍ se hace: `fecha`, `estado`, `forma_pago` y `activo` son texto y enteros de verdad. `decimal-columns.ts` es una segunda red —rechaza leer un número de una columna decimal— pero no cubre el `ORDER BY`, que devuelve texto legible en el orden equivocado. En Postgres no aplica, porque `NUMERIC` es decimal exacto nativo; los reportes leen de SQLite local, así que la regla rige igual. Hay una prueba que mide las dos trampas y otra que revisa el código fuente de los repositorios y del servicio buscando agregados y ordenamientos sobre las diez columnas decimales. | Prompt 25 — 2026-09-11 |
+| **«Hoy» es el día de GUATEMALA, no el de UTC, y la conversión vive en un módulo puro con pruebas.** | Comparar las cadenas ISO tal cual; escribir `date(fecha, '-6 hours')` dentro de cada consulta; leer la zona horaria del sistema operativo | `ventas.fecha` se guarda en UTC, que es lo correcto para guardar, pero Guatemala es UTC−6 **todo el año** (no usa horario de verano; medido con `Intl` en enero, julio y septiembre). Sin convertir, **todas las ventas hechas después de las 18:00 se le atribuirían al día siguiente**: en una tienda que cierra a las 19:00, el reporte de «hoy» estaría bien a media tarde y mentiría de noche, que es la peor forma de estar mal. Es el mismo peligro que §4.13 ya anotaba para la vigencia de un precio especial, resuelto de raíz en vez de quedar anotado. No se mete en la cadena SQL porque eso escondería una regla del negocio donde nadie la ve y la repetiría en cada consulta. **No se lee la zona del sistema** porque el reporte tiene que dar lo mismo en la computadora de la tienda que en la de Julio, que está en otra zona: es una constante, y si Guatemala adoptara horario de verano hay un solo lugar que tocar. El extremo `hasta` es inclusivo hasta el último milisegundo del día, para que una venta de las 23:59 entre en el reporte de ese día sin que nadie tenga que acordarse de sumar un día. Una fecha que no existe se rechaza en vez de correrse en silencio al mes siguiente, que es lo que haría `Date.UTC`. | Prompt 25 — 2026-09-11 |
+| **El reporte por producto NO reusa `contador_ventas` ni `cantidad_vendida`: recorre `venta_detalle` del período.** | Leer los acumuladores del catálogo, que guardan exactamente esas dos medidas; guardar una foto de los acumuladores al inicio de cada período | Las dos columnas guardan las mismas dos medidas pero de **toda la vida del producto**, y **no se pueden acotar**: nadie guardó su valor al empezar el período. Existen para ordenar la cuadrícula de la pantalla de venta (§4.12) y ese destino no cambia. Usarlas en un reporte daría el acumulado histórico bajo una etiqueta que dice «este mes», que es la clase de error que no se ve mirando el número: se ve recién cuando alguien suma doce reportes mensuales y no dan el año. Guardar una foto periódica sería inventar un mecanismo nuevo para un dato que ya está entero en `venta_detalle`, donde cada línea tiene su venta y su fecha. Comparten los datos de origen; no son la misma pregunta. Se agrupa por `producto_id` y se muestra el nombre ACTUAL del catálogo —al revés que el recibo, que es un documento histórico y usa el snapshot— porque quien lee un reporte mira el catálogo de hoy; agrupar por id hace que renombrar nunca parta un producto en dos filas. | Prompt 25 — 2026-09-11 |
+| **Los descuentos del resumen se INFORMAN, no se restan del total vendido.** | Restarlos del total; no mostrarlos | `ventas.total` ya viene con el descuento aplicado: lo aplicó la transacción de la venta, una sola vez, y es lo que el cliente pagó. Restarlo otra vez lo contaría dos veces y daría un número que nunca existió. El renglón contesta otra pregunta —cuánto se dejó de cobrar— y por eso la pantalla lo separa y lo aclara, con el mismo criterio con que el recibo aclara que sus importes ya vienen descontados (§4.14). **Queda anotada una salvedad de lectura:** se suma `descuento_valor`, que guarda el valor CONFIGURADO y no los quetzales rebajados, así que un 7.5 % suma 7.50 aunque haya rebajado Q1.35. Se informa tal cual porque es lo que se pidió; si hiciera falta la rebaja real en quetzales se deriva de `subtotal − total`, como hace el recibo. | Prompt 25 — 2026-09-11 |
+| **Los topes de descuento se configuran desde una pantalla, y el guion `seed:limites` deja de ser la única puerta.** Al guardar se llena `editado_por` con el usuario real y queda un asiento en `auditoria_log`. | Dejar solo el guion; llenar `editado_por` también en el guion, con un usuario cualquiera | El guion es de desarrollo, con valores fijos en el código y corrido desde una terminal: mientras fuera la única puerta, Jimmy no podía cambiar el tope de su cajero sin que alguien le tocara la computadora, y eso deja incompleto un mecanismo —el tope por rol— que el sistema ya aplicaba en cada venta. Las filas sembradas por el guion siguen con `editado_por = NULL` **a propósito**: no hay ninguna persona detrás, y ponerle un usuario inventado sería atribuirle a alguien una decisión que no tomó. Se guardan los DOS registros porque contestan preguntas distintas: la columna dice quién lo dejó así hoy, la bitácora dice quién lo cambió, cuándo y desde qué valor. La primera vez el valor anterior del asiento va `null` y no cero, porque «antes era 0.00» afirmaría que alguien lo configuró en cero y no es lo mismo que no haberlo configurado. El guion sobrevive para montar entornos de desarrollo nuevos. | Prompt 25 — 2026-09-11 |
+| **Un porcentaje de tope mayor que 100 se ACEPTA; la pantalla avisa sin bloquear.** | Rechazarlo con un error; aceptarlo en silencio | Rechazarlo sería inventar una regla de negocio que Jimmy no confirmó, y este proyecto no atribuye definiciones al cliente (ver la fila de los mensajes que no inventan razones). Tampoco es peligroso: `totalConDescuento` tiene piso en cero, así que 150 % no autoriza nada que 100 % no autorice ya. Pero sí es un valor inútil y un tecleo plausible —confundir el campo del porcentaje con el de quetzales—, así que callarlo tampoco sirve. Avisar sin bloquear es la misma salida que ya se eligió para el aviso de inventario de la pantalla de venta (§4.12): informar sin estorbar. Queda abierto como el punto 17 de §6.2 para que lo decida Jimmy. | Prompt 25 — 2026-09-11 |
+| **CORREGIDO: un rechazo en la pantalla de topes vuelve al paso de edición, no se queda en la confirmación.** | Quedarse en la confirmación mostrando el error ahí | Lo encontró `npm run verify:pantallas` manejando la aplicación real, no una prueba de Vitest. Quedándose en la confirmación, los campos seguían visibles y editables pero **el botón «Guardar» no existe en ese estado** —ahí el botón dice «Sí, guardar este tope»—, así que quien corrigiera el número se quedaba mirando una confirmación que seguía repitiendo el valor rechazado. Volver a la edición deja el aviso junto al botón que lo produjo, que es la regla de §4.11, y pone el foco donde está el problema. Es la tercera vez que esta comprobación atrapa un defecto que ninguna prueba de Vitest podía ver. | Prompt 25 — 2026-09-11 |
+| **`cantidadLegible` se mueve de `modelo-de-recibo.ts` a `@shared/money`, compartida por el recibo y los reportes.** | Dejar la del recibo donde estaba y escribir otra para el reporte | El reporte por producto mostraba «2.000 u» donde el recibo ya mostraba «2», y se vio manejando la aplicación real. Dos implementaciones de «cómo se escribe una cantidad» terminan mostrando el mismo número de dos formas distintas en el mismo sistema, que es el argumento por el que `colision-de-pin.ts` también vive en su propio módulo. Es SOLO presentación: lo que se guarda y lo que se compara sigue siendo la forma canónica de tres decimales. | Prompt 25 — 2026-09-11 |
 | **El PDF sale de `printToPDF` de Chromium, no de una librería de PDF.** | `pdfkit`, `jsPDF` u otra librería; generar el recibo como imagen | Electron ya empaqueta Chromium: sumar una librería sería agregar una dependencia y un segundo motor de maquetación para hacer lo mismo. Y maquetar con HTML y CSS deja el recibo legible y ajustable por alguien que no sea programador, mientras que una librería de PDF lo convierte en coordenadas. El HTML se carga por `data:` y no escribiendo un archivo temporal, para que no quede un HTML con los datos de una venta dando vueltas en el disco. La ventana va invisible, sin Node y sin preload: el recibo es contenido, no código. | Prompt 23 — 2026-09-11 |
 | **El recibo se emite DESPUÉS de la transacción de la venta, nunca adentro.** | Emitirlo dentro de la misma transacción, para que venta y recibo sean atómicos | Generar un PDF abre una ventana de Chromium e imprimir habla con un puerto: las dos cosas son lentas y fallan por motivos ajenos a la venta. Adentro, mantendrían abierta una escritura de SQLite esperando a un aparato, y una impresora sin papel revertiría una venta ya cobrada. La consecuencia se asume y se dice en voz alta: si la aplicación se cae entre la venta y el recibo, queda una venta sin recibo, que es recuperable desde el historial e infinitamente preferible a perder la venta. | Prompt 23 — 2026-09-11 |
 | **ESC/POS implementado contra el estándar más común, con la conversión a bytes como función PURA y sin dependencias nativas nuevas.** | Una librería `escpos`/`node-usb`; esperar a tener la impresora para escribir el adaptador; imprimir con el controlador del sistema | El modelo real de Jimmy llega el jueves y no está confirmado, así que se usaron solo los comandos del núcleo del estándar —inicializar, página de códigos, avanzar, corte parcial— y se evitaron los de código de barras, imagen y cajón de dinero, que es donde los fabricantes se apartan. Una librería USB obligaría a recompilar otro módulo nativo para Electron y para Windows para hacer exactamente lo que hace `node:fs`: escribir bytes en un descriptor. Dejar la parte con sustancia como función pura permite probarla byte por byte sin el aparato, y el día que llegue esas pruebas dicen exactamente qué se le está mandando. **Lo que NO está verificado es que ESA impresora los entienda.** | Prompt 23 — 2026-09-11 |
@@ -1964,7 +2193,9 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
 | 13 | **El catálogo real de Jimmy.** Nombres, categorías, precios, unidades e inventario inicial de verdad. Iba a entregarlo al día siguiente del Prompt 15. | Mientras no llegue, la tienda corre con el catálogo de ejemplo (`npm run seed:ejemplo`), que está marcado con el prefijo `[Ejemplo] ` justamente para que nadie lo confunda con el real. El día que llegue: `npm run seed:limpiar` y cargar el verdadero. | Abierto — **es lo próximo que hace falta del cliente** |
 | 14 | ~~¿Qué debe ordenar los íconos de la pantalla de venta: `contador_ventas` o `cantidad_vendida`?~~ | — | **RESUELTO (Prompt 20): ordena `contador_ventas`, y no se cambia nada.** Julio lo decidió sin necesidad de consultarlo con Jimmy: contar VECES es la única medida comparable entre productos, porque las libras de maíz y las unidades de huevo no se suman en un mismo número. `cantidad_vendida` existe para **reportes futuros**, no para el orden de los íconos. |
-| 15 | **¿Qué topes de descuento quiere Jimmy, y quién los configura desde dónde?** | `limites_descuento` existe y el servicio la respeta, pero **no hay pantalla para llenarla**: es una tarea propia, para un prompt futuro. Mientras tanto hay un andamio de desarrollo, `npm run seed:limites`, que pone 10 % / Q20 al rol `venta` y 100 % / Q1 000 al `administrativo`; los valores son de prueba y **no** una definición del negocio. Falta que Jimmy diga los topes reales. El del rol administrativo además **asume que ese rol lo tiene el dueño**, y hay que revisarlo si se le asigna a un empleado: ver la salvedad de §4.13 y el punto 6 de esta misma lista. | Abierto — el guion desbloquea probar, no reemplaza la definición |
+| 15 | **¿Qué topes de descuento quiere Jimmy?** La mitad de «quién los configura desde dónde» ya está resuelta. | **YA HAY PANTALLA** (§4.16, Prompt 25): un administrador los cambia desde la aplicación, queda su nombre en `editado_por` y su asiento en `auditoria_log`. `npm run seed:limites` sigue existiendo para montar entornos de desarrollo, pero **ya no es la única puerta**. Lo que sigue abierto es el NÚMERO: los 10 % / Q20 del rol `venta` y los 100 % / Q1 000 del `administrativo` son valores de prueba y **no** una definición del negocio. Falta que Jimmy diga los topes reales. El del rol administrativo además **asume que ese rol lo tiene el dueño**, y hay que revisarlo si se le asigna a un empleado: ver la salvedad de §4.13 y el punto 6 de esta misma lista. | Abierto — falta el número, ya no la pantalla |
+| 17 | **¿Un tope de descuento en porcentaje mayor que 100 debería rechazarse?** | Hoy **se acepta y la pantalla avisa sin bloquear** (§4.16). No es peligroso —`totalConDescuento` tiene piso en cero, así que 150 % no autoriza nada que 100 % no autorice ya— pero es un valor inútil y un tecleo plausible: confundir el campo del porcentaje con el de quetzales. Rechazarlo sería inventar una regla que Jimmy no confirmó, así que se avisa y se deja pasar. Si él prefiere que el sistema lo impida, es un cambio de tres líneas en `ServicioDeLimitesDeDescuento.leerNumero`. | Abierto — de bajo riesgo, se decide cuando haya ocasión |
+| 18 | **¿Qué umbral de «stock bajo» tiene cada producto, y quién lo define?** | El reporte de inventario muestra la fotografía de hoy y **no tiene umbral ni alertas, a propósito** (§4.15): cuál es el mínimo de cada producto es una definición de negocio, y un umbral inventado convertiría una suposición nuestra en un aviso que parece una regla de la tienda. Hace falta saber si el mínimo es por producto, por categoría o uno solo para todo, y si depende de la temporada. Es un módulo futuro con su propio prompt. | Abierto — bloquea las alertas de stock, no el reporte |
 | 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
@@ -2007,15 +2238,22 @@ negocio:
   PDF, impresión térmica por ESC/POS, historial y reimpresión. Ver la sección
   4.14. La impresión **está escrita contra el estándar y NO probada contra la
   impresora real**, que llega el jueves.
-- **No existe todavía**: **anular una venta ya registrada**, y los reportes de
-  ventas e inventario. `RepositorioDeVentas.anular` existe como operación de
-  datos, pero no hay servicio, canal ni pantalla que la use, ni reglas de
-  autorización, ni devolución de inventario.
-- **No hay pantalla para configurar `limites_descuento`.** Sin fila, el tope de
-  un rol es cero y cualquier descuento pide PIN. Hay un andamio de desarrollo
-  (`npm run seed:limites`) que pone 10 % / Q20 al rol `venta` y 100 % / Q1 000 al
-  `administrativo`, con valores de prueba y no de negocio. La pantalla es una
-  tarea propia: ver el punto 15 de la sección 6.2.
+- **Sí existen** los tres reportes: resumen de ventas por período, ventas por
+  producto e inventario, con su selector de período en hora de Guatemala. Ver la
+  sección 4.15. **Ninguno agrega ni ordena en SQL sobre una columna decimal**, y
+  esa regla vale para todo reporte futuro.
+- **Sí existe** la pantalla de topes de descuento (§4.16), con confirmación y
+  con `editado_por` llenado con el administrador real. `npm run seed:limites`
+  sigue existiendo para entornos de desarrollo nuevos, pero **ya no es la única
+  forma de cambiarlos**. Lo que falta es el número real que quiera Jimmy: punto
+  15 de la sección 6.2.
+- **No existe todavía**: **anular una venta ya registrada**. `RepositorioDeVentas.anular`
+  existe como operación de datos y los reportes ya filtran por
+  `estado = 'completada'` para el día que exista, pero no hay servicio, canal ni
+  pantalla que la use, ni reglas de autorización, ni devolución de inventario.
+- **No existen las alertas de stock mínimo, los gráficos ni la exportación de
+  reportes a un archivo.** El umbral de cada producto es una definición de
+  negocio que falta: punto 18 de la sección 6.2.
 - Tampoco hay **mermas ni ajustes de inventario a la baja**: el ajuste que
   existe solo suma mercadería recibida, y las bajas son un módulo futuro con sus
   propias reglas de autorización.
@@ -2040,6 +2278,9 @@ npm run seed:ejemplo     # siembra el catálogo de ejemplo (NO es una migración
 npm run seed:limpiar     # quita el catálogo de ejemplo, sin tocar datos reales
 npm run seed:limites     # topes de descuento: venta 10 %/Q20, admin 100 %/Q1000
 npm run seed:limites:limpiar  # los quita, y los dos roles vuelven a cero
+                         # LOS DOS son para montar un entorno de desarrollo:
+                         # desde el Prompt 25 los topes se cambian desde la
+                         # aplicación, con su auditoría (§4.16).
 npm run verify:pantallas # maneja la app real y comprueba qué se ve en pantalla
 ```
 
@@ -2074,7 +2315,8 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     usuarios/   autenticación, bloqueo por intentos, sesión, permisos y gestión de usuarios
     caja/       apertura y cierre del turno, arqueo por denominaciones
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
-    venta/      precio efectivo, descuento y la transacción que registra la venta
+    venta/      precio efectivo, descuento, topes por rol y la transacción de la venta
+    reportes/   los tres reportes y el período en hora de Guatemala. NUNCA agrega en SQL
     negocio/    los datos de la tienda que encabezan el recibo
     recibo/     modelo, plantilla, ESC/POS y emisión del comprobante
   adapters/     implementaciones reales: impresión térmica por ESC/POS

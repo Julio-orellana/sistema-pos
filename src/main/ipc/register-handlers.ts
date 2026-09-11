@@ -48,6 +48,8 @@ import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import type { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import type { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
 import type { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
+import type { ServicioDeReportes } from '@main/domain/reportes/servicio-de-reportes';
+import type { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-de-limites-de-descuento';
 import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
@@ -61,6 +63,7 @@ import {
 import { registrarManejadoresDeVenta } from './venta';
 import { registrarManejadoresDeUsuarios } from './usuarios';
 import { registrarManejadoresDeRecibos } from './recibos';
+import { registrarManejadoresDeReportes } from './reportes';
 
 /** Dependencias que los manejadores necesitan del resto del proceso principal. */
 export interface DependenciasDeIpc {
@@ -88,6 +91,10 @@ export interface DependenciasDeIpc {
   readonly repositorioDeRecibos: RepositorioDeRecibos;
   /** Precios especiales vigentes, para resolver el precio efectivo. */
   readonly preciosEspeciales: RepositorioDePreciosEspeciales;
+  /** Los tres reportes: resumen de ventas, por producto e inventario. */
+  readonly reportes: ServicioDeReportes;
+  /** Topes de descuento por rol, ya configurables desde la aplicación. */
+  readonly limitesDeDescuento: ServicioDeLimitesDeDescuento;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -125,6 +132,14 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     negocio: dependencias.negocio,
     recibos: dependencias.recibos,
     repositorioDeRecibos: dependencias.repositorioDeRecibos,
+  });
+  // Reportes y topes de descuento: los cinco canales exigen rol
+  // administrativo. Cuánto entró a la tienda y cuánto puede rebajar cada rol
+  // son las dos cosas que un cajero no tiene por qué ver ni cambiar.
+  registrarManejadoresDeReportes({
+    sesion: dependencias.sesion,
+    reportes: dependencias.reportes,
+    limites: dependencias.limitesDeDescuento,
   });
 
   ipcMain.handle(

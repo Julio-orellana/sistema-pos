@@ -28,7 +28,7 @@
 
 import type Decimal from 'decimal.js';
 
-import { dividir, montoACadena, redondearMonto, restar } from '@shared/money';
+import { cantidadLegible, dividir, montoACadena, redondearMonto, restar } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
 import type {
   ConfiguracionNegocio,
@@ -144,20 +144,8 @@ function oMarcador(valor: string | null, marcador: string): string {
   return limpio === '' ? marcador : limpio;
 }
 
-/** Decimales con que se guardan las cantidades en todo el sistema. */
-const DECIMALES_DE_CANTIDAD = 3;
-
 /** Decimales de un monto en quetzales. */
 const DECIMALES_DE_MONTO = 2;
-
-/** La cantidad tal como se lee en el papel: sin ceros decorativos. */
-function cantidadLegible(valor: Decimal): string {
-  const canonica = valor.toFixed(DECIMALES_DE_CANTIDAD);
-  if (!canonica.includes('.')) {
-    return canonica;
-  }
-  return canonica.replace(/\.?0+$/, '');
-}
 
 /** Cómo se lee un descuento: «25 %» o «Q25.00». */
 export function describirDescuento(tipo: TipoValor, valor: Decimal): string {

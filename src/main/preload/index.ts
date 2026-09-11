@@ -24,6 +24,12 @@ import {
   type ConfiguracionDeNegocioIpc,
   type ReciboEnHistorialIpc,
   type ReciboVistoIpc,
+  type PeriodoIpc,
+  type ResumenDeVentasIpc,
+  type ReporteDeVentasPorProductoIpc,
+  type ReporteDeInventarioIpc,
+  type LimiteDeDescuentoIpc,
+  type CambioDeLimiteIpc,
   type UsuarioEditadoIpc,
   type UsuarioIpc,
   type UsuarioNuevoIpc,
@@ -216,6 +222,34 @@ const apiPos: ApiPos = {
     reimprimir: (id: string): Promise<RespuestaIpc<ReciboVistoIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.recibosReimprimir, { id }) as Promise<
         RespuestaIpc<ReciboVistoIpc>
+      >,
+  },
+
+  reportes: {
+    resumenDeVentas: (periodo: PeriodoIpc): Promise<RespuestaIpc<ResumenDeVentasIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.reportesResumenDeVentas, periodo) as Promise<
+        RespuestaIpc<ResumenDeVentasIpc>
+      >,
+    ventasPorProducto: (
+      periodo: PeriodoIpc,
+    ): Promise<RespuestaIpc<ReporteDeVentasPorProductoIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.reportesVentasPorProducto, periodo) as Promise<
+        RespuestaIpc<ReporteDeVentasPorProductoIpc>
+      >,
+    inventario: (orden: 'nombre' | 'cantidad'): Promise<RespuestaIpc<ReporteDeInventarioIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.reportesInventario, { orden }) as Promise<
+        RespuestaIpc<ReporteDeInventarioIpc>
+      >,
+  },
+
+  limites: {
+    listar: (): Promise<RespuestaIpc<readonly LimiteDeDescuentoIpc[]>> =>
+      ipcRenderer.invoke(CANALES_IPC.limitesListar) as Promise<
+        RespuestaIpc<readonly LimiteDeDescuentoIpc[]>
+      >,
+    fijar: (cambio: CambioDeLimiteIpc): Promise<RespuestaIpc<LimiteDeDescuentoIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.limitesFijar, cambio) as Promise<
+        RespuestaIpc<LimiteDeDescuentoIpc>
       >,
   },
 

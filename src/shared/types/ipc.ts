@@ -135,6 +135,23 @@ export const CANALES_IPC = {
   recibosReimprimir: 'recibos:reimprimir',
   /** El recibo en texto plano, para mostrarlo en pantalla tal como sale. */
   recibosVer: 'recibos:ver',
+
+  // --- Reportes -------------------------------------------------------------
+  /**
+   * Los tres reportes. TODOS exigen rol administrativo: son la foto de cuánto
+   * entró y de qué hay en bodega, que es información de dueño, no de mostrador.
+   *
+   * NINGUNO AGREGA NI ORDENA EN SQL sobre una columna decimal: el proceso
+   * principal trae las filas y suma con Decimal.js. Ver CLAUDE.md §4.15.
+   */
+  reportesResumenDeVentas: 'reportes:resumen-de-ventas',
+  reportesVentasPorProducto: 'reportes:ventas-por-producto',
+  reportesInventario: 'reportes:inventario',
+
+  // --- Límites de descuento -------------------------------------------------
+  /** Topes de descuento por rol. Reemplazan la dependencia de `seed:limites`. */
+  limitesListar: 'limites:listar',
+  limitesFijar: 'limites:fijar',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -945,6 +962,127 @@ export interface ReciboEnHistorialIpc {
   readonly conDescuento: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Reportes
+// ---------------------------------------------------------------------------
+
+/**
+ * Qué período se está pidiendo.
+ *
+ * Las fechas del rango personalizado viajan como `AAAA-MM-DD` **en hora de
+ * Guatemala**, no como instantes: quien las escribe está eligiendo días en un
+ * calendario, no momentos. El proceso principal las convierte a instantes UTC
+ * con el desfase del país, que es donde vive esa regla y no en la ventana.
+ */
+const LARGO_DE_UN_DIA_ISO = 10;
+
+export const esquemaPeriodo = z.object({
+  clase: z.enum(['hoy', 'ayer', 'ultimos-7-dias', 'este-mes', 'personalizado']),
+  desde: z.string().max(LARGO_DE_UN_DIA_ISO).nullable().optional(),
+  hasta: z.string().max(LARGO_DE_UN_DIA_ISO).nullable().optional(),
+});
+
+/** Período pedido, ya validado. */
+export type PeriodoIpc = z.infer<typeof esquemaPeriodo>;
+
+/** El período tal como se resolvió, para que la pantalla lo muestre. */
+export interface PeriodoResueltoIpc {
+  readonly clase: PeriodoIpc['clase'];
+  /** Primer día incluido, `AAAA-MM-DD` de Guatemala. */
+  readonly desdeDia: string;
+  /** Último día incluido, `AAAA-MM-DD` de Guatemala. */
+  readonly hastaDia: string;
+  /** Cómo se lee: «Últimos 7 días · 05/09/2026 a 11/09/2026». */
+  readonly etiqueta: string;
+}
+
+/** El resumen de ventas de un período. Todo monto, cadena canónica. */
+export interface ResumenDeVentasIpc {
+  readonly periodo: PeriodoResueltoIpc;
+  readonly totalVendido: string;
+  readonly cantidadDeVentas: number;
+  readonly totalEnEfectivo: string;
+  readonly totalEnTarjeta: string;
+  readonly ventasEnEfectivo: number;
+  readonly ventasEnTarjeta: number;
+  /** Cuánto se dejó de cobrar. Es referencia, NO parte del total vendido. */
+  readonly totalDeDescuentos: string;
+  readonly ventasConDescuento: number;
+}
+
+/** Una fila del reporte de ventas por producto. */
+export interface VentasDeUnProductoIpc {
+  readonly productoId: string;
+  readonly nombre: string;
+  readonly unidad: string;
+  /** Cantidad vendida EN EL PERÍODO, no el acumulado de toda la vida. */
+  readonly cantidadVendida: string;
+  readonly montoGenerado: string;
+  readonly vecesVendido: number;
+}
+
+/** El reporte de ventas por producto, ya ordenado por monto descendente. */
+export interface ReporteDeVentasPorProductoIpc {
+  readonly periodo: PeriodoResueltoIpc;
+  readonly productos: readonly VentasDeUnProductoIpc[];
+  readonly montoTotal: string;
+}
+
+/** Cómo se ordena el reporte de inventario. */
+export const esquemaOrdenDeInventario = z.object({
+  orden: z.enum(['nombre', 'cantidad']),
+});
+
+/** Una fila del reporte de inventario. */
+export interface InventarioDeUnProductoIpc {
+  readonly productoId: string;
+  readonly nombre: string;
+  readonly categoria: string;
+  readonly unidad: string;
+  readonly inventarioDisponible: string;
+}
+
+/** La fotografía del inventario de hoy. */
+export interface ReporteDeInventarioIpc {
+  readonly productos: readonly InventarioDeUnProductoIpc[];
+  readonly orden: 'nombre' | 'cantidad';
+  readonly total: number;
+}
+
+// ---------------------------------------------------------------------------
+// Límites de descuento
+// ---------------------------------------------------------------------------
+
+/** El tope de un rol, tal como se muestra. */
+export interface LimiteDeDescuentoIpc {
+  readonly rol: RolIpc;
+  readonly porcentaje: string;
+  readonly montoFijo: string;
+  /** `false` si el rol no tiene fila. Tope CERO, nunca «sin límite». */
+  readonly configurado: boolean;
+  /** Nombre de quien lo dejó así, o `null` si lo sembró el guion. */
+  readonly editadoPor: string | null;
+  readonly actualizadoEn: string | null;
+}
+
+/**
+ * Cambio de tope. Los dos valores viajan como TEXTO, no como número.
+ *
+ * Es la misma razón por la que los montos se guardan como cadena: un `number`
+ * de JavaScript no representa exactamente todos los decimales, y este valor se
+ * compara después contra el descuento que pide un cajero.
+ */
+const LARGO_MAXIMO_DE_UN_TOPE = 20;
+
+export const esquemaLimiteDeDescuento = z.object({
+  rol: z.enum(['venta', 'administrativo']),
+  porcentaje: z.string().min(1).max(LARGO_MAXIMO_DE_UN_TOPE),
+  montoFijo: z.string().min(1).max(LARGO_MAXIMO_DE_UN_TOPE),
+});
+
+/** Cambio de tope, ya validado. */
+export type CambioDeLimiteIpc = z.infer<typeof esquemaLimiteDeDescuento>;
+
 /** Lo que se muestra después de reimprimir o al ver un recibo. */
 export interface ReciboVistoIpc {
   readonly numeroRecibo: number;
@@ -1099,6 +1237,24 @@ export interface ApiPos {
     listar(): Promise<RespuestaIpc<readonly ReciboEnHistorialIpc[]>>;
     ver(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
     reimprimir(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
+  };
+
+  /**
+   * Los tres reportes, todos con rol administrativo.
+   *
+   * Ninguno agrega en SQL: el proceso principal trae las filas y suma con
+   * Decimal.js, así que los montos son exactos al centavo. Ver CLAUDE.md §4.15.
+   */
+  readonly reportes: {
+    resumenDeVentas(periodo: PeriodoIpc): Promise<RespuestaIpc<ResumenDeVentasIpc>>;
+    ventasPorProducto(periodo: PeriodoIpc): Promise<RespuestaIpc<ReporteDeVentasPorProductoIpc>>;
+    inventario(orden: 'nombre' | 'cantidad'): Promise<RespuestaIpc<ReporteDeInventarioIpc>>;
+  };
+
+  /** Topes de descuento por rol. Solo rol administrativo. */
+  readonly limites: {
+    listar(): Promise<RespuestaIpc<readonly LimiteDeDescuentoIpc[]>>;
+    fijar(cambio: CambioDeLimiteIpc): Promise<RespuestaIpc<LimiteDeDescuentoIpc>>;
   };
 
   /**
