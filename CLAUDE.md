@@ -329,14 +329,15 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única) y 2026-09-11 (las dos del módulo de venta) |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única) y 2026-09-11 (las dos del módulo de venta y la de `configuracion_negocio`) |
 | Plan | gratuito |
 
 Estado verificado contra el catálogo del proyecto, no contra el script, el
-2026-09-11: **12 tablas**, RLS activo en las 12 sin políticas (deniega todo),
-26 índices propios, 15 llaves foráneas, 46 restricciones CHECK y el trigger
-`auditoria_log_prohibir_cambios`. Los índices y las llaves foráneas subieron
+2026-09-11: **13 tablas**, RLS activo en las 13 sin políticas (deniega todo),
+26 índices propios, 15 llaves foráneas y el trigger
+`auditoria_log_prohibir_cambios`. La número 13 es `configuracion_negocio`, que
+además sumó sus seis restricciones CHECK propias a las 46 que ya había. Los índices y las llaves foráneas subieron
 respecto de lo que decía antes esta sección (24 y 14): los agregaron las
 migraciones `0010` y `0012` del corte de caja, y el número no se había
 actualizado.
@@ -356,13 +357,37 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**HAY UNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE: `0016_configuracion_negocio`**,
-la tabla con los datos de la tienda que encabezan el recibo. Se aplica como
-todas: mostrando antes el SQL exacto y con la aprobación explícita de Julio.
+**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE.**
 
-Las dos últimas fueron `0014_boleta_solo_con_tarjeta` y `0015_cantidad_vendida`,
-el 2026-09-11, por la vía de siempre: SQL a la vista, aprobación explícita de
-Julio y evidencia consultada después contra el catálogo del proyecto.
+La última fue `0016_configuracion_negocio`, el 2026-09-11, por la vía de
+siempre: SQL completo a la vista, aprobación explícita de Julio y evidencia
+consultada después contra el catálogo del proyecto.
+
+- Las **seis columnas** quedaron como manda el espejo, leídas de
+  `information_schema.columns`: `id` TEXT `NOT NULL`, las cuatro del negocio
+  TEXT **nulables** y `actualizado_en` TIMESTAMPTZ `NOT NULL`. Ninguna tiene
+  `DEFAULT`, ni hace falta: la fila la siembra la propia migración.
+- Las **seis restricciones**, leídas de `pg_get_constraintdef`, están las seis
+  con `convalidated = true`: `configuracion_negocio_pkey` sobre `id`,
+  `configuracion_negocio_id_check` con `CHECK ((id = 'unica'::text))` y los
+  cuatro `IS NULL OR btrim(...) <> ''` que impiden la cadena vacía. La llave
+  primaria más el CHECK de la constante son las dos mitades de «una sola fila».
+- **RLS activo y CERO políticas**, leído de `pg_class.relrowsecurity` y
+  `pg_policies`: la llave anónima no puede leer ni escribir. `relforcerowsecurity`
+  va en `false`, igual que en las otras doce.
+- **La fila única está sembrada y vacía**: una sola fila, `id = 'unica'`, los
+  cuatro campos del negocio en `NULL` y `actualizado_en` con la hora de la
+  aplicación. Es el estado correcto: los datos de Jimmy todavía no llegaron y el
+  recibo imprime marcadores entre corchetes hasta que lleguen.
+- El `COMMENT` de la tabla quedó puesto y se lee con `obj_description`.
+
+El linter de seguridad pasó de 12 avisos `rls_enabled_no_policy` a **13**, que
+es el resultado buscado y no un problema. Los dos `WARN` que reporta siguen
+siendo los de `public.rls_auto_enable()`, preexistentes del proyecto y ajenos a
+este esquema.
+
+Antes de ella se aplicaron `0014_boleta_solo_con_tarjeta` y
+`0015_cantidad_vendida`, el mismo día y por la misma vía.
 
 - `ventas_boleta_solo_con_tarjeta` existe con `convalidated = true`, leído de
   `pg_get_constraintdef`, y convive con los dos CHECK del descuento que ya venían

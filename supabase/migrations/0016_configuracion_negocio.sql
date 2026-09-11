@@ -15,7 +15,9 @@
 -- RLS queda activo sin políticas, como en el resto de las tablas: la llave
 -- anónima no puede leer ni escribir nada. Ver CLAUDE.md §4.4.
 --
--- Estado: PENDIENTE de aplicar contra `pos-jimmy-cano`.
+-- Estado: APLICADA contra `pos-jimmy-cano` el 2026-09-11, como
+-- `20260911145855_configuracion_negocio`. Evidencia consultada después contra
+-- el catálogo del proyecto, no contra este archivo. Ver CLAUDE.md §4.4.
 -- ===========================================================================
 
 CREATE TABLE IF NOT EXISTS public.configuracion_negocio (
