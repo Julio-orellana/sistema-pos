@@ -2326,30 +2326,76 @@ que nadie va a ver hasta el día del robo. Se desbloquea a pedido de una persona
 **4. NUNCA BLOQUEA EL PROCESO.** Un lote por iteración, pausa real entre lotes y
 presupuesto por ciclo.
 
-#### Cómo se detecta una venta en curso, y por qué ceder no es cortesía
+#### Cómo se detecta una transacción en curso, y por qué ceder no es cortesía
 
-**Una bandera en memoria que el servicio de venta levanta y baja**, como
-especifica §2.4 del diseño. `ServicioDeVenta` envuelve su transacción entera con
-`durante(...)`, que la baja en un `finally` —si no la bajara al fallar una
-venta, el trabajador cedería para siempre y la cola no volvería a subir nada, en
-silencio—. El trabajador pregunta con `hayVentaEnCurso()` **de forma síncrona y
-antes de su primer `await`**: el cuerpo de una función `async` corre síncrono
-hasta ahí, así que la pregunta se contesta en el mismo turno del bucle de
-eventos en que se la hizo.
+**Una bandera en memoria**, como especifica §2.4 del diseño. Vive en
+`src/main/database/transaccion-en-curso.ts`.
+
+> **NACIÓ ESPECÍFICA DE LA VENTA Y ESTABA MAL. Se generalizó a las ocho
+> operaciones.** El peligro no tiene nada que ver con vender: es consecuencia de
+> que la aplicación tenga **una sola conexión**, así que aplica igual a abrir y
+> cerrar la caja, crear o editar un usuario, el catálogo, el ajuste de
+> inventario, los topes de descuento, los datos del negocio y el recibo.
+> Proteger solo la venta dejaba las otras siete con el mismo agujero y la falsa
+> sensación de que estaba cubierto.
+
+**La señal NO se levanta a mano en cada servicio.** Va dentro de
+`enTransaccionDeNegocio(base, operacion)`, que es **la única forma en que este
+proyecto abre una transacción de negocio**: la usa `conBandejaDeSalida` —y por
+ella los seis servicios que se volvieron transaccionales en la fase 1.a— y la
+usan directamente `ServicioDeVenta` y los dos métodos de `ServicioDeCaja`. No se
+puede abrir una transacción sin señalizarla porque no hay dos caminos: quien se
+olvide del envoltorio no «olvida la señal», directamente no abre transacción.
+**Hay una prueba que revisa el código fuente** y exige que solo tres archivos
+nombren `.transaction(`: el propio envoltorio, el migrador y los guiones de
+datos de ejemplo. El riesgo que cubre no es el código de hoy, es el servicio que
+alguien agregue el año que viene.
+
+La señal se baja en un `finally`: si no lo hiciera, una operación fallida
+dejaría al trabajador cediendo para siempre y la cola no volvería a subir nada,
+en silencio.
 
 **No se usa `base.inTransaction`** aunque exista y diga exactamente eso: solo es
 verdad mientras el hilo está dentro de la transacción, y para cuando el
 trabajador pudiera leerlo desde un temporizador la transacción ya terminó.
 
 > **EL PELIGRO REAL NO ES LA CONTENCIÓN DE BLOQUEOS: ES QUE EL TRABAJADOR SUBA
-> UNA VENTA QUE NUNCA EXISTIÓ.** La aplicación tiene **una sola conexión** y
-> better-sqlite3 es síncrono, así que un ciclo lanzado dentro de una transacción
-> abierta **lee las filas que esa transacción todavía no confirmó**. Si la
-> transacción después se revierte, la nube se quedó con un cambio que en la
-> tienda no ocurrió. **Está probado, no razonado**: hay una prueba de
-> falsificación que apaga la señal a propósito, lanza el ciclo desde dentro de
-> una transacción que después falla, y comprueba las dos cosas: que la categoría
-> no existe en la base y que la nube la recibió igual.
+> ALGO QUE NUNCA EXISTIÓ.** Con una sola conexión síncrona, un ciclo lanzado
+> dentro de una transacción abierta **lee las filas que esa transacción todavía
+> no confirmó**. Si después se revierte, la nube se quedó con un cambio que en
+> la tienda no ocurrió. **Está probado en tres servicios distintos, no
+> razonado**: hay falsificaciones que apagan la señal a propósito, lanzan el
+> ciclo desde dentro de una transacción que después falla, y comprueban las dos
+> cosas —que la fila no existe en la base y que la nube la recibió igual— para
+> una categoría, para **la apertura de caja** y para **el alta de un usuario**.
+> Cada una tiene al lado su contraparte con la señal puesta, donde la nube no
+> recibe nada.
+
+#### UNA sola comprobación, y por qué antes había dos
+
+El trabajador pregunta `hayTransaccionDeNegocioEnCurso()` **una vez, al
+principio de cada vuelta del bucle**, antes de leer la cola. Es síncrona y va
+antes del primer `await`: el cuerpo de una función `async` corre síncrono hasta
+ahí, así que en la primera vuelta la pregunta se contesta en el mismo turno del
+bucle de eventos en que quien llamó invocó el ciclo.
+
+**Hubo una segunda comprobación idéntica al principio de `ejecutarCiclo` y se
+quitó.** No era defensa en profundidad: era duplicación, y se midió. Quitando
+cada una por separado, **las 74 pruebas pasaban en los dos casos**; solo fallan
+quitando las dos. La del bucle cubre por completo lo que cubría la otra, porque
+corre antes de CADA lote, incluido el primero. Dos comprobaciones que ninguna
+prueba puede distinguir son dos lugares donde tocar cuando esto cambie y una
+sola prueba que se cree que protege dos cosas.
+
+**Y se dice en voz alta lo que la posición en el bucle agrega hoy: cero.** Con
+un solo hilo y una sola conexión síncrona, una transacción de negocio empieza y
+termina dentro de un bloque síncrono, y la continuación de un `await` no puede
+colarse ahí; es decir, la señal solo puede estar levantada si el ciclo se lanzó
+desde adentro, que es la primera vuelta. Se deja en el bucle porque cuesta leer
+un booleano y porque es el lugar correcto el día que la premisa cambie —un
+observador asíncrono, una segunda conexión, un hilo aparte—. Con una sola
+comprobación, **quitarla hace fallar dos pruebas**, que era lo que antes no
+pasaba con ninguna de las dos.
 
 #### Clasificación de fallos: la diferencia entre esperar y detenerse
 
@@ -2459,12 +2505,42 @@ fijó en 15 ms. **Se comprobó que muerde**: reemplazando la pausa por una esper
 ocupada de 20 ms —el bucle girando sin soltar— la prueba falla con
 «expected 21 to be less than 15».
 
-> **LO QUE NO ESTÁ VERIFICADO:** que un ciclo corra dentro del proceso real de
-> Electron. El cableado de `src/main/index.ts` compila, pasa el lint y
-> `npm run verify:pantallas` confirma que no rompe el arranque ni ninguna de las
-> 34 comprobaciones, pero el primer ciclo se agenda 30 segundos después de abrir
-> la ventana y esa verificación dura menos. Lo probado es el trabajador, con 74
-> pruebas. Y vale la regla de siempre: nada de esto está verificado en Windows.
+#### El cableado en la aplicación REAL, verificado con evidencia
+
+No alcanzaba con que compilara. Se corrió `npm run dev` dos veces, esperando 50
+segundos cada vez, contra la base de datos real de la máquina de desarrollo.
+
+**Primer arranque** —la base pasó de la migración 015 a la 018 en ese mismo
+momento, y `sync_cola` estaba vacía:
+
+```
+[sincronizacion] trabajador en marcha con SimulatedSyncProvider; primer ciclo
+                 en 30 s. Pendientes en la cola: 0 filas en 0 lotes.
+[sincronizacion] ciclo: sin_pendientes; 0 lotes, 0 filas, 1 ms
+```
+
+**Segundo arranque**, con una fila sembrada a mano en `sync_cola` para que
+hubiera algo que subir —se borró después, y `sync_cola` quedó otra vez en cero:
+
+```
+[sincronizacion] trabajador en marcha con SimulatedSyncProvider; primer ciclo
+                 en 30 s. Pendientes en la cola: 1 filas en 1 lotes.
+[sincronizacion] ciclo: cola_vaciada; 1 lotes, 1 filas, 257 ms
+```
+
+**La prueba fuerte no es el renglón: es la fila de la base.** Después del
+segundo arranque, `sincronizado_en` quedó escrito en la base real. Esa marca
+**solo se escribe cuando `empujarCambios` devuelve `ok`**, así que es la
+evidencia de que el `SimulatedSyncProvider` se llamó de verdad dentro del
+proceso de Electron. Los 257 ms son la pausa de 250 ms entre lotes, visible.
+
+**Todo ciclo queda en la bitácora TÉCNICA**, `log-tecnico.log`, nunca en
+`auditoria_log`: que la nube esté al día o no es infraestructura, y ensuciar con
+eso la única tabla que un auditor lee entera es el error que §4.14 ya rechazó
+para los fallos de impresión.
+
+> Sigue valiendo la regla de siempre: **esto se verificó en macOS, y macOS no es
+> verificación.** Windows es la plataforma de producción.
 
 ## 5. Registro de decisiones técnicas
 
@@ -2613,6 +2689,9 @@ ocupada de 20 ms —el bucle girando sin soltar— la prueba falla con
 | **El trabajador cede ante una venta en curso, detectada con una bandera en memoria que el servicio de venta levanta y baja.** No con `base.inTransaction` ni con un bloqueo de SQLite. | Leer `base.inTransaction`; confiar en que better-sqlite3 serialice; una segunda conexión para el trabajador | `base.inTransaction` dice exactamente lo que hace falta saber, pero **solo es verdad mientras el hilo está dentro de la transacción**: para cuando el trabajador lo leyera desde un temporizador, la transacción ya terminó. Y el peligro no es la contención de bloqueos: **la aplicación tiene UNA sola conexión**, así que un ciclo lanzado dentro de una transacción abierta lee las filas que esa transacción todavía no confirmó, y si después se revierte la nube se queda con un cambio que en la tienda no ocurrió. **Está probado por falsificación**, no razonado: una prueba apaga la señal a propósito, lanza el ciclo desde dentro de una transacción que después falla, y comprueba que la fila no existe en la base y que la nube la recibió igual. Una segunda conexión cambiaría el problema por otro peor —dos escritores sobre el mismo archivo, que es lo que la instancia única del proyecto evita desde el Prompt 1—. La bandera se baja en un `finally`: si no lo hiciera, una venta fallida dejaría al trabajador cediendo para siempre y la cola no volvería a subir nada, en silencio. | Prompt 30 — 2026-09-11 |
 | **«No bloquea la interfaz» se PRUEBA con un latido que mide el hueco más largo del bucle de eventos, no se afirma.** | Confiar en que `async` alcanza; medir solo la duración total del ciclo | La duración total no dice nada: un ciclo de tres segundos que suelta el bucle cada 200 ms es inofensivo, y uno de un segundo que no lo suelta congela la caja. Lo que importa es el hueco MÁS LARGO entre dos oportunidades de atender el IPC de la ventana, porque en el proceso principal de Electron es el mismo hilo. Un `setInterval` de 1 ms durante un ciclo de 20 lotes mide justamente eso. **Un ciclo sano da 2 ms de forma reproducible y el umbral quedó en 15**; se comprobó que la prueba muerde reemplazando la pausa por una espera ocupada de 20 ms. | Prompt 30 — 2026-09-11 |
 | **La sincronización corre CUANDO TIENE SENTIDO, sin intervalo fijo, y al cerrar la aplicación se DETIENE en vez de apurarse.** | Un `setInterval` cada N minutos; vaciar la cola antes de cerrar | Con la cola vacía no se agenda nada: una máquina al día no tiene por qué gastar un ciclo —ni un byte, cuando haya red— en preguntar si podría subir algo que no tiene, y menos en un i3 de 2011. Los disparadores son los de §2.4, y los 2 segundos tras el COMMIT existen para **no competir con el recibo**, que se está generando en ese mismo instante (§4.14); además agrupan, así que una ráfaga de ventas dispara un ciclo y no cinco. **Vaciar la cola al cerrar sería un error**: dejaría la salida controlada esperando a una red que puede no estar, justo cuando alguien pidió cerrar el punto de venta, y no hace falta porque la cola vive en SQLite y el trabajador retoma exacto donde quedó. El aviso de «hay algo que subir» sale de un solo lugar, la bandeja de salida, que es el único código que escribe la cola; corre dentro de la transacción y por eso lo único que puede hacer es agendar un temporizador. | Prompt 30 — 2026-09-11 |
+| **CORREGIDO: la señal de «hay una transacción abierta» es de TODA operación de negocio, no solo de la venta, y se levanta dentro del ÚNICO envoltorio que abre transacciones.** | Dejarla solo en la venta, como nació en la fase 1.b; levantarla a mano en cada uno de los ocho servicios | **Nació específica de la venta y estaba mal.** El peligro no tiene nada que ver con vender: es consecuencia de que la aplicación tenga **una sola conexión**, así que un ciclo del trabajador lanzado dentro de cualquier transacción abierta lee filas sin confirmar, y si esa transacción se revierte la nube se queda con un cambio que en la tienda nunca ocurrió. Proteger solo la venta dejaba las otras siete operaciones con el mismo agujero **y la falsa sensación de que estaba cubierto**, que es peor que no tener nada. Levantarla a mano en cada servicio sería garantizar que el noveno se olvide: por eso va dentro de `enTransaccionDeNegocio`, y quien no use el envoltorio no «olvida la señal», directamente no abre transacción. Hay una prueba que revisa el código fuente y exige que solo el envoltorio, el migrador y los guiones de ejemplo nombren `.transaction(`; el riesgo que cubre no es el código de hoy sino el servicio que alguien agregue el año que viene. La generalización está **probada por falsificación en tres servicios distintos** —categoría, apertura de caja y alta de usuario—, cada una con su contraparte con la señal puesta. | Prompt 31 — 2026-09-11 |
+| **Se quitó la segunda comprobación de «hay transacción abierta»: eran duplicación, no defensa en profundidad, y se midió.** Queda una sola, al principio de cada vuelta del bucle. | Dejar las dos «por si acaso»; dejar solo la de entrada | **Se midió quitando cada una por separado y las 74 pruebas pasaban en los dos casos**: ninguna estaba fijada por una prueba, y el conjunto solo demostraba «existe al menos una de las dos». La del bucle cubre por completo lo que cubría la de entrada, porque corre antes de CADA lote incluido el primero, así que la de entrada era el subconjunto. Dos comprobaciones que ninguna prueba puede distinguir son dos lugares donde tocar cuando esto cambie y una sola prueba que se cree que protege dos cosas. **Y se dice en voz alta que la posición en el bucle no agrega nada hoy**: con un solo hilo y una conexión síncrona, la continuación de un `await` no puede colarse dentro de un bloque síncrono, así que la señal solo puede estar levantada si el ciclo se lanzó desde adentro. Se deja en el bucle porque cuesta leer un booleano y porque es el lugar correcto el día que la premisa cambie. Con una sola, quitarla **hace fallar dos pruebas**, que es lo que antes no pasaba con ninguna. | Prompt 31 — 2026-09-11 |
+| **Todo ciclo de sincronización queda anotado en la bitácora TÉCNICA, no solo los que fallan.** | Anotar solo los fallos; no anotar nada; anotarlo en `auditoria_log` | Sin un renglón por ciclo no hay forma de saber si el trabajador está corriendo: fue exactamente lo que faltó para poder afirmar que el cableado funcionaba en la aplicación real, y por eso se agregó. El volumen es bajo porque los ciclos corren cuando tiene sentido y no cada N minutos. Va a `log-tecnico.log` y **nunca a `auditoria_log`**: que la nube esté al día o no es infraestructura, y ensuciar con eso la única tabla que un auditor lee entera es el error que §4.14 ya rechazó para los fallos de impresión. | Prompt 31 — 2026-09-11 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -2784,6 +2863,8 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     repositories/    una clase por tabla; la única puerta hacia los datos
     decimal-columns.ts  única vía para leer/escribir dinero, peso y cantidad
     bandeja-de-salida.ts  llena sync_cola DENTRO de la transacción de negocio
+    transaccion-en-curso.ts  la ÚNICA puerta para abrir una transacción de
+                             negocio; levanta la señal con la que el trabajador cede
     migrator.ts      aplica las migraciones y verifica sus checksums
   ipc/          manejadores IPC, con validación Zod de cada payload
     respuesta.ts   envoltorio único de respuesta; todo manejador pasa por aquí
@@ -2793,7 +2874,6 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     caja/       apertura y cierre del turno, arqueo por denominaciones
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
     venta/      precio efectivo, descuento, topes por rol y la transacción de la venta
-                (venta-en-curso.ts: la señal con la que el trabajador cede)
     reportes/   los tres reportes y el período en hora de Guatemala. NUNCA agrega en SQL
     negocio/    los datos de la tienda que encabezan el recibo
     recibo/     modelo, plantilla, ESC/POS y emisión del comprobante

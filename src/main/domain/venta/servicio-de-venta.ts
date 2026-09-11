@@ -37,7 +37,7 @@ import {
 } from '@shared/money';
 import { ErrorDeNegocio, errorDeConflictoDeInventario } from '@main/database/errores';
 import { encolarLote, entradasDe, type EntradaDelLote } from '@main/database/bandeja-de-salida';
-import { durante } from './venta-en-curso';
+import { enTransaccionDeNegocio } from '@main/database/transaccion-en-curso';
 import type {
   FormaPago,
   PrecioEspecial,
@@ -207,244 +207,238 @@ export class ServicioDeVenta {
       hay un solo try/catch que pudiera tragarse un fallo a medio camino y
       dejar la venta escrita a medias.
     */
-    const transaccion = this.base.transaction((): ResultadoDeVenta => {
-      // ---- 1. ¿Sigue habiendo caja abierta de esta persona? ---------------
-      // Se reverifica DENTRO de la transacción: entre que se abrió la pantalla
-      // y este momento alguien pudo haber cerrado el turno. Y se comprueba
-      // ANTES de tocar inventario, para no descontar mercadería de una venta
-      // que igual va a rechazarse.
-      const caja = this.cajaSesionDe(usuarioId);
+    const transaccion = (): ResultadoDeVenta =>
+      enTransaccionDeNegocio(this.base, (): ResultadoDeVenta => {
+        // ---- 1. ¿Sigue habiendo caja abierta de esta persona? ---------------
+        // Se reverifica DENTRO de la transacción: entre que se abrió la pantalla
+        // y este momento alguien pudo haber cerrado el turno. Y se comprueba
+        // ANTES de tocar inventario, para no descontar mercadería de una venta
+        // que igual va a rechazarse.
+        const caja = this.cajaSesionDe(usuarioId);
 
-      // ---- 2. Cada línea con su precio efectivo ---------------------------
-      const vigentes = this.preciosEspeciales.vigentesPorProductoEn(momento);
-      const resueltas = datos.lineas.map((linea, indice) =>
-        this.resolverLinea(linea, indice, vigentes),
-      );
-
-      // ---- 3. Subtotal exacto, descuento y total --------------------------
-      const subtotalExacto = sumarLista(resueltas.map((linea) => linea.subtotalExacto));
-      const descuento = this.resolverDescuento(rol, datos.descuento);
-      const descuentoAplicado =
-        descuento === null ? null : montoDelDescuento(subtotalExacto, descuento);
-      // REDONDEO ÚNICO AL FINAL: todo lo anterior se mantuvo exacto.
-      const total = totalConDescuento(subtotalExacto, descuento);
-
-      // ---- 4. Descontar inventario, línea por línea -----------------------
-      // Va DESPUÉS de todas las validaciones y ANTES de insertar nada: si una
-      // línea falla, la transacción se revierte y ninguna otra queda tocada.
-      for (const linea of resueltas) {
-        const bajo = this.productos.descontarSiSigueIgual(
-          linea.producto.id,
-          linea.producto.inventarioDisponible,
-          linea.saldoNuevo,
+        // ---- 2. Cada línea con su precio efectivo ---------------------------
+        const vigentes = this.preciosEspeciales.vigentesPorProductoEn(momento);
+        const resueltas = datos.lineas.map((linea, indice) =>
+          this.resolverLinea(linea, indice, vigentes),
         );
-        if (!bajo) {
-          throw errorDeConflictoDeInventario(
-            linea.producto.nombre,
-            'El comparar-y-cambiar de inventario del producto ' +
-              `${linea.producto.id} afectó 0 filas: el saldo cambió desde que se leyó ` +
-              `(${cantidadACadena(linea.producto.inventarioDisponible)}).`,
+
+        // ---- 3. Subtotal exacto, descuento y total --------------------------
+        const subtotalExacto = sumarLista(resueltas.map((linea) => linea.subtotalExacto));
+        const descuento = this.resolverDescuento(rol, datos.descuento);
+        const descuentoAplicado =
+          descuento === null ? null : montoDelDescuento(subtotalExacto, descuento);
+        // REDONDEO ÚNICO AL FINAL: todo lo anterior se mantuvo exacto.
+        const total = totalConDescuento(subtotalExacto, descuento);
+
+        // ---- 4. Descontar inventario, línea por línea -----------------------
+        // Va DESPUÉS de todas las validaciones y ANTES de insertar nada: si una
+        // línea falla, la transacción se revierte y ninguna otra queda tocada.
+        for (const linea of resueltas) {
+          const bajo = this.productos.descontarSiSigueIgual(
+            linea.producto.id,
+            linea.producto.inventarioDisponible,
+            linea.saldoNuevo,
           );
+          if (!bajo) {
+            throw errorDeConflictoDeInventario(
+              linea.producto.nombre,
+              'El comparar-y-cambiar de inventario del producto ' +
+                `${linea.producto.id} afectó 0 filas: el saldo cambió desde que se leyó ` +
+                `(${cantidadACadena(linea.producto.inventarioDisponible)}).`,
+            );
+          }
         }
-      }
 
-      // ---- 5. Cabecera y detalle ------------------------------------------
-      // Los ids se guardan para la bandeja de salida del paso 8: encolar una
-      // fila exige saber cuál es, y el reparto de centavos ya fijó su orden.
-      const idsDeDetalle: string[] = [];
-      const venta = this.ventas.crear({
-        cajaSesionId: caja.id,
-        usuarioId,
-        fecha: momento,
-        subtotal: redondearMonto(subtotalExacto),
-        descuentoTipo: descuento?.tipo ?? null,
-        descuentoValor: descuento?.valor ?? null,
-        descuentoAutorizadoPor: descuento?.autorizacion?.autorizadoPor ?? null,
-        descuentoAutorizadoVia: descuento?.autorizacion?.via ?? null,
-        total,
-        formaPago: datos.formaPago,
-        numBoleta: datos.numBoleta,
-        estado: 'completada',
-      });
-
-      /*
-        EL TOTAL MANDA. Los importes que se imprimen se derivan del total ya
-        redondeado y se reparten por residuo mayor, así que su suma es
-        EXACTAMENTE el total. Redondear cada línea por su cuenta dejaría
-        centavos sueltos y un recibo que no cuadra consigo mismo.
-
-        Se usa `repartirMonto` tal como está, sin variante propia: su regla de
-        desempate —gana la línea que aparece primero— ya está documentada y
-        probada, y una segunda implementación sería un segundo criterio.
-
-        El orden del arreglo es el orden de captura, así que la parte i-ésima
-        le toca a la línea de `orden_linea` i. Cambiar ese orden movería el
-        centavo de lugar.
-      */
-      const impresos = repartirMonto(
-        total,
-        resueltas.map((linea) => linea.subtotalExacto),
-      );
-
-      for (const [indice, linea] of resueltas.entries()) {
-        const impreso = impresos[indice];
-        if (impreso === undefined) {
-          // No puede pasar: `repartirMonto` devuelve una parte por ponderación.
-          // Se comprueba igual porque un `undefined` colado acá escribiría un
-          // importe equivocado en el recibo de un cliente.
-          throw new Error(
-            `repartirMonto devolvió ${String(impresos.length)} partes para ` +
-              `${String(resueltas.length)} líneas.`,
-          );
-        }
-        const linea_ = this.ventaDetalle.crear({
-          ventaId: venta.id,
-          productoId: linea.producto.id,
-          // FOTO del producto al momento de vender: si mañana cambia de nombre
-          // o de precio, este recibo se reimprime igual que se entregó.
-          productoNombreSnap: linea.producto.nombre,
-          unidadSnap: unidadDe(linea.producto),
-          cantidad: linea.cantidad,
-          precioUnitarioSnap: linea.precioUnitario,
-          subtotalExacto: linea.subtotalExacto,
-          subtotalImpreso: impreso,
-          // El orden en que el cajero capturó las líneas: es el orden del
-          // recibo y el que hace determinista el reparto de centavos.
-          ordenLinea: linea.ordenLinea,
-        });
-        idsDeDetalle.push(linea_.id);
-      }
-
-      // ---- 6. Contadores del producto, en la MISMA transacción ------------
-      for (const linea of resueltas) {
-        const anotado = this.productos.registrarVentaDeProducto(
-          linea.producto.id,
-          linea.producto.cantidadVendida,
-          linea.cantidadVendidaNueva,
-        );
-        if (!anotado) {
-          throw errorDeConflictoDeInventario(
-            linea.producto.nombre,
-            'El comparar-y-cambiar de la cantidad vendida del producto ' +
-              `${linea.producto.id} afectó 0 filas: el acumulado cambió desde que se leyó ` +
-              `(${cantidadACadena(linea.producto.cantidadVendida)}).`,
-          );
-        }
-      }
-
-      // ---- 7. Auditoría ---------------------------------------------------
-      const idsDeAuditoria: string[] = [];
-      idsDeAuditoria.push(
-        this.auditoria.registrar({
-        usuarioId,
-        accion: ACCIONES_DE_VENTA.ventaRegistrada,
-        entidadTipo: 'ventas',
-        entidadId: venta.id,
-        valorNuevo: {
+        // ---- 5. Cabecera y detalle ------------------------------------------
+        // Los ids se guardan para la bandeja de salida del paso 8: encolar una
+        // fila exige saber cuál es, y el reparto de centavos ya fijó su orden.
+        const idsDeDetalle: string[] = [];
+        const venta = this.ventas.crear({
           cajaSesionId: caja.id,
-          // Sin redondear: es el número del que sale el total, y un auditor que
-          // quiera rehacer la cuenta necesita el que se usó, no el que se
-          // imprimió.
-          subtotalExacto: subtotalExacto.toFixed(),
-          subtotal: montoACadena(subtotalExacto),
+          usuarioId,
+          fecha: momento,
+          subtotal: redondearMonto(subtotalExacto),
           descuentoTipo: descuento?.tipo ?? null,
-          descuentoValor: descuento === null ? null : montoACadena(descuento.valor),
-          descuentoAplicado:
-            descuentoAplicado === null ? null : montoACadena(descuentoAplicado),
-          total: montoACadena(total),
+          descuentoValor: descuento?.valor ?? null,
+          descuentoAutorizadoPor: descuento?.autorizacion?.autorizadoPor ?? null,
+          descuentoAutorizadoVia: descuento?.autorizacion?.via ?? null,
+          total,
           formaPago: datos.formaPago,
           numBoleta: datos.numBoleta,
-          lineas: resueltas.map((linea) => ({
-            productoId: linea.producto.id,
-            nombre: linea.producto.nombre,
-            cantidad: cantidadACadena(linea.cantidad),
-            precioBase: montoACadena(linea.producto.precioBase),
-            precioUnitario: montoACadena(linea.precioUnitario),
-            precioEspecialId: linea.especialAplicado?.id ?? null,
-            saldoAnterior: cantidadACadena(linea.producto.inventarioDisponible),
-            saldoNuevo: cantidadACadena(linea.saldoNuevo),
-          })),
-        },
-        fecha: momento,
-        }).id,
-      );
+          estado: 'completada',
+        });
 
-      if (descuento !== null && descuento.autorizacion !== null) {
         /*
-          Asiento PROPIO para la autorización: es un hecho distinto de la
-          venta, con otro responsable, y un auditor va a querer listar las
-          autorizaciones solas, sin abrir el contenido de cada venta.
+          EL TOTAL MANDA. Los importes que se imprimen se derivan del total ya
+          redondeado y se reparten por residuo mayor, así que su suma es
+          EXACTAMENTE el total. Redondear cada línea por su cuenta dejaría
+          centavos sueltos y un recibo que no cuadra consigo mismo.
 
-          LLEVA LA VÍA, no solo el autorizante. Desde que `descuento_excedente`
-          acepta el PIN remoto, «Jimmy autorizó Q40» dejó de ser una sola cosa:
-          autorizarlo frente al mostrador viendo el ticket y autorizarlo por
-          teléfono sin verlo son dos hechos distintos, y la columna de la venta
-          guarda el estado final mientras el asiento guarda el hecho.
+          Se usa `repartirMonto` tal como está, sin variante propia: su regla de
+          desempate —gana la línea que aparece primero— ya está documentada y
+          probada, y una segunda implementación sería un segundo criterio.
+
+          El orden del arreglo es el orden de captura, así que la parte i-ésima
+          le toca a la línea de `orden_linea` i. Cambiar ese orden movería el
+          centavo de lugar.
         */
+        const impresos = repartirMonto(
+          total,
+          resueltas.map((linea) => linea.subtotalExacto),
+        );
+
+        for (const [indice, linea] of resueltas.entries()) {
+          const impreso = impresos[indice];
+          if (impreso === undefined) {
+            // No puede pasar: `repartirMonto` devuelve una parte por ponderación.
+            // Se comprueba igual porque un `undefined` colado acá escribiría un
+            // importe equivocado en el recibo de un cliente.
+            throw new Error(
+              `repartirMonto devolvió ${String(impresos.length)} partes para ` +
+                `${String(resueltas.length)} líneas.`,
+            );
+          }
+          const linea_ = this.ventaDetalle.crear({
+            ventaId: venta.id,
+            productoId: linea.producto.id,
+            // FOTO del producto al momento de vender: si mañana cambia de nombre
+            // o de precio, este recibo se reimprime igual que se entregó.
+            productoNombreSnap: linea.producto.nombre,
+            unidadSnap: unidadDe(linea.producto),
+            cantidad: linea.cantidad,
+            precioUnitarioSnap: linea.precioUnitario,
+            subtotalExacto: linea.subtotalExacto,
+            subtotalImpreso: impreso,
+            // El orden en que el cajero capturó las líneas: es el orden del
+            // recibo y el que hace determinista el reparto de centavos.
+            ordenLinea: linea.ordenLinea,
+          });
+          idsDeDetalle.push(linea_.id);
+        }
+
+        // ---- 6. Contadores del producto, en la MISMA transacción ------------
+        for (const linea of resueltas) {
+          const anotado = this.productos.registrarVentaDeProducto(
+            linea.producto.id,
+            linea.producto.cantidadVendida,
+            linea.cantidadVendidaNueva,
+          );
+          if (!anotado) {
+            throw errorDeConflictoDeInventario(
+              linea.producto.nombre,
+              'El comparar-y-cambiar de la cantidad vendida del producto ' +
+                `${linea.producto.id} afectó 0 filas: el acumulado cambió desde que se leyó ` +
+                `(${cantidadACadena(linea.producto.cantidadVendida)}).`,
+            );
+          }
+        }
+
+        // ---- 7. Auditoría ---------------------------------------------------
+        const idsDeAuditoria: string[] = [];
         idsDeAuditoria.push(
           this.auditoria.registrar({
-          usuarioId: descuento.autorizacion.autorizadoPor,
-          accion: ACCIONES_DE_VENTA.descuentoAutorizado,
+          usuarioId,
+          accion: ACCIONES_DE_VENTA.ventaRegistrada,
           entidadTipo: 'ventas',
           entidadId: venta.id,
           valorNuevo: {
-            autorizadoPor: descuento.autorizacion.autorizadoPor,
-            via: descuento.autorizacion.via,
-            solicitadoPor: usuarioId,
-            rolDeQuienVende: rol,
-            tipo: descuento.tipo,
-            valor: montoACadena(descuento.valor),
-            topeDelRol: montoACadena(descuento.veredicto.tope),
-            exceso: montoACadena(descuento.veredicto.exceso),
+            cajaSesionId: caja.id,
+            // Sin redondear: es el número del que sale el total, y un auditor que
+            // quiera rehacer la cuenta necesita el que se usó, no el que se
+            // imprimió.
+            subtotalExacto: subtotalExacto.toFixed(),
+            subtotal: montoACadena(subtotalExacto),
+            descuentoTipo: descuento?.tipo ?? null,
+            descuentoValor: descuento === null ? null : montoACadena(descuento.valor),
+            descuentoAplicado:
+              descuentoAplicado === null ? null : montoACadena(descuentoAplicado),
+            total: montoACadena(total),
+            formaPago: datos.formaPago,
+            numBoleta: datos.numBoleta,
+            lineas: resueltas.map((linea) => ({
+              productoId: linea.producto.id,
+              nombre: linea.producto.nombre,
+              cantidad: cantidadACadena(linea.cantidad),
+              precioBase: montoACadena(linea.producto.precioBase),
+              precioUnitario: montoACadena(linea.precioUnitario),
+              precioEspecialId: linea.especialAplicado?.id ?? null,
+              saldoAnterior: cantidadACadena(linea.producto.inventarioDisponible),
+              saldoNuevo: cantidadACadena(linea.saldoNuevo),
+            })),
           },
           fecha: momento,
           }).id,
         );
-      }
 
-      // ---- 8. Bandeja de salida, DENTRO de esta misma transacción ---------
-      /*
-        El paso que convierte esta transacción en un respaldo confiable. Si se
-        escribiera después del COMMIT, un cierre forzado entre los dos dejaría
-        una venta cobrada que nunca se va a subir, y este proyecto permite a
-        propósito matar el proceso desde el sistema operativo (§4.5).
+        if (descuento !== null && descuento.autorizacion !== null) {
+          /*
+            Asiento PROPIO para la autorización: es un hecho distinto de la
+            venta, con otro responsable, y un auditor va a querer listar las
+            autorizaciones solas, sin abrir el contenido de cada venta.
 
-        EL ORDEN ES EL DE LAS LLAVES FORÁNEAS, padres antes que hijos: los
-        productos no dependen de nada, la venta depende de la caja y del
-        usuario —que ya subieron en sus propios lotes—, el detalle depende de
-        la venta, y los asientos dependen de todo lo anterior. Subirlo al revés
-        lo rechazaría Postgres.
+            LLEVA LA VÍA, no solo el autorizante. Desde que `descuento_excedente`
+            acepta el PIN remoto, «Jimmy autorizó Q40» dejó de ser una sola cosa:
+            autorizarlo frente al mostrador viendo el ticket y autorizarlo por
+            teléfono sin verlo son dos hechos distintos, y la columna de la venta
+            guarda el estado final mientras el asiento guarda el hecho.
+          */
+          idsDeAuditoria.push(
+            this.auditoria.registrar({
+            usuarioId: descuento.autorizacion.autorizadoPor,
+            accion: ACCIONES_DE_VENTA.descuentoAutorizado,
+            entidadTipo: 'ventas',
+            entidadId: venta.id,
+            valorNuevo: {
+              autorizadoPor: descuento.autorizacion.autorizadoPor,
+              via: descuento.autorizacion.via,
+              solicitadoPor: usuarioId,
+              rolDeQuienVende: rol,
+              tipo: descuento.tipo,
+              valor: montoACadena(descuento.valor),
+              topeDelRol: montoACadena(descuento.veredicto.tope),
+              exceso: montoACadena(descuento.veredicto.exceso),
+            },
+            fecha: momento,
+            }).id,
+          );
+        }
 
-        Los productos van como `actualizar` y no como `insertar`: la venta no
-        los creó, les bajó el inventario y les movió los contadores.
-      */
-      const entradas: EntradaDelLote[] = [
-        ...entradasDe('productos', resueltas.map((linea) => linea.producto.id), 'actualizar'),
-        { tabla: 'ventas', id: venta.id, operacion: 'insertar' },
-        ...entradasDe('venta_detalle', idsDeDetalle, 'insertar'),
-        ...entradasDe('auditoria_log', idsDeAuditoria, 'insertar'),
-      ];
-      encolarLote(this.base, entradas);
+        // ---- 8. Bandeja de salida, DENTRO de esta misma transacción ---------
+        /*
+          El paso que convierte esta transacción en un respaldo confiable. Si se
+          escribiera después del COMMIT, un cierre forzado entre los dos dejaría
+          una venta cobrada que nunca se va a subir, y este proyecto permite a
+          propósito matar el proceso desde el sistema operativo (§4.5).
 
-      return {
-        venta,
-        subtotal: montoACadena(subtotalExacto),
-        descuentoAplicado: montoACadena(descuentoAplicado ?? 0),
-        total: montoACadena(total),
-        lineas: resueltas.length,
-        lineasConPrecioEspecial: resueltas.filter((linea) => linea.especialAplicado !== null)
-          .length,
-      };
-    });
+          EL ORDEN ES EL DE LAS LLAVES FORÁNEAS, padres antes que hijos: los
+          productos no dependen de nada, la venta depende de la caja y del
+          usuario —que ya subieron en sus propios lotes—, el detalle depende de
+          la venta, y los asientos dependen de todo lo anterior. Subirlo al revés
+          lo rechazaría Postgres.
 
-    /*
-      LA SEÑAL SE LEVANTA ALREDEDOR DE LA TRANSACCIÓN ENTERA, no adentro.
-      Mientras dure, el trabajador de sincronización no toca la base: no es
-      cortesía de rendimiento, es que con una sola conexión síncrona una
-      escritura suya entraría en ESTA transacción y se revertiría con ella.
-      Ver `venta-en-curso.ts`.
-    */
-    return durante(() => transaccion());
+          Los productos van como `actualizar` y no como `insertar`: la venta no
+          los creó, les bajó el inventario y les movió los contadores.
+        */
+        const entradas: EntradaDelLote[] = [
+          ...entradasDe('productos', resueltas.map((linea) => linea.producto.id), 'actualizar'),
+          { tabla: 'ventas', id: venta.id, operacion: 'insertar' },
+          ...entradasDe('venta_detalle', idsDeDetalle, 'insertar'),
+          ...entradasDe('auditoria_log', idsDeAuditoria, 'insertar'),
+        ];
+        encolarLote(this.base, entradas);
+
+        return {
+          venta,
+          subtotal: montoACadena(subtotalExacto),
+          descuentoAplicado: montoACadena(descuentoAplicado ?? 0),
+          total: montoACadena(total),
+          lineas: resueltas.length,
+          lineasConPrecioEspecial: resueltas.filter((linea) => linea.especialAplicado !== null)
+            .length,
+        };
+      });
+
+    return transaccion();
   }
 
   /**

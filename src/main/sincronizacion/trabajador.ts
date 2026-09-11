@@ -27,10 +27,11 @@
  * va a ver hasta el día del robo (§3.2). Se desbloquea a pedido de una
  * persona, nunca solo.
  *
- * **3. CEDE ANTE LA VENTA.** Si hay una transacción de venta abierta, el
+ * **3. CEDE ANTE CUALQUIER TRANSACCIÓN DE NEGOCIO.** No solo ante la venta: si
+ * hay una transacción abierta —la venta, la caja, un usuario, el catálogo— el
  * trabajador no toca la base y espera al siguiente ciclo. Con una sola
- * conexión síncrona, una escritura suya entraría en la transacción de la venta
- * y se revertiría con ella. Ver `venta-en-curso.ts`, que explica el mecanismo.
+ * conexión síncrona, una escritura suya entraría en esa transacción ajena
+ * y se revertiría con ella. Ver `transaccion-en-curso.ts`, que lo explica.
  *
  * **4. NUNCA BLOQUEA EL PROCESO.** Un lote por iteración, con una pausa real
  * entre lotes, y un presupuesto por ciclo. El proceso principal de Electron es
@@ -53,7 +54,7 @@
 import type { SyncProvider, CambioSincronizable } from '@shared/adapters';
 import type { ElementoSyncCola } from '@main/database/repositories/entidades';
 import type { RepositorioDeSyncCola } from '@main/database/repositories/sync-cola';
-import { hayVentaEnCurso } from '@main/domain/venta/venta-en-curso';
+import { hayTransaccionDeNegocioEnCurso } from '@main/database/transaccion-en-curso';
 import { clasificarFallo, proximoIntentoTras } from './reintentos';
 
 /**
@@ -100,8 +101,8 @@ export const PRESUPUESTO_POR_DEFECTO: PresupuestoDeCiclo = {
 export type MotivoDeCiclo =
   /** No había nada que subir. */
   | 'sin_pendientes'
-  /** Había una venta en curso; el trabajador se apartó. */
-  | 'cedio_ante_venta'
+  /** Había una transacción de negocio abierta; el trabajador se apartó. */
+  | 'cedio_ante_transaccion'
   /** Se subió todo lo que estaba disponible. */
   | 'cola_vaciada'
   /** Un lote determinístico detuvo la cola. Necesita que una persona lo mire. */
@@ -205,20 +206,13 @@ export class TrabajadorDeSincronizacion {
   /**
    * Un ciclo completo: sube lotes hasta agotar la cola o el presupuesto.
    *
-   * **LA COMPROBACIÓN DE LA VENTA ES LO PRIMERO Y ES SÍNCRONA**, antes del
-   * primer `await`. No es un detalle de estilo: el cuerpo de una función
-   * `async` corre de forma síncrona hasta su primer `await`, así que preguntar
-   * acá es preguntar en el mismo turno del bucle de eventos en que quien llama
-   * invocó el ciclo. Si la pregunta viviera después de un `await`, se
-   * contestaría en otro turno y la respuesta ya no valdría para el momento en
-   * que se va a escribir.
+   * La comprobación de si hay una transacción de negocio abierta vive **al
+   * principio de cada vuelta del bucle**, no acá, y hay una razón por la que
+   * está en un solo lugar: ver el comentario de `subirLotes`.
    */
   public async ejecutarCiclo(): Promise<ResumenDeCiclo> {
     const inicio = this.ahora();
 
-    if (hayVentaEnCurso()) {
-      return this.resumen('cedio_ante_venta', 0, 0, null, null, inicio);
-    }
     if (this.corriendo) {
       /*
         Dos ciclos encimados sobre la misma cola se pisarían: los dos leerían
@@ -226,7 +220,7 @@ export class TrabajadorDeSincronizacion {
         soportaría —todo es idempotente por clave primaria— pero sería tráfico
         y trabajo al pedo en la máquina que menos lo tiene.
       */
-      return this.resumen('cedio_ante_venta', 0, 0, null, null, inicio);
+      return this.resumen('cedio_ante_transaccion', 0, 0, null, null, inicio);
     }
 
     this.corriendo = true;
@@ -248,10 +242,38 @@ export class TrabajadorDeSincronizacion {
       if (this.ahora() - inicio >= this.presupuesto.duracionMaximaMs) {
         return this.resumen('presupuesto_agotado', lotesSubidos, filasSubidas, null, null, inicio);
       }
-      // Se vuelve a preguntar entre lotes: una venta pudo empezar mientras se
-      // subía el lote anterior, y el siguiente no debe pisarla.
-      if (hayVentaEnCurso()) {
-        return this.resumen('cedio_ante_venta', lotesSubidos, filasSubidas, null, null, inicio);
+      /*
+        ===================================================================
+        LA ÚNICA COMPROBACIÓN DE «HAY UNA TRANSACCIÓN ABIERTA», Y ESTÁ ACÁ
+        ===================================================================
+
+        **Es SÍNCRONA y va antes de leer la cola.** El cuerpo de una función
+        `async` corre de forma síncrona hasta su primer `await`, así que en la
+        primera vuelta esta pregunta se contesta en el mismo turno del bucle de
+        eventos en que quien llamó invocó el ciclo: si el ciclo se lanzó desde
+        dentro de una transacción —lo hace el observador de la bandeja de
+        salida—, acá se entera y se aparta sin tocar la base.
+
+        **HUBO UNA SEGUNDA COMPROBACIÓN IGUAL AL PRINCIPIO DE `ejecutarCiclo` Y
+        SE QUITÓ.** No era defensa en profundidad: era duplicación. Se midió
+        quitando cada una por separado y las 74 pruebas pasaban en los dos
+        casos, porque esta —que corre antes de CADA lote, incluido el primero—
+        cubre por completo lo que cubría aquella. Dos comprobaciones que nadie
+        puede distinguir son dos lugares donde tocar cuando esto cambie, y una
+        sola prueba que se cree que protege dos cosas.
+
+        **Lo que esta posición agrega sobre la otra hoy es CERO, y se dice en
+        voz alta**: con un solo hilo y una sola conexión síncrona, una
+        transacción de negocio empieza y termina dentro de un bloque síncrono,
+        y la continuación de un `await` no puede colarse ahí. Es decir: hoy la
+        señal solo puede estar levantada si el ciclo se lanzó desde adentro, que
+        es la primera vuelta. La comprobación se deja en el bucle y no antes
+        porque cuesta leer un booleano y porque el día que la premisa cambie
+        —un observador asíncrono, una segunda conexión, un hilo aparte— este es
+        el lugar donde hay que preguntar.
+      */
+      if (hayTransaccionDeNegocioEnCurso()) {
+        return this.resumen('cedio_ante_transaccion', lotesSubidos, filasSubidas, null, null, inicio);
       }
 
       const loteId = this.cola.siguienteLotePendiente();
@@ -366,20 +388,20 @@ export class TrabajadorDeSincronizacion {
       // La cola NO se toca: no se suma intento, no se agenda reintento y no se
       // bloquea. El lote es válido; lo que falta es una credencial, y eso se
       // resuelve reprovisionando, no reintentando (§1.6).
-      this.registrar(`[sincronizacion] credencial rechazada al subir el lote ${loteId}`);
+      this.registrar(`credencial rechazada al subir el lote ${loteId}`);
       return { motivo: 'sin_credencial', error: detalle, proximoIntentoEn: null };
     }
 
     if (clase === 'deterministico') {
       this.cola.marcarLoteBloqueante(loteId, detalle);
-      this.registrar(`[sincronizacion] COLA DETENIDA en el lote ${loteId}: ${detalle}`);
+      this.registrar(`COLA DETENIDA en el lote ${loteId}: ${detalle}`);
       return { motivo: 'cola_detenida', error: detalle, proximoIntentoEn: null };
     }
 
     const proximo = proximoIntentoTras(intentoNumero, this.ahora(), this.azar);
     this.cola.registrarIntentoFallido(loteId, detalle, proximo);
     this.registrar(
-      `[sincronizacion] lote ${loteId}: intento ${String(intentoNumero)} falló; ` +
+      `lote ${loteId}: intento ${String(intentoNumero)} falló; ` +
         `se reintenta a partir de ${proximo}`,
     );
     return { motivo: 'fallo_transitorio', error: detalle, proximoIntentoEn: proximo };

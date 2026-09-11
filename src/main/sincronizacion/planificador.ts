@@ -56,7 +56,7 @@ export const ESPERAS_DEL_PLANIFICADOR = {
   respaldo: 300_000,
   /** Tras despertar de suspensión: Windows levanta la red unos segundos después. */
   trasDespertar: 15_000,
-  /** Tras ceder ante una venta: se vuelve a mirar enseguida. */
+  /** Tras ceder ante una transacción: se vuelve a mirar enseguida. */
   trasCeder: 2_000,
 } as const;
 
@@ -170,6 +170,20 @@ export class PlanificadorDeSincronizacion {
     const resumen = await this.trabajador.ejecutarCiclo();
     this.ultimo = resumen;
 
+    /*
+      SE ANOTA TODO CICLO, no solo los que fallan. Va a la bitácora TÉCNICA,
+      nunca a `auditoria_log`: que la nube esté al día o no es infraestructura,
+      y ensuciar con eso la única tabla que un auditor lee entera es el error
+      que §4.14 ya rechazó para los fallos de impresión. El volumen es bajo
+      porque los ciclos corren cuando tiene sentido, no cada N minutos.
+    */
+    this.registrar(
+      `ciclo: ${resumen.motivo}; ${String(resumen.lotesSubidos)} lotes, ` +
+        `${String(resumen.filasSubidas)} filas, ${String(resumen.duracionMs)} ms` +
+        (resumen.loteEnEspera === null ? '' : `; lote en espera ${resumen.loteEnEspera}`) +
+        (resumen.error === null ? '' : `; error: ${resumen.error}`),
+    );
+
     if (!this.detenido) {
       const espera = this.esperaTras(resumen);
       if (espera !== null) {
@@ -202,7 +216,7 @@ export class PlanificadorDeSincronizacion {
       case 'sin_credencial':
         return null;
 
-      case 'cedio_ante_venta':
+      case 'cedio_ante_transaccion':
         return ESPERAS_DEL_PLANIFICADOR.trasCeder;
 
       case 'presupuesto_agotado':
@@ -252,7 +266,7 @@ export class PlanificadorDeSincronizacion {
           muerta en silencio para siempre. Se anota y se reagenda el respaldo.
         */
         this.registrar(
-          `[sincronizacion] el ciclo lanzó: ${causa instanceof Error ? causa.message : String(causa)}`,
+          `el ciclo lanzó: ${causa instanceof Error ? causa.message : String(causa)}`,
         );
         if (!this.detenido) {
           this.agendar(ESPERAS_DEL_PLANIFICADOR.respaldo);

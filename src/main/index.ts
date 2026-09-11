@@ -584,18 +584,27 @@ app.whenReady().then(
       segundos más tarde, contados desde acá: es lo que §2.4 pide para no
       competir con el arranque en un i3.
     */
+    /*
+      Lo de sincronización va a la bitácora TÉCNICA y además a la consola: en
+      desarrollo se ve en la terminal, y en producción la consola no la lee
+      nadie pero el archivo queda. Nunca a `auditoria_log`.
+    */
+    const anotarSincronizacion = (mensaje: string): void => {
+      logTecnico.registrar('sincronizacion', mensaje);
+      console.info(`[sincronizacion] ${mensaje}`);
+    };
+
+    const proveedorDeSincronizacion = crearSyncProvider(
+      leerConfiguracionAdaptadoresDelEntorno(process.env),
+    );
     const trabajadorDeSincronizacion = new TrabajadorDeSincronizacion({
       cola: repositorios.syncCola,
-      proveedor: crearSyncProvider(leerConfiguracionAdaptadoresDelEntorno(process.env)),
-      registrar: (mensaje: string): void => {
-        logTecnico.registrar('sincronizacion', mensaje);
-      },
+      proveedor: proveedorDeSincronizacion,
+      registrar: anotarSincronizacion,
     });
     planificadorDeSincronizacion = new PlanificadorDeSincronizacion({
       trabajador: trabajadorDeSincronizacion,
-      registrar: (mensaje: string): void => {
-        logTecnico.registrar('sincronizacion', mensaje);
-      },
+      registrar: anotarSincronizacion,
     });
     // El único aviso de «hay algo que subir» sale de la bandeja de salida, que
     // es el único lugar que escribe la cola. Ver `observarLotesEncolados`.
@@ -603,6 +612,12 @@ app.whenReady().then(
       planificadorDeSincronizacion?.alConfirmarTransaccion();
     });
     planificadorDeSincronizacion.arrancar();
+    const avisoDeArranque =
+      `trabajador en marcha con ${proveedorDeSincronizacion.nombre}; ` +
+      `primer ciclo en 30 s. Pendientes en la cola: ` +
+      `${String(repositorios.syncCola.contarPendientes())} filas en ` +
+      `${String(repositorios.syncCola.contarLotesPendientes())} lotes.`;
+    anotarSincronizacion(avisoDeArranque);
 
     // En macOS es normal que la aplicación siga viva sin ventanas; se recrea
     // la ventana al reactivarla desde el Dock.

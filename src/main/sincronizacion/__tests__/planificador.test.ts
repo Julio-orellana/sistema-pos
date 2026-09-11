@@ -177,7 +177,7 @@ describe('Qué se agenda DESPUÉS de un ciclo, según cómo haya terminado', () 
   });
 
   it('tras ceder ante una venta vuelve a mirar enseguida, para no dejar la cola varada', async () => {
-    await crearPlanificador(trabajadorQueDevuelve({ motivo: 'cedio_ante_venta' })).ejecutarAhora();
+    await crearPlanificador(trabajadorQueDevuelve({ motivo: 'cedio_ante_transaccion' })).ejecutarAhora();
 
     expect(vivos()[0]?.ms).toBe(2_000);
   });

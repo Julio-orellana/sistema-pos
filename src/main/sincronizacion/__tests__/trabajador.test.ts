@@ -14,6 +14,9 @@
  *   4. ¿Cede de verdad ante una venta, y qué pasaría si no cediera?
  */
 
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
 
@@ -35,11 +38,12 @@ import {
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import {
   durante,
-  hayVentaEnCurso,
-  reiniciarSenalDeVenta,
-} from '@main/domain/venta/venta-en-curso';
+  hayTransaccionDeNegocioEnCurso,
+  reiniciarSenalDeTransaccion,
+} from '@main/database/transaccion-en-curso';
 import {
   PRESUPUESTO_POR_DEFECTO,
   TrabajadorDeSincronizacion,
@@ -126,6 +130,29 @@ class ProveedorProgramable implements SyncProvider {
   }
 }
 
+
+/** Los archivos de `src/main` que abren una transacción de SQLite a mano. */
+function archivosQueAbrenTransaccion(carpeta: string): string[] {
+  const encontrados: string[] = [];
+
+  const recorrer = (actual: string, prefijo: string): void => {
+    for (const entrada of readdirSync(actual, { withFileTypes: true })) {
+      const ruta = join(actual, entrada.name);
+      const relativa = prefijo === '' ? entrada.name : `${prefijo}/${entrada.name}`;
+      if (entrada.isDirectory()) {
+        if (entrada.name !== '__tests__') {
+          recorrer(ruta, relativa);
+        }
+      } else if (entrada.name.endsWith('.ts') && readFileSync(ruta, 'utf8').includes('.transaction(')) {
+        encontrados.push(relativa);
+      }
+    }
+  };
+
+  recorrer(carpeta, '');
+  return encontrados;
+}
+
 // ===========================================================================
 // Montaje
 // ===========================================================================
@@ -138,6 +165,7 @@ let proveedor: ProveedorProgramable;
 let caja: ServicioDeCaja;
 let venta: ServicioDeVenta;
 let categorias: ServicioDeCategorias;
+let usuarios: ServicioDeUsuarios;
 
 let idJimmy: string;
 let idCajera: string;
@@ -198,7 +226,7 @@ function cobrarUnaVenta(): string {
 
 beforeEach(() => {
   reloj = Date.parse('2026-09-11T12:00:00.000Z');
-  reiniciarSenalDeVenta();
+  reiniciarSenalDeTransaccion();
   observarLotesEncolados(null);
 
   const prueba = crearBaseMigrada();
@@ -230,6 +258,11 @@ beforeEach(() => {
     categorias: repos.categorias,
     auditoria: repos.auditoria,
   });
+  usuarios = new ServicioDeUsuarios({
+    base,
+    usuarios: repos.usuarios,
+    auditoria: repos.auditoria,
+  });
 
   idJimmy = repos.usuarios.crear({
     nombre: 'Jimmy',
@@ -257,7 +290,7 @@ beforeEach(() => {
 
 afterEach(() => {
   observarLotesEncolados(null);
-  reiniciarSenalDeVenta();
+  reiniciarSenalDeTransaccion();
   limpiar();
 });
 
@@ -641,7 +674,7 @@ describe('El trabajador cede ante una venta en curso', () => {
       conexión y la transacción todavía no se confirmó.
     */
     observarLotesEncolados(() => {
-      senalVistaAdentro = hayVentaEnCurso();
+      senalVistaAdentro = hayTransaccionDeNegocioEnCurso();
       ciclos.push(trabajador.ejecutarCiclo());
     });
 
@@ -650,7 +683,7 @@ describe('El trabajador cede ante una venta en curso', () => {
     const resumen = await ciclos[0];
 
     expect(senalVistaAdentro).toBe(true);
-    expect(resumen?.motivo).toBe('cedio_ante_venta');
+    expect(resumen?.motivo).toBe('cedio_ante_transaccion');
     // No hizo ni una llamada, y no marcó ni una fila.
     expect(proveedor.lotesRecibidos).toHaveLength(0);
     expect(pendientes()).toBe(4);
@@ -675,13 +708,13 @@ describe('El trabajador cede ante una venta en curso', () => {
   });
 
   it('la señal baja aunque la venta FALLE, o el trabajador cedería para siempre', () => {
-    expect(hayVentaEnCurso()).toBe(false);
+    expect(hayTransaccionDeNegocioEnCurso()).toBe(false);
     expect(() =>
       durante(() => {
         throw new Error('conflicto de inventario');
       }),
     ).toThrow('conflicto de inventario');
-    expect(hayVentaEnCurso()).toBe(false);
+    expect(hayTransaccionDeNegocioEnCurso()).toBe(false);
   });
 
   it('POR QUÉ CEDER NO ES CORTESÍA: sin la señal, subiría una venta que se revierte', async () => {
@@ -697,7 +730,7 @@ describe('El trabajador cede ante una venta en curso', () => {
     const ciclos: Promise<ResumenDeCiclo>[] = [];
 
     observarLotesEncolados(() => {
-      reiniciarSenalDeVenta(); // ← la falsificación: se apaga la señal
+      reiniciarSenalDeTransaccion(); // ← la falsificación: se apaga la señal
       ciclos.push(trabajador.ejecutarCiclo());
     });
 
@@ -864,8 +897,186 @@ describe('Un ciclo largo NO bloquea el bucle de eventos del proceso principal', 
     const primero = trabajador.ejecutarCiclo();
     const segundo = await trabajador.ejecutarCiclo();
 
-    expect(segundo.motivo).toBe('cedio_ante_venta');
+    expect(segundo.motivo).toBe('cedio_ante_transaccion');
     expect((await primero).motivo).toBe('cola_vaciada');
     expect(proveedor.lotesRecibidos).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// 8. El mecanismo GENERALIZA: cede ante cualquier transacción de negocio
+// ===========================================================================
+
+describe('La señal no es de la venta: la levanta TODA transacción de negocio', () => {
+  /**
+   * Lanza un ciclo desde DENTRO de la transacción que esté corriendo.
+   *
+   * El observador de la bandeja de salida es el punto exacto: corre después de
+   * escribir la cola y antes del COMMIT, con la conexión dentro de la
+   * transacción. Si `apagarLaSenal` es `true`, se falsifica el mecanismo; si
+   * `romperLaTransaccion` es `true`, el observador lanza y la transacción se
+   * revierte entera.
+   */
+  function espiarDesdeAdentro(
+    trabajador: TrabajadorDeSincronizacion,
+    opciones: { apagarLaSenal?: boolean; romperLaTransaccion?: boolean } = {},
+  ): { ciclos: Promise<ResumenDeCiclo>[]; senalVista: () => boolean } {
+    const ciclos: Promise<ResumenDeCiclo>[] = [];
+    let senalVista = false;
+
+    observarLotesEncolados(() => {
+      senalVista = hayTransaccionDeNegocioEnCurso();
+      if (opciones.apagarLaSenal === true) {
+        reiniciarSenalDeTransaccion();
+      }
+      ciclos.push(trabajador.ejecutarCiclo());
+      if (opciones.romperLaTransaccion === true) {
+        throw new Error('la transacción se revierte después de encolar');
+      }
+    });
+
+    return { ciclos, senalVista: (): boolean => senalVista };
+  }
+
+  it('ABRIR LA CAJA levanta la señal y el trabajador cede, igual que con una venta', async () => {
+    const trabajador = crearTrabajador();
+    const espia = espiarDesdeAdentro(trabajador);
+
+    caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    observarLotesEncolados(null);
+    const resumen = await espia.ciclos[0];
+
+    expect(espia.senalVista()).toBe(true);
+    expect(resumen?.motivo).toBe('cedio_ante_transaccion');
+    expect(proveedor.lotesRecibidos).toHaveLength(0);
+    // Y en cuanto la caja terminó, el mismo trabajador sube el lote.
+    expect((await trabajador.ejecutarCiclo()).motivo).toBe('cola_vaciada');
+    expect(pendientes()).toBe(0);
+  });
+
+  it('CREAR UN USUARIO también: el envoltorio `conBandejaDeSalida` señaliza solo', async () => {
+    const trabajador = crearTrabajador();
+    const espia = espiarDesdeAdentro(trabajador);
+
+    usuarios.crear(idJimmy, { nombre: 'Pedro', rol: 'venta', pin: '4321' });
+    observarLotesEncolados(null);
+    const resumen = await espia.ciclos[0];
+
+    expect(espia.senalVista()).toBe(true);
+    expect(resumen?.motivo).toBe('cedio_ante_transaccion');
+    expect(proveedor.lotesRecibidos).toHaveLength(0);
+  });
+
+  it('EDITAR UNA CATEGORÍA también, y cualquier otra operación del catálogo', async () => {
+    const trabajador = crearTrabajador();
+    const espia = espiarDesdeAdentro(trabajador);
+
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    observarLotesEncolados(null);
+
+    expect(espia.senalVista()).toBe(true);
+    expect((await espia.ciclos[0])?.motivo).toBe('cedio_ante_transaccion');
+    expect(proveedor.lotesRecibidos).toHaveLength(0);
+  });
+
+  it('FALSIFICACIÓN — APERTURA DE CAJA: sin la señal, la nube recibe una caja que se revirtió', async () => {
+    /*
+      Es la misma falsificación que se hizo para la venta, aplicada a un
+      servicio que hasta hoy NO estaba protegido. Se apaga la señal, se lanza el
+      ciclo desde dentro de la transacción y se revierte la transacción entera.
+    */
+    const trabajador = crearTrabajador();
+    const espia = espiarDesdeAdentro(trabajador, {
+      apagarLaSenal: true,
+      romperLaTransaccion: true,
+    });
+
+    expect(() => caja.abrir(idCajera, { modo: 'simple', monto: '500' })).toThrow('se revierte');
+    observarLotesEncolados(null);
+    await espia.ciclos[0];
+
+    // No hay ninguna caja: la transacción se revirtió.
+    const cuantas = base.prepare('SELECT COUNT(*) AS n FROM caja_sesiones').get() as { n: number };
+    expect(cuantas.n).toBe(0);
+    // Y sin embargo la nube recibió su apertura. Eso es lo que la señal impide.
+    expect(proveedor.lotesRecibidos).toHaveLength(1);
+    expect(proveedor.tablasPorLote()[0]).toContain('caja_sesiones');
+  });
+
+  it('CON la señal, esa misma apertura revertida NO llega a la nube', async () => {
+    const trabajador = crearTrabajador();
+    const espia = espiarDesdeAdentro(trabajador, { romperLaTransaccion: true });
+
+    expect(() => caja.abrir(idCajera, { modo: 'simple', monto: '500' })).toThrow('se revierte');
+    observarLotesEncolados(null);
+    const resumen = await espia.ciclos[0];
+
+    expect(resumen?.motivo).toBe('cedio_ante_transaccion');
+    expect(proveedor.lotesRecibidos).toHaveLength(0);
+    expect(pendientes()).toBe(0);
+  });
+
+  it('FALSIFICACIÓN — ALTA DE USUARIO: sin la señal, la nube recibe un usuario que se revirtió', async () => {
+    const usuariosAntes = (
+      base.prepare('SELECT COUNT(*) AS n FROM usuarios').get() as { n: number }
+    ).n;
+    const trabajador = crearTrabajador();
+    const espia = espiarDesdeAdentro(trabajador, {
+      apagarLaSenal: true,
+      romperLaTransaccion: true,
+    });
+
+    expect(() => usuarios.crear(idJimmy, { nombre: 'Pedro', rol: 'venta', pin: '4321' })).toThrow(
+      'se revierte',
+    );
+    observarLotesEncolados(null);
+    await espia.ciclos[0];
+
+    expect((base.prepare('SELECT COUNT(*) AS n FROM usuarios').get() as { n: number }).n).toBe(
+      usuariosAntes,
+    );
+    expect(proveedor.lotesRecibidos).toHaveLength(1);
+    expect(proveedor.tablasPorLote()[0]).toContain('usuarios');
+  });
+
+  it('CON la señal, ese mismo usuario revertido NO llega a la nube', async () => {
+    const trabajador = crearTrabajador();
+    const espia = espiarDesdeAdentro(trabajador, { romperLaTransaccion: true });
+
+    expect(() => usuarios.crear(idJimmy, { nombre: 'Pedro', rol: 'venta', pin: '4321' })).toThrow(
+      'se revierte',
+    );
+    observarLotesEncolados(null);
+
+    expect((await espia.ciclos[0])?.motivo).toBe('cedio_ante_transaccion');
+    expect(proveedor.lotesRecibidos).toHaveLength(0);
+  });
+
+  it('LA ÚNICA PUERTA: ningún servicio abre una transacción de negocio por su cuenta', () => {
+    /*
+      El riesgo que esta prueba cubre no es que el mecanismo esté mal escrito:
+      es que alguien agregue un servicio el año que viene, abra su transacción
+      con `base.transaction(...)` a mano y quede sin señalizar, **sin que nada
+      falle**. Es el mismo riesgo que la prueba que cuenta los guards de rol de
+      los canales IPC: no el código de hoy, el descuido de mañana. Se revisa el
+      código fuente, que es el único lugar donde eso se ve.
+    */
+    const carpetaDelMain = join(new URL('.', import.meta.url).pathname, '..', '..');
+    const conTransaccion = archivosQueAbrenTransaccion(carpetaDelMain);
+
+    /*
+      Los tres permitidos, con su razón:
+        · el propio envoltorio, que es el que la abre para todos;
+        · el migrador, que corre antes de que exista el trabajador;
+        · los guiones de datos de ejemplo, que corren en un proceso sin ventana
+          y sin sincronización.
+      Cualquier otro archivo en esta lista es un servicio que se quedó afuera
+      del mecanismo.
+    */
+    expect(conTransaccion.sort()).toEqual([
+      'database/migrator.ts',
+      'database/transaccion-en-curso.ts',
+      'domain/catalogo/datos-de-ejemplo.ts',
+    ]);
   });
 });

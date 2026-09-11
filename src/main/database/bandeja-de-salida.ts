@@ -56,6 +56,7 @@ import type { Database } from 'better-sqlite3';
 
 import type { OperacionSync } from './repositories/entidades';
 import { ahora, nuevoId } from './repositories/base';
+import { enTransaccionDeNegocio } from './transaccion-en-curso';
 
 /**
  * Las tablas que se encolan, con el nombre exacto que tienen en los dos
@@ -180,7 +181,7 @@ export function armarPayload(
  * concreta: **lo único que el observador puede hacer es agendar un
  * temporizador**, nunca tocar la base. Si tocara la base, su escritura entraría
  * en esta transacción y se revertiría con ella, que es justo lo que
- * `venta-en-curso.ts` existe para impedir.
+ * `transaccion-en-curso.ts` existe para impedir.
  *
  * Si la transacción se revierte, el temporizador queda agendado igual y el
  * ciclo que corra dos segundos después no va a encontrar nada que subir. El
@@ -279,10 +280,9 @@ export function conBandejaDeSalida<T>(
   base: Database,
   operacion: () => { readonly resultado: T; readonly entradas: readonly EntradaDelLote[] },
 ): T {
-  const transaccion = base.transaction((): T => {
+  return enTransaccionDeNegocio(base, (): T => {
     const { resultado, entradas } = operacion();
     encolarLote(base, entradas);
     return resultado;
   });
-  return transaccion();
 }
