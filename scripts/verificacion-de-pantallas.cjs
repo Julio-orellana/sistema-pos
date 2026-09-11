@@ -286,6 +286,16 @@ async function main() {
       cobrado.includes('8.50'),
     );
 
+    // El cajero tiene que enterarse EN EL MISMO AVISO de si el recibo salió por
+    // la impresora: si no salió, se lo tiene que decir al cliente ahí mismo.
+    const estadoDelRecibo = ((await prueba('cobro-estado-del-recibo').textContent()) ?? '').trim();
+    comprobar(
+      'la confirmación dice el número de recibo y si se imprimió',
+      'menciona el recibo y el PDF',
+      estadoDelRecibo === '' ? '(no apareció)' : estadoDelRecibo,
+      /Recibo No\./.test(estadoDelRecibo) && /PDF|imprimi/i.test(estadoDelRecibo),
+    );
+
     await prueba('cobro-siguiente-venta').click();
     await prueba('ticket-vacio').waitFor({ timeout: ESPERA_CORTA });
     comprobar(
@@ -304,7 +314,64 @@ async function main() {
       inventarioEnPantalla.includes('Maíz blanco'),
     );
     // =======================================================================
-    // 5. Gestión de usuarios: el hueco que cerró el Prompt 21.
+    // 5. El recibo: historial y reimpresión.
+    // =======================================================================
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-recibos').click();
+    await prueba('lista-de-recibos').waitFor({ timeout: ESPERA_CORTA });
+
+    comprobar(
+      'la venta recién cobrada dejó su recibo en el historial',
+      '1 recibo',
+      `${String(await prueba('fila-de-recibo').count())} recibos`,
+      (await prueba('fila-de-recibo').count()) === 1,
+    );
+
+    await prueba('recibo-ver').first().click();
+    await prueba('vista-de-recibo').waitFor({ timeout: ESPERA_CORTA });
+    const papel = ((await prueba('recibo-texto').textContent()) ?? '').trim();
+
+    comprobar(
+      'el recibo dice que es una proforma, no una factura fiscal',
+      'menciona "no válido como factura fiscal"',
+      papel.includes('no válido como factura fiscal') ? 'lo dice' : 'NO lo dice (mal)',
+      papel.includes('no válido como factura fiscal'),
+    );
+
+    // Sin los datos del negocio cargados, el recibo tiene que mostrar
+    // marcadores entre corchetes y nunca algo que parezca un dato real.
+    comprobar(
+      'sin datos del negocio, el recibo muestra marcadores entre corchetes',
+      'aparece "[Nombre del negocio]"',
+      papel.includes('[Nombre del negocio]') ? 'aparece' : 'no aparece (mal)',
+      papel.includes('[Nombre del negocio]'),
+    );
+
+    comprobar(
+      'el total impreso es el que se cobró',
+      'Q8.50 en el papel',
+      papel.includes('8.50') ? 'aparece' : 'no aparece (mal)',
+      papel.includes('8.50'),
+    );
+
+    await prueba('cerrar-vista-de-recibo').click();
+    await prueba('recibo-reimprimir').first().click();
+    await prueba('vista-de-recibo').waitFor({ timeout: ESPERA_CORTA });
+    const reimpreso = ((await prueba('recibo-texto').textContent()) ?? '').trim();
+
+    comprobar(
+      'reimprimir reproduce el mismo total y se marca como reimpresión',
+      'mismo total, con la marca',
+      reimpreso.includes('8.50') && reimpreso.includes('REIMPRESI')
+        ? 'igual y marcado'
+        : 'distinto o sin marcar (mal)',
+      reimpreso.includes('8.50') && reimpreso.includes('REIMPRESI'),
+    );
+    await prueba('cerrar-vista-de-recibo').click();
+
+    // =======================================================================
+    // 6. Gestión de usuarios: el hueco que cerró el Prompt 21.
     // =======================================================================
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor();

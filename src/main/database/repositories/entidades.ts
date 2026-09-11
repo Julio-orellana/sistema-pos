@@ -382,6 +382,30 @@ export interface NuevaVentaDetalle {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Datos de la tienda que encabezan el recibo.
+ *
+ * Las cuatro son nulables porque los datos reales de Jimmy todavía no llegaron.
+ * `null` significa «sin configurar», y el recibo imprime un marcador entre
+ * corchetes en su lugar. NUNCA una cadena vacía: el esquema lo impide, para que
+ * no haya dos formas distintas de estar vacío.
+ */
+export interface ConfiguracionNegocio {
+  readonly nombreComercial: string | null;
+  readonly direccion: string | null;
+  readonly telefono: string | null;
+  readonly nit: string | null;
+  readonly actualizadoEn: string;
+}
+
+/** Los cuatro campos editables de la configuración. */
+export interface CambiosDeConfiguracion {
+  readonly nombreComercial: string | null;
+  readonly direccion: string | null;
+  readonly telefono: string | null;
+  readonly nit: string | null;
+}
+
 /** Comprobante emitido por una venta. El PDF siempre existe. */
 export interface Recibo {
   readonly id: string;

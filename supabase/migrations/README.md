@@ -57,6 +57,7 @@ hueco en la numeración significa que **esa migración local no tiene espejo**.
 | `013_superficie_descuento_excedente` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja |
 | `014_boleta_solo_con_tarjeta` | `0014_boleta_solo_con_tarjeta.sql` | Regla sobre `ventas`: dato de negocio |
 | `015_cantidad_vendida` | `0015_cantidad_vendida.sql` | Columna de `productos`: dato de negocio |
+| `016_configuracion_negocio` | `0016_configuracion_negocio.sql` | Datos de la tienda: salen impresos en el recibo |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
@@ -101,8 +102,11 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 | *(no hay 0013: ver la sección anterior)* | — |
 | `0014_boleta_solo_con_tarjeta.sql` | Sí — `20260911113517` |
 | `0015_cantidad_vendida.sql` | Sí — `20260911113531` |
+| `0016_configuracion_negocio.sql` | **No — PENDIENTE** |
 
-**No queda ninguna migración pendiente de aplicar en la nube.** Las dos últimas
+**Queda UNA migración pendiente de aplicar en la nube: `0016`**, la tabla con
+los datos de la tienda que encabezan el recibo. Se aplica como todas: mostrando
+antes el SQL exacto y con la aprobación explícita de Julio. Las dos últimas
 —`0014` y `0015`— se aplicaron el 2026-09-11 por la vía de siempre, y se
 verificaron contra el catálogo del proyecto: `ventas_boleta_solo_con_tarjeta`
 existe con `convalidated = true`, y `productos.cantidad_vendida` quedó

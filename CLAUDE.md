@@ -356,7 +356,9 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**No queda ninguna migración pendiente de aplicar en la nube.**
+**HAY UNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE: `0016_configuracion_negocio`**,
+la tabla con los datos de la tienda que encabezan el recibo. Se aplica como
+todas: mostrando antes el SQL exacto y con la aprobación explícita de Julio.
 
 Las dos últimas fueron `0014_boleta_solo_con_tarjeta` y `0015_cantidad_vendida`,
 el 2026-09-11, por la vía de siempre: SQL a la vista, aprobación explícita de
@@ -1534,6 +1536,161 @@ cuadrícula por cantidad pondría el maíz —que sale de a cien libras— siemp
 encima de todo lo que se vende por unidad. Contar transacciones es la única
 medida comparable entre productos.
 
+### 4.14 Recibos: configuración del negocio, PDF e impresión térmica
+
+#### `configuracion_negocio`: una sola fila, cuatro campos nulables
+
+| Columna | Nulable | Marcador si falta |
+|---|---|---|
+| `nombre_comercial` | sí | `[Nombre del negocio]` |
+| `direccion` | sí | `[Dirección]` |
+| `telefono` | sí | `[Teléfono]` |
+| `nit` | sí | `[NIT]` |
+
+**FILA ÚNICA GARANTIZADA POR LA BASE.** `id` es la constante `'unica'` con un
+CHECK, y como además es la llave primaria, la tabla no puede tener dos filas.
+Esto **rompe a propósito la regla de UUID en el cliente**: esa regla existe
+porque dos filas creadas sin internet en máquinas distintas colisionarían al
+subir, y acá la colisión es justamente lo que se busca. La fila nace vacía en la
+migración, para que la pantalla y el recibo lean siempre algo.
+
+**LOS CUATRO SON NULABLES porque los datos reales de Jimmy todavía no llegaron**,
+y hay que poder cargar el nombre sin saber el NIT. `NULL` es «sin configurar», y
+el esquema impide la cadena vacía: si hubiera dos formas de estar vacío, el
+recibo tendría que conocer las dos para decidir si pone el marcador.
+
+**LOS MARCADORES VAN ENTRE CORCHETES Y SE VEN.** Un renglón en blanco, o peor un
+nombre de ejemplo, harían que un recibo sin configurar pasara por uno
+configurado. Entre corchetes, quien lo mire sabe que falta cargar el dato.
+
+> **PENDIENTE PARA MULTI-SUCURSAL (§6.2, punto 10).** Con más de una sucursal,
+> cada una tendría su propio nombre y dirección, y esta tabla necesitaría una
+> fila por sucursal. Ese día hay que revisarla.
+
+#### El recibo NO calcula nada
+
+Lee `ventas`, `venta_detalle`, `recibos` y `configuracion_negocio`, y muestra.
+Todo el cálculo ocurrió una sola vez, en la transacción que registró la venta
+(§4.13). Si el recibo recalculara, bastaría que una regla cambiara el año que
+viene para que reimprimir un comprobante viejo diera otro número.
+
+**La única cifra derivada es la rebaja del descuento, y sale de `subtotal −
+total`**, los dos guardados. NO se vuelve a aplicar el porcentaje: con otro modo
+de redondeo daría un centavo distinto del que el cliente pagó.
+
+#### EL PAPEL CUADRA: las líneas suman el TOTAL, no el subtotal
+
+Esto **se corrigió manejando la aplicación real**, y vale anotarlo porque el
+error es fácil de volver a cometer. `subtotal_impreso` es la parte que le toca a
+cada línea **del total ya descontado** —es lo que garantiza «el total manda» del
+§5—, así que las líneas **no** suman el subtotal. La primera versión del recibo
+imprimía «Subtotal / Descuento / Total» encima de esas líneas y salía un papel
+donde 14.80 + 5.32 no daba 21.75 y nadie podía cuadrarlo.
+
+La forma correcta con estos datos: las líneas suman el TOTAL, y el descuento se
+informa como dato de la venta, no como paso de una resta. El papel dice «Los
+importes ya incluyen el descuento», el monto rebajado y quién lo autorizó. Hay
+una prueba que suma las líneas y exige que den el total.
+
+**Quién autorizó el descuento va EN EL PAPEL**, no solo en la auditoría: es la
+única copia que se lleva el cliente, y un descuento sin responsable visible es
+justo lo que el flujo de PIN existe para evitar.
+
+#### El PDF sale de Chromium, no de una librería nueva
+
+`webContents.printToPDF` sobre una ventana invisible y efímera. Electron ya
+empaqueta Chromium: sumar `pdfkit` sería agregar una dependencia y un segundo
+motor de maquetación para lo mismo. Y maquetar con HTML y CSS deja el recibo
+ajustable por alguien que no sea programador.
+
+El HTML se carga por `data:`, nunca escribiendo un archivo temporal: así no queda
+un HTML con los datos de una venta dando vueltas en el disco. La ventana va sin
+Node, sin preload y con aislamiento: el recibo es contenido, no código.
+
+Los PDF viven en `<userData>/recibos/`, **nunca** en la carpeta de instalación,
+por la misma razón que las fotos de producto (§4.11).
+
+**UNA REIMPRESIÓN REGENERA EL PDF desde las filas de la venta y escribe encima
+del mismo archivo.** `pdf_path` es una sola columna y tiene que apuntar siempre a
+un PDF vigente. La contrapartida está aceptada y es la que se pidió: el archivo
+refleja la configuración de HOY, de modo que un recibo emitido antes de cargar
+los datos de la tienda deja de mostrar marcadores al reimprimirse.
+
+#### El recibo se emite DESPUÉS de la transacción, nunca adentro
+
+Generar un PDF abre una ventana de Chromium e imprimir habla con un puerto: las
+dos cosas son lentas y fallan por motivos ajenos a la venta. Meterlas en la
+transacción mantendría abierta una escritura de SQLite esperando a un aparato, y
+haría que una impresora sin papel revirtiera una venta ya cobrada.
+
+**La consecuencia, dicha en voz alta:** si la aplicación se cae justo entre la
+venta y el recibo, queda una venta sin recibo. Es recuperable y es infinitamente
+preferible a perder la venta por un problema de papel.
+
+#### ESC/POS: implementado contra el estándar, SIN confirmar contra el modelo real
+
+> **PENDIENTE, ES LO PRÓXIMO QUE HACE FALTA DEL CLIENTE.** La impresora de Jimmy
+> **llega el jueves**. Esto está escrito **contra el estándar ESC/POS más común,
+> no contra su modelo**, y **no se probó contra hardware real**. Hay que
+> confirmar compatibilidad exacta el día que llegue. Ver el punto 9 de §6.2.
+
+Qué se hizo para que el riesgo sea el menor posible:
+
+- **Solo comandos del núcleo del estándar**: inicializar, página de códigos,
+  avanzar y corte parcial. Se evitaron a propósito los de código de barras,
+  imagen y cajón de dinero, que es donde los fabricantes se apartan. Tampoco se
+  usan negrita ni tamaño doble.
+- **La conversión a bytes es una función pura** (`escpos.ts`) y está probada byte
+  por byte. Lo que no se puede probar sin el aparato es que ESA impresora los
+  entienda; el día que llegue, estas pruebas dicen exactamente qué se le manda.
+- **Codificación CP850**, que es la que traen casi todas de fábrica y cubre el
+  español. No se usa `latin1`: coincide con CP850 en los primeros 128 bytes y se
+  separa justo en las vocales acentuadas. Un carácter sin lugar se sustituye
+  antes que imprimir basura.
+- **Sin dependencias nativas nuevas.** Los bytes se escriben en el dispositivo
+  con `node:fs`. Una librería USB obligaría a recompilar otro módulo nativo para
+  Electron y para Windows para hacer exactamente eso.
+
+**Qué impresora usa esta terminal se configura en un ARCHIVO LOCAL**,
+`<userData>/impresora.json`, y no en `configuracion_negocio`:
+
+```json
+{ "dispositivo": "\\.\USB001" }
+```
+
+Es estado operativo de una máquina —dos cajas podrían tener la térmica en
+puertos distintos— y esa tabla se espeja en la nube. Es el mismo criterio que ya
+se aplicó a `bloqueos_de_autorizacion` (§4.4). **Sin archivo no hay impresora, y
+eso NO es un error**: es el estado normal hoy. No hay pantalla para configurarlo
+porque configurar una impresora que nadie vio sería adivinar qué opciones
+ofrecerle a Jimmy.
+
+#### Un fallo de impresión es TÉCNICO, no un hecho del negocio
+
+Va a `<userData>/log-tecnico.log`, **nunca** a `auditoria_log`. Esa tabla es
+inmutable por trigger, se espeja en la nube y un auditor la lee como evidencia:
+que una impresora no respondiera es un problema del aparato, y meterlo ahí
+ensuciaría con ruido de hardware la única tabla que tiene que poder leerse
+entera. Hay una prueba que lo verifica.
+
+**La venta sobrevive a todo**: sin impresora, con impresora rota, e incluso si
+falla el PDF. En los tres casos la venta queda `completada` y el recibo existe en
+la base, así que se puede volver a emitir desde el historial.
+
+#### El historial vive en su propia pantalla, y no exige ser administrador
+
+Reimprimir lo pide un cliente que volvió al rato porque perdió su papel, no
+alguien que está cobrando: meterlo dentro de la venta obligaría a abandonar un
+ticket a medio armar. Y lo hace **cualquiera con sesión**, porque el cajero tiene
+que poder resolverlo solo y el recibo no muestra nada que el cliente no haya
+visto al comprar. **Configurar los datos del negocio sí exige rol
+administrativo**: cambia un documento que se le entrega al cliente.
+
+El recibo se muestra en pantalla **en texto plano y monoespaciado, exactamente el
+mismo texto que va a la impresora**. No es una versión bonita de los mismos
+datos: si la pantalla y el rollo se vieran distintos, cotejar uno contra otro
+dejaría de ser inmediato.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -1599,6 +1756,16 @@ medida comparable entre productos.
 | **Un `ErrorDeNegocio` cruza el puente IPC con SU código y SU mensaje**, no envuelto en un genérico. | Devolver siempre «La operación no pudo completarse» y dejar el detalle en la bitácora | Los mensajes de negocio están escritos para que los lea una persona frente a la pantalla —«El precio no puede ser negativo»— y esconderlos detrás de un genérico deja a quien carga el catálogo sin saber qué corregir. Era además lo que §4.7 ya decía que pasaba («el mensaje llega a la interfaz ya traducido») y no era cierto. Cualquier otro error sí se generaliza: un fallo inesperado no debe filtrar detalles internos a la ventana. El envoltorio vive en un solo lugar, `src/main/ipc/respuesta.ts`, para que ningún módulo tenga su propia variante. | Prompt 15 — 2026-09-07 |
 | **`playwright-core` como devDependency, en modo Electron, para `npm run verify:pantallas`.** | No verificar la interfaz automáticamente y confiar en pruebas manuales; usar el paquete `playwright` completo; escribir un arnés propio sobre el protocolo de depuración de Chrome | Hay defectos que ninguna prueba de Vitest puede ver: si el mensaje correcto LLEGA a la ventana y si quedó dentro de la parte visible. Los dos que se encontraron eran de esa clase y aparecieron a mano. Se eligió `playwright-core` y no `playwright` porque el primero **no tiene guiones de instalación ni dependencias** y por lo tanto no descarga navegadores —medido: tras instalarlo y usarlo no existe ninguna carpeta `ms-playwright`—, y su modo `_electron` maneja el binario de Electron que el proyecto ya tiene. **No viaja en el instalador de Jimmy**, comprobado empaquetando: `electron-builder` reescribe el `package.json` que va dentro del asar dejando solo `dependencies`, y una búsqueda de «playwright» en los 935 archivos del paquete y en todo el `.app` no devuelve nada. | Prompt 16 — 2026-09-08 |
 | **Los mensajes al usuario no inventan razones de negocio.** «El precio no puede ser negativo», no «…Se permite 0, para muestras y regalos». | Explicar en el mensaje para qué sirve cada regla | Que un precio 0 se acepte es una decisión técnica del esquema; PARA QUÉ le sirve a la tienda es una definición de negocio que Jimmy no confirmó. Un mensaje que se la atribuya convierte una suposición nuestra en algo que parece decidido por él, y eso es exactamente lo que este proyecto no puede hacer: el resto de la documentación distingue con cuidado lo confirmado de lo supuesto. La regla vale para todo texto que vea una persona. | Prompt 16 — 2026-09-08 |
+| **`configuracion_negocio` es una tabla de FILA ÚNICA con `id = 'unica'`, y rompe a propósito la regla de UUID en el cliente.** Sus cuatro campos son nulables. | Un UUID como el resto de las tablas; guardar los datos en un archivo de configuración; exigir los cuatro campos | La regla de UUID existe porque dos filas creadas sin internet en máquinas distintas colisionarían al subir, y acá la colisión es justamente lo que se busca: la configuración del negocio es UNA, y si dos terminales la editan tienen que estar hablando de la misma fila. Un archivo no serviría porque esto SÍ es dato de negocio —sale impreso en un documento que se le entrega al cliente— y por lo tanto se espeja en Postgres. Y los cuatro son nulables porque los datos reales de Jimmy todavía no llegaron: obligar a llenarlos impediría cargar lo que sí se sabe. `NULL` es «sin configurar» y el esquema prohíbe la cadena vacía, para que no haya dos formas de estar vacío. Queda anotado que con multi-sucursal esta tabla necesitaría una fila por sucursal (§6.2, punto 10). | Prompt 23 — 2026-09-11 |
+| **Lo que falta configurar sale en el recibo como un marcador ENTRE CORCHETES, nunca en blanco ni con un valor de ejemplo.** | Dejar el renglón vacío; poner un nombre de ejemplo; impedir vender hasta configurar | Un renglón en blanco o un nombre inventado harían que un recibo sin configurar pasara por uno configurado, y el comprobante es lo único que se lleva el cliente. Entre corchetes, quien lo mire sabe de inmediato que falta cargar el dato. Impedir vender era la otra opción y es peor: dejaría la tienda sin poder cobrar por un dato administrativo que se puede cargar después. Es la misma regla que ya rige para los mensajes: no se inventan datos que parezcan confirmados por Jimmy. | Prompt 23 — 2026-09-11 |
+| **El recibo NO recalcula nada: muestra lo guardado. La única cifra derivada es la rebaja, y sale de `subtotal − total`.** | Recalcular el subtotal de cada línea; reaplicar el porcentaje de descuento sobre el subtotal | Todo el cálculo ocurrió una vez, en la transacción de la venta. Si el recibo recalculara, bastaría que una regla cambiara el año que viene para que reimprimir un comprobante viejo diera otro número, y un documento histórico que cambia retroactivamente es lo que una auditoría no tolera. La rebaja se deriva de una resta entre dos valores guardados en vez de reaplicar el porcentaje porque con otro modo de redondeo el porcentaje daría un centavo distinto del que el cliente pagó; la resta no puede discrepar con lo cobrado. | Prompt 23 — 2026-09-11 |
+| **CORREGIDO: el recibo no imprime «Subtotal / Descuento / Total». Las líneas suman el TOTAL y el descuento se informa.** | Dejar el bloque de resta como estaba; mostrar en cada línea su importe antes del descuento | Se descubrió manejando la aplicación real. `subtotal_impreso` es la parte que le toca a cada línea **del total ya descontado** —eso es lo que garantiza «el total manda» del §5—, así que las líneas NO suman el subtotal: el papel decía «Subtotal 21.75» encima de importes que sumaban 20.12 y no había forma de cuadrarlo. Mostrar en cada línea el importe previo al descuento tampoco servía: obligaría a recalcular, y las líneas dejarían de sumar lo que el cliente paga. La salida correcta con estos datos es que las líneas sumen el TOTAL y el descuento se informe como dato de la venta, con su monto y su autorizante, bajo la aclaración «Los importes ya incluyen el descuento». Hay una prueba que suma las líneas y exige que den el total. | Prompt 23 — 2026-09-11 |
+| **El PDF sale de `printToPDF` de Chromium, no de una librería de PDF.** | `pdfkit`, `jsPDF` u otra librería; generar el recibo como imagen | Electron ya empaqueta Chromium: sumar una librería sería agregar una dependencia y un segundo motor de maquetación para hacer lo mismo. Y maquetar con HTML y CSS deja el recibo legible y ajustable por alguien que no sea programador, mientras que una librería de PDF lo convierte en coordenadas. El HTML se carga por `data:` y no escribiendo un archivo temporal, para que no quede un HTML con los datos de una venta dando vueltas en el disco. La ventana va invisible, sin Node y sin preload: el recibo es contenido, no código. | Prompt 23 — 2026-09-11 |
+| **El recibo se emite DESPUÉS de la transacción de la venta, nunca adentro.** | Emitirlo dentro de la misma transacción, para que venta y recibo sean atómicos | Generar un PDF abre una ventana de Chromium e imprimir habla con un puerto: las dos cosas son lentas y fallan por motivos ajenos a la venta. Adentro, mantendrían abierta una escritura de SQLite esperando a un aparato, y una impresora sin papel revertiría una venta ya cobrada. La consecuencia se asume y se dice en voz alta: si la aplicación se cae entre la venta y el recibo, queda una venta sin recibo, que es recuperable desde el historial e infinitamente preferible a perder la venta. | Prompt 23 — 2026-09-11 |
+| **ESC/POS implementado contra el estándar más común, con la conversión a bytes como función PURA y sin dependencias nativas nuevas.** | Una librería `escpos`/`node-usb`; esperar a tener la impresora para escribir el adaptador; imprimir con el controlador del sistema | El modelo real de Jimmy llega el jueves y no está confirmado, así que se usaron solo los comandos del núcleo del estándar —inicializar, página de códigos, avanzar, corte parcial— y se evitaron los de código de barras, imagen y cajón de dinero, que es donde los fabricantes se apartan. Una librería USB obligaría a recompilar otro módulo nativo para Electron y para Windows para hacer exactamente lo que hace `node:fs`: escribir bytes en un descriptor. Dejar la parte con sustancia como función pura permite probarla byte por byte sin el aparato, y el día que llegue esas pruebas dicen exactamente qué se le está mandando. **Lo que NO está verificado es que ESA impresora los entienda.** | Prompt 23 — 2026-09-11 |
+| **Qué impresora usa la terminal se configura en un archivo LOCAL, no en `configuracion_negocio`.** | Guardarlo en la tabla del negocio; una variable de entorno; una pantalla de configuración | Es estado operativo de una máquina: dos cajas podrían tener la térmica en puertos distintos, y el puerto de la caja A no significa nada en la caja B. `configuracion_negocio` se espeja en la nube, así que meterlo ahí repetiría el error que el proyecto ya evitó con `bloqueos_de_autorizacion`. No hay pantalla todavía porque configurar una impresora que nadie vio sería adivinar qué opciones ofrecerle a Jimmy; se decide cuando llegue el modelo real. Sin archivo no hay impresora, y **eso no es un error**: es el estado normal hoy, y la venta sigue su curso con el PDF como respaldo. | Prompt 23 — 2026-09-11 |
+| **Un fallo de impresión va a una bitácora TÉCNICA en archivo, nunca a `auditoria_log`.** | Registrarlo en `auditoria_log` como cualquier otro evento; no registrarlo | `auditoria_log` guarda hechos del negocio, es inmutable por trigger, se espeja en la nube y un auditor la lee como evidencia. Que una impresora no respondiera es un problema del aparato: meterlo ahí ensuciaría con ruido de hardware la única tabla que tiene que poder leerse entera. No registrarlo tampoco sirve, porque entonces nadie podría diagnosticar por qué la tienda dejó de imprimir. Un archivo de texto en la carpeta de datos se abre con cualquier cosa, se borra sin consecuencias y no viaja a la nube. | Prompt 23 — 2026-09-11 |
+| **El historial de recibos exige solo SESIÓN; configurar los datos del negocio exige rol ADMINISTRATIVO.** | Pedir rol administrativo para las dos cosas; no pedir nada para ninguna | Reimprimir lo pide un cliente que volvió al rato porque perdió su papel: exigir un administrador paralizaría el mostrador, y el recibo no muestra nada que ese cliente no haya visto ya al comprar. Cambiar el NIT o el nombre del negocio es otra cosa: cambia un documento que se le entrega al cliente, y por eso queda además en la auditoría. | Prompt 23 — 2026-09-11 |
 | **Gestión de usuarios completa: crear, editar, cambiar PIN y dar de baja, en cualquier momento.** Cierra un hueco de alcance abierto desde el Prompt 3. | Dejar solo el primer arranque; permitir crear usuarios desde una pantalla sin rol; borrar usuarios en vez de darlos de baja | Hasta acá el sistema sabía crear UN usuario —el primer administrador, y solo con la tabla vacía—, así que la tienda no podía dar de alta a su propio cajero. El requerimiento pedía «usuario de venta y usuario administrativo» desde el principio: el sistema no estaba completo con un solo usuario creado el primer día. Se reutiliza `@shared/auth` para el hash y no se escribe uno nuevo, porque dos implementaciones en el mismo proyecto terminan en usuarios que no pueden entrar. **Nunca se borra**, igual que con productos y categorías: un usuario de baja conserva sus ventas y sus asientos de auditoría, que son el historial de la tienda y no le pertenecen a la cuenta. | Prompt 21 — 2026-09-11 |
 | **Cambiar el PIN es una acción APARTE de editar, y NO pide el PIN anterior.** | Un campo más en el formulario de edición; exigir el PIN viejo antes de cambiarlo | Mezclarlo con el nombre invitaría a tocarlo sin querer al corregir un acento, y además es un hecho distinto para la auditoría, con su propia acción. Y no se pide el anterior porque el caso que hay que resolver es el del cajero que lo OLVIDÓ: exigir el viejo lo dejaría sin forma de volver a entrar, que es justamente el problema que esta operación existe para arreglar. Quien la ejecuta ya es un administrador con sesión iniciada, y eso es lo que la autoriza. El PIN nuevo no se registra en la auditoría ni en claro ni hasheado: lo que queda es a quién se le cambió, quién lo cambió y cuándo. | Prompt 21 — 2026-09-11 |
 | **Dos usuarios ACTIVOS no pueden tener el mismo PIN, y el rechazo no dice de quién es.** Se comprueba al crear un usuario y al cambiarle el PIN, para los dos roles. | No validarlo, como hasta el Prompt 21; validarlo solo para el rol administrativo; nombrar en el mensaje a la persona con la que choca | El daño no está donde parece. En el ingreso la colisión es acotada, porque primero se elige el nombre. **El problema serio está en el diálogo de autorización**, que prueba el PIN contra todos los administradores activos y se queda con el primero que coincida: con dos PIN iguales, `descuento_autorizado_por` y `diferencia_autorizada_por` nombran a la persona equivocada, en silencio y sin forma de detectarlo después. La §4.9 ya lo anticipaba al hablar de «una coincidencia improbable». Se aplica a los DOS roles aunque el riesgo esté concentrado en el administrativo: un usuario de venta pasa a administrativo con una edición, así que la excepción envejecería mal, y una regla general es más barata que dos casos. Solo cuentan los activos, porque quien está de baja no inicia sesión ni autoriza nada. Se compara el PIN en claro contra cada hash —dos hash scrypt del mismo PIN son distintos, cada uno con su sal— y eso cuesta una verificación por usuario activo: cerca de un segundo con una decena, aceptable en una acción de administrador e inaceptable en el ingreso. **El mensaje no nombra a nadie**, ni siquiera en la causa técnica: hacerlo convertiría el control en una forma de averiguar el PIN ajeno por eliminación. La regla se aplica en las TRES puertas —alta, cambio de PIN y configuración del PIN remoto— con una sola función compartida, `colision-de-pin.ts`: escribirla por servicio sería garantizar que un día los criterios se separen y la colisión entre por la puerta que quedó floja. En el PIN remoto convive con la comprobación vieja, que mira el PIN normal de uno mismo y protege otra cosa: no regalar el acceso a la propia sesión al dictar el código por teléfono. | Prompt 22 — 2026-09-11 |
@@ -1668,12 +1835,12 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? **Y quién tiene en la práctica el rol `administrativo`: solo el dueño, o también un encargado de confianza?** | Define la matriz de permisos (RBAC). Desde el Prompt 21 se pueden crear usuarios de los dos roles desde la pantalla, así que la pregunta dejó de ser teórica: el día que Jimmy le dé el rol administrativo a alguien más, hay que revisar el tope de descuento. **Y de esto depende el tope de descuento del rol administrativo**, que hoy se siembra en 100 % asumiendo que lo tiene el dueño (§4.13): si lo tuviera un empleado, ese 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere, y el número habría que revisarlo. | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? ¿Hace falta autorización de administrador para bajar inventario, como la hay para un descuadre de caja? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. **Ya hay un hueco concreto esperándola:** `ServicioDeProductos.ajustarInventario` solo SUMA y rechaza cualquier cantidad no positiva, a propósito, para no convertir la recepción de mercadería en una vía de bajar inventario sin controles. El módulo de mermas tiene que traer su propia regla de autorización. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
-| 9 | Modelo y marca de la impresora térmica. | Necesario para escribir el adaptador ESC/POS real. | Abierto |
+| 9 | **Modelo y marca de la impresora térmica. LLEGA EL JUEVES.** | El adaptador ESC/POS **ya está implementado**, pero **contra el estándar más común y sin probar contra hardware real**: solo comandos del núcleo, codificación CP850, sin código de barras ni imagen. **Hay que confirmar compatibilidad exacta con el modelo real el día que llegue.** Ver §4.14. Falta además decidir cómo se configura el puerto en la máquina de la tienda: hoy es un archivo `impresora.json` puesto a mano, y con el modelo a la vista se decide si hace falta una pantalla. | Abierto — **es lo próximo que hace falta del cliente**, junto con el catálogo |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
 | 13 | **El catálogo real de Jimmy.** Nombres, categorías, precios, unidades e inventario inicial de verdad. Iba a entregarlo al día siguiente del Prompt 15. | Mientras no llegue, la tienda corre con el catálogo de ejemplo (`npm run seed:ejemplo`), que está marcado con el prefijo `[Ejemplo] ` justamente para que nadie lo confunda con el real. El día que llegue: `npm run seed:limpiar` y cargar el verdadero. | Abierto — **es lo próximo que hace falta del cliente** |
 | 14 | ~~¿Qué debe ordenar los íconos de la pantalla de venta: `contador_ventas` o `cantidad_vendida`?~~ | — | **RESUELTO (Prompt 20): ordena `contador_ventas`, y no se cambia nada.** Julio lo decidió sin necesidad de consultarlo con Jimmy: contar VECES es la única medida comparable entre productos, porque las libras de maíz y las unidades de huevo no se suman en un mismo número. `cantidad_vendida` existe para **reportes futuros**, no para el orden de los íconos. |
 | 15 | **¿Qué topes de descuento quiere Jimmy, y quién los configura desde dónde?** | `limites_descuento` existe y el servicio la respeta, pero **no hay pantalla para llenarla**: es una tarea propia, para un prompt futuro. Mientras tanto hay un andamio de desarrollo, `npm run seed:limites`, que pone 10 % / Q20 al rol `venta` y 100 % / Q1 000 al `administrativo`; los valores son de prueba y **no** una definición del negocio. Falta que Jimmy diga los topes reales. El del rol administrativo además **asume que ese rol lo tiene el dueño**, y hay que revisarlo si se le asigna a un empleado: ver la salvedad de §4.13 y el punto 6 de esta misma lista. | Abierto — el guion desbloquea probar, no reemplaza la definición |
-| 16 | **¿Qué número de venta quiere ver el cajero en la confirmación?** | Hoy se muestra el id de la venta, que es un UUID: sirve para rastrear en la base pero no es un número que una persona pueda cantar o anotar. El correlativo vive en `recibos.numero_recibo` y llega con el módulo de recibos. Si Jimmy quiere un correlativo visible antes de eso, hay que decidir de dónde sale y si tiene que coincidir con el del comprobante impreso. | Abierto |
+| 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -1711,10 +1878,14 @@ negocio:
   Ver las secciones 4.12 y 4.13.
 - **Sí existe** el cálculo real de `monto_esperado`, con las ventas en efectivo
   sumadas y las de tarjeta excluidas. Ver la sección 4.10.
-- **No existe todavía**: generación de recibo o PDF, impresión térmica, y
-  **anular una venta ya registrada**. `RepositorioDeVentas.anular` existe como
-  operación de datos, pero no hay servicio, canal ni pantalla que la use, ni
-  reglas de autorización, ni devolución de inventario.
+- **Sí existe** el módulo de comprobantes: datos del negocio, generación del
+  PDF, impresión térmica por ESC/POS, historial y reimpresión. Ver la sección
+  4.14. La impresión **está escrita contra el estándar y NO probada contra la
+  impresora real**, que llega el jueves.
+- **No existe todavía**: **anular una venta ya registrada**, y los reportes de
+  ventas e inventario. `RepositorioDeVentas.anular` existe como operación de
+  datos, pero no hay servicio, canal ni pantalla que la use, ni reglas de
+  autorización, ni devolución de inventario.
 - **No hay pantalla para configurar `limites_descuento`.** Sin fila, el tope de
   un rol es cero y cualquier descuento pide PIN. Hay un andamio de desarrollo
   (`npm run seed:limites`) que pone 10 % / Q20 al rol `venta` y 100 % / Q1 000 al
@@ -1725,8 +1896,10 @@ negocio:
   propias reglas de autorización.
 - No hay log de auditoría: los puntos donde debería escribirse ya están
   marcados con `TODO(auditoria)` en el controlador de salida.
-- No hay adaptador real de impresora ni de Supabase: solo los contratos y las
-  implementaciones seguras por defecto.
+- **Sí existe** el adaptador real de impresión (`EscPosPrinterProvider`), con su
+  implementación segura por defecto intacta: sin `impresora.json` configurado se
+  usa `NullPrinterProvider` y el recibo queda solo en PDF. No hay adaptador real
+  de Supabase: ahí sigue solo el contrato y la implementación simulada.
 
 ## 8. Comandos
 
@@ -1744,6 +1917,16 @@ npm run seed:limites     # topes de descuento: venta 10 %/Q20, admin 100 %/Q1000
 npm run seed:limites:limpiar  # los quita, y los dos roles vuelven a cero
 npm run verify:pantallas # maneja la app real y comprueba qué se ve en pantalla
 ```
+
+Archivos que la aplicación usa en `<userData>` y que conviene conocer:
+
+| Archivo o carpeta | Qué es |
+|---|---|
+| `pos-agricola.db` | La base de datos de la tienda. |
+| `recibos/` | Los PDF de los comprobantes emitidos. |
+| `fotos-de-productos/` | Las fotos del catálogo. |
+| `impresora.json` | Dónde está la térmica. **Si no existe, no hay impresión** y el recibo queda solo en PDF, que es el estado normal hoy. |
+| `log-tecnico.log` | Bitácora TÉCNICA: fallos de impresión y de PDF. No es `auditoria_log`. |
 
 Los cuatro `seed:` arrancan el proceso principal sin abrir ventana, trabajan
 contra la MISMA base que usa la aplicación e imprimen qué hicieron. Se activan
@@ -1767,6 +1950,11 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     caja/       apertura y cierre del turno, arqueo por denominaciones
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
     venta/      precio efectivo, descuento y la transacción que registra la venta
+    negocio/    los datos de la tienda que encabezan el recibo
+    recibo/     modelo, plantilla, ESC/POS y emisión del comprobante
+  adapters/     implementaciones reales: impresión térmica por ESC/POS
+  recibo/       HTML a PDF con el Chromium que Electron ya trae
+  log-tecnico.ts  bitácora de eventos técnicos; NO es la de auditoría
   windows/      creación y bloqueos de la ventana kiosko
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
   src/venta/    lógica pura del ticket en memoria (sin DOM, sin IPC)

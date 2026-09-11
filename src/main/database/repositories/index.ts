@@ -21,6 +21,7 @@ import { RepositorioDeLimitesDescuento } from './limites-descuento';
 import { RepositorioDePreciosEspeciales } from './precios-especiales';
 import { RepositorioDeProductos } from './productos';
 import { RepositorioDeRecibos } from './recibos';
+import { RepositorioDeConfiguracionDeNegocio } from './configuracion-negocio';
 import { RepositorioDeSyncCola } from './sync-cola';
 import { RepositorioDeUsuarios } from './usuarios';
 import { RepositorioDeVentaDetalle } from './venta-detalle';
@@ -59,6 +60,7 @@ export interface Repositorios {
   readonly ventas: RepositorioDeVentas;
   readonly ventaDetalle: RepositorioDeVentaDetalle;
   readonly recibos: RepositorioDeRecibos;
+  readonly configuracionNegocio: RepositorioDeConfiguracionDeNegocio;
   readonly auditoria: RepositorioDeAuditoria;
   readonly bloqueosDeAutorizacion: RepositorioDeBloqueosDeAutorizacion;
   readonly syncCola: RepositorioDeSyncCola;
@@ -78,6 +80,7 @@ export function crearRepositorios(base: Database): Repositorios {
     ventas: new RepositorioDeVentas(base),
     ventaDetalle: new RepositorioDeVentaDetalle(base),
     recibos: new RepositorioDeRecibos(base),
+    configuracionNegocio: new RepositorioDeConfiguracionDeNegocio(base),
     auditoria: new RepositorioDeAuditoria(base),
     bloqueosDeAutorizacion: new RepositorioDeBloqueosDeAutorizacion(base),
     syncCola: new RepositorioDeSyncCola(base),

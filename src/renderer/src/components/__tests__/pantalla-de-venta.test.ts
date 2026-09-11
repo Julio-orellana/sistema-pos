@@ -99,6 +99,14 @@ const VENTA_OK: ResultadoDeCobro = {
   numBoleta: null,
   lineas: 1,
   lineasConPrecioEspecial: 0,
+  recibo: {
+    id: 'r-1',
+    numeroRecibo: 1,
+    rutaPdf: '/pdf/recibo-000001.pdf',
+    pdfGenerado: true,
+    impreso: false,
+    mensajeDeImpresion: 'No hay impresora configurada. El recibo quedó en PDF.',
+  },
 };
 
 function instalarApi(estado: EstadoDeVenta): void {

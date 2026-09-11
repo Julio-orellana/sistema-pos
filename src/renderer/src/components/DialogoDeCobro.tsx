@@ -150,10 +150,25 @@ export function DialogoDeCobro({
           </p>
 
           {/*
-            La referencia es el id de la venta, que es lo que hay hoy. El número
-            correlativo del comprobante vive en `recibos.numero_recibo` y llega
-            con el módulo de recibos; inventar acá un número que después no
-            coincida con el impreso sería peor que no mostrar ninguno.
+            SI EL RECIBO SALIÓ POR LA IMPRESORA O NO, dicho en el mismo aviso.
+            No es un detalle técnico: si no salió, el cajero tiene que decírselo
+            al cliente en ese momento, no descubrirlo cuando el cliente estire
+            la mano esperando un papel.
+          */}
+          <p
+            className={registrada.recibo.impreso ? 'aviso-exito' : 'advertencia'}
+            data-prueba="cobro-estado-del-recibo"
+          >
+            Recibo No. {registrada.recibo.numeroRecibo}.{' '}
+            {registrada.recibo.impreso
+              ? 'Se imprimió.'
+              : registrada.recibo.mensajeDeImpresion}
+          </p>
+
+          {/*
+            La referencia fina sigue siendo el id de la venta, para poder
+            rastrearla en la base. El número que una persona canta o anota es el
+            del recibo, y va arriba, junto al estado de la impresión.
           */}
           <p className="cobro__referencia" data-prueba="cobro-referencia">
             Referencia {registrada.ventaId}

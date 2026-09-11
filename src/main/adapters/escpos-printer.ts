@@ -1,0 +1,125 @@
+/**
+ * Impresión térmica real, por ESC/POS.
+ *
+ * CÓMO LLEGA EL RECIBO A LA IMPRESORA. Se escriben los bytes ESC/POS
+ * directamente en el dispositivo, como quien copia un archivo a un puerto. Es
+ * la vía que funciona con las térmicas genéricas económicas, que exponen un
+ * dispositivo de impresora sin necesitar un controlador propio:
+ *
+ *   · Windows —la plataforma de producción—: un puerto (`\\.\USB001`) o el
+ *     recurso compartido de una impresora instalada (`\\equipo\TERMICA`).
+ *   · Linux: `/dev/usb/lp0`.
+ *   · macOS, que es solo el entorno de desarrollo, no expone un dispositivo
+ *     equivalente; acá se apunta a un archivo para poder inspeccionar los bytes.
+ *
+ * NO SE AGREGÓ NINGUNA DEPENDENCIA NATIVA. Una librería USB obligaría a
+ * recompilar un módulo nativo más para Electron y para Windows, y todo lo que
+ * haría es lo que hace `node:fs`: escribir bytes en un descriptor. La parte con
+ * sustancia —construir esos bytes— es `escpos.ts`, y es pura y está probada.
+ *
+ * > **EL MODELO REAL DE JIMMY NO ESTÁ CONFIRMADO.** Llega el jueves. Esto está
+ * > escrito contra el estándar más común y **no se probó contra hardware
+ * > real**. Ver CLAUDE.md.
+ *
+ * NUNCA LANZA. El contrato lo exige y la regla del proyecto también: el PDF es
+ * el respaldo obligatorio y la impresión es una capa opcional encima, así que
+ * ningún fallo de impresora puede tumbar una venta ya cobrada. Todo error sale
+ * como un `ResultadoImpresion` con `ok: false` y queda en la bitácora técnica.
+ */
+
+import { existsSync, writeFileSync } from 'node:fs';
+
+import type {
+  ComprobanteImprimible,
+  EstadoImpresora,
+  ReceiptPrinterProvider,
+  ResultadoImpresion,
+} from '@shared/adapters';
+import { reciboComoEscPos } from '@main/domain/recibo/escpos';
+import type { LogTecnico } from '@main/log-tecnico';
+
+/** Cómo está configurada la impresora de esta terminal. */
+export interface ConfiguracionDeImpresora {
+  /**
+   * Ruta del dispositivo o del recurso compartido donde se escriben los bytes.
+   *
+   * Es configuración de ESTA TERMINAL, no del negocio: dos cajas podrían tener
+   * la impresora en puertos distintos. Por eso NO vive en
+   * `configuracion_negocio` —que se espeja en la nube— sino en un archivo local.
+   */
+  readonly dispositivo: string;
+}
+
+export class EscPosPrinterProvider implements ReceiptPrinterProvider {
+  public readonly nombre = 'EscPosPrinterProvider';
+
+  private readonly dispositivo: string;
+  private readonly log: LogTecnico;
+
+  public constructor(configuracion: ConfiguracionDeImpresora, log: LogTecnico) {
+    this.dispositivo = configuracion.dispositivo;
+    this.log = log;
+  }
+
+  public imprimirComprobante(comprobante: ComprobanteImprimible): Promise<ResultadoImpresion> {
+    const texto = comprobante.contenidoTexto ?? '';
+
+    if (texto.trim() === '') {
+      return Promise.resolve(
+        this.fallo(comprobante, 'El comprobante llegó sin texto para imprimir.'),
+      );
+    }
+
+    try {
+      const bytes = reciboComoEscPos(texto);
+      const copias = Math.max(1, comprobante.copias);
+      for (let copia = 0; copia < copias; copia += 1) {
+        // `writeFileSync` sobre un dispositivo escribe el flujo completo de una
+        // vez, que es justo lo que una térmica espera: no hay «archivo» que
+        // truncar del otro lado, hay un puerto que recibe bytes.
+        writeFileSync(this.dispositivo, bytes);
+      }
+
+      this.log.registrar(
+        'impresion',
+        `Comprobante ${comprobante.idComprobante} enviado a ${this.dispositivo} ` +
+          `(${String(bytes.length)} bytes, ${String(copias)} copia(s)).`,
+      );
+
+      return Promise.resolve({
+        ok: true,
+        adaptador: this.nombre,
+        omitidaPorDiseno: false,
+        mensaje: 'Recibo enviado a la impresora.',
+      });
+    } catch (error) {
+      const detalle = error instanceof Error ? error.message : String(error);
+      return Promise.resolve(this.fallo(comprobante, detalle));
+    }
+  }
+
+  public consultarEstado(): Promise<EstadoImpresora> {
+    const disponible = existsSync(this.dispositivo);
+    return Promise.resolve({
+      disponible,
+      adaptador: this.nombre,
+      descripcion: disponible
+        ? `Impresora térmica en ${this.dispositivo}.`
+        : `No se encuentra el dispositivo ${this.dispositivo}. El recibo queda solo en PDF.`,
+    });
+  }
+
+  /** Un fallo, anotado en la bitácora TÉCNICA y nunca en la de auditoría. */
+  private fallo(comprobante: ComprobanteImprimible, detalle: string): ResultadoImpresion {
+    this.log.registrar(
+      'impresion',
+      `FALLÓ el comprobante ${comprobante.idComprobante} hacia ${this.dispositivo}: ${detalle}`,
+    );
+    return {
+      ok: false,
+      adaptador: this.nombre,
+      omitidaPorDiseno: false,
+      mensaje: 'No se pudo imprimir. El recibo quedó guardado en PDF.',
+    };
+  }
+}

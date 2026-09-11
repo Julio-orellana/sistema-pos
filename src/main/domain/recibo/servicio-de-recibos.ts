@@ -1,0 +1,265 @@
+/**
+ * Emisión y reimpresión de recibos.
+ *
+ * ES EL ÚNICO LUGAR QUE JUNTA LAS TRES PIEZAS: el modelo armado desde lo
+ * guardado, el PDF y el intento de impresión. El servicio de venta no lo
+ * conoce; lo llama quien cierra el cobro, DESPUÉS de que la transacción ya
+ * terminó (§4.13).
+ *
+ * POR QUÉ VA DESPUÉS DE LA TRANSACCIÓN Y NO ADENTRO. Generar un PDF abre una
+ * ventana de Chromium e imprimir habla con un puerto: las dos cosas son lentas
+ * y pueden fallar por motivos que no tienen nada que ver con la venta. Meterlas
+ * en la transacción significaría mantener abierta una transacción de escritura
+ * de SQLite mientras se espera a un aparato, y que una impresora sin papel
+ * revirtiera una venta ya cobrada. **La venta se registra primero y se
+ * consolida; el papel viene después.**
+ *
+ * LA CONSECUENCIA, DICHA EN VOZ ALTA: si la aplicación se cae justo entre la
+ * venta y el recibo, queda una venta sin recibo. Es recuperable —el historial
+ * muestra las ventas sin recibo y permite emitirlo— y es infinitamente
+ * preferible a la alternativa, que es perder la venta por un problema de papel.
+ *
+ * EL PDF SIEMPRE SE GENERA, haya o no impresora. Es la regla del proyecto desde
+ * el Prompt 1 y no se negocia: la impresión física es una capa opcional encima
+ * del PDF, nunca un requisito para cerrar una venta.
+ *
+ * REIMPRIMIR VUELVE A ARMAR TODO desde las filas guardadas, nunca desde el PDF
+ * que ya está en el disco. Así, si mañana Jimmy carga por fin el nombre y el
+ * NIT de su tienda, un recibo reimpreso sale con los datos correctos en vez de
+ * con los marcadores entre corchetes que tenía el original.
+ */
+
+import type { ComprobanteImprimible, ReceiptPrinterProvider } from '@shared/adapters';
+import { ErrorDeNegocio } from '@main/database/errores';
+import type { Recibo } from '@main/database/repositories/entidades';
+import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
+import type { LogTecnico } from '@main/log-tecnico';
+import {
+  armarModeloDeRecibo,
+  type DependenciasDelModelo,
+  type ModeloDeRecibo,
+} from './modelo-de-recibo';
+import { reciboComoHtml, reciboComoTexto } from './plantilla-de-recibo';
+
+/** Convierte el HTML del recibo en un PDF guardado en `destino`. */
+export type GeneradorDePdf = (html: string, destino: string) => Promise<void>;
+
+/** Dónde se guardan los PDF y cómo se nombran. */
+export interface UbicacionDePdf {
+  /** Carpeta donde viven los PDF, ya creada. */
+  readonly carpeta: string;
+  /** Une carpeta y nombre. Se inyecta para poder probar sin tocar el disco. */
+  readonly unir: (carpeta: string, nombre: string) => string;
+}
+
+/** Qué pasó al emitir o reimprimir un recibo. */
+export interface ResultadoDeRecibo {
+  readonly recibo: Recibo;
+  readonly modelo: ModeloDeRecibo;
+  /** Ruta absoluta del PDF recién escrito. */
+  readonly rutaPdf: string;
+  /** `true` si el PDF quedó generado. Es la garantía del proyecto. */
+  readonly pdfGenerado: boolean;
+  /** `true` si además salió por la impresora térmica. */
+  readonly impreso: boolean;
+  /** Qué contarle al cajero sobre la impresión, en una frase. */
+  readonly mensajeDeImpresion: string;
+}
+
+/** Dependencias del servicio. */
+export interface DependenciasDeRecibos extends DependenciasDelModelo {
+  readonly impresora: ReceiptPrinterProvider;
+  readonly generarPdf: GeneradorDePdf;
+  readonly ubicacion: UbicacionDePdf;
+  readonly log: LogTecnico;
+  readonly ahora?: () => number;
+}
+
+export class ServicioDeRecibos {
+  private readonly dependencias: DependenciasDeRecibos;
+  private readonly recibos: RepositorioDeRecibos;
+  private readonly ahora: () => number;
+
+  public constructor(dependencias: DependenciasDeRecibos) {
+    this.dependencias = dependencias;
+    this.recibos = dependencias.recibos;
+    this.ahora = dependencias.ahora ?? ((): number => Date.now());
+  }
+
+  /**
+   * Emite el recibo de una venta recién registrada.
+   *
+   * Si la venta YA tiene recibo, no crea otro: vuelve a emitir el que hay. La
+   * tabla tiene un UNIQUE sobre `venta_id` que lo impediría igual, pero ese
+   * error no le diría nada a quien lo provocó, y además reintentar después de
+   * un corte de luz es un caso legítimo, no un error.
+   */
+  public async emitir(ventaId: string): Promise<ResultadoDeRecibo> {
+    const existente = this.recibos.obtenerPorVenta(ventaId);
+    if (existente !== null) {
+      return this.producir(existente, { reimpresion: true });
+    }
+
+    /*
+      El número y la fila se crean ANTES del PDF, y el nombre del archivo sale
+      del número. Al revés —generar el PDF y después pedir el número— habría que
+      renombrar el archivo o inventarle un nombre provisional, y un fallo a la
+      mitad dejaría PDF huérfanos que nadie sabría a qué venta pertenecen.
+    */
+    const numero = this.recibos.siguienteNumero();
+    const nombre = this.nombreDeArchivo(numero);
+    const rutaPdf = this.dependencias.ubicacion.unir(this.dependencias.ubicacion.carpeta, nombre);
+
+    const recibo = this.recibos.crear({ ventaId, numeroRecibo: numero, pdfPath: rutaPdf });
+    return this.producir(recibo, { reimpresion: false });
+  }
+
+  /**
+   * Vuelve a emitir un recibo ya existente.
+   *
+   * REGENERA EL PDF desde las filas guardadas; no reusa el archivo que estaba en
+   * el disco. Es lo que permite que un recibo emitido antes de que Jimmy cargara
+   * los datos de su tienda salga, al reimprimirse, con el nombre y el NIT
+   * correctos en vez de con los marcadores entre corchetes.
+   */
+  public async reimprimir(reciboId: string): Promise<ResultadoDeRecibo> {
+    const recibo = this.recibos.obtenerPorId(reciboId);
+    if (recibo === null) {
+      throw new ErrorDeNegocio(
+        'REFERENCIA_INEXISTENTE',
+        'No se encontró ese recibo.',
+        `recibo_id inexistente: ${reciboId}`,
+      );
+    }
+    return this.producir(recibo, { reimpresion: true });
+  }
+
+  /** El modelo de un recibo, sin generar nada. Para mostrarlo en pantalla. */
+  public modeloDe(reciboId: string): ModeloDeRecibo {
+    const recibo = this.recibos.obtenerPorId(reciboId);
+    if (recibo === null) {
+      throw new ErrorDeNegocio(
+        'REFERENCIA_INEXISTENTE',
+        'No se encontró ese recibo.',
+        `recibo_id inexistente: ${reciboId}`,
+      );
+    }
+    return armarModeloDeRecibo(this.dependencias, recibo);
+  }
+
+  // -------------------------------------------------------------------------
+
+  /** Arma el modelo, escribe el PDF e intenta imprimir. En ese orden. */
+  private async producir(
+    recibo: Recibo,
+    opciones: { readonly reimpresion: boolean },
+  ): Promise<ResultadoDeRecibo> {
+    const modelo = armarModeloDeRecibo(this.dependencias, recibo, opciones);
+
+    let pdfGenerado = false;
+    try {
+      await this.dependencias.generarPdf(reciboComoHtml(modelo), recibo.pdfPath);
+      pdfGenerado = true;
+    } catch (error) {
+      /*
+        Que falle el PDF es grave —es el respaldo obligatorio— pero NO puede
+        tumbar la venta, que a esta altura ya está cobrada y guardada. Se anota
+        en la bitácora técnica y se sigue: el recibo existe en la base y se puede
+        volver a emitir desde el historial.
+      */
+      const detalle = error instanceof Error ? error.message : String(error);
+      this.dependencias.log.registrar(
+        'recibo',
+        `FALLÓ el PDF del recibo ${String(recibo.numeroRecibo)} en ${recibo.pdfPath}: ${detalle}`,
+      );
+    }
+
+    const impresion = await this.intentarImprimir(recibo, modelo, pdfGenerado);
+
+    return {
+      recibo: this.recibos.obtenerPorId(recibo.id) ?? recibo,
+      modelo,
+      rutaPdf: recibo.pdfPath,
+      pdfGenerado,
+      impreso: impresion.impreso,
+      mensajeDeImpresion: impresion.mensaje,
+    };
+  }
+
+  /**
+   * Intenta imprimir. NUNCA lanza.
+   *
+   * Un fallo de impresora es un evento TÉCNICO, no un hecho del negocio, así
+   * que queda en la bitácora técnica y no en `auditoria_log`: esa tabla es
+   * evidencia para un auditor y no debe llenarse de ruido de hardware.
+   */
+  private async intentarImprimir(
+    recibo: Recibo,
+    modelo: ModeloDeRecibo,
+    pdfGenerado: boolean,
+  ): Promise<{ readonly impreso: boolean; readonly mensaje: string }> {
+    const comprobante: ComprobanteImprimible = {
+      idComprobante: recibo.id,
+      tipo: 'recibo',
+      rutaPdf: recibo.pdfPath,
+      contenidoTexto: reciboComoTexto(modelo),
+      copias: 1,
+    };
+
+    try {
+      const resultado = await this.dependencias.impresora.imprimirComprobante(comprobante);
+
+      if (resultado.ok && !resultado.omitidaPorDiseno) {
+        this.recibos.marcarImpreso(recibo.id);
+        return { impreso: true, mensaje: resultado.mensaje };
+      }
+
+      // `omitidaPorDiseno` es el caso normal sin impresora configurada: no es
+      // un fallo, y por eso no se registra como tal.
+      if (resultado.omitidaPorDiseno) {
+        return {
+          impreso: false,
+          mensaje: pdfGenerado
+            ? 'No hay impresora configurada. El recibo quedó en PDF.'
+            : 'No hay impresora configurada, y además no se pudo generar el PDF.',
+        };
+      }
+
+      return { impreso: false, mensaje: resultado.mensaje };
+    } catch (error) {
+      /*
+        El contrato dice que un proveedor no debe lanzar, pero esta es la última
+        frontera antes de una venta ya cobrada: si una implementación futura lo
+        incumpliera, la excepción no puede llegar a la pantalla del cajero.
+      */
+      const detalle = error instanceof Error ? error.message : String(error);
+      this.dependencias.log.registrar(
+        'impresion',
+        `El proveedor de impresión lanzó una excepción con el recibo ` +
+          `${String(recibo.numeroRecibo)}: ${detalle}`,
+      );
+      return { impreso: false, mensaje: 'No se pudo imprimir. El recibo quedó guardado en PDF.' };
+    }
+  }
+
+  /**
+   * Nombre único del archivo: número de recibo y momento de emisión.
+   *
+   * El número va primero para que la carpeta se ordene como el talonario, y el
+   * momento lo hace único aunque alguna vez se reiniciara la numeración.
+   *
+   * UNA REIMPRESIÓN ESCRIBE ENCIMA DEL MISMO ARCHIVO, a propósito: `pdf_path`
+   * es una sola columna y tiene que apuntar siempre a un PDF vigente. Si cada
+   * reimpresión dejara un archivo nuevo, o habría que ir agregando columnas o
+   * quedarían PDF huérfanos que nadie sabría a qué emisión corresponden. La
+   * contrapartida está aceptada: el PDF que queda en el disco refleja la
+   * configuración del negocio de HOY, no la del día de la venta. Es justamente
+   * lo que se pidió, para que un recibo emitido antes de cargar los datos de la
+   * tienda deje de mostrar marcadores al reimprimirse.
+   */
+  private nombreDeArchivo(numero: number): string {
+    const LARGO_DEL_NUMERO = 6;
+    const momento = new Date(this.ahora()).toISOString().replace(/[:.]/g, '-');
+    return `recibo-${String(numero).padStart(LARGO_DEL_NUMERO, '0')}-${momento}.pdf`;
+  }
+}

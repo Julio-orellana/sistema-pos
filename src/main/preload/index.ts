@@ -21,6 +21,9 @@ import {
   type EstadoDeVenta,
   type PedidoDeCobro,
   type ResultadoDeCobro,
+  type ConfiguracionDeNegocioIpc,
+  type ReciboEnHistorialIpc,
+  type ReciboVistoIpc,
   type UsuarioEditadoIpc,
   type UsuarioIpc,
   type UsuarioNuevoIpc,
@@ -189,6 +192,30 @@ const apiPos: ApiPos = {
     fijarActivo: (id: string, activo: boolean): Promise<RespuestaIpc<UsuarioIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.usuariosFijarActivo, { id, activo }) as Promise<
         RespuestaIpc<UsuarioIpc>
+      >,
+  },
+
+  negocio: {
+    obtener: (): Promise<RespuestaIpc<ConfiguracionDeNegocioIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.negocioObtener) as Promise<
+        RespuestaIpc<ConfiguracionDeNegocioIpc>
+      >,
+    guardar: (datos: ConfiguracionDeNegocioIpc): Promise<RespuestaIpc<ConfiguracionDeNegocioIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.negocioGuardar, datos) as Promise<
+        RespuestaIpc<ConfiguracionDeNegocioIpc>
+      >,
+  },
+
+  recibos: {
+    listar: (): Promise<RespuestaIpc<readonly ReciboEnHistorialIpc[]>> =>
+      ipcRenderer.invoke(CANALES_IPC.recibosListar) as Promise<
+        RespuestaIpc<readonly ReciboEnHistorialIpc[]>
+      >,
+    ver: (id: string): Promise<RespuestaIpc<ReciboVistoIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.recibosVer, { id }) as Promise<RespuestaIpc<ReciboVistoIpc>>,
+    reimprimir: (id: string): Promise<RespuestaIpc<ReciboVistoIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.recibosReimprimir, { id }) as Promise<
+        RespuestaIpc<ReciboVistoIpc>
       >,
   },
 

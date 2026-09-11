@@ -46,6 +46,9 @@ import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usu
 import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import type { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
+import type { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
+import type { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
+import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import { generarHashDePin } from '@shared/auth';
@@ -57,6 +60,7 @@ import {
 } from './catalogo';
 import { registrarManejadoresDeVenta } from './venta';
 import { registrarManejadoresDeUsuarios } from './usuarios';
+import { registrarManejadoresDeRecibos } from './recibos';
 
 /** Dependencias que los manejadores necesitan del resto del proceso principal. */
 export interface DependenciasDeIpc {
@@ -76,6 +80,12 @@ export interface DependenciasDeIpc {
   readonly venta: ServicioDeVenta;
   /** Alta, edición, cambio de PIN y baja de usuarios. Todo con rol administrativo. */
   readonly gestionDeUsuarios: ServicioDeUsuarios;
+  /** Datos de la tienda que encabezan el recibo. */
+  readonly negocio: ServicioDeConfiguracionDeNegocio;
+  /** Emisión, historial y reimpresión de recibos. */
+  readonly recibos: ServicioDeRecibos;
+  /** Acceso a las filas de recibos, para armar el historial. */
+  readonly repositorioDeRecibos: RepositorioDeRecibos;
   /** Precios especiales vigentes, para resolver el precio efectivo. */
   readonly preciosEspeciales: RepositorioDePreciosEspeciales;
 }
@@ -99,6 +109,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     autenticacion: dependencias.autenticacion,
     preciosEspeciales: dependencias.preciosEspeciales,
     usuarios: dependencias.usuarios,
+    recibos: dependencias.recibos,
   });
   // La gestión de usuarios vive en su propio archivo y exige rol
   // administrativo en cada canal, igual que el catálogo.
@@ -106,6 +117,14 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     sesion: dependencias.sesion,
     usuarios: dependencias.gestionDeUsuarios,
     repositorioDeUsuarios: dependencias.usuarios,
+  });
+  // Configuración del negocio y recibos. Los dos niveles de permiso conviven
+  // en ese módulo: configurar exige administrativo, reimprimir solo sesión.
+  registrarManejadoresDeRecibos({
+    sesion: dependencias.sesion,
+    negocio: dependencias.negocio,
+    recibos: dependencias.recibos,
+    repositorioDeRecibos: dependencias.repositorioDeRecibos,
   });
 
   ipcMain.handle(

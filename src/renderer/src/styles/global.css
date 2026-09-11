@@ -1451,3 +1451,39 @@ button:disabled {
 .venta .campo__pista {
   color: var(--venta-texto-tenue);
 }
+
+/* --- Vista de un recibo -------------------------------------------------- */
+
+/*
+  Más ancho que un modal normal: el recibo son 48 columnas de texto
+  monoespaciado, y partirlas lo volvería ilegible justo cuando se lo está
+  cotejando contra el papel.
+*/
+.modal--recibo {
+  min-width: 520px;
+  max-width: 640px;
+}
+
+/*
+  El recibo se muestra tal cual sale del rollo. Monoespaciado y con los
+  espacios respetados: es el mismo texto que recibe la impresora, no una
+  versión maquillada de los mismos datos.
+*/
+.recibo-papel {
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--borde);
+  background: oklch(0.97 0.005 92);
+  color: oklch(0.2 0.01 92);
+  font: 400 12px/1.45 ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+}
+
+.recibo-ruta {
+  font-size: 12px;
+  word-break: break-all;
+  opacity: 0.75;
+}

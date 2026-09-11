@@ -81,6 +81,20 @@ export class RepositorioDeRecibos extends RepositorioBase {
     return fila.ultimo + 1;
   }
 
+  /**
+   * Los recibos más recientes primero, que es el orden del historial.
+   *
+   * Se ordena por número y no por fecha: el número es correlativo y no se
+   * repite, así que dos recibos emitidos en el mismo milisegundo —al reintentar
+   * tras un corte, por ejemplo— no quedan en un orden ambiguo.
+   */
+  public listarRecientes(limite = 200): Recibo[] {
+    const filas = this.base
+      .prepare('SELECT * FROM recibos ORDER BY numero_recibo DESC LIMIT ?')
+      .all(limite) as FilaRecibo[];
+    return filas.map(aEntidad);
+  }
+
   public marcarImpreso(id: string): void {
     this.ejecutar(() => {
       this.base.prepare('UPDATE recibos SET impreso = 1 WHERE id = ?').run(id);

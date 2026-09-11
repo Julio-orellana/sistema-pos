@@ -124,6 +124,17 @@ export const CANALES_IPC = {
   /** Acción APARTE de editar: el PIN es información sensible, no un campo más. */
   usuariosCambiarPin: 'usuarios:cambiar-pin',
   usuariosFijarActivo: 'usuarios:fijar-activo',
+
+  // --- Negocio y recibos ----------------------------------------------------
+  /** Datos de la tienda que encabezan el recibo. Solo rol administrativo. */
+  negocioObtener: 'negocio:obtener',
+  negocioGuardar: 'negocio:guardar',
+  /** Historial de recibos emitidos. Lo consulta cualquiera con sesión. */
+  recibosListar: 'recibos:listar',
+  /** Vuelve a emitir uno ya emitido, regenerando el PDF desde la base. */
+  recibosReimprimir: 'recibos:reimprimir',
+  /** El recibo en texto plano, para mostrarlo en pantalla tal como sale. */
+  recibosVer: 'recibos:ver',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -775,6 +786,27 @@ export interface VentaRegistrada {
   readonly lineas: number;
   /** Cuántas líneas se cobraron con un precio especial vigente. */
   readonly lineasConPrecioEspecial: number;
+  /**
+   * El recibo que se emitió junto con la venta.
+   *
+   * Viaja con la venta y no en una consulta aparte porque el cajero tiene que
+   * ver EN EL MISMO AVISO si el recibo salió por la impresora o si le toca
+   * explicarle al cliente que por ahora queda solo en PDF.
+   */
+  readonly recibo: ReciboDeLaVentaIpc;
+}
+
+/** El recibo emitido al cerrar una venta. */
+export interface ReciboDeLaVentaIpc {
+  readonly id: string;
+  readonly numeroRecibo: number;
+  readonly rutaPdf: string;
+  /** `true` si el PDF quedó escrito. Es el respaldo obligatorio del proyecto. */
+  readonly pdfGenerado: boolean;
+  /** `true` si además salió por la impresora térmica. */
+  readonly impreso: boolean;
+  /** Qué decirle al cajero sobre la impresión, en una frase. */
+  readonly mensajeDeImpresion: string;
 }
 
 /**
@@ -863,6 +895,66 @@ export interface UsuarioIpc {
    */
   readonly esElUnicoAdministrador: boolean;
   readonly creadoEn: string;
+}
+
+/** Largo máximo de cada campo de la configuración del negocio. */
+const LARGOS_DEL_NEGOCIO = {
+  nombreComercial: 80,
+  direccion: 160,
+  telefono: 40,
+  nit: 20,
+} as const;
+
+/**
+ * Payload de la configuración del negocio.
+ *
+ * Los cuatro campos aceptan `null` porque los datos reales de Jimmy todavía no
+ * llegaron: se puede guardar el nombre sin saber el NIT. `null` es «sin
+ * configurar», y el recibo pone un marcador entre corchetes en su lugar.
+ */
+export const esquemaConfiguracionDeNegocio = z.object({
+  nombreComercial: z.string().max(LARGOS_DEL_NEGOCIO.nombreComercial).nullable(),
+  direccion: z.string().max(LARGOS_DEL_NEGOCIO.direccion).nullable(),
+  telefono: z.string().max(LARGOS_DEL_NEGOCIO.telefono).nullable(),
+  nit: z.string().max(LARGOS_DEL_NEGOCIO.nit).nullable(),
+});
+
+/** Configuración del negocio, ya validada. */
+export type ConfiguracionDeNegocioIpc = z.infer<typeof esquemaConfiguracionDeNegocio>;
+
+/** Payload que identifica un recibo. */
+export const esquemaReciboPorId = z.object({
+  id: z.uuid(),
+});
+
+/** Una fila del historial de recibos. */
+export interface ReciboEnHistorialIpc {
+  readonly id: string;
+  readonly ventaId: string;
+  readonly numeroRecibo: number;
+  /** Fecha y hora de la VENTA, no de la emisión del papel. */
+  readonly fecha: string;
+  readonly hora: string;
+  readonly cajero: string;
+  readonly total: string;
+  readonly formaPago: FormaPagoIpc;
+  /** `true` si alguna vez salió por la impresora térmica. */
+  readonly impreso: boolean;
+  readonly lineas: number;
+  /** `true` si la venta llevaba descuento discrecional. */
+  readonly conDescuento: boolean;
+}
+
+/** Lo que se muestra después de reimprimir o al ver un recibo. */
+export interface ReciboVistoIpc {
+  readonly numeroRecibo: number;
+  /** El recibo tal como sale en el papel, en texto plano. */
+  readonly texto: string;
+  /** Ruta del PDF en el disco. */
+  readonly rutaPdf: string;
+  readonly pdfGenerado: boolean;
+  readonly impreso: boolean;
+  readonly mensajeDeImpresion: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -988,6 +1080,25 @@ export interface ApiPos {
     cambiarPin(id: string, pin: string): Promise<RespuestaIpc<UsuarioIpc>>;
     /** Da de baja o vuelve a habilitar. Nunca borra. */
     fijarActivo(id: string, activo: boolean): Promise<RespuestaIpc<UsuarioIpc>>;
+  };
+
+  /** Datos de la tienda que encabezan el recibo. Solo rol administrativo. */
+  readonly negocio: {
+    obtener(): Promise<RespuestaIpc<ConfiguracionDeNegocioIpc>>;
+    guardar(datos: ConfiguracionDeNegocioIpc): Promise<RespuestaIpc<ConfiguracionDeNegocioIpc>>;
+  };
+
+  /**
+   * Historial de recibos y reimpresión.
+   *
+   * Reimprimir REGENERA el PDF desde las filas de la venta, nunca reusa el
+   * archivo del disco: así un recibo emitido antes de cargar los datos de la
+   * tienda sale, al reimprimirse, con el nombre y el NIT correctos.
+   */
+  readonly recibos: {
+    listar(): Promise<RespuestaIpc<readonly ReciboEnHistorialIpc[]>>;
+    ver(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
+    reimprimir(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
   };
 
   /**

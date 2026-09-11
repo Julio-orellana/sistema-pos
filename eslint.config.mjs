@@ -215,6 +215,23 @@ export default defineConfig(
   },
 
   // -------------------------------------------------------------------------
+  // Tablas de protocolo: sus números NO son mágicos, son la especificación
+  // -------------------------------------------------------------------------
+  //
+  // `escpos.ts` traduce el recibo a los bytes de ESC/POS y a la página de
+  // códigos CP850. Ahí cada número ES el dato: `0x1b` no es una constante que
+  // convenga nombrar mejor, es el byte ESC del estándar, y la tabla de CP850
+  // son cincuenta parejas «carácter → byte» que ningún nombre aclararía. Cada
+  // comando lleva su constante con nombre igual; lo que se permite acá son los
+  // bytes sueltos de esas tablas.
+  {
+    files: ['src/main/domain/recibo/escpos.ts'],
+    rules: {
+      '@typescript-eslint/no-magic-numbers': 'off',
+    },
+  },
+
+  // -------------------------------------------------------------------------
   // Pruebas y archivos de configuración: se relajan las reglas que estorban
   // -------------------------------------------------------------------------
   {

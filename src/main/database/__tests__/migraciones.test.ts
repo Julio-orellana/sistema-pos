@@ -18,6 +18,7 @@ const TABLAS_ESPERADAS = [
   'caja_sesion_denominaciones',
   'caja_sesiones',
   'categorias',
+  'configuracion_negocio',
   'denominaciones',
   'limites_descuento',
   'migraciones_aplicadas',

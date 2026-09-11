@@ -36,6 +36,7 @@ import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import type { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
 import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import type { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import { precioEfectivoDe } from '@main/domain/venta/precios';
@@ -52,6 +53,8 @@ export interface DependenciasDeVenta {
   readonly autenticacion: ServicioDeAutenticacion;
   readonly preciosEspeciales: RepositorioDePreciosEspeciales;
   readonly usuarios: RepositorioDeUsuarios;
+  /** Emisión del recibo. Corre DESPUÉS de la transacción de la venta. */
+  readonly recibos: ServicioDeRecibos;
   /** Reloj inyectable: decide qué precios especiales están vigentes. */
   readonly ahora?: () => number;
 }
@@ -205,8 +208,8 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
   ipcMain.handle(
     CANALES_IPC.ventaCobrar,
     async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeCobro>> =>
-      ejecutarConRespuesta('COBRO_FALLIDO', () =>
-        requiereSesion(sesion, () => {
+      ejecutarConRespuesta('COBRO_FALLIDO', async () =>
+        requiereSesion(sesion, async () => {
           const pedido = esquemaCobro.parse(payload);
           const enSesion = sesion.obtener();
           if (enSesion === null) {
@@ -293,6 +296,19 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
             numBoleta: pedido.numBoleta,
           });
 
+          /*
+            EL RECIBO SE EMITE DESPUÉS DE LA TRANSACCIÓN, nunca adentro.
+            Generar un PDF abre una ventana de Chromium e imprimir habla con un
+            puerto: las dos cosas son lentas y pueden fallar por motivos ajenos
+            a la venta. Meterlas en la transacción mantendría abierta una
+            escritura de SQLite esperando a un aparato, y haría que una
+            impresora sin papel revirtiera una venta ya cobrada.
+
+            Por eso `emitir` nunca lanza hacia acá: el PDF y la impresión
+            reportan lo que pasó en el resultado, y la venta ya está firme.
+          */
+          const emision = await dependencias.recibos.emitir(resultado.venta.id);
+
           const registrada: ResultadoDeCobro = {
             registrada: true,
             ventaId: resultado.venta.id,
@@ -304,6 +320,14 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
             numBoleta: resultado.venta.numBoleta,
             lineas: resultado.lineas,
             lineasConPrecioEspecial: resultado.lineasConPrecioEspecial,
+            recibo: {
+              id: emision.recibo.id,
+              numeroRecibo: emision.recibo.numeroRecibo,
+              rutaPdf: emision.rutaPdf,
+              pdfGenerado: emision.pdfGenerado,
+              impreso: emision.impreso,
+              mensajeDeImpresion: emision.mensajeDeImpresion,
+            },
           };
           return registrada;
         }),

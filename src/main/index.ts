@@ -9,7 +9,7 @@
  *   4. crear ventana — en modo kiosko.
  */
 
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, net, protocol } from 'electron';
@@ -30,6 +30,11 @@ import { crearRepositorios, type Repositorios } from '@main/database/repositorie
 import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { SesionActual } from '@main/domain/usuarios/sesion';
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
+import { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
+import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
+import { generarPdfDesdeHtml } from '@main/recibo/generador-de-pdf';
+import { LogTecnicoEnArchivo } from '@main/log-tecnico';
+import { CARPETA_DE_RECIBOS, crearImpresoraConfigurada } from '@main/adapters/impresora-configurada';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
@@ -391,6 +396,40 @@ app.whenReady().then(
       auditoria: repositorios.auditoria,
     });
 
+    const servicioDeNegocio = new ServicioDeConfiguracionDeNegocio({
+      configuracion: repositorios.configuracionNegocio,
+      auditoria: repositorios.auditoria,
+    });
+
+    /*
+      RECIBOS: PDF siempre, impresión si hay con qué.
+
+      La carpeta de PDF y la bitácora TÉCNICA viven en `userData`, nunca en la
+      carpeta de instalación: en Windows esa no es escribible de forma confiable
+      y se reemplaza entera en cada actualización. Es la misma razón por la que
+      las fotos de producto van ahí (§4.11).
+
+      La impresora se lee de un archivo LOCAL de esta terminal y no de
+      `configuracion_negocio`: dos cajas podrían tener la impresora en puertos
+      distintos, y esa tabla se espeja en la nube. Ver §4.14.
+    */
+    const carpetaDePdf = join(app.getPath('userData'), CARPETA_DE_RECIBOS);
+    mkdirSync(carpetaDePdf, { recursive: true });
+    const logTecnico = new LogTecnicoEnArchivo(app.getPath('userData'));
+    const impresora = crearImpresoraConfigurada(app.getPath('userData'), logTecnico);
+
+    const servicioDeRecibos = new ServicioDeRecibos({
+      ventas: repositorios.ventas,
+      ventaDetalle: repositorios.ventaDetalle,
+      recibos: repositorios.recibos,
+      usuarios: repositorios.usuarios,
+      configuracion: repositorios.configuracionNegocio,
+      impresora,
+      generarPdf: generarPdfDesdeHtml,
+      ubicacion: { carpeta: carpetaDePdf, unir: join },
+      log: logTecnico,
+    });
+
     // La venta recibe la CONEXIÓN además de los repositorios: es quien delimita
     // la transacción que descuenta inventario, inserta la venta y su detalle y
     // mueve los contadores, todo o nada.
@@ -453,6 +492,9 @@ app.whenReady().then(
       caja,
       venta: servicioDeVenta,
       gestionDeUsuarios: servicioDeUsuarios,
+      negocio: servicioDeNegocio,
+      recibos: servicioDeRecibos,
+      repositorioDeRecibos: repositorios.recibos,
       preciosEspeciales: repositorios.preciosEspeciales,
       catalogo: {
         categorias: servicioDeCategorias,

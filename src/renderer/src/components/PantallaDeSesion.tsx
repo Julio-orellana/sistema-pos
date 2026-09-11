@@ -14,6 +14,8 @@ import { PantallaDeCategorias } from './PantallaDeCategorias';
 import { PantallaDePinRemoto } from './PantallaDePinRemoto';
 import { PantallaDeProductos } from './PantallaDeProductos';
 import { PantallaDeUsuarios } from './PantallaDeUsuarios';
+import { PantallaDeNegocio } from './PantallaDeNegocio';
+import { PantallaDeRecibos } from './PantallaDeRecibos';
 import { PantallaDeVenta } from './PantallaDeVenta';
 
 export interface PantallaDeSesionProps {
@@ -29,7 +31,9 @@ type Vista =
   | 'pin-remoto'
   | 'categorias'
   | 'productos'
-  | 'usuarios';
+  | 'usuarios'
+  | 'negocio'
+  | 'recibos';
 
 export function PantallaDeSesion({
   sesion,
@@ -60,6 +64,12 @@ export function PantallaDeSesion({
   if (vista === 'usuarios') {
     return <PantallaDeUsuarios alVolver={() => { setVista('menu'); }} />;
   }
+  if (vista === 'negocio') {
+    return <PantallaDeNegocio alVolver={() => { setVista('menu'); }} />;
+  }
+  if (vista === 'recibos') {
+    return <PantallaDeRecibos alVolver={() => { setVista('menu'); }} />;
+  }
 
   return (
     <div data-prueba="pantalla-de-sesion">
@@ -76,6 +86,13 @@ export function PantallaDeSesion({
         </button>
         <button type="button" data-prueba="ir-a-caja" onClick={() => { setVista('caja'); }}>
           Caja
+        </button>
+        {/*
+          Recibos NO es de administración: reimprimir lo pide un cliente que
+          perdió su papel, y el cajero tiene que poder resolverlo solo.
+        */}
+        <button type="button" data-prueba="ir-a-recibos" onClick={() => { setVista('recibos'); }}>
+          Recibos
         </button>
         {/*
           El catálogo y el PIN remoto son de administración. Esconder los
@@ -104,6 +121,13 @@ export function PantallaDeSesion({
               onClick={() => { setVista('usuarios'); }}
             >
               Usuarios
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-negocio"
+              onClick={() => { setVista('negocio'); }}
+            >
+              Datos del negocio
             </button>
             <button
               type="button"
