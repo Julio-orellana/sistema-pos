@@ -35,6 +35,7 @@ import { tieneFormatoDePinValido } from '@shared/pin';
 import type { Usuario, ViaDeAutorizacion } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
+import { exigirPinNoUsado } from './colision-de-pin';
 import type {
   RepositorioDeBloqueosDeAutorizacion,
   SuperficieDeAutorizacion,
@@ -392,6 +393,24 @@ export class ServicioDeAutenticacion {
         'Se intentó fijar un pin_remoto_hash igual al pin_hash del propio usuario.',
       );
     }
+
+    /*
+      Y TAMPOCO PUEDE CHOCAR CON EL DE OTRA PERSONA. La comprobación de arriba
+      mira solo el PIN normal de uno mismo, que es un caso distinto: allí lo que
+      se protege es no regalar el acceso a la propia sesión al dictar el código
+      por teléfono. Acá se protege la ATRIBUCIÓN en la auditoría.
+
+      Este diálogo prueba el PIN contra todos los administradores activos
+      —primero los normales, después los remotos— y se queda con el primero que
+      coincida (§4.9). Un PIN remoto igual al PIN de otra persona haría que la
+      autorización quedara registrada a nombre de quien no la dio.
+
+      Es la MISMA función que usan el alta de usuarios y el cambio de PIN, no
+      una copia: la regla tiene que ser una sola, o la colisión entra por la
+      puerta que quedó floja. Excluye a uno mismo, no nombra a nadie en el
+      rechazo y trata un hash ilegible como que no coincide, igual que allá.
+    */
+    exigirPinNoUsado(this.usuarios, pin, usuarioId);
 
     this.usuarios.actualizarPinRemotoHash(usuarioId, generarHashDePin(pin));
     this.auditoria.registrar({

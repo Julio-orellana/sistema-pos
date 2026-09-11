@@ -275,6 +275,102 @@ describe('Dos usuarios activos no pueden tener el mismo PIN', () => {
 });
 
 // ===========================================================================
+/**
+ * LA REGLA EN LA DIRECCIÓN CONTRARIA: el PIN remoto.
+ *
+ * `configurarPinRemoto` ya comprobaba que el remoto fuera distinto del PIN
+ * normal DE UNO MISMO, pero no que no chocara con el de otra persona. Era el
+ * hueco simétrico del que cerró el Prompt 22: la misma colisión, entrando por
+ * la otra puerta.
+ */
+describe('Un PIN remoto tampoco puede chocar con el de otra persona', () => {
+  it('un PIN remoto igual al PIN NORMAL de otro usuario se rechaza', () => {
+    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+
+    expect(() => {
+      autenticacion.configurarPinRemoto(idJimmy, '1357');
+    }).toThrow(/ya está en uso/);
+  });
+
+  it('el rechazo NO nombra ni insinúa de quién es', () => {
+    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+
+    try {
+      autenticacion.configurarPinRemoto(idJimmy, '1357');
+      throw new Error('Se esperaba el rechazo por PIN repetido.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ErrorDeNegocio);
+      const negocio = error as ErrorDeNegocio;
+
+      for (const texto of [negocio.mensajeParaElUsuario, negocio.causaTecnica]) {
+        expect(texto).not.toContain('Ana');
+        expect(texto).not.toContain('Jimmy');
+        expect(texto).not.toContain(ana.id);
+        expect(texto).not.toContain(idJimmy);
+      }
+      // Es EXACTAMENTE el mismo mensaje que en el alta: una sola regla, un
+      // solo texto.
+      expect(negocio.mensajeParaElUsuario).toBe('Ese PIN ya está en uso. Elegí otro.');
+    }
+  });
+
+  it('y el PIN remoto NO queda configurado: el rechazo no dejó nada', () => {
+    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+    expect(() => {
+      autenticacion.configurarPinRemoto(idJimmy, '1357');
+    }).toThrow(ErrorDeNegocio);
+
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).toBeNull();
+  });
+
+  it('un PIN remoto igual al PIN REMOTO de otro administrador también se rechaza', () => {
+    const rosa = usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'administrativo', pin: '4321' });
+    autenticacion.configurarPinRemoto(rosa.id, '9753');
+
+    expect(() => {
+      autenticacion.configurarPinRemoto(idJimmy, '9753');
+    }).toThrow(/ya está en uso/);
+  });
+
+  it('con un PIN libre sí se configura', () => {
+    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+
+    expect(() => {
+      autenticacion.configurarPinRemoto(idJimmy, '9753');
+    }).not.toThrow();
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).not.toBeNull();
+  });
+
+  it('se puede REEMPLAZAR el propio PIN remoto por el mismo que ya tenía', () => {
+    // Se excluye a uno mismo, igual que en las otras dos operaciones: no es una
+    // colisión, es algo que no cambia nada.
+    autenticacion.configurarPinRemoto(idJimmy, '9753');
+    expect(() => {
+      autenticacion.configurarPinRemoto(idJimmy, '9753');
+    }).not.toThrow();
+  });
+
+  it('sigue sin poder ser igual al PIN NORMAL de uno mismo, con SU mensaje', () => {
+    // La regla vieja no se perdió, y conserva su propia explicación: ahí lo que
+    // se protege es no regalar el acceso a la sesión al dictarlo por teléfono.
+    expect(() => {
+      autenticacion.configurarPinRemoto(idJimmy, PIN_DE_JIMMY);
+    }).toThrow(
+      /DISTINTO de tu PIN normal/,
+    );
+  });
+
+  it('el PIN de alguien DADO DE BAJA no reserva el número tampoco acá', () => {
+    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+    usuarios.fijarActivo(idJimmy, ana.id, false);
+
+    expect(() => {
+      autenticacion.configurarPinRemoto(idJimmy, '1357');
+    }).not.toThrow();
+  });
+});
+
+// ===========================================================================
 describe('Dar de baja: deja de entrar, pero su historial queda intacto', () => {
   /** Crea a Ana y le registra una venta, para tener historial que conservar. */
   function anaConHistorial(): string {
