@@ -691,12 +691,48 @@ el historial de la tienda y no le pertenecen a la cuenta. Reactivar además
 **limpia el bloqueo por intentos**: volver a habilitar a alguien con el candado
 todavía puesto lo dejaría afuera por una razón que ya nadie recuerda.
 
-##### Dos invariantes que solo este servicio puede proteger
+##### Tres invariantes que solo este servicio puede proteger
 
 | Invariante | Por qué no puede vivir en otro lado |
 |---|---|
 | **Siempre queda un administrador activo** | El esquema no sabe contar administradores. Y si se pierde el último, la tienda se queda sin poder abrir caja, cargar catálogo ni gestionar usuarios, **sin vuelta atrás**: el primer arranque solo se ofrece con la tabla VACÍA, y dar de baja no la vacía. Se bloquea tanto la baja como quitarle el rol. |
 | **Nadie se cambia a sí mismo el rol ni se da de baja** | Es un pie en el que dispararse sin uso legítimo: quien quiera irse lo da de baja otro administrador. Además dejaría la sesión viva con una identidad que ya no corresponde a lo que dice la base. Corregirse el PROPIO nombre sí se permite: no tiene ningún riesgo. |
+| **Dos usuarios ACTIVOS no comparten PIN** | Ver abajo. La base no puede verlo: cada hash lleva su propia sal, así que dos PIN iguales se guardan distintos, que es justamente lo que impide deducirlos mirando la tabla. |
+
+##### Por qué dos usuarios no pueden compartir PIN
+
+**El daño no está donde parece.** En el ingreso la colisión es molesta pero
+acotada: primero se elige el nombre y después se teclea, así que compartir PIN
+solo significa que una persona puede entrar como otra si sabe que lo comparten.
+
+**El problema serio está en el DIÁLOGO DE AUTORIZACIÓN**, que prueba el PIN
+contra todos los administradores activos y se queda con el primero que coincida
+(§4.9). Con dos PIN iguales, `descuento_autorizado_por` y
+`diferencia_autorizada_por` terminan nombrando a la persona equivocada, en
+silencio y sin forma de detectarlo después. En un sistema cuyo valor es la
+auditoría, eso es peor que la suplantación. La §4.9 ya anticipaba el caso al
+hablar de «una coincidencia improbable»; ahora, sencillamente, no puede ocurrir.
+
+| Decisión | Por qué |
+|---|---|
+| **Una sola regla para los DOS roles** | El riesgo está concentrado en el administrativo, pero un usuario de venta pasa a administrativo con una edición: una excepción por rol envejecería mal en cuanto alguien cambie de rol, y es más barato mantener una regla general que dos casos. |
+| **Solo cuentan los ACTIVOS** | Quien está de baja no inicia sesión ni autoriza nada, así que su PIN no provoca ninguna de las dos confusiones. Reservar para siempre todos los PIN históricos iría achicando el espacio disponible sin que nadie entienda por qué. |
+| **Se compara el PIN en claro contra cada hash** | Dos hash scrypt del mismo PIN son distintos, porque cada usuario tiene su propia sal. Obliga a una verificación por usuario activo, y scrypt es lento a propósito: con una decena de usuarios, cerca de un segundo. Es aceptable al crear un usuario, que es una acción de administrador, y sería inaceptable en el ingreso. |
+| **También se mira el PIN REMOTO de cada uno** | El diálogo de autorización prueba los dos, así que un PIN nuevo igual al remoto de alguien produce la misma atribución equivocada. |
+| **Ponerle a alguien el PIN que ya tenía NO es colisión** | No cambia nada, y rechazarlo sería desconcertante. Se excluye a la propia persona de la comparación. |
+
+> **EL MENSAJE NO DICE DE QUIÉN ES EL PIN, ni lo insinúa, y la causa técnica
+> tampoco lleva el id.** Dice exactamente «Ese PIN ya está en uso. Elegí otro.»
+> Nombrar a la persona convertiría este control en una forma de averiguar el PIN
+> de otra por eliminación: bastaría probar combinaciones al crear usuarios y
+> leer a quién nombra el rechazo. Hay una prueba que comprueba que ni el mensaje
+> ni la causa técnica contienen ningún nombre ni ningún id.
+
+**QUEDA UN HUECO EN LA OTRA DIRECCIÓN.** `configurarPinRemoto` comprueba que el
+PIN remoto sea distinto del PIN normal **de esa misma persona**, pero no que no
+choque con el de otra. Así que la regla se hace cumplir al crear un usuario y al
+cambiarle el PIN, y no al configurar un PIN remoto. Es una comprobación de la
+misma forma y todavía no se agregó.
 
 La pantalla esconde esos botones y explica por qué en el `title`, pero eso es
 comodidad: quien de verdad rechaza es el servicio, y una pantalla se salta
@@ -1551,6 +1587,7 @@ medida comparable entre productos.
 | **Los mensajes al usuario no inventan razones de negocio.** «El precio no puede ser negativo», no «…Se permite 0, para muestras y regalos». | Explicar en el mensaje para qué sirve cada regla | Que un precio 0 se acepte es una decisión técnica del esquema; PARA QUÉ le sirve a la tienda es una definición de negocio que Jimmy no confirmó. Un mensaje que se la atribuya convierte una suposición nuestra en algo que parece decidido por él, y eso es exactamente lo que este proyecto no puede hacer: el resto de la documentación distingue con cuidado lo confirmado de lo supuesto. La regla vale para todo texto que vea una persona. | Prompt 16 — 2026-09-08 |
 | **Gestión de usuarios completa: crear, editar, cambiar PIN y dar de baja, en cualquier momento.** Cierra un hueco de alcance abierto desde el Prompt 3. | Dejar solo el primer arranque; permitir crear usuarios desde una pantalla sin rol; borrar usuarios en vez de darlos de baja | Hasta acá el sistema sabía crear UN usuario —el primer administrador, y solo con la tabla vacía—, así que la tienda no podía dar de alta a su propio cajero. El requerimiento pedía «usuario de venta y usuario administrativo» desde el principio: el sistema no estaba completo con un solo usuario creado el primer día. Se reutiliza `@shared/auth` para el hash y no se escribe uno nuevo, porque dos implementaciones en el mismo proyecto terminan en usuarios que no pueden entrar. **Nunca se borra**, igual que con productos y categorías: un usuario de baja conserva sus ventas y sus asientos de auditoría, que son el historial de la tienda y no le pertenecen a la cuenta. | Prompt 21 — 2026-09-11 |
 | **Cambiar el PIN es una acción APARTE de editar, y NO pide el PIN anterior.** | Un campo más en el formulario de edición; exigir el PIN viejo antes de cambiarlo | Mezclarlo con el nombre invitaría a tocarlo sin querer al corregir un acento, y además es un hecho distinto para la auditoría, con su propia acción. Y no se pide el anterior porque el caso que hay que resolver es el del cajero que lo OLVIDÓ: exigir el viejo lo dejaría sin forma de volver a entrar, que es justamente el problema que esta operación existe para arreglar. Quien la ejecuta ya es un administrador con sesión iniciada, y eso es lo que la autoriza. El PIN nuevo no se registra en la auditoría ni en claro ni hasheado: lo que queda es a quién se le cambió, quién lo cambió y cuándo. | Prompt 21 — 2026-09-11 |
+| **Dos usuarios ACTIVOS no pueden tener el mismo PIN, y el rechazo no dice de quién es.** Se comprueba al crear un usuario y al cambiarle el PIN, para los dos roles. | No validarlo, como hasta el Prompt 21; validarlo solo para el rol administrativo; nombrar en el mensaje a la persona con la que choca | El daño no está donde parece. En el ingreso la colisión es acotada, porque primero se elige el nombre. **El problema serio está en el diálogo de autorización**, que prueba el PIN contra todos los administradores activos y se queda con el primero que coincida: con dos PIN iguales, `descuento_autorizado_por` y `diferencia_autorizada_por` nombran a la persona equivocada, en silencio y sin forma de detectarlo después. La §4.9 ya lo anticipaba al hablar de «una coincidencia improbable». Se aplica a los DOS roles aunque el riesgo esté concentrado en el administrativo: un usuario de venta pasa a administrativo con una edición, así que la excepción envejecería mal, y una regla general es más barata que dos casos. Solo cuentan los activos, porque quien está de baja no inicia sesión ni autoriza nada. Se compara el PIN en claro contra cada hash —dos hash scrypt del mismo PIN son distintos, cada uno con su sal— y eso cuesta una verificación por usuario activo: cerca de un segundo con una decena, aceptable en una acción de administrador e inaceptable en el ingreso. **El mensaje no nombra a nadie**, ni siquiera en la causa técnica: hacerlo convertiría el control en una forma de averiguar el PIN ajeno por eliminación. Queda pendiente la misma comprobación al configurar un PIN remoto. | Prompt 22 — 2026-09-11 |
 | **Siempre tiene que quedar un administrador activo, y nadie se cambia a sí mismo el rol ni se da de baja.** | Confiar en que nadie lo haga; avisar en la pantalla y dejar pasar la operación | Perder al último administrador deja la tienda sin poder abrir caja, cargar catálogo ni gestionar usuarios, y **no hay vuelta atrás**: el primer arranque solo se ofrece con la tabla VACÍA, y dar de baja no la vacía. Es un invariante que ninguna otra capa puede proteger, porque el esquema no sabe contar administradores y la pantalla se salta llamando al canal. Lo mismo vale para quitarle el rol, no solo para darlo de baja. La regla de «ni a uno mismo» evita además dejar la sesión viva con una identidad que ya no corresponde a la base; corregirse el PROPIO nombre sí se permite, porque no tiene riesgo. | Prompt 21 — 2026-09-11 |
 | **El orden de la cuadrícula de venta lo decide `contador_ventas` (VECES vendido), y `cantidad_vendida` queda para reportes.** Cerrado sin consultar a Jimmy. | Ordenar por `cantidad_vendida`; ofrecer las dos y dejar elegir en configuración | Contar transacciones es la **única medida comparable entre productos**: las libras de maíz y las unidades de huevo no se pueden sumar en un mismo número, así que ordenar por cantidad pondría el maíz —que sale de a cien libras— por encima de todo lo que se vende por unidad, y la cuadrícula dejaría de reflejar lo que el cajero busca. La pregunta había quedado abierta como punto 14 de §6.2; Julio la cerró en el Prompt 20 sin necesidad de consultarla, porque no es una preferencia del negocio sino una consecuencia de que las unidades no sean conmensurables. `cantidad_vendida` sigue existiendo y sigue subiendo con cada venta: su destino son los reportes y el futuro módulo de mermas, no el orden de los íconos. | Prompt 20 — 2026-09-10 |
 | **El tope de descuento se siembra con un guion aparte, `seed:limites`, y NO con una migración ni junto al catálogo de ejemplo.** | Sembrarlo en una migración; incluirlo en `seed:ejemplo`; poner un valor por omisión en el código cuando falta la fila | Una migración es historial permanente del esquema, y un tope de descuento es **configuración** que un administrador cambia cuando quiere: sembrarlo ahí dejaría el valor de un guion de desarrollo metido para siempre en la base de la tienda. Meterlo en `seed:ejemplo` juntaría dos cosas distintas —mercadería inventada y configuración— y haría que limpiar el catálogo le quitara el tope a alguien de paso. Y un valor por omisión en el código sería lo peor de todo: convertiría un olvido de configuración en un permiso, que es exactamente lo que el tope cero evita. El guion imprime el tope de cada rol al terminar, para que un rol sin fila se lea como «tope cero» y no como «sin límite». **No reemplaza la pantalla de configuración**, que sigue pendiente. | Prompt 20 — 2026-09-10 |

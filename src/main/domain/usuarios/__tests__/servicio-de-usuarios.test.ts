@@ -155,6 +155,126 @@ describe('Dar de alta a alguien: el hueco que este módulo vino a cerrar', () =>
 });
 
 // ===========================================================================
+/**
+ * Dos usuarios activos no pueden compartir el PIN.
+ *
+ * El daño no está donde parece. En el ingreso la colisión es acotada, porque
+ * primero se elige el nombre. El problema serio está en el DIÁLOGO DE
+ * AUTORIZACIÓN, que prueba el PIN contra todos los administradores activos y se
+ * queda con el primero que coincida: con dos PIN iguales, la auditoría termina
+ * nombrando a la persona equivocada, en silencio.
+ */
+describe('Dos usuarios activos no pueden tener el mismo PIN', () => {
+  it('el SEGUNDO intento de usar el mismo PIN se rechaza', () => {
+    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+
+    expect(() => usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'venta', pin: '1357' })).toThrow(
+      /ya está en uso/,
+    );
+  });
+
+  it('y el segundo usuario NO queda creado a medias', () => {
+    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+    expect(() => usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'venta', pin: '1357' })).toThrow(
+      ErrorDeNegocio,
+    );
+
+    expect(repos.usuarios.listarTodos().map((usuario) => usuario.nombre)).toEqual([
+      'Ana',
+      'Jimmy',
+    ]);
+  });
+
+  it('EL MENSAJE NO NOMBRA NI INSINÚA de quién es el PIN', () => {
+    // Decirlo convertiría este control en una forma de averiguar el PIN de otra
+    // persona por eliminación: bastaría probar combinaciones al crear usuarios
+    // y leer a quién nombra el rechazo.
+    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+
+    try {
+      usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'venta', pin: '1357' });
+      throw new Error('Se esperaba el rechazo por PIN repetido.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ErrorDeNegocio);
+      const negocio = error as ErrorDeNegocio;
+
+      // Ni el nombre, ni el id, ni el rol de la persona con la que colisiona.
+      for (const texto of [negocio.mensajeParaElUsuario, negocio.causaTecnica]) {
+        expect(texto).not.toContain('Ana');
+        expect(texto).not.toContain('Jimmy');
+        expect(texto).not.toContain(ana.id);
+        expect(texto).not.toContain(idJimmy);
+      }
+      expect(negocio.mensajeParaElUsuario).toBe('Ese PIN ya está en uso. Elegí otro.');
+    }
+  });
+
+  it('con otro PIN el segundo usuario se crea sin problema', () => {
+    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+    // 5791 no lo tiene nadie: ni Jimmy, que arranca con 2468, ni Ana.
+    expect(usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'venta', pin: '5791' }).nombre).toBe(
+      'Rosa',
+    );
+  });
+
+  it('tampoco se puede chocar contra el PIN del ADMINISTRADOR que ya existía', () => {
+    expect(() => usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: PIN_DE_JIMMY }))
+      .toThrow(/ya está en uso/);
+  });
+
+  it('LA REGLA ES UNA SOLA para los dos roles, sin excepción por rol', () => {
+    // El riesgo está concentrado en el administrativo, pero un usuario de venta
+    // puede pasar a administrativo con una edición: una excepción por rol
+    // envejecería mal en cuanto alguien cambie de rol.
+    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+
+    expect(() =>
+      usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'administrativo', pin: '1357' }),
+    ).toThrow(/ya está en uso/);
+    expect(() => usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'venta', pin: '1357' })).toThrow(
+      /ya está en uso/,
+    );
+  });
+
+  it('al CAMBIAR el PIN también se comprueba', () => {
+    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+
+    expect(() => usuarios.cambiarPin(idJimmy, ana.id, PIN_DE_JIMMY)).toThrow(/ya está en uso/);
+    // Y el PIN viejo de Ana sigue sirviendo: el rechazo no cambió nada.
+    expect(autenticacion.autenticar(ana.id, '1357').autenticado).toBe(true);
+  });
+
+  it('volver a ponerle a alguien el PIN que YA TENÍA no es una colisión', () => {
+    // Es una operación que no cambia nada; rechazarla con «ese PIN ya está en
+    // uso» sería desconcertante.
+    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+    expect(() => usuarios.cambiarPin(idJimmy, ana.id, '1357')).not.toThrow();
+    expect(autenticacion.autenticar(ana.id, '1357').autenticado).toBe(true);
+  });
+
+  it('el PIN de alguien DADO DE BAJA no reserva el número', () => {
+    // Quien está de baja no inicia sesión ni autoriza nada, así que su PIN no
+    // puede provocar ninguna de las dos confusiones.
+    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
+    usuarios.fijarActivo(idJimmy, ana.id, false);
+
+    expect(usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'venta', pin: '1357' }).nombre).toBe(
+      'Rosa',
+    );
+  });
+
+  it('también choca contra el PIN REMOTO de un administrador', () => {
+    // El diálogo de autorización prueba los dos, así que un PIN nuevo igual al
+    // remoto de alguien produce la misma atribución equivocada.
+    autenticacion.configurarPinRemoto(idJimmy, '9753');
+
+    expect(() => usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '9753' })).toThrow(
+      /ya está en uso/,
+    );
+  });
+});
+
+// ===========================================================================
 describe('Dar de baja: deja de entrar, pero su historial queda intacto', () => {
   /** Crea a Ana y le registra una venta, para tener historial que conservar. */
   function anaConHistorial(): string {
