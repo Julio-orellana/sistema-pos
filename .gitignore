@@ -54,6 +54,7 @@ node_modules/better-sqlite3/prebuilds/
 .env
 .env.*
 !.env.example
+!.env.nube-pruebas.ejemplo
 *.pem
 *.key
 *.p12
