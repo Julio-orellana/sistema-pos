@@ -495,6 +495,9 @@ Pendiente en la nube, para la fase 2.c de la sincronización:
   es `SELECT` al rol `restauracion`. Mientras tanto, los 13 avisos
   `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
   problema.
+- Revocar los privilegios de tabla que Supabase concede por omisión a `anon` y
+  `authenticated` (§4.20, migración `0024`): hoy la única capa que frena a la
+  terminal es RLS sin políticas.
 - Aplicar la `0023_funciones_de_sincronizacion` (§4.20). En cuanto esté, el
   linter va a sumar **cinco avisos WARN
   `authenticated_security_definer_function_executable`**, uno por función de
@@ -2755,6 +2758,16 @@ diferencias y sale con código 1.
   a `900`, **primero en el proyecto de pruebas y después en el real**. La
   batería ya mide `expires_in` y falla mientras no sea 900, y
   `--esperar-vencimiento` comprueba que un token efectivamente venza.
+- **Revocar los privilegios de tabla a `anon` y `authenticated`** (fase 2.c,
+  migración `0024`). Leído del catálogo de los DOS proyectos el 2026-09-12:
+  Supabase les concede por omisión `SELECT, INSERT, UPDATE, DELETE, TRUNCATE,
+  REFERENCES, TRIGGER` sobre las trece tablas, y lo mismo a toda tabla nueva.
+  Hoy los frena RLS con cero políticas, y la batería lo midió; pero es una sola
+  capa, y `TRUNCATE` ni siquiera pasa por RLS. Se revoca todo menos `SELECT` a
+  `authenticated`, que la política de restauración necesita porque terminal y
+  restauración son el mismo rol de Postgres. Las funciones DEFINER corren como
+  `postgres` y no dependen de esos privilegios. La tabla vigente de políticas
+  está en §2.3 del diseño.
 - **Aplicar la `0023` a `pos-jimmy-cano`** y escribir las políticas de
   `restauracion`: fase 2.c.
 - **El enrutador de lotes** —qué función llama el `SyncProvider` real para cada

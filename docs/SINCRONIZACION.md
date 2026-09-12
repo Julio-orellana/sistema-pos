@@ -397,15 +397,49 @@ vacía, una vez, a mano, y con otra credencial.
 
 ### 2.3 Las políticas RLS que este diseño necesita
 
-> **SUPERADA en la fase 2.b, por la medición del riesgo 8.4.** La columna de
-> la terminal de esta tabla es «nadie: por función» **en las trece filas**:
-> la terminal no tiene ninguna política directa sobre ninguna tabla, y
-> escribe únicamente por las cinco funciones `SECURITY DEFINER` de la `0023`.
-> Lo que queda por crear en la fase 2.c es **solo la columna `R`**: `SELECT`
-> para el rol restauración sobre las trece tablas. Se midió en el proyecto de
-> pruebas que sin políticas la terminal no lee, no actualiza ni borra nada
-> directamente (lista vacía, cero filas afectadas), aunque acabe de escribir
-> por función. La tabla de abajo se conserva como historia.
+**SUPERADA EN LA FASE 2.b, POR LA MEDICIÓN DEL RIESGO 8.4. La tabla vigente es
+esta; la original queda más abajo como historia del razonamiento.**
+
+| Tabla | INSERT / UPDATE / DELETE (terminal) | SELECT (terminal) | SELECT (restauración) | Único camino de escritura |
+|---|---|---|---|---|
+| `usuarios` | nadie | nadie | `R` (2.c) | `sincronizar_usuario` |
+| `categorias` | nadie | nadie | `R` (2.c) | `sincronizar_lote_simple` |
+| `productos` | nadie | nadie | `R` (2.c) | `sincronizar_lote_simple` y `sincronizar_venta` |
+| `precios_especiales` | nadie | nadie | `R` (2.c) | `sincronizar_lote_simple` |
+| `limites_descuento` | nadie | nadie | `R` (2.c) | `sincronizar_lote_simple` |
+| `configuracion_negocio` | nadie | nadie | `R` (2.c) | `sincronizar_lote_simple`, solo `actualizar` |
+| `denominaciones` | nadie | nadie | `R` (2.c) | ninguno: la sembró la `0004` y nunca cambia |
+| `caja_sesiones` | nadie | nadie | `R` (2.c) | `sincronizar_apertura_de_caja` y `sincronizar_cierre_de_caja` |
+| `caja_sesion_denominaciones` | nadie | nadie | `R` (2.c) | las dos de caja |
+| `ventas` | nadie | nadie | `R` (2.c) | `sincronizar_venta` |
+| `venta_detalle` | nadie | nadie | `R` (2.c) | `sincronizar_venta` |
+| `recibos` | nadie | nadie | `R` (2.c) | `sincronizar_lote_simple`, solo `insertar` |
+| `auditoria_log` | nadie, y además el trigger | nadie | `R` (2.c) | las cinco, siempre con `DO NOTHING` |
+
+`R` sigue siendo la condición del rol restauración de 1.2, y es **la única
+política que la fase 2.c va a crear**. Para el rol terminal no habrá ninguna
+política sobre ninguna tabla: `pg_policies` tiene que seguir sin una sola fila
+que nombre a la terminal, hoy y después de 2.c. `EXECUTE` sobre las cinco
+funciones de escritura lo tiene `authenticated`, y adentro cada función exige
+el claim `rol = 'terminal'`; los ayudantes internos no son ejecutables ni por
+`authenticated`. Se midió en el proyecto de pruebas: sin políticas, la terminal
+no lee, no actualiza ni borra nada directamente —lista vacía, cero filas
+afectadas, `42501` al insertar—, aunque acabe de escribir por función.
+
+**Lo que hoy frena a la terminal es RLS, no la ausencia de GRANT, y hay que
+decirlo.** Leído del catálogo de los dos proyectos el 2026-09-12: `anon` y
+`authenticated` tienen, por omisión de Supabase, `SELECT, INSERT, UPDATE,
+DELETE, TRUNCATE, REFERENCES, TRIGGER` sobre las trece tablas, y los privilegios
+por omisión (`pg_default_acl`) conceden lo mismo a toda tabla nueva. Es una
+sola capa, y `TRUNCATE` ni siquiera pasa por RLS. **La fase 2.c agrega la
+segunda capa** con una migración `0024`: `REVOKE INSERT, UPDATE, DELETE,
+TRUNCATE, REFERENCES, TRIGGER` a `anon` y `authenticated` sobre las trece
+tablas, `REVOKE ALL` a `anon`, y los mismos privilegios por omisión revocados
+para las tablas futuras. `SELECT` se conserva concedido a `authenticated`
+porque restauración y terminal son el MISMO rol de Postgres —el rol del diseño
+es un claim del JWT, no un rol de la base— y es la política `R` la que decide
+quién lo ejerce. Las funciones `SECURITY DEFINER` no dependen de nada de esto:
+corren como `postgres`, el dueño de las tablas.
 
 Hoy las 13 tablas tienen RLS activo y **cero políticas**: nadie puede leer ni
 escribir, y eso es correcto hasta que exista esto. Las políticas van en una
