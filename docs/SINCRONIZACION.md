@@ -24,13 +24,23 @@
 >   determinístico y cede ante una venta en curso. Corre contra
 >   `SimulatedSyncProvider`. La decisión 10 se ejecutó: `traerCambios` ya no
 >   está en la interfaz.
+> - **Fase 2.a — construida.** El proyecto de pruebas descartable de la 9.5 y
+>   las migraciones `0019` a `0022`: `recibido_en` en doce tablas (mitigación
+>   1 de 1.5.1), y las decisiones 4 y 17 aplicadas. Ver CLAUDE.md §4.19.
+> - **Fase 2.b — construida, SOLO en el proyecto de pruebas.** Las funciones
+>   de la migración `0023` —usuario, apertura, cierre, venta, lote simple y el
+>   contrato de la 9.2—, el guion `verify:nube` con su seguro, y la prueba de
+>   deriva en sus dos mitades. **El riesgo 8.4 se midió y cambió el diseño:**
+>   todo lote sube por función y la terminal no tiene política directa sobre
+>   ninguna tabla (ver 8.4 y CLAUDE.md §4.20). `pos-jimmy-cano` no tiene la
+>   `0023` todavía.
 >
-> **Lo que sigue sin existir:** el `SyncProvider` real contra Supabase, las
-> credenciales de la sección 1, la detección de conexión de la sección 5, las
-> políticas de RLS de la 2.3, las funciones de Postgres de la 4.3, los archivos
-> de la 2.5, la pantalla de sincronización de la 3.3 y la restauración de la 6.
-> Toda sección que describa algo que hable con la nube describe una fase
-> futura.
+> **Lo que sigue sin existir:** las políticas de RLS de la 2.3 (fase 2.c), el
+> `SyncProvider` real contra Supabase y las credenciales de la sección 1 en la
+> terminal (fase 3), la detección de conexión de la sección 5, los archivos de
+> la 2.5, la pantalla de sincronización de la 3.3 y la restauración de la 6.
+> **Este documento describe el diseño; donde lo construido se apartó de él,
+> hay una nota «COMO QUEDÓ CONSTRUIDO» al principio de la sección.**
 
 ## 0. Qué se leyó para escribir esto, y qué se encontró de entrada
 
@@ -49,10 +59,10 @@ Se señalan, no se resuelven: decidir cuál versión es la correcta es tuyo.
 
 | # | Qué dice la documentación | Qué existe de verdad | Consecuencia para este diseño |
 |---|---|---|---|
-| 1 | «La nube lleva datos de negocio; el estado operativo de una terminal se queda en SQLite» (README de migraciones, CLAUDE.md §4.4). | **`ventas.estado_sincronizacion` EXISTE en Postgres**, con su CHECK, desde la 0001. Es estado operativo de la terminal, exactamente lo que la regla dice que no se espeja. | En la nube esa columna va a decir siempre lo que la terminal mande o su `DEFAULT 'pendiente'`, que allá no significa nada. Es el mismo error que el README describe para `intentos_fallidos`: «columnas siempre en cero engañan al auditor». Este diseño **no la manda** en el payload. Hace falta decidir si se quita de Postgres con una migración. |
+| 1 | «La nube lleva datos de negocio; el estado operativo de una terminal se queda en SQLite» (README de migraciones, CLAUDE.md §4.4). | **`ventas.estado_sincronizacion` EXISTE en Postgres**, con su CHECK, desde la 0001. Es estado operativo de la terminal, exactamente lo que la regla dice que no se espeja. | En la nube esa columna va a decir siempre lo que la terminal mande o su `DEFAULT 'pendiente'`, que allá no significa nada. Es el mismo error que el README describe para `intentos_fallidos`: «columnas siempre en cero engañan al auditor». Este diseño **no la manda** en el payload. Hace falta decidir si se quita de Postgres con una migración. **RESUELTA en la fase 2.a: la `0020` la quitó de Postgres.** |
 | 2 | La infraestructura de sincronización «ya existe»: `sync_cola` y `ventas.estado_sincronizacion`. | **Nadie escribe en `sync_cola` fuera de las pruebas.** La transacción de venta no encola nada. `estado_sincronizacion` se pone en `'pendiente'` al insertar y ninguna otra línea del proyecto la lee ni la cambia. | Es andamiaje sin conectar. Sirve como punto de partida, pero `sync_cola` necesita columnas que no tiene (sección 2.4). |
-| 3 | El README de `supabase/migrations` lista en su tabla de «qué se espeja» **10 tablas**. | Postgres tiene **13**: faltan en esa tabla `denominaciones`, `caja_sesion_denominaciones` y `configuracion_negocio`, que sí están espejadas. | La lista definitiva de este documento (sección 2.1) sale del catálogo real, no del README. |
-| 4 | El README dice que la `0016` está **pendiente**. | Se aplicó el 2026-09-11, igual que la `0017`, que el README no menciona. | Documentación desactualizada. Se corrige aparte; no afecta el diseño. |
+| 3 | El README de `supabase/migrations` lista en su tabla de «qué se espeja» **10 tablas**. | Postgres tiene **13**: faltan en esa tabla `denominaciones`, `caja_sesion_denominaciones` y `configuracion_negocio`, que sí están espejadas. | La lista definitiva de este documento (sección 2.1) sale del catálogo real, no del README. **RESUELTA en la fase 2.a: el README se reescribió con las trece.** |
+| 4 | El README dice que la `0016` está **pendiente**. | Se aplicó el 2026-09-11, igual que la `0017`, que el README no menciona. | Documentación desactualizada. Se corrige aparte; no afecta el diseño. **RESUELTA en la fase 2.a: el README tiene el estado real de los dos proyectos.** |
 | 5 | La interfaz `SyncProvider` tiene `traerCambios(desde)`: un método de **bajada** incremental. | La sincronización continua de este diseño es **solo subida** (sección 2.2). Bajar cambios sería tener dos escritores, que es el problema que el prompt excluye. | **RESUELTA en la fase 1.b: se retiró de la interfaz.** La restauración tendrá la suya propia en la fase 4.b. |
 
 Y un hallazgo que no es inconsistencia pero condiciona todo lo demás:
@@ -259,6 +269,17 @@ hace falta acá, y exactamente lo que hay que hacer con cuidado:
 | Nunca `EXECUTE` con texto armado desde el payload | El payload es entrada no confiable, igual que un payload de IPC (§5). |
 | **El linter de seguridad de Supabase va a listar cada una de estas funciones como `SECURITY DEFINER` ejecutable por `authenticated`**, igual que hoy lista `rls_auto_enable()` | Es esperado y hay que anotarlo en §4.4 como aviso conocido, con la razón, para que nadie lo «corrija» quitándole el `DEFINER`. |
 
+> **COMO QUEDÓ CONSTRUIDO (fase 2.b, migración `0023`).** Las firmas son
+> `(lote jsonb, version_de_contrato integer)` y devuelven una constancia por
+> fila. Son **cinco** funciones de escritura, no tres: a las de esta tabla se
+> sumaron `sincronizar_venta` (DEFINER, ver 4.3) y `sincronizar_lote_simple`
+> (ver «Qué queda igual», más abajo), por el resultado del riesgo 8.4. Los seis
+> puntos del endurecimiento están confirmados en el catálogo, punto por punto,
+> más uno que Julio exigió: **lista cerrada de tablas admitidas por función**.
+> El linter dio exactamente los cinco avisos previstos y ninguno de
+> `search_path`. `caja_sesion_denominaciones` viaja dentro de la apertura y del
+> cierre. Detalle en CLAUDE.md §4.20.
+
 **Lo que estas funciones logran, y lo que no.** El ladrón tiene la misma
 credencial que la terminal legítima, así que puede llamar a las mismas
 funciones. Lo que **no** puede: reescribir un cierre de caja, dejar la
@@ -274,6 +295,14 @@ función lee por su cuenta. Es decir, **la credencial de la terminal deja de
 poder leer los hashes de PIN desde la nube**, que era la mitad del riesgo 8.2.
 
 ##### Qué queda igual, y por qué
+
+> **SUPERADO por la medición del riesgo 8.4 (fase 2.b).** El catálogo, los
+> topes, la configuración y los recibos **también** suben por función,
+> `sincronizar_lote_simple`, con lista cerrada y regla de conflicto por tabla.
+> La razón no es la que este párrafo descartaba —proteger datos de bajo
+> valor— sino que el upsert directo exigía darle `SELECT` a la terminal sobre
+> `auditoria_log`, que va en todos los lotes. Lo de abajo se conserva como
+> historia del razonamiento.
 
 `categorias`, `productos`, `precios_especiales`, `limites_descuento` y
 `configuracion_negocio` conservan `UPDATE` directo. Son el catálogo: de bajo
@@ -367,6 +396,16 @@ La única operación que trae datos de la nube a la terminal es la
 vacía, una vez, a mano, y con otra credencial.
 
 ### 2.3 Las políticas RLS que este diseño necesita
+
+> **SUPERADA en la fase 2.b, por la medición del riesgo 8.4.** La columna de
+> la terminal de esta tabla es «nadie: por función» **en las trece filas**:
+> la terminal no tiene ninguna política directa sobre ninguna tabla, y
+> escribe únicamente por las cinco funciones `SECURITY DEFINER` de la `0023`.
+> Lo que queda por crear en la fase 2.c es **solo la columna `R`**: `SELECT`
+> para el rol restauración sobre las trece tablas. Se midió en el proyecto de
+> pruebas que sin políticas la terminal no lee, no actualiza ni borra nada
+> directamente (lista vacía, cero filas afectadas), aunque acabe de escribir
+> por función. La tabla de abajo se conserva como historia.
 
 Hoy las 13 tablas tienen RLS activo y **cero políticas**: nadie puede leer ni
 escribir, y eso es correcto hasta que exista esto. Las políticas van en una
@@ -646,6 +685,16 @@ recordarlo.**
 
 ### 3.1 Los UUID del cliente, aprovechados como pide el prompt
 
+> **COMO QUEDÓ CONSTRUIDO.** Las tres variantes de la tabla de abajo existen,
+> pero **todas dentro de las funciones**: `escribir_fila` recibe por
+> parámetro `'actualizar'` (DO UPDATE) o `'ignorar'` (DO NOTHING) y cada
+> función lo decide POR TABLA; no hay upsert directo por PostgREST, porque el
+> riesgo 8.4 resultó real. La regla de `auditoria_log` —siempre DO NOTHING—
+> se cumple en las cinco funciones y se comprobó como control que un DO UPDATE
+> dispara el trigger. La idempotencia es la de esta sección, con una
+> precisión: repetir el MISMO lote devuelve `sin_cambios`/`ya_existia` con la
+> misma huella; OTRO lote con el mismo id se rechaza (CLAUDE.md §4.20).
+
 CLAUDE.md §5 decidió desde el Prompt 5 que todas las claves primarias son
 UUID generados en la terminal, justamente porque «con autoincrementales, dos
 ventas creadas offline tendrían el mismo id y colisionarían al subir». Este
@@ -734,6 +783,14 @@ así que un lote de **una** tabla también es atómico. Lo que no es atómico es
 hay un instante en que la nube tiene una venta sin líneas.
 
 ### 4.3 Las dos opciones, y la recomendación
+
+> **COMO QUEDÓ CONSTRUIDO.** Opción B para la venta, la apertura y el cierre,
+> como recomienda esta sección, **y además para todo lo demás**
+> (`sincronizar_lote_simple`), porque el riesgo 8.4 impidió los upserts
+> directos. Y **`sincronizar_venta` es `SECURITY DEFINER`, no INVOKER** como
+> dice la fila «RLS» de la tabla: como INVOKER, el `DO NOTHING` de `ventas`
+> exigiría `SELECT` a la terminal. Con eso, las cinco funciones de escritura
+> llevan el mismo endurecimiento de 1.5.1.
 
 **Opción A — una petición por tabla, en orden de llaves foráneas.**
 Para una venta: primero `productos` (las actualizaciones de inventario, que
@@ -1057,7 +1114,9 @@ Por eso la pantalla, que es nueva y solo de rol administrativo:
     `precios_especiales`, `limites_descuento` y `configuracion_negocio`
     conservan `UPDATE` directo (1.5.1). Recomendación: dejarlos así por ahora;
     son de bajo valor, se detectan con `recibido_en`, y cada función más es
-    más superficie que mantener (sección 9).
+    más superficie que mantener (sección 9). **SUPERADA por la medición de
+    8.4 (fase 2.b): sí van por función, `sincronizar_lote_simple`, porque el
+    upsert directo exigía `SELECT` sobre `auditoria_log`.**
 15. **Toda restauración resetea todos los PIN y borra los remotos,
     automáticamente y sin preguntar** (6.1). No depende de marcar «robo»: esa
     marca solo fecha la revisión de 6.5. Recomendación: sí. Un disco que
@@ -1067,7 +1126,9 @@ Por eso la pantalla, que es nueva y solo de rol administrativo:
     **Lo que hace falta decidir es qué proyecto pausar**: la organización ya
     tiene los dos proyectos activos que permite el plan gratuito, y uno de
     ellos, `dembow-ay-lupita`, es ajeno a este trabajo. Sin pausarlo no se
-    puede crear el de pruebas.
+    puede crear el de pruebas. **HECHO el 2026-09-11:** se pausó
+    `dembow-ay-lupita` y se creó `pos-pruebas-descartable`
+    (`ztidrshifrblhfraiowg`).
 17. **Dejar de sincronizar `pin_hash` y `pin_remoto_hash`, y quitar las dos
     columnas de Postgres con una migración.** Consecuencia directa de la
     decisión 15: si la terminal restaurada nunca confía en los hashes de la
@@ -1155,21 +1216,25 @@ La salida real es el plan Pro, que «no está sujeto a pausado». El proyecto
 ya prevé pasar a plan pagado antes de la entrega (§3); este riesgo dice que
 **no es opcional** si la nube tiene que ser un respaldo confiable.
 
-### 8.4 `ON CONFLICT DO NOTHING` bajo RLS, sin verificar (ahora acotado a menos tablas)
+### 8.4 `ON CONFLICT DO NOTHING` bajo RLS — MEDIDO: SÍ exige `SELECT`. Resuelto cambiando el diseño
 
-La sección 3.1 asume que un upsert con «no hacer nada si existe» **no exige
-política de `SELECT`** en Postgres, y que por eso la terminal puede reintentar
-sobre `ventas` sin poder leerla. Es lo que dice la semántica de Postgres
-—`DO NOTHING` no lee la fila existente—, pero **no se verificó contra
-PostgREST con RLS en el proyecto real**, porque hacerlo exige crear políticas
-y un usuario, y este prompt prohíbe tocar la nube. Es la **primera cosa que
-hay que medir** al implementar, antes de escribir la cola: si resultara que
-hace falta `SELECT`, la terminal necesitaría leer las tablas del dinero, que
-es justo lo que 1.5 evita, y habría que mover también esas inserciones a
-funciones `SECURITY DEFINER` (1.5.1). Con 1.5.1 la pregunta ya solo afecta a
-las tablas que conservan `INSERT` directo: las del catálogo y, si la venta
-queda como `INVOKER` (4.3), `ventas`, `venta_detalle`, `recibos` y
-`auditoria_log`.
+**Medido el 2026-09-11 en el proyecto de pruebas, como `authenticated` con los
+claims de la terminal, en SQL directo (`SET LOCAL ROLE authenticated` más
+`request.jwt.claims`) y confirmado por PostgREST.** Con una política de solo
+`INSERT`, `INSERT ... ON CONFLICT (id) DO NOTHING` falla con `42501` («new row
+violates row-level security policy») **aunque no haya ningún conflicto**; con
+`INSERT` + `SELECT` pasa; `DO UPDATE` exige además `UPDATE`. La semántica que
+esta sección asumía era falsa.
+
+La consecuencia era la que el párrafo original anticipaba: para reintentar
+sobre `ventas`, `venta_detalle`, `recibos` y —peor— `auditoria_log`, que va en
+**todos** los lotes, la terminal habría necesitado `SELECT` sobre las tablas
+del dinero y de la auditoría, que es justo lo que 1.5 evita. Se detuvo la
+implementación, se avisó, y Julio aprobó la otra salida: **todo lote sube por
+una función `SECURITY DEFINER`** (las tres de 1.5.1, `sincronizar_venta` como
+DEFINER y una nueva `sincronizar_lote_simple` para el resto), **y la terminal no
+tiene política directa sobre ninguna tabla.** Riesgo cerrado; la tabla de 2.3
+quedó reducida a `SELECT` para restauración.
 
 ### 8.5 El reloj de la máquina
 
@@ -1211,6 +1276,14 @@ pendiente 12 de §6.2, extendido a esto: la primera implementación tiene que
 medirse allí antes de dar por buenos los presupuestos de la sección 2.4.
 
 ### 8.9 Las funciones `SECURITY DEFINER` son la superficie más delicada del diseño
+
+> **Estado tras la fase 2.b:** son **cinco** de escritura (usuario, apertura,
+> cierre, venta y lote simple); el contrato de 9.2 quedó como `SECURITY
+> INVOKER` porque solo lee `pg_catalog`. El linter del proyecto de pruebas
+> lista exactamente esos cinco avisos y ninguno de `search_path`; CLAUDE.md
+> §4.4 y §4.20 dicen que son esperados y que no se «corrigen». Dónde se
+> probaron: `npm run verify:nube -- --destructivo`, 67 comprobaciones contra
+> el proyecto descartable, más 70 mediciones en SQL directo.
 
 Con 1.5.1 hay cuatro funciones que pasan por encima de RLS: usuario,
 apertura, cierre y el contrato de 9.2. Un error en cualquiera es un error con
@@ -1255,6 +1328,17 @@ para las funciones, antes de cualquier prueba:
 | **Cada función lleva un número de versión de contrato**, y cada lote lleva el que la terminal espera. Si no coinciden, la función falla con un error que dice los dos números. | Que la terminal y la nube cambien por separado. Es un error determinístico (3.2): detiene la cola y se ve. |
 
 ### 9.2 La prueba de deriva, en dos mitades
+
+> **COMO QUEDÓ CONSTRUIDO.** Mitad A: `src/main/database/__tests__/deriva-de-esquema.test.ts`,
+> 54 pruebas, en cada `npm test`. Mitad B: `npm run verify:nube` (sin
+> argumentos). Dos diferencias con lo escrito abajo, a propósito:
+> `contrato_de_sincronizacion()` es `SECURITY INVOKER` —solo lee
+> `pg_catalog`— y **la foto no se regenera sola cuando coincide**: se toma con
+> `--tomar-foto` y se revisa en el commit, para que un cambio hecho desde el
+> panel nunca entre a la foto sin que alguien lo lea. Las exclusiones de la
+> mitad A salen de `COLUMNAS_EXCLUIDAS` de la bandeja de salida —la misma
+> lista que arma los payloads— y de `recibido_en`. Se comprobó que las dos
+> mitades muerden con la foto manipulada de 9.3.
 
 Hay una regla del proyecto que condiciona el diseño: **las pruebas no dependen
 de que Supabase esté disponible ni consumen su cuota** (CLAUDE.md §4, punto
@@ -1351,7 +1435,7 @@ ocurrir en el proyecto de la tienda, donde rige «nunca se borra».
 | Dato | Valor | De dónde sale |
 |---|---|---|
 | Plan de la organización | **gratuito** | Consultado hoy |
-| Proyectos en la organización | **tres**: `pos-jimmy-cano` (activo), `dembow-ay-lupita` (activo, ajeno a este trabajo), `Olam Church` (pausado) | Listado hoy |
+| Proyectos en la organización | **tres**: `pos-jimmy-cano` (activo), `dembow-ay-lupita` (activo, ajeno a este trabajo), `Olam Church` (pausado) | Listado hoy. **Actualizado el 2026-09-11 (fase 2.b):** `Olam Church` ya no existe; `dembow-ay-lupita` está **pausado**; y el tercero es `pos-pruebas-descartable`, activo. Los dos activos son el real y el de pruebas. |
 | Costo de crear un proyecto nuevo | **$0 al mes** | La propia API de costos, consultada hoy |
 | Límite del plan gratuito | **«Dos proyectos gratuitos activos. Los proyectos pausados no cuentan.»** Y el límite se cuenta sobre todas las organizaciones donde uno es dueño o administrador. | Documentación de facturación, leída hoy |
 
@@ -1390,6 +1474,17 @@ un lugar libre no hay proyecto de pruebas, y que las opciones son tres:
    improbable.
 
 #### Qué prueban esas pruebas, que ninguna prueba local puede probar
+
+> **COMO QUEDÓ CONSTRUIDO.** La batería de `npm run verify:nube -- --destructivo`
+> cubre esta tabla con 67 comprobaciones por PostgREST y JWT reales, con dos
+> precisiones: la fila del riesgo 8.4 quedó **superada** —se midió que SÍ exige
+> `SELECT`, y por eso ya no hay `INSERT` directo que probar—, y la de
+> `recibido_en` es más fuerte que lo escrito: un payload que la traiga **se
+> rechaza con nombre**, y la que pone el servidor se comprueba en la constancia.
+> Sobre «borra lo que insertó»: el reinicio con `service_role` está escrito
+> pero no se ejercitó (no hay `service_role` del proyecto de pruebas en la
+> máquina), y `auditoria_log` no se puede vaciar por PostgREST porque es
+> inmutable: se trunca por SQL. Detalle en CLAUDE.md §4.20.
 
 | Qué | Por qué solo se puede probar allá |
 |---|---|

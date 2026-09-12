@@ -358,9 +358,14 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN LA NUBE.**
+**QUEDA UNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`: la
+`0023_funciones_de_sincronizacion`, de la fase 2.b.** Está escrita, aplicada y
+probada **solo en `pos-pruebas-descartable`**, por instrucción explícita de Julio
+(«no apliques nada contra pos-jimmy-cano en esta fase»). Se aplica en la fase
+2.c, junto con las políticas de RLS, por la vía de siempre: SQL a la vista y
+aprobación explícita. Ver §4.20.
 
-Las últimas fueron las **cuatro de la fase 2.a de la sincronización**, el
+Las últimas aplicadas en el real fueron las **cuatro de la fase 2.a de la sincronización**, el
 2026-09-11: `0019_recibido_en`, `0020_quitar_estado_sincronizacion`,
 `0021_quitar_hashes_de_pin` y `0022_fijar_search_path_auditoria`. Son las
 primeras migraciones del proyecto que **solo existen del lado de la nube**, y
@@ -479,13 +484,23 @@ arquitectura actual de una sola terminal, no un principio permanente.**
 > cuatro dígitos. No es un detalle de implementación: hay que resolverlo en el
 > diseño del módulo, no después. Ver también el punto 10 de la sección 6.2.
 
-Pendiente en la nube, para el prompt del módulo de sincronización:
+Pendiente en la nube, para la fase 2.c de la sincronización:
 
-- Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave anónima
-  no puede leer ni escribir nada. La sincronización usará una llave de
-  servicio, que ignora RLS por diseño. Mientras tanto, los 12 avisos
+- Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave
+  publicable no puede leer ni escribir nada. **Corrección al texto que estuvo
+  acá hasta el Prompt 33:** la sincronización NO usa una llave de servicio.
+  Usa un usuario de Auth con rol `terminal` (§1.2 del diseño), y la terminal
+  **no tendrá política directa sobre ninguna tabla**: escribe únicamente por
+  las funciones de la `0023` (§4.20). Lo único que las políticas van a conceder
+  es `SELECT` al rol `restauracion`. Mientras tanto, los 13 avisos
   `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
   problema.
+- Aplicar la `0023_funciones_de_sincronizacion` (§4.20). En cuanto esté, el
+  linter va a sumar **cinco avisos WARN
+  `authenticated_security_definer_function_executable`**, uno por función de
+  escritura, y ninguno de `search_path`. Medido en el proyecto de pruebas:
+  exactamente esos cinco. **Son esperados y no se corrigen**: esas funciones
+  son la única puerta de escritura de la terminal.
 
 **No tocar** la función `public.rls_auto_enable()` ni su disparador de eventos
 `ensure_rls`: son preexistentes del proyecto y ajenos a este esquema. Tienen dos
@@ -2553,6 +2568,200 @@ para los fallos de impresión.
 > Sigue valiendo la regla de siempre: **esto se verificó en macOS, y macOS no es
 > verificación.** Windows es la plataforma de producción.
 
+### 4.19 Un proyecto de Supabase descartable, y las migraciones que solo existen en la nube (Fase 2.a)
+
+**Qué se hizo el 2026-09-11.** Se creó `pos-pruebas-descartable` (referencia
+`ztidrshifrblhfraiowg`, `us-east-2`, plan gratuito), se le aplicaron **desde los
+mismos archivos** las migraciones del esquema, y recién después se escribieron y
+probaron allí las cuatro de esta fase, antes de que Julio aprobara aplicarlas al
+real. Es lo que §9.5 del diseño exige: nada que toque la nube se prueba por
+primera vez en `pos-jimmy-cano`. Costó pausar `dembow-ay-lupita`, ajeno a este
+trabajo, porque el plan gratuito permite dos proyectos activos.
+
+| Migración | Qué hace | Por qué no tiene espejo local |
+|---|---|---|
+| `0019_recibido_en` | Columna `recibido_en TIMESTAMPTZ NOT NULL DEFAULT now()` y un trigger `BEFORE INSERT OR UPDATE` que la fija con el reloj del servidor, en **doce** tablas | Es la única fecha que el cliente no controla. En SQLite, toda fecha la controla el cliente. |
+| `0020_quitar_estado_sincronizacion` | Quita `ventas.estado_sincronizacion` de Postgres | Es estado operativo de la terminal (decisión 4). En SQLite sigue. |
+| `0021_quitar_hashes_de_pin` | Quita `usuarios.pin_hash` y `pin_remoto_hash` de Postgres | Decisión 17: la nube no los necesita, y son 10 000 valores posibles. En SQLite siguen: son el ingreso. |
+| `0022_fijar_search_path_auditoria` | Le fija `search_path = ''` a `auditoria_log_es_inmutable` | El cambio estaba en el real desde el 2026-09-05 **sin archivo**; lo delató el proyecto de pruebas al comparar los dos catálogos. |
+
+**`denominaciones` no lleva `recibido_en`, y fue una corrección de Julio**: la
+terminal nunca la escribe —las once del quetzal viven en la nube desde la
+`0004`—, así que una marca de recepción ahí sería una columna que nunca
+significa nada. Doce tablas, no trece.
+
+**Los huecos de numeración tienen DOS direcciones**, y el README de
+`supabase/migrations` las distingue con sus dos tablas: locales sin espejo
+(002, 003, 006, 011, 013, 018: estado operativo de la terminal) y de la nube
+sin espejo (0019 a 0023). Un número usado en una dirección queda reservado en la
+otra.
+
+Evidencia leída del catálogo, no del archivo: la huella md5 de todas las
+columnas con tipo y nulabilidad dio `d85af488732d5874cd87844d2039713d` **en los
+dos proyectos** después de aplicarlas; 13 tablas, 127 columnas, 50 CHECK, 13
+triggers, 0 políticas. Los tres `DROP COLUMN` pasaron sin `CASCADE` y con
+`usuarios` en 0 filas.
+
+### 4.20 Las funciones de sincronización de la nube (Fase 2.b)
+
+**Están construidas, probadas y aplicadas SOLO en `pos-pruebas-descartable`.**
+`pos-jimmy-cano` no tiene la `0023` todavía, por instrucción explícita de
+Julio; se aplica en la fase 2.c con las políticas de RLS, con el SQL a la vista
+y su aprobación. El registro de `schema_migrations` del proyecto de pruebas
+guarda byte a byte el archivo del repositorio (mismo md5, sin el salto de línea
+final).
+
+#### El riesgo 8.4 se midió, y cambió el diseño
+
+El diseño asumía que `INSERT ... ON CONFLICT DO NOTHING` bajo RLS no exige
+política de `SELECT`, y sobre eso apoyaba los upserts directos de la terminal.
+**Se midió y es falso**: como `authenticated` con los claims de la terminal y
+una política de solo `INSERT`, Postgres rechaza con `42501` («new row violates
+row-level security policy») **aunque no haya conflicto**; con `INSERT` +
+`SELECT` pasa; `DO UPDATE` exige además `UPDATE`. Medido en SQL directo con
+`SET LOCAL ROLE authenticated` y `request.jwt.claims`, y confirmado por
+PostgREST. Como pedía el prompt, se detuvo el trabajo y se avisó.
+
+Darle `SELECT` a la terminal sobre `ventas`, `venta_detalle`, `recibos` y
+`auditoria_log` es exactamente lo que §1.5 del diseño evita —con la credencial
+robada se leería toda la auditoría—, así que Julio aprobó la salida que el
+propio 8.4 preveía: **todo lote sube por una función `SECURITY DEFINER` con la
+forma exacta de su operación, y la terminal no tiene política directa sobre
+ninguna tabla.** Lo único que las políticas de 2.c van a conceder es `SELECT`
+al rol `restauracion`.
+
+#### Las seis funciones de la `0023`
+
+| Función | Lote que recibe, en orden | Regla de conflicto, decidida POR TABLA |
+|---|---|---|
+| `sincronizar_usuario` | `usuarios` → `auditoria_log` | usuarios: actualizar; auditoría: **ignorar**. Rechaza cambiar `creado_en`, un rol inexistente y dejar cero administradores activos |
+| `sincronizar_apertura_de_caja` | `caja_sesiones` (insertar, `abierta`) → desglose de apertura → `auditoria_log` | todas: ignorar. Una caja que ya existe con OTRA apertura se rechaza |
+| `sincronizar_cierre_de_caja` | `caja_sesiones` (actualizar, `cerrada`) → desglose de cierre → `auditoria_log` | la única transición, `abierta → cerrada`. No cambia quién abrió, con cuánto ni cuándo; un cierre ya hecho con otros números se rechaza |
+| `sincronizar_venta` | `productos`… → `ventas` → `venta_detalle`… → `auditoria_log`… | productos: actualizar; el resto: ignorar. **Es DEFINER**, no INVOKER como preveía §4.3 del diseño, por el 8.4 |
+| `sincronizar_lote_simple` | UNA fila de `categorias`, `productos`, `precios_especiales`, `limites_descuento`, `configuracion_negocio` o `recibos` → `auditoria_log`… | actualizar para el catálogo, los topes y la configuración; ignorar para recibos y auditoría. **Lista cerrada**: cualquier otra tabla se rechaza por nombre |
+| `contrato_de_sincronizacion` | — | Solo lectura, solo rol `restauracion`, y **`SECURITY INVOKER`**: lee `pg_catalog`, que no tiene RLS, así que no necesita pasar por encima de nada |
+
+Las tres reglas de §9.1 del diseño se cumplen: **no calculan nada de negocio**,
+**no enumeran columnas** (`jsonb_populate_record` sobre el tipo de la tabla,
+leído al ejecutar) y **cada llamada lleva `version_de_contrato`**, que se
+compara con `version_del_contrato_de_sincronizacion()` —hoy `1`; la constante
+local vive en `src/shared/contrato-de-sincronizacion.ts`— y falla diciendo los
+dos números.
+
+#### El endurecimiento de §1.5.1, punto por punto, confirmado en el catálogo
+
+| Punto | Cómo está, y cómo se comprobó |
+|---|---|
+| `SET search_path = ''` | En las trece funciones de la nube, ayudantes y triggers incluidos: `proconfig = {search_path=""}`. La prueba de deriva falla si alguna lo pierde. |
+| `REVOKE` de `public` y `anon`; `GRANT` solo a `authenticated` | `proacl` de las cinco de escritura: `postgres`, `authenticated`, `service_role`; sin `anon` ni la entrada de `public`. Los cuatro ayudantes internos ni siquiera a `authenticated`: «permission denied for function escribir_fila» como terminal. |
+| Chequeo de `app_metadata.rol` en la primera línea | Con `is_anonymous = false` además. Veinticuatro llamadas con credenciales equivocadas —anon, sin rol, restauracion, y un anónimo con rol terminal— dieron `42501`. |
+| Nombres calificados por esquema | `public.x`, `auth.jwt()`, `pg_catalog.pg_attribute`. Las funciones incorporadas no se prefijan porque `pg_catalog` se busca siempre primero, aun con el camino vacío. |
+| Nunca `EXECUTE` con texto del payload | Hay UN solo `EXECUTE`, en `escribir_fila`: su texto lleva el nombre de la tabla —un `regclass` elegido de una lista literal— y columnas leídas de `pg_attribute` citadas con `%I`; el payload viaja como parámetro `$1`. |
+| Lista cerrada de tablas por función | Un `CASE` por nombre literal en cada función. `sincronizar_lote_simple` rechazó `ventas`, `usuarios` y `auditoria_log` como fila principal, con el nombre en el mensaje. |
+
+**`auditoria_log` es siempre `DO NOTHING`, y se distingue POR TABLA, no con una
+regla genérica.** `escribir_fila` no tiene valor por omisión: quien llama dice
+`'actualizar'` o `'ignorar'` fila por fila. Se comprobó el porqué como control:
+un `ON CONFLICT DO UPDATE` sobre un asiento existente, ejecutado como
+`postgres`, dispara `auditoria_log_prohibir_cambios` y aborta.
+
+#### Idempotencia reconciliada con los rechazos
+
+Repetir el MISMO lote es un no-op que devuelve `sin_cambios` / `ya_existia`
+**con la misma huella**; mandar OTRO lote con el mismo id se rechaza. «Mismo» se
+decide comparando la fila tipada del payload con la guardada, sin `recibido_en`.
+Cada función devuelve una constancia por fila —resultado, huella md5 y
+`recibido_en`— para que la terminal y las pruebas afirmen sobre el estado sin
+leer las tablas, que es lo que la terminal no puede hacer.
+
+Dos reglas que salieron de medir, no de diseñar:
+
+- **Las columnas `jsonb` reciben el texto JSON de SQLite ya parseado.**
+  `jsonb_populate_record` copiaría la cadena tal cual —un jsonb que contiene un
+  texto— y `auditoria_log.valor_nuevo` quedaría inservible. La regla es por
+  TIPO de columna leído del catálogo, no por nombre.
+- **Un payload que traiga `recibido_en` se rechaza con nombre.** La batería lo
+  encontró: pasaba, y el trigger lo pisaba en silencio, que es lo que §9.1
+  prohíbe.
+
+#### `npm run verify:nube`: la única prueba de las funciones, y el seguro
+
+Vitest no sabe nada de Postgres, RLS ni `auth.jwt()`. El guion
+`scripts/verificacion-de-nube.cjs` habla con un proyecto real por PostgREST,
+con los tres usuarios de Auth del proyecto de pruebas y sus JWT reales. Las
+credenciales salen de `.env.nube-pruebas` (ignorado por git; plantilla en
+`.env.nube-pruebas.ejemplo`); ninguna viaja en la aplicación.
+
+| Modo | Qué hace |
+|---|---|
+| sin argumentos | Mitad B de la prueba de deriva: llama a `contrato_de_sincronizacion()` como `restauracion` y compara con `supabase/esquema-nube.json`. No escribe nada. |
+| `--tomar-foto` | Escribe esa foto. Se corre a propósito cuando la nube cambió de verdad, y el archivo se revisa en el commit. |
+| `--destructivo` | La batería: **67 comprobaciones**. Vacía las tablas con la `service_role` del proyecto de pruebas, o salta ese paso con `--reinicio-hecho` si se vaciaron por SQL. |
+| `--esperar-vencimiento` | Espera a que venza el JWT de la terminal y comprueba que PostgREST lo rechace. |
+
+Códigos de salida: 0 bien, 1 alguna comprobación falló, 2 faltó algo para poder
+verificar, 3 el seguro se negó.
+
+**El seguro no es opcional.** `scripts/proyectos-de-prueba.cjs` tiene la lista
+FIJA (`['ztidrshifrblhfraiowg']`) y la referencia del real escrita aparte para
+negarla POR NOMBRE, antes de mirar la lista; compara además la URL con la
+referencia; y se niega ante cualquier proyecto si la lista llegara a contener el
+real. Diez pruebas de Vitest lo ejercitan cargando el mismo archivo que usa el
+guion, y una comprueba que el guion lo llame antes de crear el cliente de red.
+**Se probó que muerde** corriendo el guion real con la referencia de
+`pos-jimmy-cano`, con la URL del real y con una referencia ajena: código 3 las
+tres veces, sin una sola petición.
+
+Resultado contra el proyecto de pruebas: **66 de 67**. La única que falla es «el
+JWT dura 900 s»: sigue en 3600 (ver el pendiente de abajo). Lo que la batería
+probó, y que ninguna prueba local puede probar: las puertas cerradas (401 con la
+llave publicable sola; 403 para sin rol, para restauracion y para la terminal
+fuera de su función); el invariante de administradores; la transición única de
+la caja; el rechazo de un cierre con otros números; la atomicidad de la venta
+(un `CHECK` que falla en `ventas` deja la nube sin la venta: el recibo posterior
+no la encuentra, `409`); que la terminal no lee, ni actualiza, ni borra ninguna
+tabla directamente, aunque acabe de escribir en ella; y `recibido_en` con el
+reloj del servidor. Antes, la misma batería se corrió en SQL directo —70
+mediciones con `SET LOCAL ROLE authenticated` y los claims de cada rol— y las 70
+dieron lo esperado, incluido que un lote rechazado no deja ni un asiento.
+
+**Lo que NO se ejercitó:** el reinicio con `service_role` por PostgREST. No hay
+`service_role` del proyecto de pruebas en esta máquina —Julio la pone a mano si
+quiere que el guion vacíe por su cuenta— y las corridas se hicieron vaciando por
+SQL y con `--reinicio-hecho`. Ese código está escrito y no visto correr.
+`auditoria_log` no se puede vaciar por PostgREST ni con `service_role`: es
+inmutable por trigger; se trunca por SQL.
+
+#### La prueba de deriva, en sus dos mitades
+
+- **Mitad A, `deriva-de-esquema.test.ts`, en cada `npm test`, sin red**: compara
+  el esquema de SQLite —aplicando todas las migraciones— con la foto. Las
+  exclusiones salen de UNA sola fuente, `COLUMNAS_EXCLUIDAS` de la bandeja de
+  salida, más `recibido_en` del lado de la nube. Cubre las cinco funciones de
+  escritura (DEFINER, `search_path`, firma), el contrato (INVOKER), los cuatro
+  ayudantes, la versión de contrato y las listas cerradas. 54 pruebas.
+- **Mitad B, `verify:nube`, con red**: lo que la nube declara contra la foto.
+
+**Se comprobó que muerden** con una foto manipulada —sin `ventas.total`, con
+`ventas.propina`, `sincronizar_venta` como INVOKER y contrato 2—: la mitad A cae
+en tres pruebas nombrando cada cosa, y la mitad B imprime las cuatro
+diferencias y sale con código 1.
+
+#### Pendiente, y por qué
+
+- **JWT de 15 minutos.** No se puede cambiar desde el conector —llega solo a la
+  base— ni desde el código: es configuración de Auth. Se cambia en el panel,
+  Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time»,
+  a `900`, **primero en el proyecto de pruebas y después en el real**. La
+  batería ya mide `expires_in` y falla mientras no sea 900, y
+  `--esperar-vencimiento` comprueba que un token efectivamente venza.
+- **Aplicar la `0023` a `pos-jimmy-cano`** y escribir las políticas de
+  `restauracion`: fase 2.c.
+- **El enrutador de lotes** —qué función llama el `SyncProvider` real para cada
+  lote— es de la fase 3. Un detalle para ese día: un lote que empieza por
+  `productos` puede ser una venta o un lote simple; se distingue por si trae una
+  fila de `ventas`, no por la primera tabla.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -2703,6 +2912,18 @@ para los fallos de impresión.
 | **CORREGIDO: la señal de «hay una transacción abierta» es de TODA operación de negocio, no solo de la venta, y se levanta dentro del ÚNICO envoltorio que abre transacciones.** | Dejarla solo en la venta, como nació en la fase 1.b; levantarla a mano en cada uno de los ocho servicios | **Nació específica de la venta y estaba mal.** El peligro no tiene nada que ver con vender: es consecuencia de que la aplicación tenga **una sola conexión**, así que un ciclo del trabajador lanzado dentro de cualquier transacción abierta lee filas sin confirmar, y si esa transacción se revierte la nube se queda con un cambio que en la tienda nunca ocurrió. Proteger solo la venta dejaba las otras siete operaciones con el mismo agujero **y la falsa sensación de que estaba cubierto**, que es peor que no tener nada. Levantarla a mano en cada servicio sería garantizar que el noveno se olvide: por eso va dentro de `enTransaccionDeNegocio`, y quien no use el envoltorio no «olvida la señal», directamente no abre transacción. Hay una prueba que revisa el código fuente y exige que solo el envoltorio, el migrador y los guiones de ejemplo nombren `.transaction(`; el riesgo que cubre no es el código de hoy sino el servicio que alguien agregue el año que viene. La generalización está **probada por falsificación en tres servicios distintos** —categoría, apertura de caja y alta de usuario—, cada una con su contraparte con la señal puesta. | Prompt 31 — 2026-09-11 |
 | **Se quitó la segunda comprobación de «hay transacción abierta»: eran duplicación, no defensa en profundidad, y se midió.** Queda una sola, al principio de cada vuelta del bucle. | Dejar las dos «por si acaso»; dejar solo la de entrada | **Se midió quitando cada una por separado y las 74 pruebas pasaban en los dos casos**: ninguna estaba fijada por una prueba, y el conjunto solo demostraba «existe al menos una de las dos». La del bucle cubre por completo lo que cubría la de entrada, porque corre antes de CADA lote incluido el primero, así que la de entrada era el subconjunto. Dos comprobaciones que ninguna prueba puede distinguir son dos lugares donde tocar cuando esto cambie y una sola prueba que se cree que protege dos cosas. **Y se dice en voz alta que la posición en el bucle no agrega nada hoy**: con un solo hilo y una conexión síncrona, la continuación de un `await` no puede colarse dentro de un bloque síncrono, así que la señal solo puede estar levantada si el ciclo se lanzó desde adentro. Se deja en el bucle porque cuesta leer un booleano y porque es el lugar correcto el día que la premisa cambie. Con una sola, quitarla **hace fallar dos pruebas**, que es lo que antes no pasaba con ninguna. | Prompt 31 — 2026-09-11 |
 | **Todo ciclo de sincronización queda anotado en la bitácora TÉCNICA, no solo los que fallan.** | Anotar solo los fallos; no anotar nada; anotarlo en `auditoria_log` | Sin un renglón por ciclo no hay forma de saber si el trabajador está corriendo: fue exactamente lo que faltó para poder afirmar que el cableado funcionaba en la aplicación real, y por eso se agregó. El volumen es bajo porque los ciclos corren cuando tiene sentido y no cada N minutos. Va a `log-tecnico.log` y **nunca a `auditoria_log`**: que la nube esté al día o no es infraestructura, y ensuciar con eso la única tabla que un auditor lee entera es el error que §4.14 ya rechazó para los fallos de impresión. | Prompt 31 — 2026-09-11 |
+| **Todo lo que toca la nube se prueba primero en un proyecto de Supabase SEPARADO y descartable, `pos-pruebas-descartable`, montado desde los mismos archivos de migración.** | Probar contra `pos-jimmy-cano` «con cuidado»; una rama de Supabase; no probar las funciones contra Postgres real | Probar funciones y políticas exige insertar, ver qué rechazan y borrar, y en el real rige «nunca se borra». Un proyecto aparte con el MISMO esquema —no hay un esquema «de pruebas», hay un esquema y dos proyectos— hace posible lo que el real prohíbe. Costó pausar `dembow-ay-lupita`, ajeno a este trabajo, porque el plan gratuito permite dos proyectos activos. Es descartable por diseño: si se pausa solo o se pierde, se recrea en minutos desde las migraciones. Detectó de paso que el cambio de la `0022` estaba en el real sin archivo. | Prompt 32 — 2026-09-11 |
+| **Los huecos de numeración de las migraciones tienen DOS direcciones, y el README las lista por separado.** Las `0019` a `0023` son las primeras que solo existen del lado de la nube. | Renumerar; una sola tabla de huecos; reservar números «por si acaso» | Hasta la fase 2.a todo hueco era «local sin espejo»: estado operativo de la terminal. Con `recibido_en` apareció lo contrario: algo que la nube tiene que tener y la terminal no puede tener. Sin distinguir las dos direcciones, una sesión futura leería un hueco como «falta escribir el espejo» y lo escribiría. Cada archivo de la dirección 2 lleva en la tabla la razón concreta de por qué no hay migración local, y el número usado en una dirección queda reservado en la otra. | Prompt 32 — 2026-09-11 |
+| **`recibido_en` va en doce tablas, no en trece: `denominaciones` queda afuera.** Corrección de Julio. | Ponerla en las trece «por simetría» | La terminal nunca escribe `denominaciones`: las once del quetzal viven en la nube desde la `0004` con UUID fijos. Una marca de recepción en una tabla que nadie recibe es una columna que nunca significa nada, y la restauración (§6.5 del diseño) la leería como si algo hubiera llegado. En el README quedó la razón, no solo el cambio. | Prompt 32 — 2026-09-11 |
+| **RIESGO 8.4 MEDIDO: `INSERT ... ON CONFLICT DO NOTHING` bajo RLS SÍ exige política de `SELECT`, aunque no haya conflicto. Consecuencia: TODO lote sube por una función `SECURITY DEFINER`, y la terminal no tiene política directa sobre ninguna tabla.** | Darle `SELECT` a la terminal sobre `ventas`, `venta_detalle`, `recibos` y `auditoria_log`; insertar sin `ON CONFLICT` y tratar el duplicado como error; una `service_role` en la terminal | Medido como `authenticated` con los claims de la terminal, en SQL directo y por PostgREST: `42501` con solo `INSERT`; pasa con `INSERT` + `SELECT`. Conceder `SELECT` es exactamente lo que §1.5 del diseño evita: con la credencial robada se leerían las ventas y toda la auditoría. Tratar el duplicado como error rompe la idempotencia de §3.1, que es lo que hace seguro reintentar. Una `service_role` en la terminal es la credencial que ignora RLS entera. La función DEFINER pasa por encima de RLS con la forma exacta de cada operación, y las políticas de 2.c quedan reducidas a `SELECT` para `restauracion`. Se detuvo el trabajo y se avisó antes de decidir, como pedía el prompt. | Prompt 33 — 2026-09-11 |
+| **`sincronizar_venta` es `SECURITY DEFINER` (no INVOKER, como preveía §4.3 del diseño) y nace `sincronizar_lote_simple` para el catálogo, los topes, la configuración y los recibos, con LISTA CERRADA de tablas y regla de conflicto POR TABLA.** | Una función genérica `sincronizar_lote(jsonb)` que acepte cualquier tabla con una sola regla de upsert; una función por tabla | Como INVOKER, el `DO NOTHING` de `ventas` exigiría `SELECT` (8.4). Una función genérica sería una puerta a cualquier tabla —incluida `usuarios`— con la credencial de la terminal, y una sola regla de upsert es imposible: `auditoria_log` exige `DO NOTHING` porque su trigger `BEFORE UPDATE` abortaría un `DO UPDATE` aunque los valores fueran idénticos, comprobado como control. `escribir_fila` no tiene valor por omisión: cada función dice `actualizar` o `ignorar` fila por fila. Una función por tabla multiplicaría la superficie DEFINER sin ganar nada. | Prompt 33 — 2026-09-11 |
+| **Las funciones no enumeran columnas y exigen el payload EXACTO: `jsonb_populate_record` sobre el tipo de la tabla; `exigir_claves_conocidas` rechaza con nombre una columna de más o de menos; `recibido_en` no puede venir; y las columnas `jsonb` reciben el texto JSON de SQLite ya parseado.** | Listar las columnas en cada función; aceptar claves sobrantes en silencio; dejar que el trigger pise `recibido_en` | Enumerar columnas es lo que la sección 9 del diseño quiere evitar: cada columna nueva exigiría tocar la función. Pero `jsonb_populate_record` ignora en silencio una clave que la tabla no tiene, y el silencio es lo prohibido: por eso el payload tiene que ser exactamente las columnas. Las dos últimas reglas salieron de MEDIR, no de diseñar: `auditoria_log.valor_nuevo` llegaba como cadena y quedaba como un jsonb que contiene un texto —la regla es por tipo de columna leído del catálogo—, y un payload con `recibido_en` pasaba y el trigger lo pisaba sin ruido; la batería lo encontró y ahora se rechaza. | Prompt 33 — 2026-09-11 |
+| **Repetir el MISMO lote es un no-op con constancia (`sin_cambios` / `ya_existia`, misma huella); mandar OTRO lote con el mismo id se rechaza.** Cada función devuelve por fila resultado, huella md5 y `recibido_en`. | Rechazar todo lote cuyo id ya exista (§1.5.1 al pie de la letra); aceptar cualquier reescritura (upsert puro) | §1.5.1 decía «rechazar una caja que ya exista» y §3.1 decía «repetir un lote da el mismo estado»: leídas literalmente se contradicen, porque una respuesta 2xx perdida obliga a repetir. «Mismo» se decide comparando la fila TIPADA del payload con la guardada, sin `recibido_en`, así que un reintento pasa y una reescritura de un cierre hecho no. La constancia existe porque la terminal no puede leer las tablas: es la única forma de afirmar sobre el estado sin `SELECT`. | Prompt 33 — 2026-09-11 |
+| **`contrato_de_sincronizacion` es `SECURITY INVOKER`, no DEFINER como decía el diseño.** | DEFINER, como las de escritura | Solo lee `pg_catalog`, que no tiene RLS ni filtro por privilegio: no necesita pasar por encima de nada. Una función DEFINER menos es un aviso menos del linter y una superficie menos que cuidar. Sigue exigiendo el rol `restauracion` en la primera línea, y así se midió: 403 para la terminal y para el usuario sin rol. | Prompt 33 — 2026-09-11 |
+| **La prueba de deriva vive en dos mitades con una FOTO en el repositorio (`supabase/esquema-nube.json`), y la foto se toma A PROPÓSITO con `--tomar-foto`: el guion no la regenera solo.** | Una sola prueba con red en `npm test`; regenerar la foto en cada corrida, como sugería §9.2 del diseño | `npm test` no puede depender de la nube (§4, punto 4). Regenerar la foto cuando coincide es un no-op, y regenerarla cuando NO coincide taparía «alguien tocó la nube desde el panel»: la foto cambia solo por un commit que alguien lee. Las exclusiones de la mitad A salen de `COLUMNAS_EXCLUIDAS`, la misma lista que arma los payloads, para que no haya dos listas que puedan derivar. Cubre las cinco funciones, el contrato, los ayudantes y la versión, y se comprobó que muerde con una foto manipulada. | Prompt 33 — 2026-09-11 |
+| **El seguro del modo destructivo de `verify:nube`: lista FIJA en `scripts/proyectos-de-prueba.cjs`, la referencia de `pos-jimmy-cano` prohibida POR NOMBRE antes de mirar la lista, la URL cotejada con la referencia, y negativa total si la lista llegara a contener el real.** | Una variable de entorno o un argumento `--proyecto`; solo la lista, sin nombrar al real | Equivocarse de proyecto tiene que ser imposible, no improbable (§9.5). Una variable de entorno se pisa y un argumento se tipea. Nombrar al real aparte hace que ni agregarlo a la lista lo habilite: la lista envenenada se rechaza entera. La URL se coteja porque sin eso alguien podría declarar la referencia de prueba y apuntar al real. Vive en su propio módulo para que las diez pruebas de Vitest ejerciten la misma función que usa el guion, y una comprueba que el guion la llame antes de crear el cliente de red. Se probó que muerde con el guion real: código 3, sin peticiones. | Prompt 33 — 2026-09-11 |
+| **Las funciones se prueban ÚNICAMENTE con red, contra el proyecto de pruebas, con `npm run verify:nube -- --destructivo`; y se dice lo que no se ejercitó: el reinicio con `service_role`.** | Simular Postgres en Vitest; probar contra el real «con cuidado» | Vitest corre contra SQLite y no sabe nada de RLS, `auth.jwt()` ni triggers: cualquier simulación probaría la simulación. La batería son 67 comprobaciones por PostgREST con los JWT reales de los tres usuarios; antes, 70 mediciones en SQL directo. La `service_role` del proyecto de pruebas no está en esta máquina —la pone Julio si quiere que el guion vacíe por su cuenta—, así que el reinicio se hizo por SQL y con `--reinicio-hecho`, y ese código queda escrito y no visto correr. `auditoria_log` no se puede vaciar por PostgREST ni con `service_role`: es inmutable; se trunca por SQL. | Prompt 33 — 2026-09-11 |
+| **El JWT de 15 minutos (decisión 2 del diseño) NO se pudo aplicar desde acá: es configuración de Auth, fuera del alcance del conector y del código. Queda pendiente en el panel, y la batería lo mide y FALLA mientras siga en 3600.** | Darlo por hecho; quitar la comprobación para que la batería pase en verde | Una batería en verde con un JWT de una hora diría que la nube está como pide el diseño, y no lo está. La comprobación falla a propósito hasta que se cambie en Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time» —primero en el de pruebas, después en el real—, y `--esperar-vencimiento` comprueba que un token efectivamente venza. | Prompt 33 — 2026-09-11 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -2808,9 +3029,9 @@ negocio:
   implementación segura por defecto intacta: sin `impresora.json` configurado se
   usa `NullPrinterProvider` y el recibo queda solo en PDF. No hay adaptador real
   de Supabase: ahí sigue solo el contrato y la implementación simulada.
-- **La sincronización con la nube TODAVÍA NO HABLA CON LA NUBE, pero su diseño
-  está aprobado y sus dos primeras fases están construidas.** El diseño completo
-  vive en `docs/SINCRONIZACION.md` (Prompt 28), aprobado el 2026-09-11 con dos
+- **La APLICACIÓN todavía no habla con la nube, pero su diseño está aprobado y
+  cuatro fases están construidas.** El diseño completo vive en
+  `docs/SINCRONIZACION.md` (Prompt 28), aprobado el 2026-09-11 con dos
   excepciones anotadas en §4.17.
   - **Fase 1.a** (§4.17): la migración `018_sync_cola_lotes` y la **bandeja de
     salida transaccional**, que escribe en `sync_cola` dentro de la misma
@@ -2819,10 +3040,17 @@ negocio:
     respeta el orden de llegada, aplica el presupuesto por ciclo y la escalera
     de reintentos, detiene la cola ante un error determinístico y cede ante una
     venta en curso. Corre contra `SimulatedSyncProvider`.
-  **Lo que sigue sin existir:** el `SyncProvider` real contra Supabase, las
-  credenciales, la detección de conexión, las políticas de RLS, las funciones de
-  Postgres, la sincronización de archivos, la pantalla de sincronización y la
-  restauración. **No se ha hecho ni una llamada de red.**
+  - **Fase 2.a** (§4.19): el proyecto de pruebas descartable y las migraciones
+    `0019` a `0022`, que solo existen del lado de la nube.
+  - **Fase 2.b** (§4.20): las **funciones de sincronización** de la `0023`, el
+    guion `verify:nube` con su seguro, y la prueba de deriva. **Solo en el
+    proyecto de pruebas**: `pos-jimmy-cano` todavía no tiene la `0023`.
+  **Lo que sigue sin existir:** las políticas de RLS (2.c), el `SyncProvider`
+  real contra Supabase y las credenciales en la terminal (3), la detección de
+  conexión, la sincronización de archivos, la pantalla de sincronización y la
+  restauración. **La aplicación no ha hecho ni una llamada de red**: las únicas
+  llamadas reales las hace `npm run verify:nube`, un guion de desarrollo,
+  contra el proyecto de pruebas.
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
   canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.
@@ -2846,6 +3074,10 @@ npm run seed:limites:limpiar  # los quita, y los dos roles vuelven a cero
                          # desde el Prompt 25 los topes se cambian desde la
                          # aplicación, con su auditoría (§4.16).
 npm run verify:pantallas # maneja la app real y comprueba qué se ve en pantalla
+npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
+npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
+npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
+                                       # se niega ante cualquier otro (código 3)
 ```
 
 Archivos que la aplicación usa en `<userData>` y que conviene conocer:
@@ -2902,10 +3134,15 @@ src/shared/     código compartido main <-> renderer
   pin.ts        reglas de formato del PIN (sí va al renderer)
   money.ts      aritmética exacta con Decimal.js
   descuento.ts  cálculo del descuento discrecional (lo usan las DOS capas)
+  contrato-de-sincronizacion.ts  la versión de contrato y las listas cerradas de la 0023
   __tests__/    pruebas automatizadas
+scripts/        guiones de desarrollo: verify:pantallas, verify:nube y su seguro
+                (proyectos-de-prueba.cjs: la lista FIJA de proyectos descartables)
 supabase/       espejo del esquema en Postgres (migraciones para la nube)
+  migrations/0023_…  las funciones de sincronización; aplicada SOLO en el proyecto de pruebas
+  esquema-nube.json  la FOTO del catálogo de la nube que coteja la prueba de deriva
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
-  SINCRONIZACION.md  diseño de la sincronización. APROBADO; solo la fase 1.a está construida
+  SINCRONIZACION.md  diseño de la sincronización. APROBADO; fases 1.a, 1.b, 2.a y 2.b construidas
 ```
 
 ## 10. Antes de cerrar cualquier sesión de trabajo

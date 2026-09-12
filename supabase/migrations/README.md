@@ -124,10 +124,12 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 
 ### Dirección 2 — el cambio es solo de la nube, y allá no hay archivo
 
-**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020 y 021.** Las tres
-de esta dirección llegaron juntas, con la fase 2.a de la sincronización, y las
-tres nacen de la misma pregunta: qué tiene que haber en la nube que no tiene por
-qué estar en la terminal, y qué hay hoy en la nube que nunca debió estar.
+**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021 ni 023.**
+Las tres primeras de esta dirección llegaron juntas, con la fase 2.a de la
+sincronización, y nacen de la misma pregunta: qué tiene que haber en la nube que
+no tiene por qué estar en la terminal, y qué hay hoy en la nube que nunca debió
+estar. La `0023` llegó con la fase 2.b y es de otra clase: código que corre en
+Postgres.
 
 | Archivo aquí | Migración local | Por qué no la hay, en concreto |
 |---|---|---|
@@ -135,12 +137,14 @@ qué estar en la terminal, y qué hay hoy en la nube que nunca debió estar.
 | `0020_quitar_estado_sincronizacion.sql` | **(ninguna, a propósito)** | Quita `ventas.estado_sincronizacion` **de Postgres**. La columna **sigue existiendo y sigue usándose en SQLite**: dice si esta terminal ya subió esta venta, que es estado operativo local. En la nube no significaba nada —una fila que está en Postgres está, por definición, sincronizada— y mostraba siempre su `DEFAULT`, que es el mismo error que este README describe arriba para `intentos_fallidos`. Es la inconsistencia 1 del diseño, resuelta. Decisión 4. |
 | `0022_fijar_search_path_auditoria.sql` | **(ninguna, a propósito)** | Le fija `search_path = ''` a `auditoria_log_es_inmutable`. En SQLite no existe el concepto. **Este cambio ya estaba aplicado en `pos-jimmy-cano` desde el 2026-09-05, pero nunca se había escrito el archivo**: se aplicó directamente para callar un aviso del linter. Lo detectó el proyecto de pruebas al comparar los dos catálogos, que es exactamente para lo que existe (§9.5). Sin este archivo, aplicar esta carpeta sobre un proyecto vacío no reproducía el esquema real. |
 | `0021_quitar_hashes_de_pin.sql` | **(ninguna, a propósito)** | Quita `usuarios.pin_hash` y `pin_remoto_hash` **de Postgres**. Las dos columnas **siguen existiendo en SQLite**, donde son lo que hace funcionar el ingreso y el diálogo de autorización: quitarlas allá dejaría a la tienda sin poder abrir. Se quitan acá porque un PIN de cuatro dígitos tiene 10 000 valores y quien lea esa tabla en la nube los saca todos, y porque **no hacen falta**: toda restauración resetea los PIN sin mirarlos (decisión 15). Decisión 17. |
+| `0023_funciones_de_sincronizacion.sql` | **(ninguna, a propósito)** | Las **funciones de sincronización**: las cinco `SECURITY DEFINER` por las que escribe la terminal —usuario, apertura de caja, cierre de caja, venta y lote simple—, sus ayudantes internos y `contrato_de_sincronizacion()` para la prueba de deriva. Son código que corre **en Postgres**, con `auth.jwt()`, RLS y `jsonb_populate_record`: en SQLite no existe nada de eso ni hace falta, porque la terminal es quien llama, no quien recibe. Ver CLAUDE.md §4.20. **Aplicada solo en `pos-pruebas-descartable`**; en `pos-jimmy-cano` está pendiente (fase 2.c). |
 
-**Las tres tienen la misma forma y conviene verla:** ninguna es «la nube va
+**Las cuatro tienen la misma forma y conviene verla:** ninguna es «la nube va
 atrasada respecto de lo local». Dos de ellas *quitan* de la nube algo que lo
-local conserva, y la tercera *agrega* a la nube algo que lo local no puede
-tener. Es decir, los esquemas dejaron de ser espejos exactos a propósito, y
-estas tres son la lista completa de en qué difieren.
+local conserva, y las otras dos *agregan* a la nube algo que lo local no puede
+tener: una columna que solo el servidor puede fijar, y funciones que solo
+Postgres puede correr. Es decir, los esquemas dejaron de ser espejos exactos a
+propósito, y estas cuatro son la lista completa de en qué difieren.
 
 Si algún día hace falta una cuarta, va en esta tabla con su razón escrita, y el
 número que use queda reservado también del lado local.
@@ -175,9 +179,11 @@ número que use queda reservado también del lado local.
 | `0020_quitar_estado_sincronizacion.sql` | Sí — aplicada el 2026-09-11 |
 | `0021_quitar_hashes_de_pin.sql` | Sí — aplicada el 2026-09-11 |
 | `0022_fijar_search_path_auditoria.sql` | Sí — el CAMBIO estaba desde el 2026-09-05; el archivo se escribió y se aplicó el 2026-09-11, y fue un no-op comprobado |
+| `0023_funciones_de_sincronizacion.sql` | **NO, todavía.** Aplicada y probada solo en `pos-pruebas-descartable` el 2026-09-11, por instrucción de Julio. Se aplica en la fase 2.c con las políticas de RLS, con el SQL a la vista y su aprobación. |
 
-**No queda ninguna migración pendiente de aplicar en la nube.** Las cuatro
-últimas son las de la fase 2.a, aplicadas el 2026-09-11 por la vía de siempre:
+**Queda UNA migración pendiente de aplicar en `pos-jimmy-cano`: la `0023`.**
+Las cuatro anteriores son las de la fase 2.a, aplicadas el 2026-09-11 por la
+vía de siempre:
 primero contra `pos-pruebas-descartable`, después el SQL completo a la vista, y
 recién con la aprobación explícita de Julio contra `pos-jimmy-cano`.
 
@@ -210,9 +216,26 @@ porque es `SECURITY INVOKER`.
 ### Estado en `pos-pruebas-descartable` (referencia `ztidrshifrblhfraiowg`)
 
 Creado el 2026-09-11 en `us-east-2`, plan gratuito, para lo que manda §9.5 del
-diseño. **Tiene aplicadas las dieciséis migraciones**: las doce del esquema, la
-`0022` y las tres de la fase 2.a. Es el único proyecto donde estas tres se
-probaron antes de existir en la tienda.
+diseño. **Tiene aplicadas las diecisiete migraciones**: las doce del esquema, la
+`0022`, las tres de la fase 2.a y la `0023` de la fase 2.b. Es el único proyecto
+donde las de la nube se prueban antes de existir en la tienda, y **el único que
+hoy tiene las funciones de sincronización**.
+
+Su registro de `schema_migrations` guarda la `0023` byte a byte igual al archivo
+de esta carpeta (mismo md5, sin el salto de línea final), y la FOTO de su
+catálogo es `supabase/esquema-nube.json`, tomada con
+`npm run verify:nube -- --tomar-foto` y cotejada en cada `npm test` por la prueba
+de deriva. Las credenciales de sus tres usuarios de Auth viven en
+`.env.nube-pruebas` (ignorado por git; plantilla en `.env.nube-pruebas.ejemplo`).
+`npm run verify:nube -- --destructivo` escribe y vuelve a escribir filas de
+mentira ahí, y **solo ahí**: el seguro de `scripts/proyectos-de-prueba.cjs` se
+niega ante cualquier otra referencia, y ante la del real por nombre.
+
+Después de cada corrida de la batería quedan filas de mentira: las de las once
+tablas de negocio se vacían con la `service_role` del proyecto (o por SQL), y
+`auditoria_log` **solo por SQL** (`TRUNCATE`), porque es inmutable por trigger
+también para la `service_role`. Que crezca entre corridas no importa: los ids son
+nuevos en cada una.
 
 Comparado con `pos-jimmy-cano` **antes** de aplicarle las tres nuevas, los ocho
 contadores del catálogo daban idénticos —13 tablas, 118 columnas, 49 índices, 52
