@@ -1317,7 +1317,7 @@ medirse allí antes de dar por buenos los presupuestos de la sección 2.4.
 > lista exactamente esos cinco avisos y ninguno de `search_path`; CLAUDE.md
 > §4.4 y §4.20 dicen que son esperados y que no se «corrigen». Dónde se
 > probaron: `npm run verify:nube -- --destructivo`, 67 comprobaciones contra
-> el proyecto descartable, más 70 mediciones en SQL directo.
+> el proyecto descartable, más 91 mediciones en SQL directo.
 
 Con 1.5.1 hay cuatro funciones que pasan por encima de RLS: usuario,
 apertura, cierre y el contrato de 9.2. Un error en cualquiera es un error con
