@@ -364,16 +364,22 @@ ella.
 probado contra `pos-pruebas-descartable`. **Los dos proyectos tienen hoy las 21
 migraciones.**
 
-Lo que sigue pendiente de la fase 2.c **no son migraciones, son dos pasos
-manuales del panel** que ni el conector ni el código pueden hacer:
+De los dos pasos manuales que la fase 2.c necesitaba, **uno está hecho y
+verificado, y el otro está hecho pero NO verificado desde acá**:
 
-1. **Poner `app_metadata.rol = 'restauracion'`** en el usuario de Julio. Hoy
-   `pos-jimmy-cano` tiene **cero usuarios de Auth**, así que las trece políticas
-   recién aplicadas **no le sirven todavía a nadie**, y eso está medido, no
-   supuesto (ver la tabla de abajo). No es opcional: sin ese claim la
-   restauración no puede leer una sola fila.
-2. **Bajar la expiración del JWT a 900 s**, que en el proyecto de pruebas ya
-   está hecha. Ver §4.20.
+1. **`app_metadata.rol = 'restauracion'`: HECHO el 2026-09-13.** Julio creó su
+   usuario en el panel (`julioes134@outlook.es`, confirmado) y la marca se puso
+   por SQL sobre `auth.users`, **sumando** la clave sin borrar las que GoTrue ya
+   había puesto. Verificado leyendo la fila y, sobre todo, ejercitando las
+   políticas con los claims armados **desde el `app_metadata` real de la fila**:
+   ve las 11 denominaciones y la única fila de `configuracion_negocio`, y 0 en
+   las once tablas que están vacías. Ver §4.21.
+2. **JWT de 900 s: Julio dice haberlo cambiado en el panel, y ESO NO ESTÁ
+   VERIFICADO desde esta sesión.** La configuración de Auth **no vive en la
+   base** —se listaron las 23 tablas del esquema `auth` y no hay ninguna de
+   configuración— y el conector tampoco la expone, así que la única forma de
+   leerla es acuñar un token, lo que exige la contraseña del usuario. Queda como
+   afirmación del panel, no como medición. Ver §4.20.
 
 Evidencia de esa aplicación, leída del catálogo del real y no del archivo:
 
@@ -2861,6 +2867,41 @@ vía de siempre: SQL a la vista primero.
 >
 > Es decir: la política funciona, y **no le sirve a nadie hasta que el usuario
 > exista y tenga ese claim**, que se pone desde el panel (§1.7, punto 4).
+
+##### El usuario de restauración del real: cómo se marcó, y qué se comprobó
+
+**Hecho el 2026-09-13.** Julio creó `julioes134@outlook.es` desde el panel, con
+su contraseña y ya confirmado; la marca de rol se puso por SQL, porque la API de
+administración habría exigido la `service_role` del proyecto REAL, que por regla
+del proyecto nunca está en manos de esta sesión.
+
+```sql
+UPDATE auth.users
+   SET raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb)
+                           || jsonb_build_object('rol', 'restauracion'),
+       updated_at = now()
+ WHERE email = 'julioes134@outlook.es';
+```
+
+**El `||` no es un detalle de estilo.** GoTrue pone `provider` y `providers` en
+`app_metadata` al registrar al usuario, y las usa. Un `SET raw_app_meta_data =
+'{"rol":"restauracion"}'` las habría borrado. Antes de la actualización la fila
+tenía `{"provider":"email","providers":["email"]}`; después quedó con las tres
+claves. **Y el valor va sin tilde**: las políticas comparan contra el literal
+`'restauracion'`, así que `restauración` habría devuelto cero filas sin ningún
+error visible.
+
+**La comprobación fuerte no es que el texto guardado se parezca al esperado.**
+Se tomó el `app_metadata` REAL de la fila, se armaron los claims con él y se
+recorrieron las trece tablas bajo las políticas: 11 en `denominaciones`, 1 en
+`configuracion_negocio` y 0 en las once que están vacías en producción.
+
+> **EL ÚLTIMO ESLABÓN NO SE PUEDE CERRAR DESDE ACÁ.** Lo anterior prueba que lo
+> guardado alcanza para que la política deje pasar. Lo que falta probar es que
+> **GoTrue copia `raw_app_meta_data` al claim `app_metadata` del JWT que acuña**,
+> y eso exige iniciar sesión con la contraseña, que esta sesión no maneja. Se
+> cierra con un inicio de sesión real; hasta entonces es el único tramo de la
+> cadena que está razonado y no medido.
 
 | Migración | Qué crea |
 |---|---|
