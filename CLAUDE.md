@@ -374,12 +374,25 @@ verificado, y el otro está hecho pero NO verificado desde acá**:
    políticas con los claims armados **desde el `app_metadata` real de la fila**:
    ve las 11 denominaciones y la única fila de `configuracion_negocio`, y 0 en
    las once tablas que están vacías. Ver §4.21.
-2. **JWT de 900 s: Julio dice haberlo cambiado en el panel, y ESO NO ESTÁ
-   VERIFICADO desde esta sesión.** La configuración de Auth **no vive en la
-   base** —se listaron las 23 tablas del esquema `auth` y no hay ninguna de
-   configuración— y el conector tampoco la expone, así que la única forma de
-   leerla es acuñar un token, lo que exige la contraseña del usuario. Queda como
-   afirmación del panel, no como medición. Ver §4.20.
+2. **JWT de 900 s: HECHO y MEDIDO el 2026-09-13.** La configuración de Auth
+   **no vive en la base** —se listaron las 23 tablas del esquema `auth` y no hay
+   ninguna de configuración— y el conector tampoco la expone, así que la única
+   forma de leerla es acuñar un token, lo que exige la contraseña. La midió
+   Julio con el comando preparado en esta sesión y pegó la salida:
+
+   ```
+   expires_in       = 900 s
+   exp - iat        = 900 s
+   app_metadata.rol = restauracion
+   is_anonymous     = false
+   ```
+
+   Es medición, no afirmación, aunque la ejecutó Julio y no esta sesión: el
+   token lo acuñó el proyecto real y los cuatro valores salen de su carga útil.
+   **Y cierra de paso el último eslabón** que estaba razonado y no medido: que
+   GoTrue copie `raw_app_meta_data` al claim `app_metadata` del JWT. Las tres
+   condiciones que las políticas exigen —rol, no anónimo y token vivo— están las
+   tres confirmadas en un token real del proyecto real.
 
 Evidencia de esa aplicación, leída del catálogo del real y no del archivo:
 
@@ -513,20 +526,22 @@ arquitectura actual de una sola terminal, no un principio permanente.**
 > cuatro dígitos. No es un detalle de implementación: hay que resolverlo en el
 > diseño del módulo, no después. Ver también el punto 10 de la sección 6.2.
 
-Pendiente en la nube, para la fase 2.c de la sincronización:
+Estado de la fase 2.c en la nube — **CERRADA el 2026-09-13, en los dos
+proyectos y con los dos pasos manuales del panel hechos y medidos**:
 
-- Crear las **políticas de RLS** y los **buckets de Storage**: migraciones
-  `0025` y `0026`, **escritas, aplicadas y probadas solo en
-  `pos-pruebas-descartable` el 2026-09-13**, pendientes de revisión y
-  aprobación para el real. La sincronización NO usa una llave de servicio: usa
-  un usuario de Auth con rol `terminal` (§1.2 del diseño), y la terminal **no
-  tiene política directa sobre ninguna tabla**; escribe únicamente por las
-  funciones de la `0023`. Lo único que las políticas conceden es `SELECT` al
-  rol `restauracion`. Ver §4.21.
-  - **Cuando se apliquen, los 13 avisos INFO `rls_enabled_no_policy`
-    desaparecen.** Medido en el proyecto de pruebas: el linter pasó de 13 INFO
-    + 5 WARN a **0 INFO + 5 WARN**. Hasta entonces esos 13 avisos siguen siendo
-    el resultado buscado y no un problema.
+- Las **políticas de RLS** y los **buckets de Storage**, migraciones `0025` y
+  `0026`, **aplicadas en `pos-pruebas-descartable` y en `pos-jimmy-cano` el
+  2026-09-13**, con la aprobación explícita de Julio. La sincronización NO usa
+  una llave de servicio: usa un usuario de Auth con rol `terminal` (§1.2 del
+  diseño), y la terminal **no tiene política directa sobre ninguna tabla**;
+  escribe únicamente por las funciones de la `0023`. Lo único que las políticas
+  conceden es `SELECT` al rol `restauracion`. Ver §4.21.
+  - **Los 13 avisos INFO `rls_enabled_no_policy` desaparecieron**, que era la
+    señal buscada. Medido en los dos: el de pruebas pasó de 13 INFO + 5 WARN a
+    **0 INFO + 5 WARN**, y el real de 13 INFO + 7 WARN a **0 INFO + 7 WARN**.
+  - **Los dos pasos del panel están hechos y medidos**, no dados por buenos:
+    `app_metadata.rol = 'restauracion'` en el usuario de Julio (§4.21) y el JWT
+    en 900 s (§4.22).
 - **HECHO el 2026-09-12: la `0023` y la `0024` ya están aplicadas en el real.**
   La terminal no tiene privilegio de tabla para escribir nada (`anon` sin
   ninguno, `authenticated` solo con `SELECT`, `MAINTAIN` incluido en la
@@ -2757,9 +2772,10 @@ guion, y una comprueba que el guion lo llame antes de crear el cliente de red.
 `pos-jimmy-cano`, con la URL del real y con una referencia ajena: código 3 las
 tres veces, sin una sola petición.
 
-Resultado contra el proyecto de pruebas: **66 de 67**. La única que falla es «el
-JWT dura 900 s»: sigue en 3600 (ver el pendiente de abajo). Lo que la batería
-probó, y que ninguna prueba local puede probar: las puertas cerradas (401 con la
+Resultado de esta fase contra el proyecto de pruebas: **67 de 67** una vez
+puesto el JWT en 900 s; antes de eso fallaba una, «el JWT dura 900 s», a
+propósito. Con la fase 2.c la batería creció a **136** (§4.21). Lo que la
+batería probó, y que ninguna prueba local puede probar: las puertas cerradas (401 con la
 llave publicable sola; 403 para sin rol, para restauracion y para la terminal
 fuera de su función); el invariante de administradores; la transición única de
 la caja; el rechazo de un cierre con otros números; la atomicidad de la venta
@@ -2794,18 +2810,20 @@ diferencias y sale con código 1.
 
 #### Pendiente, y por qué
 
-- **JWT de 15 minutos.** No se puede cambiar desde el conector —llega solo a la
-  base— ni desde el código: es configuración de Auth. Se cambia en el panel,
-  Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time»,
-  a `900`. **Hecho en `pos-pruebas-descartable` el 2026-09-12**: medido con una
-  sesión directa, el proyecto de pruebas emite tokens de 900 s, y la batería,
-  que exige exactamente 900, ya pasa esa comprobación (por eso da 67/67 y no
-  66/67). **Falta el mismo cambio en `pos-jimmy-cano`.** `--esperar-vencimiento`
-  comprueba que un token efectivamente venza a los 15 minutos; ya se puede
-  correr contra el proyecto de pruebas, y todavía no se corrió (son 15 minutos
-  de espera). **En `pos-jimmy-cano` es hoy el ÚNICO punto del diseño que sigue
-  sin aplicarse, y no lo puede aplicar esta sesión**: hay que entrar al panel
-  del proyecto real y ponerlo en `900`.
+- **JWT de 15 minutos: CERRADO EN LOS DOS PROYECTOS, y medido en los dos.** No
+  se puede cambiar desde el conector —llega solo a la base— ni desde el código:
+  es configuración de Auth. Se cambia en el panel, Project Settings → JWT Keys →
+  Legacy JWT Secret → «Access token expiry time», a `900`. **Hecho en
+  `pos-pruebas-descartable` el 2026-09-12** y **en `pos-jimmy-cano` el
+  2026-09-13**, este último medido por Julio acuñando un token real del proyecto
+  real: `expires_in = 900`, `exp - iat = 900` (§4.4).
+  - **Y se comprobó que el token de verdad DEJA de servir**, no solo que dice
+    durar 900 s, corriendo `--esperar-vencimiento` contra el proyecto de
+    pruebas. Es la mitad que faltaba: `expires_in` es lo que el emisor promete,
+    y esto es lo que el verificador hace.
+  - **POSTGREST TOLERA ~30 SEGUNDOS DE RELOJ DESPUÉS DE `exp`, Y ESO HIZO
+    FALLAR LA SONDA LA PRIMERA VEZ.** Ver el detalle en §4.22. El fallo era del
+    guion, no de la nube.
 - **Revocar los privilegios de tabla a `anon` y `authenticated`**, migración
   `0024`. **Escrita y medida en `pos-pruebas-descartable`, y aplicada también en
   `pos-jimmy-cano` el 2026-09-12** (evidencia en §4.4). Leído del catálogo
@@ -2896,12 +2914,13 @@ Se tomó el `app_metadata` REAL de la fila, se armaron los claims con él y se
 recorrieron las trece tablas bajo las políticas: 11 en `denominaciones`, 1 en
 `configuracion_negocio` y 0 en las once que están vacías en producción.
 
-> **EL ÚLTIMO ESLABÓN NO SE PUEDE CERRAR DESDE ACÁ.** Lo anterior prueba que lo
-> guardado alcanza para que la política deje pasar. Lo que falta probar es que
-> **GoTrue copia `raw_app_meta_data` al claim `app_metadata` del JWT que acuña**,
-> y eso exige iniciar sesión con la contraseña, que esta sesión no maneja. Se
-> cierra con un inicio de sesión real; hasta entonces es el único tramo de la
-> cadena que está razonado y no medido.
+> **EL ÚLTIMO ESLABÓN, CERRADO.** Lo anterior prueba que lo guardado alcanza
+> para que la política deje pasar. Lo que faltaba era que **GoTrue copiara
+> `raw_app_meta_data` al claim `app_metadata` del JWT que acuña**, y eso exige
+> iniciar sesión con la contraseña, que esta sesión no maneja. Lo corrió Julio
+> el 2026-09-13 con el comando preparado acá, contra el proyecto real, y el
+> token trajo `app_metadata.rol = restauracion` e `is_anonymous = false`. La
+> cadena entera está medida de punta a punta: fila, claim y política.
 
 | Migración | Qué crea |
 |---|---|
@@ -3047,12 +3066,109 @@ desaparecer los trece avisos `rls_enabled_no_policy`, que era su razón de ser.
   funciones. Si alguien borrara una política desde el panel, solo lo vería la
   batería destructiva. Hacer que `contrato_de_sincronizacion()` declare también
   las políticas cerraría el hueco, y es una migración nueva más una foto nueva.
-- **El usuario de restauración del real hay que marcarlo en el panel** con
-  `app_metadata.rol = 'restauracion'` (§1.7, punto 4). Las políticas no sirven
-  de nada sin eso, y no se puede hacer desde el conector.
+- ~~El usuario de restauración del real hay que marcarlo con
+  `app_metadata.rol = 'restauracion'`~~ **HECHO el 2026-09-13**, y medido de
+  punta a punta: la fila, el claim del JWT y las trece políticas. Ver el bloque
+  de arriba.
 - **La foto de prueba queda en el bucket del proyecto de pruebas** después de
   cada corrida: con estas credenciales Storage no deja borrarla. Son 70 bytes
   por corrida en un proyecto descartable.
+
+### 4.22 El vencimiento del JWT, y la tolerancia de reloj que hizo fallar la sonda
+
+Cierra el último punto abierto de la fase 2: que el token de 900 s **de verdad
+deje de servir**, no solo que su carga útil diga `expires_in = 900`. Son dos
+cosas distintas —lo que el emisor promete y lo que el verificador hace— y hasta
+el 2026-09-13 solo estaba medida la primera.
+
+#### Lo que se midió, y en qué orden
+
+`npm run verify:nube -- --esperar-vencimiento` acuña un token de la terminal,
+comprueba que PostgREST lo acepte recién emitido, espera a pasar el `exp` y
+comprueba que lo rechace con `401 PGRST303 «JWT expired»`. **Para no esperar 15
+minutos por corrida, Julio bajó el JWT de `pos-pruebas-descartable` a 300 s
+mientras duraron estas mediciones.** Por eso las corridas de abajo reportan
+`expires_in = 300` y fallan la comprobación «el token se emitió para 900 s»:
+ese fallo es correcto y esperado mientras el valor esté bajado.
+
+> **HAY QUE DEVOLVER `pos-pruebas-descartable` A 900 s EN EL PANEL.** Esta
+> sesión no puede: es configuración de Auth. Mientras siga en 300, la batería
+> completa debería dar **135 de 136** —la que sobra es esa misma—, y si una
+> sesión futura ve ese 135/136 lo primero que tiene que mirar es el valor del
+> panel, no el guion. **El 135 es inferencia, no medición**: la batería
+> destructiva completa no se volvió a correr con el valor bajado; lo medido es
+> que esa comprobación falla, en la corrida de `--esperar-vencimiento` de acá
+> arriba.
+
+**La primera corrida FALLÓ, y la conclusión evidente era la equivocada.** Con el
+margen de 10 s que tenía el guion, el token vencido **seguía siendo aceptado**:
+llegaba un `403` por rol en vez del `401` por vencimiento. Leída al pie de la
+letra, esa corrida decía que la nube no hace cumplir el vencimiento, que es una
+falla grave y **es falsa**.
+
+Se descartaron las hipótesis una por una, y ninguna se dio por buena sin
+medirla:
+
+| Hipótesis | Cómo se descartó |
+|---|---|
+| El reloj de esta máquina está adelantado | Medido contra el reloj del servidor: **la Mac va 1.9 s ATRASADA**, o sea al revés de lo que haría falta para explicarlo |
+| PostgREST cachea el token que ya usó | Prueba A/B con **dos** tokens: uno usado antes de vencer y otro **nunca tocado**. A los 60 s del `exp`, los dos dieron `401 PGRST303`. Sin diferencia: no hay caché |
+| El vencimiento no se hace cumplir | Descartada por lo mismo: a los 60 s los rechaza, y GoTrue también (`403 bad_jwt`) |
+
+Quedaba una sola explicación posible —una **tolerancia de reloj** entre los 10 s
+y los 60 s— y se midió en vez de suponerla. Un token nunca usado, presentado
+cada 5 s desde antes del `exp`:
+
+```
+exp -4.5s -> 403 todavia aceptado      exp +15.9s -> 403 todavia aceptado
+exp +0.1s -> 403 todavia aceptado      exp +21.0s -> 403 todavia aceptado
+exp +5.3s -> 403 todavia aceptado      exp +26.0s -> 403 todavia aceptado
+exp +12.9s -> 504 (la nube tardó)      exp +31.0s -> 401 RECHAZADO POR VENCIDO
+```
+
+**Dejó de servir entre los 25 s y los 30 s del reloj de esta máquina**, que va
+1.9 s atrasada: entre 27.9 s y 32.9 s de reloj del servidor. Compatible con una
+tolerancia de **30 s exactos**, que es el valor habitual y existe para que dos
+relojes desfasados no rechacen tokens legítimos.
+
+`MARGEN_DE_VENCIMIENTO_MS` pasó de 10 s a **90 s**, tres veces la tolerancia
+medida, con la medición escrita al lado en el código. Con el margen corregido la
+sonda pasa, corrida entera contra el proyecto de pruebas:
+
+```
+Vencimiento del JWT de la terminal en ztidrshifrblhfraiowg
+  FALLA el token se emitió para 900 s
+        expires_in = 300
+   ok   recién emitido, PostgREST acepta el token (contesta 403 por el rol, no 401)
+   ·    esperando 389 s hasta pasado exp = 2026-09-13T21:13:19.000Z…
+   ok   vencido, el MISMO token es rechazado con 401 (JWT expired)
+
+3 comprobaciones, 1 fallidas.
+  - el token se emitió para 900 s
+```
+
+**La que falla es la del valor bajado a propósito, y las dos de sustancia
+pasan.** Antes del arreglo fallaban dos, y la segunda era falsa.
+
+> **LA LECCIÓN, QUE VALE MÁS QUE EL NÚMERO.** Una comprobación que falla no
+> prueba que el sistema esté mal: prueba que la comprobación y el sistema no
+> coinciden. Acá el defecto estaba **en la prueba**, y darla por buena habría
+> hecho perseguir un fallo de seguridad inexistente en la nube. Es la contracara
+> exacta de la regla de este proyecto sobre falsificar: así como una prueba que
+> nunca se vio fallar no prueba nada, **una prueba que falla tampoco prueba nada
+> hasta saber POR QUÉ falla.**
+
+#### Lo que esto NO cubre
+
+- **`pos-jimmy-cano` no se sondeó así.** El guion no puede correr contra el
+  real: el seguro lo rechaza por nombre (§4.20). De la vida del token del real
+  hay medición de su carga útil —`expires_in = 900`, `exp - iat = 900`, §4.4— y
+  no de su rechazo pasado el `exp`. Los dos proyectos corren la misma versión
+  de PostgREST y GoTrue, así que la tolerancia debería ser la misma, **pero eso
+  es razonamiento, no medición**, y así queda dicho.
+- **La tolerancia es de la plataforma y puede cambiar sin avisar.** Si un día
+  esta comprobación vuelve a fallar, lo primero que hay que medir es la
+  tolerancia otra vez, no concluir que la nube dejó de validar.
 
 ## 5. Registro de decisiones técnicas
 
@@ -3215,7 +3331,7 @@ desaparecer los trece avisos `rls_enabled_no_policy`, que era su razón de ser.
 | **La prueba de deriva vive en dos mitades con una FOTO en el repositorio (`supabase/esquema-nube.json`), y la foto se toma A PROPÓSITO con `--tomar-foto`: el guion no la regenera solo.** | Una sola prueba con red en `npm test`; regenerar la foto en cada corrida, como sugería §9.2 del diseño | `npm test` no puede depender de la nube (§4, punto 4). Regenerar la foto cuando coincide es un no-op, y regenerarla cuando NO coincide taparía «alguien tocó la nube desde el panel»: la foto cambia solo por un commit que alguien lee. Las exclusiones de la mitad A salen de `COLUMNAS_EXCLUIDAS`, la misma lista que arma los payloads, para que no haya dos listas que puedan derivar. Cubre las cinco funciones, el contrato, los ayudantes y la versión, y se comprobó que muerde con una foto manipulada. | Prompt 33 — 2026-09-11 |
 | **El seguro del modo destructivo de `verify:nube`: lista FIJA en `scripts/proyectos-de-prueba.cjs`, la referencia de `pos-jimmy-cano` prohibida POR NOMBRE antes de mirar la lista, la URL cotejada con la referencia, y negativa total si la lista llegara a contener el real.** | Una variable de entorno o un argumento `--proyecto`; solo la lista, sin nombrar al real | Equivocarse de proyecto tiene que ser imposible, no improbable (§9.5). Una variable de entorno se pisa y un argumento se tipea. Nombrar al real aparte hace que ni agregarlo a la lista lo habilite: la lista envenenada se rechaza entera. La URL se coteja porque sin eso alguien podría declarar la referencia de prueba y apuntar al real. Vive en su propio módulo para que las diez pruebas de Vitest ejerciten la misma función que usa el guion, y una comprueba que el guion la llame antes de crear el cliente de red. Se probó que muerde con el guion real: código 3, sin peticiones. | Prompt 33 — 2026-09-11 |
 | **Las funciones se prueban ÚNICAMENTE con red, contra el proyecto de pruebas, con `npm run verify:nube -- --destructivo`; y se dice lo que no se ejercitó: el reinicio con `service_role`.** | Simular Postgres en Vitest; probar contra el real «con cuidado» | Vitest corre contra SQLite y no sabe nada de RLS, `auth.jwt()` ni triggers: cualquier simulación probaría la simulación. La batería son 67 comprobaciones por PostgREST con los JWT reales de los tres usuarios; antes, 91 mediciones en SQL directo. La `service_role` del proyecto de pruebas no está en esta máquina —la pone Julio si quiere que el guion vacíe por su cuenta—, así que el reinicio se hizo por SQL y con `--reinicio-hecho`, y ese código queda escrito y no visto correr. `auditoria_log` no se puede vaciar por PostgREST ni con `service_role`: es inmutable; se trunca por SQL. | Prompt 33 — 2026-09-11 |
-| **El JWT de 15 minutos (decisión 2 del diseño) NO se pudo aplicar desde acá: es configuración de Auth, fuera del alcance del conector y del código. Queda pendiente en el panel, y la batería lo mide y FALLA mientras siga en 3600.** | Darlo por hecho; quitar la comprobación para que la batería pase en verde | Una batería en verde con un JWT de una hora diría que la nube está como pide el diseño, y no lo está. La comprobación falla a propósito hasta que se cambie en Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time» —primero en el de pruebas, después en el real—, y `--esperar-vencimiento` comprueba que un token efectivamente venza. | Prompt 33 — 2026-09-11 |
+| **El JWT de 15 minutos (decisión 2 del diseño) NO se pudo aplicar desde acá: es configuración de Auth, fuera del alcance del conector y del código. Queda pendiente en el panel, y la batería lo mide y FALLA mientras siga en 3600.** | Darlo por hecho; quitar la comprobación para que la batería pase en verde | Una batería en verde con un JWT de una hora diría que la nube está como pide el diseño, y no lo está. La comprobación falla a propósito hasta que se cambie en Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time» —primero en el de pruebas, después en el real—, y `--esperar-vencimiento` comprueba que un token efectivamente venza. **CERRADO: el de pruebas el 2026-09-12 y el real el 2026-09-13, los dos medidos acuñando un token; y `--esperar-vencimiento` ya se corrió y pasa, después de corregir el margen del guion (§4.22).** | Prompt 33 — 2026-09-11 |
 | **La `0024` revoca los privilegios de tabla con `REVOKE ALL` + `GRANT SELECT`, no con una lista de privilegios; se aplicó y midió en `pos-pruebas-descartable` sin cambiar ningún comportamiento de función.** | Enumerar los privilegios a revocar; revocar también `SELECT`; escribir la migración directo contra el real | Supabase concede a `anon` y `authenticated` los OCHO privilegios de tabla de Postgres 17. La primera versión de la `0024` enumeraba seis y **se le escapó `MAINTAIN`**, nuevo en PG17, que no aparece en `information_schema.role_table_grants` y sí en `pg_class.relacl` (la letra `m`); se vio leyendo `relacl` tras aplicarla. `REVOKE ALL` seguido de `GRANT SELECT` no puede dejar un privilegio afuera y sobrevive a que Postgres agregue otro mañana. `SELECT` se conserva para `authenticated` porque terminal y restauración son el MISMO rol de Postgres —el rol es un claim del JWT— y quién lee lo decide RLS. El criterio de aplicación fue que la misma batería, antes y después, diera lo mismo en TODAS las funciones: medido, 90/93 filas del arnés SQL byte a byte iguales (cambian solo los dos marcadores de privilegios y la sonda 152, de «viola RLS» a «permission denied», mismo `42501`) y 67/67 en PostgREST, con las tres sondas de acceso directo pasando de RLS a «permission denied». Queda anotado lo que NO cubre: el `pg_default_acl` del rol de plataforma `supabase_admin`, que `postgres` no puede alterar. Aplicada solo en el proyecto de pruebas; en `pos-jimmy-cano` va en la fase 2.c. | Prompt 34 — 2026-09-12 |
 | **La `0023` y la `0024` se aplicaron a `pos-jimmy-cano` el 2026-09-12, y lo que prueba que se aplicó lo correcto NO es el texto de la migración sino la huella de los OBJETOS: las 13 definiciones de función del real comparadas una a una con las del proyecto de pruebas.** | Confiar en que el texto enviado al conector era el del archivo; comparar solo el md5 del registro de `schema_migrations`; pedirle a Julio que las pegara a mano en el editor SQL del panel | Aplicar una migración de 43 KB por el conector obliga a que el texto pase entero por la sesión, y una diferencia de un byte produciría en producción funciones parecidas pero distintas. El md5 del registro detecta eso, pero mide **la entrada**; lo que importa es **el efecto**. Por eso la verificación fuerte es `md5(pg_get_functiondef(oid))` de las trece funciones contra las del proyecto de pruebas: dio **13 de 13**, y el md5 de los dos registros coincidió además con el de los archivos (`a77ae682…` y `5286ab2a…`). Se sumó una tercera comprobación independiente del mecanismo: la huella canónica del contrato que declara cada nube, que dio `81b685b17f47750bb6c56812ae89c99e` en el real, en el de pruebas y en `supabase/esquema-nube.json`. La aplicación se hizo con el real en 0 filas de negocio, y se comprobó que siguiera en 0 después. **La batería destructiva NO se corrió contra el real, y no puede correrse**: el seguro la rechaza por nombre, el real no tiene usuarios de Auth, y escribiría asientos en `auditoria_log`, que es inmutable por trigger y solo se vacía con TRUNCATE. En su lugar se corrieron 40 sondas que no escriben nada. | Prompt 35 — 2026-09-12 |
 | **La fase 2.c crea UNA sola clase de política: `SELECT` para `restauracion`, sobre las 13 tablas. Para la terminal, ninguna política sobre ninguna tabla, y el catálogo NO recupera el `UPDATE` directo de la decisión 14.** | Implementar la tabla ORIGINAL de §2.3, que le daba al catálogo `INSERT`/`UPDATE`/`SELECT` directos; escribir además políticas de escritura para las otras tablas | El prompt pedía «el catálogo conserva UPDATE directo (decisión 14)», y **esa es la versión superada** del documento: §2.3 lleva desde la fase 2.b un encabezado que dice «SUPERADA EN LA FASE 2.b, POR LA MEDICIÓN DEL RIESGO 8.4», y el propio §7 marca la decisión 14 como «SUPERADA por la medición de 8.4: sí van por función». Implementarla al pie de la letra habría **roto lo que ya funciona**: todo lote de catálogo lleva su asiento de `auditoria_log`, y el `ON CONFLICT DO NOTHING` de ese asiento exige `SELECT` sobre la auditoría entera —medido—, que es justo lo que §1.5 evita; y además crearía un segundo camino de escritura para tablas que `sincronizar_lote_simple` ya escribe con su auditoría y su lista cerrada. **Políticas de escritura tampoco se escriben**, y no por olvido: después de la `0024`, `authenticated` solo tiene `SELECT`, así que una escritura muere en el privilegio antes de llegar a RLS; una política ahí sería una regla para un camino cerrado. Las trece se crean con la condición IDÉNTICA y hay una comprobación que exige `count(DISTINCT qual) = 1`. | Prompt 36 — 2026-09-13 |
@@ -3224,6 +3340,7 @@ desaparecer los trece avisos `rls_enabled_no_policy`, que era su razón de ser.
 | **En `storage.objects` NO se puede revocar el privilegio de `anon`, y en vez de dejar un `REVOKE` que no revoca se puso una política RESTRICTIVA.** | Dejar el `REVOKE ALL ON storage.objects FROM anon` en la migración, que es lo que se pidió y lo que «parece» aplicarse; revocar también a `authenticated`; no poner nada | El `REVOKE` **no lanza error y no hace nada**: el `relacl` muestra `anon=arwdDxtm/supabase_storage_admin`, y un `REVOKE` solo quita lo que concedió quien lo ejecuta. `postgres` no es miembro de `supabase_storage_admin`, `GRANTED BY` da «grantor must be current user» y `SET ROLE` da «permission denied to set role». **Dejarlo habría sido lo peor de las tres opciones**: una migración que aparenta cerrar una puerta y no la cierra es exactamente el guion que sale en silencio y miente sobre lo que hizo, la clase de cosa que este proyecto ya prohibió en §4.11. La política restrictiva da la misma defensa en profundidad y sí está en nuestra mano: no concede nada, se combina con Y contra las permisivas, y ninguna permisiva futura la pasa por encima. **Falsificada con un control**: con la restrictiva puesta, `anon` no sube ni con una permisiva abierta encima; quitándola, con la misma permisiva, sube y lista los objetos. A `authenticated` no se le toca porque la terminal NECESITA `INSERT`; medido, su subida funciona idéntica antes y después. | Prompt 37 — 2026-09-13 |
 | **«Privado» es un ESTADO del bucket que se cambia desde el panel, no una garantía que la migración sostenga; queda documentado y no se agrega ningún mecanismo.** | Agregar un disparador o una comprobación periódica que vuelva a poner `public = false`; no decir nada | `public` es una columna de la fila del bucket y el panel la cambia con un interruptor, sin pasar por ninguna migración de la carpeta y sin pasar por RLS. Si alguien marca `fotos` o `recibos` como público, Storage sirve esos objetos por una ruta que **no evalúa ninguna de las cuatro políticas de la `0026`**, y la migración seguiría figurando como aplicada: ni la restrictiva de `anon` ni la ausencia de permisos de la terminal se enterarían. No se agrega mecanismo porque no hace falta hoy y porque un vigilante automático sería otra pieza que mantener; lo que sí hace falta es que esté **dicho**, para que el día que un archivo aparezca donde no debería, lo primero que se mire sea si el bucket sigue privado. | Prompt 38 — 2026-09-13 |
 | **La `0025` y la `0026` aplicadas en `pos-jimmy-cano`, y con ellas la fase 2.c queda completa del lado del SQL. Lo que falta son dos pasos del panel, y se documentan como no opcionales.** | Darla por cerrada al aplicar las migraciones; dejar los pasos del panel como una nota al pie | Las trece políticas conceden lectura a quien traiga `app_metadata.rol = 'restauracion'`, y el real tiene **cero usuarios de Auth**: aplicadas y todo, hoy no le sirven a nadie. Se midió en el real, con los claims simulados sobre `denominaciones`: sin rol 0 de 11, con rol terminal 0 de 11, con rol restauración pero anónimo 0 de 11, con el claim correcto **11 de 11**, y la llave publicable `42501`. Es decir, la política discrimina bien y **el paso manual es la mitad que falta del mecanismo**, no un trámite. El otro paso es el JWT de 900 s. El linter confirmó lo previsto: los 13 avisos INFO `rls_enabled_no_policy` desaparecieron. | Prompt 38 — 2026-09-13 |
+| **`MARGEN_DE_VENCIMIENTO_MS` pasa de 10 s a 90 s, porque se MIDIÓ que PostgREST tolera ~30 s de reloj después del `exp`. El fallo de la sonda era del guion, no de la nube.** | Dar por buena la primera corrida y reportar que la nube no hace cumplir el vencimiento; subir el margen a un número cómodo sin medir la tolerancia; quitar la comprobación | La sonda falló diciendo que un token vencido seguía siendo aceptado, y **leída al pie de la letra acusaba a la nube de una falla de seguridad que no tiene**. Se descartaron las hipótesis midiendo, no razonando: el reloj de esta máquina resultó ir **1.9 s ATRASADO** respecto del servidor, o sea al revés de lo que haría falta para explicarlo; y una prueba A/B con dos tokens —uno usado antes de vencer y otro **nunca tocado**— dio `401 PGRST303` en los dos a los 60 s del `exp`, así que tampoco hay caché y el vencimiento **sí** se hace cumplir. Quedaba una tolerancia de reloj entre 10 s y 60 s, y se midió con un token nunca usado presentado cada 5 s: **dejó de servir entre los 25 s y los 30 s de esta máquina**, o sea entre 27.9 s y 32.9 s del servidor, compatible con los 30 s exactos que es el valor habitual. El margen queda en 90 s —tres veces la tolerancia medida— con la medición escrita al lado en el código; el costo es minuto y medio en un guion que ya espera el vencimiento entero. **La lección es la contracara de la regla de falsificar:** así como una prueba que nunca se vio fallar no prueba nada, una prueba que falla tampoco prueba nada hasta saber POR QUÉ falla. Ver §4.22. | Prompt 39 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -3346,8 +3463,9 @@ negocio:
     guion `verify:nube` con su seguro, y la prueba de deriva. Aplicada en los
     dos proyectos el 2026-09-12, junto con la `0024`.
   - **Fase 2.c** (§4.21): las **políticas de RLS** de la `0025` y los **buckets
-    de Storage** de la `0026`. **Solo en el proyecto de pruebas**: en
-    `pos-jimmy-cano` están pendientes de la revisión de Julio.
+    de Storage** de la `0026`. Aplicadas en los dos proyectos el 2026-09-13,
+    con los dos pasos manuales del panel hechos y medidos (§4.22). **La fase 2
+    queda cerrada entera.**
   **Lo que sigue sin existir:** el `SyncProvider`
   real contra Supabase y las credenciales en la terminal (3), la detección de
   conexión, la sincronización de archivos, la pantalla de sincronización y la
@@ -3381,6 +3499,10 @@ npm run verify:nube      # compara lo que la nube declara con supabase/esquema-n
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
                                        # se niega ante cualquier otro (código 3)
+npm run verify:nube -- --esperar-vencimiento   # comprueba que un token VENCIDO sea rechazado.
+                                       # TARDA la vida del token + 90 s de margen: con el JWT
+                                       # en 900 s son ~16 minutos. El margen NO se baja de 60 s
+                                       # (§4.22: PostgREST tolera ~30 s de reloj tras el exp).
 ```
 
 Archivos que la aplicación usa en `<userData>` y que conviene conocer:

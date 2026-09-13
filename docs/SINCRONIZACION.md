@@ -329,6 +329,22 @@ alguien más está escribiendo. Queda en 8.1.
 | **Reloj de la máquina mal puesto** | Un JWT «del futuro» o «vencido» por desfase. | La documentación advierte que los equipos de escritorio pueden desfasarse minutos u horas. Es un riesgo abierto (8.5): la sincronización no corrige el reloj, y un desfase grande la deja sin poder autenticar hasta que alguien lo arregle en Windows. |
 | **Límite de sesiones del plan** | Time-box e inactividad de sesión **son de plan Pro**. | En el plan gratuito **no se puede** hacer que la sesión de la terminal caduque sola. La única expiración forzable es la del JWT. Anotado en 8.1. |
 
+> **COMO QUEDÓ CONSTRUIDO (2026-09-13).** Los 15 minutos están puestos en los
+> dos proyectos y **medidos acuñando un token**, no dados por buenos:
+> `expires_in = 900` y `exp - iat = 900`, también en `pos-jimmy-cano`.
+>
+> Y se midió algo que esta sección no preveía y que **matiza la fila del reloj
+> mal puesto**: **PostgREST tolera unos 30 segundos de desfase después del
+> `exp`.** Medido contra el proyecto de pruebas presentando un token nunca
+> usado cada 5 s: seguía siendo aceptado a los 26 s del `exp` y fue rechazado a
+> los 31 s (reloj de la máquina de desarrollo, que iba 1.9 s atrasada respecto
+> del servidor). No cambia la cota de la sección 1.5 en ningún sentido
+> práctico —medio minuto sobre quince—, pero sí quiere decir que la ventana
+> real tras una revocación es «hasta 15 minutos **y medio**», y que un desfase
+> de reloj **de segundos** no rompe nada; el riesgo 8.5 sigue siendo el de un
+> desfase de minutos u horas. El detalle completo, con la tabla de la
+> medición, está en CLAUDE.md §4.22.
+
 ### 1.7 Lo que hay que hacer en el panel de Supabase, y que la aplicación no puede hacer sola
 
 Todo esto se hace una vez, con tu cuenta, y queda registrado en una migración

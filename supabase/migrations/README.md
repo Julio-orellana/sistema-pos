@@ -138,7 +138,7 @@ tabla, un concepto que en SQLite no existe.
 | `0020_quitar_estado_sincronizacion.sql` | **(ninguna, a propósito)** | Quita `ventas.estado_sincronizacion` **de Postgres**. La columna **sigue existiendo y sigue usándose en SQLite**: dice si esta terminal ya subió esta venta, que es estado operativo local. En la nube no significaba nada —una fila que está en Postgres está, por definición, sincronizada— y mostraba siempre su `DEFAULT`, que es el mismo error que este README describe arriba para `intentos_fallidos`. Es la inconsistencia 1 del diseño, resuelta. Decisión 4. |
 | `0022_fijar_search_path_auditoria.sql` | **(ninguna, a propósito)** | Le fija `search_path = ''` a `auditoria_log_es_inmutable`. En SQLite no existe el concepto. **Este cambio ya estaba aplicado en `pos-jimmy-cano` desde el 2026-09-05, pero nunca se había escrito el archivo**: se aplicó directamente para callar un aviso del linter. Lo detectó el proyecto de pruebas al comparar los dos catálogos, que es exactamente para lo que existe (§9.5). Sin este archivo, aplicar esta carpeta sobre un proyecto vacío no reproducía el esquema real. |
 | `0021_quitar_hashes_de_pin.sql` | **(ninguna, a propósito)** | Quita `usuarios.pin_hash` y `pin_remoto_hash` **de Postgres**. Las dos columnas **siguen existiendo en SQLite**, donde son lo que hace funcionar el ingreso y el diálogo de autorización: quitarlas allá dejaría a la tienda sin poder abrir. Se quitan acá porque un PIN de cuatro dígitos tiene 10 000 valores y quien lea esa tabla en la nube los saca todos, y porque **no hacen falta**: toda restauración resetea los PIN sin mirarlos (decisión 15). Decisión 17. |
-| `0023_funciones_de_sincronizacion.sql` | **(ninguna, a propósito)** | Las **funciones de sincronización**: las cinco `SECURITY DEFINER` por las que escribe la terminal —usuario, apertura de caja, cierre de caja, venta y lote simple—, sus ayudantes internos y `contrato_de_sincronizacion()` para la prueba de deriva. Son código que corre **en Postgres**, con `auth.jwt()`, RLS y `jsonb_populate_record`: en SQLite no existe nada de eso ni hace falta, porque la terminal es quien llama, no quien recibe. Ver CLAUDE.md §4.20. **Aplicada solo en `pos-pruebas-descartable`**; en `pos-jimmy-cano` está pendiente (fase 2.c). |
+| `0023_funciones_de_sincronizacion.sql` | **(ninguna, a propósito)** | Las **funciones de sincronización**: las cinco `SECURITY DEFINER` por las que escribe la terminal —usuario, apertura de caja, cierre de caja, venta y lote simple—, sus ayudantes internos y `contrato_de_sincronizacion()` para la prueba de deriva. Son código que corre **en Postgres**, con `auth.jwt()`, RLS y `jsonb_populate_record`: en SQLite no existe nada de eso ni hace falta, porque la terminal es quien llama, no quien recibe. Ver CLAUDE.md §4.20. **Aplicada en los dos proyectos el 2026-09-12.** |
 | `0024_privilegios_de_tabla.sql` | **(ninguna, a propósito)** | Revoca los privilegios de tabla que Supabase concede por omisión a `anon` y `authenticated`, y deja a `authenticated` con `SELECT` y nada más. **En SQLite no existe el concepto**: no hay roles ni privilegios de tabla, y el único que abre la base es el proceso principal. Se escribe `REVOKE ALL` + `GRANT SELECT` en vez de enumerar privilegios, porque enumerar dejó afuera `MAINTAIN` (nuevo en Postgres 17, invisible en `information_schema`). Ver CLAUDE.md §4.20. |
 | `0025_politicas_de_restauracion.sql` | **(ninguna, a propósito)** | Una política RLS `FOR SELECT` para el rol `restauracion` sobre cada una de las 13 tablas, y ninguna para la terminal. **En SQLite no hay RLS ni roles**: la base la abre un solo proceso y el control de acceso es el guard de permisos del IPC (§4.7). Ver CLAUDE.md §4.21. |
 | `0026_storage_de_archivos.sql` | **(ninguna, a propósito)** | Los buckets privados `fotos` y `recibos` y sus políticas, más una restrictiva que le cierra `storage.objects` a `anon`. **En SQLite no hay Storage**: los archivos viven en `<userData>` y su ruta relativa está en `productos.foto_path` y `recibos.pdf_path`, que esta migración no toca. Ver CLAUDE.md §4.21. |
@@ -190,10 +190,18 @@ número que use queda reservado también del lado local.
 proyectos tienen hoy las 21.** Las dos últimas fueron la `0025` y la `0026`, el
 2026-09-13; antes, la `0023` y la `0024`, el 2026-09-12.
 
-**Lo que sí queda pendiente son dos pasos del panel, y ninguno es opcional:**
-marcar el usuario de Julio con `app_metadata.rol = 'restauracion'` —sin ese
-claim las trece políticas de la `0025` no le sirven a nadie, y el real tiene hoy
-cero usuarios de Auth— y bajar la expiración del JWT a 900 s.
+**Los dos pasos del panel que la fase 2.c necesitaba también están HECHOS y
+MEDIDOS, los dos el 2026-09-13**, así que no queda nada de la fase 2:
+
+- **`app_metadata.rol = 'restauracion'`** en el usuario de Julio del real. Sin
+  ese claim las trece políticas de la `0025` no le sirven a nadie. Verificado
+  leyendo la fila, ejercitando las trece políticas con los claims armados desde
+  el `app_metadata` real, y —lo que faltaba— acuñando un token de verdad, que
+  trajo el claim copiado por GoTrue. Ver CLAUDE.md §4.21.
+- **JWT en 900 s.** Medido acuñando un token del proyecto real: `expires_in =
+  900` y `exp - iat = 900`. Y contra el proyecto de pruebas se comprobó además
+  que el token **deja de servir** pasado el `exp`, que es otra cosa distinta de
+  que su carga útil diga 900. Ver CLAUDE.md §4.22.
 
 Antes de ellas,
 Las cuatro anteriores son las de la fase 2.a, aplicadas el 2026-09-11 por la

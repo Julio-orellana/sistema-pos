@@ -96,8 +96,35 @@ const TIEMPO_MAXIMO_MS = 30_000;
 /** Cuánto puede diferir `recibido_en` del reloj de esta máquina sin sospechar. */
 const MARGEN_DEL_RELOJ_MS = 5 * 60 * 1000;
 
-/** Margen después de `exp` antes de comprobar que el token venció. */
-const MARGEN_DE_VENCIMIENTO_MS = 10_000;
+/**
+ * Margen después de `exp` antes de comprobar que el token venció.
+ *
+ * **NO ES UN NÚMERO ELEGIDO POR COMODIDAD: SALE DE UNA MEDICIÓN, y la primera
+ * versión (10 s) producía un FALLO FALSO.** Con 10 s de margen el token
+ * vencido todavía era aceptado y la comprobación reportaba que la nube no
+ * hacía cumplir el vencimiento, que es falso y es la peor forma de estar mal:
+ * acusa a la nube de un defecto que no tiene.
+ *
+ * Lo que pasa es que PostgREST admite una **tolerancia de reloj** sobre `exp`.
+ * Se midió contra `pos-pruebas-descartable` presentando un token NUNCA usado
+ * —para que ninguna caché pudiera explicar el resultado— cada 5 s desde `exp`
+ * hasta que lo rechazaran:
+ *
+ *     exp +0.1s  -> 403 todavía aceptado      exp +21.0s -> 403 todavía aceptado
+ *     exp +5.3s  -> 403 todavía aceptado      exp +26.0s -> 403 todavía aceptado
+ *     exp +15.9s -> 403 todavía aceptado      exp +31.0s -> 401 RECHAZADO
+ *
+ * Es decir: **dejó de servir entre los 25 s y los 30 s del reloj de esta
+ * máquina**, que iba 1.9 s atrasado respecto del servidor, o sea entre 27.9 s
+ * y 32.9 s de reloj del servidor. Compatible con una tolerancia de 30 s
+ * exactos, que es el valor habitual.
+ *
+ * Se usan 90 s: tres veces la tolerancia medida. El costo es esperar minuto y
+ * medio de más en un guion que ya espera el vencimiento entero; el beneficio
+ * es que la comprobación no vuelva a fallar por el margen en vez de por la
+ * nube. **No bajarlo por debajo de 60 s.**
+ */
+const MARGEN_DE_VENCIMIENTO_MS = 90_000;
 
 /** El billete de Q5, con el UUID fijo de la migración 004 (igual en local y nube). */
 const DENOMINACION_Q5 = 'c11a36fb-5100-4459-8fde-740bb784d3aa';
