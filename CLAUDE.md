@@ -2875,6 +2875,7 @@ que dar **1**.
 | Tipos | `image/jpeg`, `image/png`, de §4.11 | `application/pdf` |
 | La terminal | **Sube, y nada más** | **nada** |
 | La restauración | Lee | Lee |
+| La llave publicable | **nada, y con dos capas** | **nada, y con dos capas** |
 | Borrar | nadie | nadie |
 
 **La terminal no tiene permiso sobre `recibos`, y es deliberado.** §2.5.3 del
@@ -2891,13 +2892,50 @@ segunda subida a la misma ruta contesta `KeyAlreadyExists`, que el diseño lee
 como éxito de un reintento, y con `x-upsert` la rechaza RLS porque no hay
 `UPDATE`.
 
-> **DOS COSAS DE STORAGE QUE HAY QUE SABER.** Un bucket **no se borra por
-> SQL**: el trigger `protect_buckets_delete` lo rechaza y hay que usar la API
-> de Storage. Y en `storage.objects`, `anon` y `authenticated` conservan los
-> ocho privilegios de tabla por omisión —la `0024` revocó los de `public` y no
-> llega hasta ahí—, así que **en Storage la única capa es RLS**. No se replicó
-> el REVOKE porque la terminal NECESITA `INSERT` para subir, y porque esa tabla
-> pertenece a `supabase_storage_admin` y no a `postgres`.
+> **UN BUCKET NO SE BORRA POR SQL.** El trigger `protect_buckets_delete` lo
+> rechaza con «Direct deletion from storage tables is not allowed». Crearlo por
+> SQL sí funciona, así que la `0026` se aplica fácil y no se deshace por la
+> misma vía.
+
+##### En `storage.objects` NO se puede revocar nada, y por eso hay una política restrictiva
+
+`anon` y `authenticated` conservan ahí los ocho privilegios de tabla por
+omisión: la `0024` revocó los del esquema `public` y no llega hasta Storage.
+**Se intentó revocárselos a `anon` y no se puede.** Medido, las tres vías:
+
+| Intento | Resultado |
+|---|---|
+| `REVOKE ALL ON storage.objects FROM anon` | **No lanza error Y NO HACE NADA**: el privilegio sigue |
+| `... GRANTED BY supabase_storage_admin` | `ERROR: grantor must be current user` |
+| `SET ROLE supabase_storage_admin` y revocar | `ERROR: permission denied to set role` |
+
+La razón está en el `relacl` de la tabla: `anon=arwdDxtm/supabase_storage_admin`.
+**Quien concedió es `supabase_storage_admin`, y un `REVOKE` solo quita lo que
+concedió quien lo ejecuta.** `postgres` no es miembro de ese rol.
+
+**Lo peligroso de esto es el primer renglón**, no los otros dos: un `REVOKE`
+que no revoca **no falla**. Si se hubiera dejado en la migración, cualquiera
+que la leyera creería que `anon` se quedó sin privilegios, y sería falso. Por
+eso no quedó en el archivo.
+
+Lo que sí está en nuestra mano es una **política RESTRICTIVA** `TO anon`, que
+da la misma defensa en profundidad: una restrictiva no concede nada, se combina
+con Y contra las permisivas, así que ninguna permisiva futura la pasa por
+encima. **Falsificada en tres estados**, y el control es lo que la prueba:
+
+| Estado | Restrictiva | Permisiva abierta para `anon` | `anon` sube |
+|---|---|---|---|
+| A | sí | no | 403, viola RLS |
+| B | sí | **sí** | **403, viola RLS** |
+| C | **no** | sí | **200: subió el archivo** |
+
+A `authenticated` no se le toca nada, y no es una omisión: es el rol de Postgres
+con el que corre la terminal, y sin `INSERT` no podría subir por más que la
+política se lo permita. Quién puede qué lo decide la política, no el privilegio.
+
+Lo que ni el `REVOKE` ni la restrictiva cubrirían: **un bucket marcado como
+público**, porque Storage sirve esos objetos por una ruta que no pasa por RLS.
+Los dos nacen privados, y esa es la defensa.
 
 #### Cómo se probó, y qué se falsificó
 
@@ -3109,6 +3147,7 @@ desaparecer los trece avisos `rls_enabled_no_policy`, que era su razón de ser.
 | **La fase 2.c crea UNA sola clase de política: `SELECT` para `restauracion`, sobre las 13 tablas. Para la terminal, ninguna política sobre ninguna tabla, y el catálogo NO recupera el `UPDATE` directo de la decisión 14.** | Implementar la tabla ORIGINAL de §2.3, que le daba al catálogo `INSERT`/`UPDATE`/`SELECT` directos; escribir además políticas de escritura para las otras tablas | El prompt pedía «el catálogo conserva UPDATE directo (decisión 14)», y **esa es la versión superada** del documento: §2.3 lleva desde la fase 2.b un encabezado que dice «SUPERADA EN LA FASE 2.b, POR LA MEDICIÓN DEL RIESGO 8.4», y el propio §7 marca la decisión 14 como «SUPERADA por la medición de 8.4: sí van por función». Implementarla al pie de la letra habría **roto lo que ya funciona**: todo lote de catálogo lleva su asiento de `auditoria_log`, y el `ON CONFLICT DO NOTHING` de ese asiento exige `SELECT` sobre la auditoría entera —medido—, que es justo lo que §1.5 evita; y además crearía un segundo camino de escritura para tablas que `sincronizar_lote_simple` ya escribe con su auditoría y su lista cerrada. **Políticas de escritura tampoco se escriben**, y no por olvido: después de la `0024`, `authenticated` solo tiene `SELECT`, así que una escritura muere en el privilegio antes de llegar a RLS; una política ahí sería una regla para un camino cerrado. Las trece se crean con la condición IDÉNTICA y hay una comprobación que exige `count(DISTINCT qual) = 1`. | Prompt 36 — 2026-09-13 |
 | **Storage: dos buckets PRIVADOS; la terminal solo SUBE fotos; nadie borra; y el bucket `recibos` se crea sin ningún permiso para la terminal.** | Buckets públicos, que es lo cómodo; darle a la terminal también lectura de sus fotos; conceder ya la subida de PDF | Un bucket público sirve sus objetos a cualquiera que consiga la URL, sin pasar por RLS, y un recibo lleva lo que compró una persona con su total. Que la terminal no lea las fotos que sube no es una limitación sino la forma correcta: §2.5.2 dice que una foto en una ruta es inmutable y que se sube sin `x-upsert`; medido contra la nube, la segunda subida a la misma ruta contesta `KeyAlreadyExists` —que el diseño lee como éxito de un reintento— y con `x-upsert` la rechaza RLS. Sobre `recibos` no se concede nada porque **§2.5.3 recomienda no subir los PDF** (son dato derivado y llenan el gigabyte del plan gratuito en unos ocho meses) y la decisión todavía no está tomada: rige el valor por omisión del proyecto, el permiso que no se pidió no se concede. Queda anotado que en `storage.objects` la única capa es RLS —la `0024` solo cubrió `public`— y que un bucket **no se borra por SQL**: lo impide el trigger `protect_buckets_delete`. | Prompt 36 — 2026-09-13 |
 | **CORREGIDO durante la falsificación: «la restauración lee X» no mordía, porque sin política un SELECT no falla, devuelve 200 con la lista vacía.** Ahora exige ver filas. | Dejar la comprobación mirando solo el código HTTP | Se borró `restauracion_lee_ventas` a propósito para ver si la batería lo notaba, **y no lo notó**: la comprobación afirmaba «lee» cuando lo único que había verificado es que la consulta no diera error. Es exactamente la clase de prueba que este proyecto considera peor que no tener prueba, porque da confianza sin darla. Corregida, exige `datos.length > 0` en las doce tablas que la batería deja con filas —`precios_especiales` queda vacía porque en producción nada la escribe (§4.17)— y borrar esa única política hace fallar exactamente una comprobación, que nombra la tabla y muestra `leer 200 []`. | Prompt 36 — 2026-09-13 |
+| **En `storage.objects` NO se puede revocar el privilegio de `anon`, y en vez de dejar un `REVOKE` que no revoca se puso una política RESTRICTIVA.** | Dejar el `REVOKE ALL ON storage.objects FROM anon` en la migración, que es lo que se pidió y lo que «parece» aplicarse; revocar también a `authenticated`; no poner nada | El `REVOKE` **no lanza error y no hace nada**: el `relacl` muestra `anon=arwdDxtm/supabase_storage_admin`, y un `REVOKE` solo quita lo que concedió quien lo ejecuta. `postgres` no es miembro de `supabase_storage_admin`, `GRANTED BY` da «grantor must be current user» y `SET ROLE` da «permission denied to set role». **Dejarlo habría sido lo peor de las tres opciones**: una migración que aparenta cerrar una puerta y no la cierra es exactamente el guion que sale en silencio y miente sobre lo que hizo, la clase de cosa que este proyecto ya prohibió en §4.11. La política restrictiva da la misma defensa en profundidad y sí está en nuestra mano: no concede nada, se combina con Y contra las permisivas, y ninguna permisiva futura la pasa por encima. **Falsificada con un control**: con la restrictiva puesta, `anon` no sube ni con una permisiva abierta encima; quitándola, con la misma permisiva, sube y lista los objetos. A `authenticated` no se le toca porque la terminal NECESITA `INSERT`; medido, su subida funciona idéntica antes y después. | Prompt 37 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

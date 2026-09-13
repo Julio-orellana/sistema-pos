@@ -63,18 +63,54 @@
 -- en `select` (§1.2), y `is_anonymous` con `coalesce(..., false)`.
 --
 -- ---------------------------------------------------------------------------
--- LO QUE ESTA MIGRACIÓN NO PUEDE HACER, DICHO EN VOZ ALTA
+-- LA SEGUNDA CAPA PARA `anon`: SE INTENTÓ REVOCAR, Y NO SE PUEDE
 -- ---------------------------------------------------------------------------
--- En `storage.objects`, `anon` y `authenticated` conservan los ocho privilegios
--- de tabla que Supabase concede por omisión: la `0024` revocó los del esquema
--- `public` y no llega hasta acá. **Así que en Storage la única capa es RLS**,
--- igual que estaban las trece tablas antes de la `0024`. No se replica acá el
--- mismo REVOKE por dos razones medidas: la terminal NECESITA `INSERT` sobre
--- `storage.objects` para subir —revocarlo la dejaría sin poder hacerlo aunque
--- la política se lo permita—, y `storage.objects` pertenece a
--- `supabase_storage_admin`, no a `postgres`, así que un cambio de privilegios
--- ahí lo puede revertir una actualización de la plataforma sin avisar. Revocar
--- solo a `anon` sí sería posible y quedaría como una decisión aparte.
+-- En `storage.objects`, `anon` y `authenticated` tienen los ocho privilegios de
+-- tabla que Supabase concede por omisión: la `0024` revocó los del esquema
+-- `public` y no llega hasta acá. Sin una segunda capa, lo único que frena a
+-- Storage es RLS, igual que estaban las trece tablas antes de la `0024`.
+--
+-- **Lo primero que se intentó fue el REVOKE, y NO FUNCIONA.** Medido en el
+-- proyecto de pruebas, con las tres vías posibles:
+--
+--   REVOKE ALL ON storage.objects FROM anon
+--       -> NO lanza error Y NO HACE NADA: el privilegio sigue ahí.
+--   REVOKE ALL ON storage.objects FROM anon GRANTED BY supabase_storage_admin
+--       -> ERROR: grantor must be current user
+--   SET ROLE supabase_storage_admin; REVOKE ...
+--       -> ERROR: permission denied to set role "supabase_storage_admin"
+--
+-- La razón está en el propio `relacl` de la tabla:
+-- `anon=arwdDxtm/supabase_storage_admin`. **Quien concedió es
+-- `supabase_storage_admin`, y un REVOKE solo quita lo que concedió quien lo
+-- ejecuta.** `postgres` no es miembro de ese rol y no puede llegar a serlo
+-- desde acá.
+--
+-- **Por eso en este archivo NO queda un REVOKE que no revoca.** Un enunciado
+-- que parece un control de seguridad y no hace nada es peor que no tenerlo:
+-- quien leyera la migración creería que `anon` se quedó sin privilegios, y no
+-- es cierto. Es la misma regla por la que los guiones de datos de ejemplo
+-- dejaron de salir en silencio (§4.11 de CLAUDE.md).
+--
+-- **Lo que sí está en nuestra mano es una política RESTRICTIVA para `anon`, y
+-- da la misma defensa en profundidad.** Una restrictiva no concede nada: se
+-- combina con Y contra las permisivas, así que ninguna política permisiva
+-- futura puede pasarle por encima. Hoy `anon` ya no puede nada, porque no tiene
+-- ninguna permisiva; con esta tampoco podría el día que alguien le agregue una
+-- por error, que es exactamente la capa que el REVOKE iba a dar. Va `TO anon`,
+-- así que no roza a `authenticated`.
+--
+-- **A `authenticated` no se le toca nada, y no es una omisión.** Es el rol de
+-- Postgres con el que corre la terminal: sin `INSERT` no podría subir una foto
+-- por más que la política se lo permita, y sin `SELECT` la restauración no
+-- podría bajar. Quién de los dos puede qué lo decide la POLÍTICA, no el
+-- privilegio, igual que en las trece tablas.
+--
+-- Lo que NI el REVOKE ni la restrictiva cubrirían, dicho en voz alta: **un
+-- bucket marcado como público**, porque Storage sirve esos objetos por una ruta
+-- que no pasa por RLS. Los dos de acá nacen privados, y esa es la defensa.
+-- `storage.buckets` tampoco se toca: hoy no tiene ninguna política, así que la
+-- terminal ni siquiera puede enumerar los buckets (medido: lista vacía).
 -- ===========================================================================
 
 -- ---------------------------------------------------------------------------
@@ -123,3 +159,16 @@ CREATE POLICY restauracion_lee_recibos
     AND (select auth.jwt() -> 'app_metadata' ->> 'rol') = 'restauracion'
     AND coalesce((select (auth.jwt() ->> 'is_anonymous')::boolean), false) = false
   );
+
+-- ---------------------------------------------------------------------------
+-- 4. La segunda capa para la llave publicable sola. Una política restrictiva
+--    no concede nada: solo puede quitar, y ninguna permisiva futura la pasa
+--    por encima. A `authenticated` NO se le toca (ver la cabecera).
+-- ---------------------------------------------------------------------------
+CREATE POLICY anon_no_toca_los_archivos
+  ON storage.objects
+  AS RESTRICTIVE
+  FOR ALL
+  TO anon
+  USING (false)
+  WITH CHECK (false);

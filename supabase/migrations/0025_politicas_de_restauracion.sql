@@ -62,7 +62,7 @@
 -- `SELECT` bajo RLS y es lo que las pruebas verifican tabla por tabla.
 -- ===========================================================================
 
--- usuarios: escribe sincronizar_usuario. Sin esta política la terminal no puede leer los hashes de PIN desde la nube, que era la mitad del riesgo 8.2.
+-- usuarios: escribe sincronizar_usuario.
 CREATE POLICY restauracion_lee_usuarios
   ON public.usuarios
   FOR SELECT

@@ -608,7 +608,11 @@ sincronización», que es este.
 > borra, que es la forma que 2.5.2 describe. La restauración lee los dos.
 > **Sobre `recibos` la terminal no tiene ningún permiso**, porque la decisión
 > de 2.5.3 —no subir los PDF— todavía no está tomada y rige el valor por
-> omisión: el permiso que no se pidió, no se concede. Detalle en CLAUDE.md
+> omisión: el permiso que no se pidió, no se concede. Para la llave publicable
+> hay además una política **restrictiva**, porque el `REVOKE` de sus privilegios
+> sobre `storage.objects` **no es posible**: los concedió
+> `supabase_storage_admin` y `postgres` no puede revocarlos, con el agravante de
+> que el `REVOKE` no falla, simplemente no hace nada. Detalle en CLAUDE.md
 > §4.21.
 
 #### 2.5.1 La ruta local no cambia de significado, y no se agrega ninguna columna
