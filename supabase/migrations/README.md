@@ -65,7 +65,7 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
 | **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018 |
-| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024 |
+| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026 |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
 2026-09-11. Antes todos los huecos eran de la primera clase, y por eso este
@@ -124,7 +124,7 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 
 ### Dirección 2 — el cambio es solo de la nube, y allá no hay archivo
 
-**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023 ni 024.**
+**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023, 024, 025 ni 026.**
 Las tres primeras de esta dirección llegaron juntas, con la fase 2.a de la
 sincronización, y nacen de la misma pregunta: qué tiene que haber en la nube que
 no tiene por qué estar en la terminal, y qué hay hoy en la nube que nunca debió
@@ -139,7 +139,9 @@ tabla, un concepto que en SQLite no existe.
 | `0022_fijar_search_path_auditoria.sql` | **(ninguna, a propósito)** | Le fija `search_path = ''` a `auditoria_log_es_inmutable`. En SQLite no existe el concepto. **Este cambio ya estaba aplicado en `pos-jimmy-cano` desde el 2026-09-05, pero nunca se había escrito el archivo**: se aplicó directamente para callar un aviso del linter. Lo detectó el proyecto de pruebas al comparar los dos catálogos, que es exactamente para lo que existe (§9.5). Sin este archivo, aplicar esta carpeta sobre un proyecto vacío no reproducía el esquema real. |
 | `0021_quitar_hashes_de_pin.sql` | **(ninguna, a propósito)** | Quita `usuarios.pin_hash` y `pin_remoto_hash` **de Postgres**. Las dos columnas **siguen existiendo en SQLite**, donde son lo que hace funcionar el ingreso y el diálogo de autorización: quitarlas allá dejaría a la tienda sin poder abrir. Se quitan acá porque un PIN de cuatro dígitos tiene 10 000 valores y quien lea esa tabla en la nube los saca todos, y porque **no hacen falta**: toda restauración resetea los PIN sin mirarlos (decisión 15). Decisión 17. |
 | `0023_funciones_de_sincronizacion.sql` | **(ninguna, a propósito)** | Las **funciones de sincronización**: las cinco `SECURITY DEFINER` por las que escribe la terminal —usuario, apertura de caja, cierre de caja, venta y lote simple—, sus ayudantes internos y `contrato_de_sincronizacion()` para la prueba de deriva. Son código que corre **en Postgres**, con `auth.jwt()`, RLS y `jsonb_populate_record`: en SQLite no existe nada de eso ni hace falta, porque la terminal es quien llama, no quien recibe. Ver CLAUDE.md §4.20. **Aplicada solo en `pos-pruebas-descartable`**; en `pos-jimmy-cano` está pendiente (fase 2.c). |
-| `0024_privilegios_de_tabla.sql` | **(ninguna, a propósito)** | Revoca los privilegios de tabla que Supabase concede por omisión a `anon` y `authenticated`, y deja a `authenticated` con `SELECT` y nada más. **En SQLite no existe el concepto**: no hay roles ni privilegios de tabla, y el único que abre la base es el proceso principal. Se escribe `REVOKE ALL` + `GRANT SELECT` en vez de enumerar privilegios, porque enumerar dejó afuera `MAINTAIN` (nuevo en Postgres 17, invisible en `information_schema`). Ver CLAUDE.md §4.20. **Aplicada solo en `pos-pruebas-descartable`** el 2026-09-12; en `pos-jimmy-cano` está pendiente (fase 2.c). |
+| `0024_privilegios_de_tabla.sql` | **(ninguna, a propósito)** | Revoca los privilegios de tabla que Supabase concede por omisión a `anon` y `authenticated`, y deja a `authenticated` con `SELECT` y nada más. **En SQLite no existe el concepto**: no hay roles ni privilegios de tabla, y el único que abre la base es el proceso principal. Se escribe `REVOKE ALL` + `GRANT SELECT` en vez de enumerar privilegios, porque enumerar dejó afuera `MAINTAIN` (nuevo en Postgres 17, invisible en `information_schema`). Ver CLAUDE.md §4.20. |
+| `0025_politicas_de_restauracion.sql` | **(ninguna, a propósito)** | Una política RLS `FOR SELECT` para el rol `restauracion` sobre cada una de las 13 tablas, y ninguna para la terminal. **En SQLite no hay RLS ni roles**: la base la abre un solo proceso y el control de acceso es el guard de permisos del IPC (§4.7). Ver CLAUDE.md §4.21. **Aplicada solo en `pos-pruebas-descartable`** el 2026-09-13. |
+| `0026_storage_de_archivos.sql` | **(ninguna, a propósito)** | Los buckets privados `fotos` y `recibos` y sus políticas. **En SQLite no hay Storage**: los archivos viven en `<userData>` y su ruta relativa está en `productos.foto_path` y `recibos.pdf_path`, que esta migración no toca. Ver CLAUDE.md §4.21. **Aplicada solo en `pos-pruebas-descartable`** el 2026-09-13. |
 
 **Las cuatro tienen la misma forma y conviene verla:** ninguna es «la nube va
 atrasada respecto de lo local». Dos de ellas *quitan* de la nube algo que lo
@@ -184,10 +186,13 @@ número que use queda reservado también del lado local.
 | `0023_funciones_de_sincronizacion.sql` | Sí — aplicada el 2026-09-12, después de probarse en `pos-pruebas-descartable` desde el 2026-09-11. Las 13 definiciones de función del real son idénticas a las del de pruebas (`md5(pg_get_functiondef)`), y el registro guarda el archivo byte a byte. |
 | `0024_privilegios_de_tabla.sql` | Sí — aplicada el 2026-09-12, justo después de la `0023`. `anon` quedó sin ningún privilegio de tabla y `authenticated` solo con `SELECT`; `has_table_privilege(…, 'MAINTAIN')` da `false` en las trece. |
 
-**No queda ninguna migración pendiente de aplicar en `pos-jimmy-cano`.** Las dos
-últimas fueron la `0023` y la `0024`, el 2026-09-12. Lo que sigue pendiente de la
-fase 2.c no es una migración: son las políticas de RLS y el JWT de 15 minutos,
-que es configuración del panel de Auth.
+**Quedan DOS migraciones pendientes de aplicar en `pos-jimmy-cano`: la `0025` y
+la `0026`**, las dos de la fase 2.c, escritas y probadas en
+`pos-pruebas-descartable` el 2026-09-13 y a la espera de la revisión de Julio.
+Antes de ellas se aplicaron la `0023` y la `0024`, el 2026-09-12. Pendiente
+además, y no es una migración: el JWT de 15 minutos, que es configuración del
+panel de Auth, y marcar el usuario de restauración con
+`app_metadata.rol = 'restauracion'`.
 
 Antes de ellas,
 Las cuatro anteriores son las de la fase 2.a, aplicadas el 2026-09-11 por la

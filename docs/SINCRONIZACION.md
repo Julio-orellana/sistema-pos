@@ -416,6 +416,16 @@ esta; la original queda más abajo como historia del razonamiento.**
 | `recibos` | nadie | nadie | `R` (2.c) | `sincronizar_lote_simple`, solo `insertar` |
 | `auditoria_log` | nadie, y además el trigger | nadie | `R` (2.c) | las cinco, siempre con `DO NOTHING` |
 
+> **COMO QUEDÓ CONSTRUIDO (fase 2.c, migración `0025`).** Exactamente esta
+> tabla, y nada más: trece políticas `FOR SELECT TO authenticated` para el rol
+> `restauracion`, cero para la terminal. Las trece se crearon con la condición
+> IDÉNTICA y hay una comprobación que exige `count(DISTINCT qual) = 1`. No se
+> escribieron políticas de escritura porque después de la `0024` no tendrían
+> efecto: `authenticated` solo conserva `SELECT`, así que un INSERT, UPDATE o
+> DELETE muere en el privilegio antes de llegar a RLS. Verificado contra el
+> proyecto de pruebas con las cuatro credenciales sobre las trece tablas, y
+> falsificado borrando una política. Detalle en CLAUDE.md §4.21.
+
 `R` sigue siendo la condición del rol restauración de 1.2, y es **la única
 política que la fase 2.c va a crear**. Para el rol terminal no habrá ninguna
 política sobre ninguna tabla: `pg_policies` tiene que seguir sin una sola fila
@@ -590,6 +600,16 @@ la base: las fotos de producto en `fotos-de-productos/<uuid>.jpg|png`
 (`productos.foto_path`) y los PDF en `recibos/<nombre>.pdf`
 (`recibos.pdf_path`). Los dos quedaron pospuestos «para el módulo de
 sincronización», que es este.
+
+> **COMO QUEDÓ CONSTRUIDO (fase 2.c, migración `0026`).** Los dos buckets se
+> crearon **privados**, `fotos` con los límites de §4.11 de CLAUDE.md (5 MB,
+> JPG o PNG) y `recibos` restringido a `application/pdf`. La terminal solo
+> tiene `INSERT` sobre `fotos`: no lee lo que sube, no lo sobrescribe y no lo
+> borra, que es la forma que 2.5.2 describe. La restauración lee los dos.
+> **Sobre `recibos` la terminal no tiene ningún permiso**, porque la decisión
+> de 2.5.3 —no subir los PDF— todavía no está tomada y rige el valor por
+> omisión: el permiso que no se pidió, no se concede. Detalle en CLAUDE.md
+> §4.21.
 
 #### 2.5.1 La ruta local no cambia de significado, y no se agrega ninguna columna
 

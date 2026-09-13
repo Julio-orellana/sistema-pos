@@ -500,15 +500,18 @@ arquitectura actual de una sola terminal, no un principio permanente.**
 
 Pendiente en la nube, para la fase 2.c de la sincronización:
 
-- Crear las **políticas de RLS**. Hoy no hay ninguna, así que la llave
-  publicable no puede leer ni escribir nada. **Corrección al texto que estuvo
-  acá hasta el Prompt 33:** la sincronización NO usa una llave de servicio.
-  Usa un usuario de Auth con rol `terminal` (§1.2 del diseño), y la terminal
-  **no tendrá política directa sobre ninguna tabla**: escribe únicamente por
-  las funciones de la `0023` (§4.20). Lo único que las políticas van a conceder
-  es `SELECT` al rol `restauracion`. Mientras tanto, los 13 avisos
-  `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
-  problema.
+- Crear las **políticas de RLS** y los **buckets de Storage**: migraciones
+  `0025` y `0026`, **escritas, aplicadas y probadas solo en
+  `pos-pruebas-descartable` el 2026-09-13**, pendientes de revisión y
+  aprobación para el real. La sincronización NO usa una llave de servicio: usa
+  un usuario de Auth con rol `terminal` (§1.2 del diseño), y la terminal **no
+  tiene política directa sobre ninguna tabla**; escribe únicamente por las
+  funciones de la `0023`. Lo único que las políticas conceden es `SELECT` al
+  rol `restauracion`. Ver §4.21.
+  - **Cuando se apliquen, los 13 avisos INFO `rls_enabled_no_policy`
+    desaparecen.** Medido en el proyecto de pruebas: el linter pasó de 13 INFO
+    + 5 WARN a **0 INFO + 5 WARN**. Hasta entonces esos 13 avisos siguen siendo
+    el resultado buscado y no un problema.
 - **HECHO el 2026-09-12: la `0023` y la `0024` ya están aplicadas en el real.**
   La terminal no tiene privilegio de tabla para escribir nada (`anon` sin
   ninguno, `authenticated` solo con `SELECT`, `MAINTAIN` incluido en la
@@ -2716,7 +2719,7 @@ credenciales salen de `.env.nube-pruebas` (ignorado por git; plantilla en
 |---|---|
 | sin argumentos | Mitad B de la prueba de deriva: llama a `contrato_de_sincronizacion()` como `restauracion` y compara con `supabase/esquema-nube.json`. No escribe nada. |
 | `--tomar-foto` | Escribe esa foto. Se corre a propósito cuando la nube cambió de verdad, y el archivo se revisa en el commit. |
-| `--destructivo` | La batería: **67 comprobaciones**. Vacía las tablas con la `service_role` del proyecto de pruebas, o salta ese paso con `--reinicio-hecho` si se vaciaron por SQL. |
+| `--destructivo` | La batería: **136 comprobaciones** (67 de la fase 2.b más 69 de la 2.c). Vacía las tablas con la `service_role` del proyecto de pruebas, o salta ese paso con `--reinicio-hecho` si se vaciaron por SQL. |
 | `--esperar-vencimiento` | Espera a que venza el JWT de la terminal y comprueba que PostgREST lo rechace. |
 
 Códigos de salida: 0 bien, 1 alguna comprobación falló, 2 faltó algo para poder
@@ -2819,6 +2822,125 @@ diferencias y sale con código 1.
   lote— es de la fase 3. Un detalle para ese día: un lote que empieza por
   `productos` puede ser una venta o un lote simple; se distingue por si trae una
   fila de `ventas`, no por la primera tabla.
+
+### 4.21 Las políticas y los archivos (Fase 2.c)
+
+**Escritas, aplicadas y probadas SOLO en `pos-pruebas-descartable`, el
+2026-09-13.** En `pos-jimmy-cano` están pendientes de la revisión de Julio, por
+la vía de siempre: SQL a la vista y aprobación explícita.
+
+| Migración | Qué crea |
+|---|---|
+| `0025_politicas_de_restauracion` | Una política `FOR SELECT` para el rol `restauracion`, sobre cada una de las 13 tablas. **Nada más.** |
+| `0026_storage_de_archivos` | Los buckets privados `fotos` y `recibos`, y tres políticas sobre `storage.objects`. |
+
+#### Para la terminal no hay ninguna política, y eso NO es un olvido
+
+La tabla vigente de §2.3 del diseño dice «nadie» para la terminal en las trece
+columnas de escritura y de lectura. La versión anterior de esa tabla —la que le
+dejaba `INSERT`/`UPDATE`/`SELECT` directos al catálogo, **decisión 14**— quedó
+**superada por la medición del riesgo 8.4** en la fase 2.b, y el propio §7 del
+diseño marca esa decisión como superada. Los dos motivos están medidos:
+
+1. `INSERT ... ON CONFLICT DO NOTHING` bajo RLS **exige política de `SELECT`
+   aunque no haya conflicto**. Todo lote de catálogo lleva su asiento de
+   `auditoria_log`, así que un camino directo obligaría a darle a la terminal
+   `SELECT` sobre la auditoría entera: lo que §1.5 existe para impedir.
+2. Desde la `0023`, el catálogo ya se escribe por `sincronizar_lote_simple`,
+   que escribe la fila y su asiento en una sola transacción. Conceder además
+   `UPDATE` directo crearía un SEGUNDO camino de escritura para las mismas
+   tablas, sin auditoría y sin la lista cerrada.
+
+#### Después de la `0024`, una política solo puede decidir QUIÉN LEE
+
+`authenticated` tiene un único privilegio de tabla, `SELECT`. Un `INSERT`,
+`UPDATE`, `DELETE` o `TRUNCATE` de cualquier usuario autenticado muere antes de
+llegar a RLS, con «permission denied for table». `anon` no tiene ninguno. Por
+eso la `0025` no escribe políticas de escritura: serían reglas para un camino
+ya cerrado, y darían la falsa impresión de que ese camino existe.
+
+**La condición es una sola, y hay una comprobación que lo exige.** Las trece
+políticas se crean con el texto idéntico —rol en `app_metadata`, envuelto en
+`select` como pide §1.2, y `is_anonymous` con `coalesce(..., false)`, la misma
+forma exacta que usan las cinco funciones de la `0023`—, y
+`SELECT count(DISTINCT qual) FROM pg_policies WHERE schemaname='public'` tiene
+que dar **1**.
+
+#### Storage: dos buckets privados, y un permiso que a propósito no está
+
+| | `fotos` | `recibos` |
+|---|---|---|
+| Público | **No** | **No** |
+| Límite de tamaño | 5 MB, de §4.11 | sin límite propio |
+| Tipos | `image/jpeg`, `image/png`, de §4.11 | `application/pdf` |
+| La terminal | **Sube, y nada más** | **nada** |
+| La restauración | Lee | Lee |
+| Borrar | nadie | nadie |
+
+**La terminal no tiene permiso sobre `recibos`, y es deliberado.** §2.5.3 del
+diseño recomienda **no subir los PDF**: son dato derivado que la reimpresión
+regenera desde las filas, y subirlos llena el gigabyte del plan gratuito en
+unos ocho meses. Esa decisión es de Jimmy y de Julio y **todavía no está
+tomada**, así que rige el valor por omisión del proyecto: el permiso que no se
+pidió, no se concede. El bucket se crea igual para fijar la convención de rutas.
+
+**Que la terminal no lea las fotos que sube es la forma correcta**, no una
+limitación: §2.5.2 dice que una foto en una ruta es inmutable —una foto nueva
+recibe un UUID nuevo— y que se sube SIN `x-upsert`. Medido contra la nube: una
+segunda subida a la misma ruta contesta `KeyAlreadyExists`, que el diseño lee
+como éxito de un reintento, y con `x-upsert` la rechaza RLS porque no hay
+`UPDATE`.
+
+> **DOS COSAS DE STORAGE QUE HAY QUE SABER.** Un bucket **no se borra por
+> SQL**: el trigger `protect_buckets_delete` lo rechaza y hay que usar la API
+> de Storage. Y en `storage.objects`, `anon` y `authenticated` conservan los
+> ocho privilegios de tabla por omisión —la `0024` revocó los de `public` y no
+> llega hasta ahí—, así que **en Storage la única capa es RLS**. No se replicó
+> el REVOKE porque la terminal NECESITA `INSERT` para subir, y porque esa tabla
+> pertenece a `supabase_storage_admin` y no a `postgres`.
+
+#### Cómo se probó, y qué se falsificó
+
+La batería pasó de 67 a **136 comprobaciones**, todas contra el proyecto de
+pruebas con los JWT reales de los tres usuarios. Las 69 nuevas son:
+
+- **52 de tablas**: por cada una de las 13 y cada una de las cuatro
+  credenciales —restauración, terminal, usuario sin rol y la llave publicable
+  sola—, cuatro peticiones reales (leer, insertar, actualizar, borrar), que se
+  informan como una comprobación porque la afirmación es una. El `UPDATE` y el
+  `DELETE` llevan filtro por un id inexistente: aunque un permiso estuviera mal
+  puesto, no habría nada que romper.
+- **2 de contraste**: que la restauración vea filas en las tablas que la
+  terminal acaba de escribir mientras la terminal ve cero en las trece, y que
+  las 11 denominaciones del quetzal las vea una y no la otra.
+- **15 de Storage**, con una subida real de un PNG de 70 bytes.
+
+**Se falsificó, y la primera versión NO mordía.** Al borrar
+`restauracion_lee_ventas`, la comprobación «la restauración lee ventas» seguía
+pasando: sin política, un `SELECT` no falla, devuelve 200 con la lista vacía, y
+la comprobación solo miraba el estado. Se corrigió para exigir filas, y con la
+corrección borrar esa única política hace fallar **exactamente una**
+comprobación, que nombra la tabla y muestra `leer 200 []`. Se falsificaron
+además dos cosas más: conceder a la terminal una política de lectura sobre
+`usuarios` hace fallar dos comprobaciones, y borrar `terminal_sube_fotos` hace
+fallar cuatro de Storage.
+
+**El linter pasó de 13 INFO + 5 WARN a 0 INFO + 5 WARN**: las políticas hacen
+desaparecer los trece avisos `rls_enabled_no_policy`, que era su razón de ser.
+
+#### Lo que falta, dicho en voz alta
+
+- **Nada offline guarda las políticas.** `npm test` no toca la nube y la mitad
+  B de la prueba de deriva compara el CONTRATO, que solo declara columnas y
+  funciones. Si alguien borrara una política desde el panel, solo lo vería la
+  batería destructiva. Hacer que `contrato_de_sincronizacion()` declare también
+  las políticas cerraría el hueco, y es una migración nueva más una foto nueva.
+- **El usuario de restauración del real hay que marcarlo en el panel** con
+  `app_metadata.rol = 'restauracion'` (§1.7, punto 4). Las políticas no sirven
+  de nada sin eso, y no se puede hacer desde el conector.
+- **La foto de prueba queda en el bucket del proyecto de pruebas** después de
+  cada corrida: con estas credenciales Storage no deja borrarla. Son 70 bytes
+  por corrida en un proyecto descartable.
 
 ## 5. Registro de decisiones técnicas
 
@@ -2984,6 +3106,9 @@ diferencias y sale con código 1.
 | **El JWT de 15 minutos (decisión 2 del diseño) NO se pudo aplicar desde acá: es configuración de Auth, fuera del alcance del conector y del código. Queda pendiente en el panel, y la batería lo mide y FALLA mientras siga en 3600.** | Darlo por hecho; quitar la comprobación para que la batería pase en verde | Una batería en verde con un JWT de una hora diría que la nube está como pide el diseño, y no lo está. La comprobación falla a propósito hasta que se cambie en Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time» —primero en el de pruebas, después en el real—, y `--esperar-vencimiento` comprueba que un token efectivamente venza. | Prompt 33 — 2026-09-11 |
 | **La `0024` revoca los privilegios de tabla con `REVOKE ALL` + `GRANT SELECT`, no con una lista de privilegios; se aplicó y midió en `pos-pruebas-descartable` sin cambiar ningún comportamiento de función.** | Enumerar los privilegios a revocar; revocar también `SELECT`; escribir la migración directo contra el real | Supabase concede a `anon` y `authenticated` los OCHO privilegios de tabla de Postgres 17. La primera versión de la `0024` enumeraba seis y **se le escapó `MAINTAIN`**, nuevo en PG17, que no aparece en `information_schema.role_table_grants` y sí en `pg_class.relacl` (la letra `m`); se vio leyendo `relacl` tras aplicarla. `REVOKE ALL` seguido de `GRANT SELECT` no puede dejar un privilegio afuera y sobrevive a que Postgres agregue otro mañana. `SELECT` se conserva para `authenticated` porque terminal y restauración son el MISMO rol de Postgres —el rol es un claim del JWT— y quién lee lo decide RLS. El criterio de aplicación fue que la misma batería, antes y después, diera lo mismo en TODAS las funciones: medido, 90/93 filas del arnés SQL byte a byte iguales (cambian solo los dos marcadores de privilegios y la sonda 152, de «viola RLS» a «permission denied», mismo `42501`) y 67/67 en PostgREST, con las tres sondas de acceso directo pasando de RLS a «permission denied». Queda anotado lo que NO cubre: el `pg_default_acl` del rol de plataforma `supabase_admin`, que `postgres` no puede alterar. Aplicada solo en el proyecto de pruebas; en `pos-jimmy-cano` va en la fase 2.c. | Prompt 34 — 2026-09-12 |
 | **La `0023` y la `0024` se aplicaron a `pos-jimmy-cano` el 2026-09-12, y lo que prueba que se aplicó lo correcto NO es el texto de la migración sino la huella de los OBJETOS: las 13 definiciones de función del real comparadas una a una con las del proyecto de pruebas.** | Confiar en que el texto enviado al conector era el del archivo; comparar solo el md5 del registro de `schema_migrations`; pedirle a Julio que las pegara a mano en el editor SQL del panel | Aplicar una migración de 43 KB por el conector obliga a que el texto pase entero por la sesión, y una diferencia de un byte produciría en producción funciones parecidas pero distintas. El md5 del registro detecta eso, pero mide **la entrada**; lo que importa es **el efecto**. Por eso la verificación fuerte es `md5(pg_get_functiondef(oid))` de las trece funciones contra las del proyecto de pruebas: dio **13 de 13**, y el md5 de los dos registros coincidió además con el de los archivos (`a77ae682…` y `5286ab2a…`). Se sumó una tercera comprobación independiente del mecanismo: la huella canónica del contrato que declara cada nube, que dio `81b685b17f47750bb6c56812ae89c99e` en el real, en el de pruebas y en `supabase/esquema-nube.json`. La aplicación se hizo con el real en 0 filas de negocio, y se comprobó que siguiera en 0 después. **La batería destructiva NO se corrió contra el real, y no puede correrse**: el seguro la rechaza por nombre, el real no tiene usuarios de Auth, y escribiría asientos en `auditoria_log`, que es inmutable por trigger y solo se vacía con TRUNCATE. En su lugar se corrieron 40 sondas que no escriben nada. | Prompt 35 — 2026-09-12 |
+| **La fase 2.c crea UNA sola clase de política: `SELECT` para `restauracion`, sobre las 13 tablas. Para la terminal, ninguna política sobre ninguna tabla, y el catálogo NO recupera el `UPDATE` directo de la decisión 14.** | Implementar la tabla ORIGINAL de §2.3, que le daba al catálogo `INSERT`/`UPDATE`/`SELECT` directos; escribir además políticas de escritura para las otras tablas | El prompt pedía «el catálogo conserva UPDATE directo (decisión 14)», y **esa es la versión superada** del documento: §2.3 lleva desde la fase 2.b un encabezado que dice «SUPERADA EN LA FASE 2.b, POR LA MEDICIÓN DEL RIESGO 8.4», y el propio §7 marca la decisión 14 como «SUPERADA por la medición de 8.4: sí van por función». Implementarla al pie de la letra habría **roto lo que ya funciona**: todo lote de catálogo lleva su asiento de `auditoria_log`, y el `ON CONFLICT DO NOTHING` de ese asiento exige `SELECT` sobre la auditoría entera —medido—, que es justo lo que §1.5 evita; y además crearía un segundo camino de escritura para tablas que `sincronizar_lote_simple` ya escribe con su auditoría y su lista cerrada. **Políticas de escritura tampoco se escriben**, y no por olvido: después de la `0024`, `authenticated` solo tiene `SELECT`, así que una escritura muere en el privilegio antes de llegar a RLS; una política ahí sería una regla para un camino cerrado. Las trece se crean con la condición IDÉNTICA y hay una comprobación que exige `count(DISTINCT qual) = 1`. | Prompt 36 — 2026-09-13 |
+| **Storage: dos buckets PRIVADOS; la terminal solo SUBE fotos; nadie borra; y el bucket `recibos` se crea sin ningún permiso para la terminal.** | Buckets públicos, que es lo cómodo; darle a la terminal también lectura de sus fotos; conceder ya la subida de PDF | Un bucket público sirve sus objetos a cualquiera que consiga la URL, sin pasar por RLS, y un recibo lleva lo que compró una persona con su total. Que la terminal no lea las fotos que sube no es una limitación sino la forma correcta: §2.5.2 dice que una foto en una ruta es inmutable y que se sube sin `x-upsert`; medido contra la nube, la segunda subida a la misma ruta contesta `KeyAlreadyExists` —que el diseño lee como éxito de un reintento— y con `x-upsert` la rechaza RLS. Sobre `recibos` no se concede nada porque **§2.5.3 recomienda no subir los PDF** (son dato derivado y llenan el gigabyte del plan gratuito en unos ocho meses) y la decisión todavía no está tomada: rige el valor por omisión del proyecto, el permiso que no se pidió no se concede. Queda anotado que en `storage.objects` la única capa es RLS —la `0024` solo cubrió `public`— y que un bucket **no se borra por SQL**: lo impide el trigger `protect_buckets_delete`. | Prompt 36 — 2026-09-13 |
+| **CORREGIDO durante la falsificación: «la restauración lee X» no mordía, porque sin política un SELECT no falla, devuelve 200 con la lista vacía.** Ahora exige ver filas. | Dejar la comprobación mirando solo el código HTTP | Se borró `restauracion_lee_ventas` a propósito para ver si la batería lo notaba, **y no lo notó**: la comprobación afirmaba «lee» cuando lo único que había verificado es que la consulta no diera error. Es exactamente la clase de prueba que este proyecto considera peor que no tener prueba, porque da confianza sin darla. Corregida, exige `datos.length > 0` en las doce tablas que la batería deja con filas —`precios_especiales` queda vacía porque en producción nada la escribe (§4.17)— y borrar esa única política hace fallar exactamente una comprobación, que nombra la tabla y muestra `leer 200 []`. | Prompt 36 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -3103,9 +3228,12 @@ negocio:
   - **Fase 2.a** (§4.19): el proyecto de pruebas descartable y las migraciones
     `0019` a `0022`, que solo existen del lado de la nube.
   - **Fase 2.b** (§4.20): las **funciones de sincronización** de la `0023`, el
-    guion `verify:nube` con su seguro, y la prueba de deriva. **Solo en el
-    proyecto de pruebas**: `pos-jimmy-cano` todavía no tiene la `0023`.
-  **Lo que sigue sin existir:** las políticas de RLS (2.c), el `SyncProvider`
+    guion `verify:nube` con su seguro, y la prueba de deriva. Aplicada en los
+    dos proyectos el 2026-09-12, junto con la `0024`.
+  - **Fase 2.c** (§4.21): las **políticas de RLS** de la `0025` y los **buckets
+    de Storage** de la `0026`. **Solo en el proyecto de pruebas**: en
+    `pos-jimmy-cano` están pendientes de la revisión de Julio.
+  **Lo que sigue sin existir:** el `SyncProvider`
   real contra Supabase y las credenciales en la terminal (3), la detección de
   conexión, la sincronización de archivos, la pantalla de sincronización y la
   restauración. **La aplicación no ha hecho ni una llamada de red**: las únicas

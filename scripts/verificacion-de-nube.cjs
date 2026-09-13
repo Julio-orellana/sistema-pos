@@ -85,6 +85,11 @@ const CODIGO = Object.freeze({ ok: 0, fallo: 1, incompleto: 2, seguro: 3 });
 /** Segundos que §1.6 del diseño pide para la vida de un JWT. */
 const VIDA_DEL_JWT_SEGUNDOS = 900;
 
+// Las once del quetzal, sembradas por la 0004 con UUID fijos. Es la única
+// tabla con filas que no escribió la terminal, así que sirve de ancla: un
+// número que la restauración tiene que ver siempre, corrida tras corrida.
+const DENOMINACIONES_DEL_QUETZAL = 11;
+
 /** Milisegundos máximos por petición: la nube puede tardar, pero no colgarse. */
 const TIEMPO_MAXIMO_MS = 30_000;
 
@@ -180,18 +185,23 @@ class ClienteDeNube {
    * aplicación instalada y sin credencial. Una llave secreta (`sb_secret_`)
    * viaja también como `apikey`, que es como Supabase la reconoce.
    */
-  async pedir(metodo, ruta, { token = null, cuerpo, prefer } = {}) {
+  async pedir(metodo, ruta, { token = null, cuerpo, prefer, cuerpoCrudo, tipo, upsert } = {}) {
     const apikey = token !== null && token.startsWith('sb_secret_') ? token : this.llavePublicable;
+    const carga = cuerpoCrudo ?? (cuerpo === undefined ? undefined : JSON.stringify(cuerpo));
     const headers = {
       apikey,
       Authorization: `Bearer ${token ?? this.llavePublicable}`,
-      'Content-Type': 'application/json',
     };
+    // Sin cuerpo NO se manda Content-Type. Storage lo rechaza: contesta «Body
+    // cannot be empty when content-type is set to application/json» a un DELETE
+    // sin cuerpo, y esa respuesta esconde el permiso que se estaba probando.
+    if (carga !== undefined) headers['Content-Type'] = tipo ?? 'application/json';
     if (prefer !== undefined) headers.Prefer = prefer;
+    if (upsert === true) headers['x-upsert'] = 'true';
     const respuesta = await fetch(`${this.url}${ruta}`, {
       method: metodo,
       headers,
-      body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
+      body: carga,
       signal: AbortSignal.timeout(TIEMPO_MAXIMO_MS),
     });
     const texto = await respuesta.text();
@@ -527,8 +537,9 @@ async function vaciarProyectoDePruebas(cliente, llaveDeServicio, informe) {
   informe.observar('tablas vaciadas con la service_role del proyecto de pruebas (usuarios: desactivados; auditoria_log: intacta, es inmutable)');
 }
 
-async function correrBateria(cliente, sesiones, version, informe) {
+async function correrBateria(cliente, sesiones, foto, informe) {
   const { terminal, restauracion, sinRol } = sesiones;
+  const version = foto.version_del_contrato;
   const rpc = (funcion, lote, token, v = version) => cliente.rpc(funcion, { lote, version_de_contrato: v }, token);
 
   informe.seccion('Puertas: quién puede llamar a qué');
@@ -775,6 +786,9 @@ async function correrBateria(cliente, sesiones, version, informe) {
     { estado: HTTP.prohibido, texto: 'permission denied' },
   );
 
+  await correrPoliticasDeLectura(cliente, sesiones, foto, informe);
+  await correrPoliticasDeStorage(cliente, sesiones, informe);
+
   informe.seccion('Auth: la vida del token');
   informe.comprobar(
     `el JWT de la terminal dura ${String(VIDA_DEL_JWT_SEGUNDOS)} s, como pide §1.6 del diseño`,
@@ -782,6 +796,215 @@ async function correrBateria(cliente, sesiones, version, informe) {
     `expires_in = ${String(terminal.expiraEn)} s; exp − iat = ${String(terminal.claims.exp - terminal.claims.iat)} s. Se cambia en el panel de Supabase: Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time», en segundos.`,
   );
   informe.observar(`claims del JWT de la terminal: app_metadata.rol = ${String(terminal.claims.app_metadata?.rol)}, is_anonymous = ${String(terminal.claims.is_anonymous)}`);
+}
+
+// ---------------------------------------------------------------------------
+// FASE 2.c: quién lee qué, tabla por tabla y rol por rol.
+//
+// La tabla vigente de §2.3 del diseño dice, para las TRECE tablas: la terminal
+// no puede nada, la restauración solo lee. Esto lo comprueba contra la nube de
+// verdad, con los JWT de los tres usuarios y con la llave publicable sola.
+//
+// Por cada tabla y cada identidad se hacen CUATRO peticiones —leer, insertar,
+// actualizar y borrar— y se informan como una sola comprobación, porque la
+// afirmación es una sola: «esta identidad, sobre esta tabla, puede exactamente
+// esto». El detalle de las cuatro aparece solo si falla.
+//
+// El UPDATE y el DELETE llevan un filtro por un id que no existe: aunque un
+// permiso estuviera mal puesto, no habría nada que romper.
+// ---------------------------------------------------------------------------
+
+// `precios_especiales` es la única de las trece que queda vacía después de la
+// batería, y no es un descuido de la batería: en producción NADA la escribe
+// —no hay servicio, ni canal IPC, ni pantalla (CLAUDE.md §4.17)—, así que no
+// hay lote que la lleve a la nube. Para las otras doce, «la restauración lee»
+// significa que TIENE que ver filas.
+const TABLAS_QUE_LA_BATERIA_DEJA_VACIAS = new Set(['precios_especiales']);
+
+const IDENTIDADES = [
+  { clave: 'restauracion', etiqueta: 'la restauración', lee: true },
+  { clave: 'terminal', etiqueta: 'la terminal', lee: false },
+  { clave: 'sinRol', etiqueta: 'un usuario sin rol', lee: false },
+  { clave: null, etiqueta: 'la llave publicable sola', lee: null },
+];
+
+async function sondearTabla(cliente, token, tabla) {
+  const inexistente = randomUUID();
+  const [leer, insertar, actualizar, borrar] = await Promise.all([
+    cliente.pedir('GET', `/rest/v1/${tabla}?select=id&limit=1000`, { token }),
+    cliente.pedir('POST', `/rest/v1/${tabla}`, { token, cuerpo: { id: inexistente }, prefer: 'return=minimal' }),
+    cliente.pedir('PATCH', `/rest/v1/${tabla}?id=eq.${inexistente}`, { token, cuerpo: { id: inexistente }, prefer: 'return=minimal' }),
+    cliente.pedir('DELETE', `/rest/v1/${tabla}?id=eq.${inexistente}`, { token, prefer: 'return=minimal' }),
+  ]);
+  return { leer, insertar, actualizar, borrar };
+}
+
+const niegaPermiso = (r, estado) => r.estado === estado && JSON.stringify(r.datos).includes('permission denied');
+
+async function correrPoliticasDeLectura(cliente, sesiones, foto, informe) {
+  const tablas = Object.keys(foto.tablas).sort();
+  informe.seccion(`Fase 2.c: las políticas, sobre las ${String(tablas.length)} tablas y con las cuatro credenciales`);
+
+  const filasQueVe = { restauracion: {}, terminal: {}, sinRol: {} };
+
+  for (const tabla of tablas) {
+    for (const identidad of IDENTIDADES) {
+      const token = identidad.clave === null ? null : sesiones[identidad.clave].token;
+      const r = await sondearTabla(cliente, token, tabla);
+      const detalle =
+        `leer ${String(r.leer.estado)} ${resumir(r.leer.datos)} · insertar ${String(r.insertar.estado)} ${resumir(r.insertar.datos)} · ` +
+        `actualizar ${String(r.actualizar.estado)} ${resumir(r.actualizar.datos)} · borrar ${String(r.borrar.estado)} ${resumir(r.borrar.datos)}`;
+
+      if (identidad.clave === null) {
+        // Sin ninguna política y sin ningún privilegio (0024): ni siquiera lee.
+        const ok =
+          niegaPermiso(r.leer, HTTP.sinAutenticar) &&
+          niegaPermiso(r.insertar, HTTP.sinAutenticar) &&
+          niegaPermiso(r.actualizar, HTTP.sinAutenticar) &&
+          niegaPermiso(r.borrar, HTTP.sinAutenticar);
+        informe.comprobar(`${identidad.etiqueta} no hace NADA sobre ${tabla}: 401 en leer, insertar, actualizar y borrar`, ok, detalle);
+        continue;
+      }
+
+      const noEscribe =
+        niegaPermiso(r.insertar, HTTP.prohibido) && niegaPermiso(r.actualizar, HTTP.prohibido) && niegaPermiso(r.borrar, HTTP.prohibido);
+      const leyoBien = r.leer.estado === HTTP.ok && Array.isArray(r.leer.datos);
+      if (leyoBien) filasQueVe[identidad.clave][tabla] = r.leer.datos.length;
+
+      if (identidad.lee) {
+        // NO alcanza con que la consulta no falle. Sin política, un SELECT
+        // igual contesta 200 con la lista vacía, así que una comprobación que
+        // solo mirara el estado pasaría con la política BORRADA. Se falsificó
+        // y se vio: hay que exigir las filas.
+        const debeVerFilas = !TABLAS_QUE_LA_BATERIA_DEJA_VACIAS.has(tabla);
+        const vioFilas = leyoBien && r.leer.datos.length > 0;
+        informe.comprobar(
+          debeVerFilas
+            ? `${identidad.etiqueta} LEE ${tabla} y ve las filas que hay, y no inserta, no actualiza y no borra`
+            : `${identidad.etiqueta} LEE ${tabla}, que queda vacía porque nada la escribe todavía, y no inserta, no actualiza y no borra`,
+          leyoBien && noEscribe && (debeVerFilas ? vioFilas : r.leer.datos.length === 0),
+          detalle,
+        );
+      } else {
+        informe.comprobar(
+          `${identidad.etiqueta} no lee ${tabla} (0 filas, sin política), y no inserta, no actualiza y no borra`,
+          leyoBien && r.leer.datos.length === 0 && noEscribe,
+          detalle,
+        );
+      }
+    }
+  }
+
+  // El contraste que de verdad prueba que la política discrimina: las MISMAS
+  // tablas, en el MISMO momento, vistas por dos credenciales distintas.
+  const conFilas = Object.entries(filasQueVe.restauracion).filter(([, n]) => n > 0).map(([t, n]) => `${t}=${String(n)}`);
+  const terminalVioAlgo = Object.entries(filasQueVe.terminal).filter(([, n]) => n > 0).map(([t]) => t);
+  const sinRolVioAlgo = Object.entries(filasQueVe.sinRol).filter(([, n]) => n > 0).map(([t]) => t);
+  informe.comprobar(
+    'la restauración ve filas en las tablas que la terminal acaba de escribir, y la terminal no ve ninguna en NINGUNA',
+    conFilas.length > 0 && terminalVioAlgo.length === 0 && sinRolVioAlgo.length === 0,
+    `la restauración ve ${conFilas.join(', ')}; la terminal ve filas en [${terminalVioAlgo.join(', ')}] y el usuario sin rol en [${sinRolVioAlgo.join(', ')}]`,
+  );
+  informe.comprobar(
+    'las 11 denominaciones del quetzal las ve la restauración y no las ve la terminal',
+    filasQueVe.restauracion.denominaciones === DENOMINACIONES_DEL_QUETZAL && filasQueVe.terminal.denominaciones === 0,
+    `restauración ${String(filasQueVe.restauracion.denominaciones)}, terminal ${String(filasQueVe.terminal.denominaciones)}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FASE 2.c: los dos buckets de §2.5.
+//
+// Lo que se comprueba es la forma exacta que describe §2.5.2: la terminal SUBE
+// una foto y no la vuelve a ver; una segunda subida a la misma ruta choca con
+// «ya existe», que el diseño lee como éxito de un reintento; y con `x-upsert`
+// —que pediría UPDATE— la rechaza RLS, porque una foto en una ruta es
+// inmutable. La restauración es la única que la baja.
+//
+// Storage contesta casi todo con HTTP 400 y el código real adentro del cuerpo,
+// así que las comprobaciones miran el cuerpo y no solo el estado.
+// ---------------------------------------------------------------------------
+
+const PNG_DE_UN_PIXEL = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+const subirFoto = (cliente, token, objeto, { upsert = false, tipo = 'image/png', cuerpo = PNG_DE_UN_PIXEL } = {}) =>
+  cliente.pedir(upsert ? 'PUT' : 'POST', `/storage/v1/object/fotos/${objeto}`, { token, cuerpoCrudo: cuerpo, tipo, upsert });
+
+const dice = (r, texto) => JSON.stringify(r.datos).includes(texto);
+
+async function correrPoliticasDeStorage(cliente, sesiones, informe) {
+  const { terminal, restauracion, sinRol } = sesiones;
+  informe.seccion('Fase 2.c: los buckets de archivos');
+
+  const objeto = `prueba-${randomUUID()}.png`;
+
+  const subida = await subirFoto(cliente, terminal.token, objeto);
+  informe.comprobar('la terminal sube una foto al bucket fotos', subida.estado === HTTP.ok && dice(subida, `fotos/${objeto}`), `HTTP ${String(subida.estado)} ${resumir(subida.datos)}`);
+
+  const leeLaTerminal = await cliente.pedir('GET', `/storage/v1/object/fotos/${objeto}`, { token: terminal.token });
+  informe.comprobar('…y no la puede volver a leer: para la terminal el objeto no existe', leeLaTerminal.estado !== HTTP.ok && dice(leeLaTerminal, 'not_found'), `HTTP ${String(leeLaTerminal.estado)} ${resumir(leeLaTerminal.datos)}`);
+
+  const leeLaRestauracion = await cliente.pedir('GET', `/storage/v1/object/fotos/${objeto}`, { token: restauracion.token });
+  informe.comprobar('la restauración SÍ baja esa misma foto, y son los bytes que se subieron', leeLaRestauracion.estado === HTTP.ok, `HTTP ${String(leeLaRestauracion.estado)}`);
+
+  for (const [etiqueta, token] of [['un usuario sin rol', sinRol.token], ['la llave publicable sola', null]]) {
+    const r = await cliente.pedir('GET', `/storage/v1/object/fotos/${objeto}`, { token });
+    informe.comprobar(`${etiqueta} no baja la foto`, r.estado !== HTTP.ok && dice(r, 'not_found'), `HTTP ${String(r.estado)} ${resumir(r.datos)}`);
+  }
+
+  const repetida = await subirFoto(cliente, terminal.token, objeto);
+  informe.comprobar(
+    'repetir la subida de la MISMA foto choca con «ya existe», que §2.5.2 lee como éxito de un reintento',
+    dice(repetida, 'KeyAlreadyExists'),
+    `HTTP ${String(repetida.estado)} ${resumir(repetida.datos)}`,
+  );
+
+  const conUpsert = await subirFoto(cliente, terminal.token, objeto, { upsert: true });
+  informe.comprobar(
+    'la terminal NO puede sobrescribir una foto con x-upsert: no tiene UPDATE, y una foto en una ruta es inmutable',
+    dice(conUpsert, 'row-level security'),
+    `HTTP ${String(conUpsert.estado)} ${resumir(conUpsert.datos)}`,
+  );
+
+  for (const [etiqueta, token] of [['la terminal', terminal.token], ['la restauración', restauracion.token]]) {
+    const r = await cliente.pedir('DELETE', `/storage/v1/object/fotos/${objeto}`, { token });
+    informe.comprobar(`${etiqueta} no borra la foto`, dice(r, 'AccessDenied'), `HTTP ${String(r.estado)} ${resumir(r.datos)}`);
+  }
+
+  for (const [etiqueta, token] of [['la restauración', restauracion.token], ['un usuario sin rol', sinRol.token], ['la llave publicable sola', null]]) {
+    const r = await subirFoto(cliente, token, `prueba-${randomUUID()}.png`);
+    informe.comprobar(`${etiqueta} no sube fotos`, dice(r, 'row-level security'), `HTTP ${String(r.estado)} ${resumir(r.datos)}`);
+  }
+
+  const aRecibos = await cliente.pedir('POST', `/storage/v1/object/recibos/${randomUUID()}.pdf`, {
+    token: terminal.token,
+    cuerpoCrudo: Buffer.from('%PDF-1.4\n'),
+    tipo: 'application/pdf',
+  });
+  informe.comprobar(
+    'la terminal NO sube al bucket recibos: la decisión de subir los PDF (§2.5.3) no está tomada, así que no hay política',
+    dice(aRecibos, 'row-level security'),
+    `HTTP ${String(aRecibos.estado)} ${resumir(aRecibos.datos)}`,
+  );
+
+  const tipoEquivocado = await subirFoto(cliente, terminal.token, `prueba-${randomUUID()}.pdf`, { tipo: 'application/pdf', cuerpo: Buffer.from('%PDF-1.4\n') });
+  informe.comprobar(
+    'el bucket fotos rechaza lo que no sea JPG o PNG, con el límite puesto en el servidor y no solo en la aplicación',
+    dice(tipoEquivocado, 'InvalidMimeType'),
+    `HTTP ${String(tipoEquivocado.estado)} ${resumir(tipoEquivocado.datos)}`,
+  );
+
+  const buckets = await cliente.pedir('GET', '/storage/v1/bucket', { token: terminal.token });
+  informe.comprobar(
+    'la terminal no puede ni enumerar los buckets: no hay política sobre storage.buckets',
+    buckets.estado === HTTP.ok && Array.isArray(buckets.datos) && buckets.datos.length === 0,
+    `HTTP ${String(buckets.estado)} ${resumir(buckets.datos)}`,
+  );
+
+  informe.observar(`la foto de prueba queda en el bucket: Storage no deja borrarla con estas credenciales, y en un proyecto descartable no importa (objeto ${objeto}, ${String(PNG_DE_UN_PIXEL.length)} bytes)`);
 }
 
 async function correrModoDestructivo(entorno, opciones, informe) {
@@ -813,7 +1036,7 @@ async function correrModoDestructivo(entorno, opciones, informe) {
     restauracion: await cliente.iniciarSesion(entorno.POS_NUBE_RESTAURACION_CORREO, entorno.POS_NUBE_RESTAURACION_CLAVE),
     sinRol: await cliente.iniciarSesion(entorno.POS_NUBE_SIN_ROL_CORREO, entorno.POS_NUBE_SIN_ROL_CLAVE),
   };
-  await correrBateria(cliente, sesiones, version, informe);
+  await correrBateria(cliente, sesiones, foto, informe);
   return informe.cerrar({ proyecto: entorno.POS_NUBE_PROYECTO });
 }
 
