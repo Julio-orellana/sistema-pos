@@ -141,19 +141,31 @@ export const FRACCION_DE_VIDA_PARA_RENOVAR = 0.75;
 export const ESPERA_MINIMA_MS = 5_000;
 
 /**
- * La tolerancia de reloj que PostgREST aplica después del `exp`, **medida**.
+ * A partir de cuántos segundos de desfase de reloj vale la pena avisar.
  *
- * No es un número de la documentación: se midió contra `pos-pruebas-descartable`
- * el 2026-09-13 presentando un token nunca usado cada 5 segundos. Siguió
- * aceptándolo a los 26 s del `exp` y lo rechazó a los 31 s (reloj local, que
- * iba 1.9 s atrasado respecto del servidor). Ver CLAUDE.md §4.22.
+ * **Es el UMBRAL DEL AVISO, no una tolerancia medida**, y el nombre lo dice
+ * a propósito: una versión anterior de esta constante se llamaba
+ * `TOLERANCIA_DE_RELOJ_MEDIDA_S`, y ese nombre afirmaba más de lo que la
+ * medición sostiene.
  *
- * **Acá NO se usa como margen para renovar** —renovar tarde y confiar en la
+ * **Lo que sí está medido** contra `pos-pruebas-descartable`, el 2026-09-13,
+ * en dos corridas independientes, es una **COTA**: un token vencido deja de
+ * servir en algún punto por debajo de los ~33 s después del `exp`.
+ *
+ *   corrida 1 (cada 5 s):  aceptado en exp+26.0s  →  rechazado en exp+31.0s
+ *   corrida 2 (cada 2 s):  aceptado en exp+30.1s  →  rechazado en exp+32.3s
+ *
+ * Los 30 de acá son **el número redondo que cae dentro de esa cota**, y que
+ * además es el valor por omisión habitual de esta clase de tolerancia. **No se
+ * midió que sean exactamente 30**: se midió que el token no sobrevive más allá
+ * de ~32 s, que es lo que importa para afirmar que la ventana está acotada.
+ *
+ * **Y NO se usa como margen para renovar.** Renovar tarde confiando en esta
  * tolerancia sería apostar a un comportamiento de la plataforma que puede
- * cambiar sin avisar—. Se usa para una sola cosa: decidir a partir de qué
- * desfase de reloj vale la pena gritar en la bitácora técnica.
+ * cambiar sin avisar. Su único uso es decidir cuándo gritar en la bitácora
+ * técnica por un reloj mal puesto. Ver CLAUDE.md §4.22.
  */
-export const TOLERANCIA_DE_RELOJ_MEDIDA_S = 30;
+export const DESFASE_QUE_MERECE_AVISO_S = 30;
 
 /**
  * La vida del token en segundos, medida con el reloj del servidor.
@@ -199,13 +211,13 @@ export function desfaseDeRelojEnSegundos(
 /**
  * `true` si el desfase es lo bastante grande como para dejarlo anotado.
  *
- * El umbral es la tolerancia medida de PostgREST: por debajo de eso el desfase
- * no le hace daño a nadie —la nube lo absorbe— y anotarlo sería llenar la
- * bitácora de ruido. Por encima, es el riesgo 8.5 del diseño ocurriendo de
- * verdad, y hay que poder verlo.
+ * El umbral son los 30 s de `DESFASE_QUE_MERECE_AVISO_S`: por debajo de eso la
+ * nube absorbe el desfase —está medido que tolera al menos 30 s— y anotarlo
+ * sería llenar la bitácora de ruido. Por encima, es el riesgo 8.5 del diseño
+ * ocurriendo de verdad, y hay que poder verlo.
  */
 export function elDesfaseMerecePreocupar(desfaseSegundos: number): boolean {
-  return Math.abs(desfaseSegundos) > TOLERANCIA_DE_RELOJ_MEDIDA_S;
+  return Math.abs(desfaseSegundos) > DESFASE_QUE_MERECE_AVISO_S;
 }
 
 // ===========================================================================

@@ -370,9 +370,11 @@ alguien más está escribiendo. Queda en 8.1.
 > Y se midió algo que esta sección no preveía y que **matiza la fila del reloj
 > mal puesto**: **PostgREST tolera unos 30 segundos de desfase después del
 > `exp`.** Medido contra el proyecto de pruebas presentando un token nunca
-> usado cada 5 s: seguía siendo aceptado a los 26 s del `exp` y fue rechazado a
-> los 31 s (reloj de la máquina de desarrollo, que iba 1.9 s atrasada respecto
-> del servidor). No cambia la cota de la sección 1.5 en ningún sentido
+> usado: en dos corridas independientes, el último aceptado fue exp+26.0 s /
+> exp+30.1 s y el primer rechazado exp+31.0 s / exp+32.3 s, con el reloj local
+> coincidiendo con el del servidor (medido contra su cabecera `Date`: desfase
+> entre −0.21 s y +0.75 s). Es decir, lo medido es una **cota** de ~32 s, no
+> que la tolerancia sea exactamente 30. No cambia la cota de la sección 1.5 en ningún sentido
 > práctico —medio minuto sobre quince—, pero sí quiere decir que la ventana
 > real tras una revocación es «hasta 15 minutos **y medio**», y que un desfase
 > de reloj **de segundos** no rompe nada; el riesgo 8.5 sigue siendo el de un

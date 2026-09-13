@@ -9,7 +9,7 @@ import {
   ESPERA_MINIMA_MS,
   FRACCION_DE_VIDA_PARA_RENOVAR,
   leerClaimsSinVerificar,
-  TOLERANCIA_DE_RELOJ_MEDIDA_S,
+  DESFASE_QUE_MERECE_AVISO_S,
   vidaDelTokenEnSegundos,
 } from '../vida-del-token';
 
@@ -174,8 +174,13 @@ describe('EL RELOJ LOCAL NO ENTRA EN EL CÁLCULO: el desfase no mueve la renovac
 });
 
 describe('El desfase de reloj se anota, y solo cuando pasa la tolerancia medida', () => {
-  it('la tolerancia declarada es la que se midió contra PostgREST: 30 s', () => {
-    expect(TOLERANCIA_DE_RELOJ_MEDIDA_S).toBe(30);
+  it('el umbral del aviso son 30 s, dentro de la cota medida de ~32 s', () => {
+    // Lo medido es una COTA —el token no sobrevive más allá de ~32 s del exp,
+    // en dos corridas— no que la tolerancia sea exactamente 30. El umbral del
+    // aviso se elige dentro de esa cota. Ver CLAUDE.md §4.22.
+    const COTA_MEDIDA_S = 32.3;
+    expect(DESFASE_QUE_MERECE_AVISO_S).toBe(30);
+    expect(DESFASE_QUE_MERECE_AVISO_S).toBeLessThan(COTA_MEDIDA_S);
   });
 
   it('los 1.9 s medidos en la máquina de desarrollo NO merecen preocupar', () => {

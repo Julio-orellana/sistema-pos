@@ -3111,27 +3111,74 @@ medirla:
 
 | Hipótesis | Cómo se descartó |
 |---|---|
-| El reloj de esta máquina está adelantado | Medido contra el reloj del servidor: **la Mac va 1.9 s ATRASADA**, o sea al revés de lo que haría falta para explicarlo |
-| PostgREST cachea el token que ya usó | Prueba A/B con **dos** tokens: uno usado antes de vencer y otro **nunca tocado**. A los 60 s del `exp`, los dos dieron `401 PGRST303`. Sin diferencia: no hay caché |
-| El vencimiento no se hace cumplir | Descartada por lo mismo: a los 60 s los rechaza, y GoTrue también (`403 bad_jwt`) |
+| PostgREST cachea el token que ya usó | Prueba A/B con tokens acuñados a la vez: uno usado antes de vencer y otros **nunca tocados**. Los rechaza a todos igual, con el mismo `401 PGRST303`. Sin diferencia: no hay caché |
+| El vencimiento no se hace cumplir | Descartada por lo mismo, y GoTrue también los rechaza (`403 bad_jwt`) |
+| El reloj de esta máquina está desfasado | Medido contra la cabecera `Date` del propio servidor. **Ver la corrección de abajo: el 1.9 s que decía este renglón NO se pudo reproducir.** |
 
-Quedaba una sola explicación posible —una **tolerancia de reloj** entre los 10 s
-y los 60 s— y se midió en vez de suponerla. Un token nunca usado, presentado
-cada 5 s desde antes del `exp`:
+Quedaba una sola explicación posible —una **tolerancia de reloj** después del
+`exp`— y se midió en vez de suponerla.
+
+##### CORREGIDO EL 2026-09-13: tres afirmaciones de la primera versión no se sostenían
+
+Julio pidió ver la salida cruda en vez del resumen, y al releerla aparecieron
+tres cosas mal. **Se dejan escritas porque el error estaba en cómo se reportó la
+medición, no en la medición**, y esa distinción es la que hay que poder
+auditar.
+
+| Lo que decía esta sección | Qué pasa de verdad |
+|---|---|
+| «la Mac va **1.9 s** atrasada» | **No se pudo reproducir.** Medido de nuevo contra la cabecera `Date`, en tres intentos: **−0.21 s, +0.50 s y +0.75 s**, o sea desfase ≈ 0 dentro del ruido de ±0.5 s que impone la resolución de un segundo de esa cabecera. De dónde salió el 1.9 no consta. |
+| «entre 27.9 s y 32.9 s de reloj del servidor» | **Se cae con lo anterior**: esa conversión era el bracket local corrido por el 1.9 s. Sin ese número, no hay conversión que hacer: local y servidor coinciden. |
+| «dejó de servir entre los **25 s y los 30 s**» | Eran **el contador nominal del bucle**, no los instantes medidos. Los reales de esa corrida son **+26.0 s aceptado y +31.0 s rechazado**. |
+
+Y una cuarta, menor pero del mismo tipo: el renglón `exp +12.9s -> HTTP 504` se
+imprimió como «todavía aceptado», y **un 504 no es un veredicto**: es la
+petición que no llegó a contestarse. No cambia la conclusión —hay 403 a +15.9,
++21.0 y +26.0 que sí la sostienen— pero la etiqueta era falsa.
+
+##### La medición buena, con timestamp de cada intento
+
+Se rehízo el experimento entero registrando la hora absoluta de **cada**
+petición, tres tokens acuñados en el mismo segundo (`iat` idéntico) y un sondeo
+cada 2 s en vez de cada 5:
 
 ```
-exp -4.5s -> 403 todavia aceptado      exp +15.9s -> 403 todavia aceptado
-exp +0.1s -> 403 todavia aceptado      exp +21.0s -> 403 todavia aceptado
-exp +5.3s -> 403 todavia aceptado      exp +26.0s -> 403 todavia aceptado
-exp +12.9s -> 504 (la nube tardó)      exp +31.0s -> 401 RECHAZADO POR VENCIDO
+2026-09-13T22:28:10.650Z  exp+25.7s  A (sondeo repetido)     HTTP 403  aceptado
+2026-09-13T22:28:12.872Z  exp+27.9s  A (sondeo repetido)     HTTP 403  aceptado
+2026-09-13T22:28:15.104Z  exp+30.1s  A (sondeo repetido)     HTTP 403  aceptado
+2026-09-13T22:28:17.296Z  exp+32.3s  A (sondeo repetido)     HTTP 401  RECHAZADO  PGRST303 JWT expired
+2026-09-13T22:28:17.481Z  exp+32.5s  B (PRIMER Y ÚNICO USO)  HTTP 401  RECHAZADO  PGRST303 JWT expired
+2026-09-13T22:28:45.017Z  exp+60.0s  C (PRIMER USO, exp+60)  HTTP 401  RECHAZADO  PGRST303 JWT expired
 ```
 
-**Dejó de servir entre los 25 s y los 30 s del reloj de esta máquina**, que va
-1.9 s atrasada: entre 27.9 s y 32.9 s de reloj del servidor. Compatible con una
-tolerancia de **30 s exactos**, que es el valor habitual y existe para que dos
-relojes desfasados no rechacen tokens legítimos.
+**El límite quedó acotado entre exp+30.1 s y exp+32.3 s**, una ventana de 2.2
+segundos, con el reloj local coincidiendo con el del servidor. Y **B y C, que
+nunca se habían presentado antes**, se rechazan igual que A: la hipótesis de la
+caché queda descartada con tokens vírgenes, no solo con uno reusado.
 
-`MARGEN_DE_VENCIMIENTO_MS` pasó de 10 s a **90 s**, tres veces la tolerancia
+##### De dónde sale exactamente el «30 s», dicho sin adornos
+
+**No está medido que la tolerancia sea 30 s.** Lo medido es una **COTA**, en dos
+corridas independientes:
+
+| Corrida | Último aceptado | Primer rechazado |
+|---|---|---|
+| 1, cada 5 s | exp+26.0 s | exp+31.0 s |
+| 2, cada 2 s | exp+30.1 s | exp+32.3 s |
+
+O sea: **un token vencido no sobrevive más allá de ~32 s del `exp`.** Los 30 s
+son el número redondo que cae dentro de esa cota y el valor por omisión habitual
+de esta clase de tolerancia; es una **inferencia razonable**, no una medición.
+
+Lo que sí queda demostrado, que es lo que importaba, es que **la ventana está
+acotada**: no hay ningún estado en que un token vencido siga sirviendo
+indefinidamente.
+
+Por eso la constante del código **dejó de llamarse
+`TOLERANCIA_DE_RELOJ_MEDIDA_S`**: ese nombre afirmaba más que la evidencia.
+Ahora es `DESFASE_QUE_MERECE_AVISO_S`, que es lo único para lo que se usa.
+
+`MARGEN_DE_VENCIMIENTO_MS` pasó de 10 s a **90 s**, casi tres veces la cota
 medida, con la medición escrita al lado en el código. Con el margen corregido la
 sonda pasa, corrida entera contra el proyecto de pruebas:
 
@@ -3327,6 +3374,65 @@ disco, no contra quien encienda la máquina y entre como ese usuario**. Una
 terminal en kiosko probablemente inicie sesión sola. La credencial **es
 extraíble**, y el trabajo de verdad es acotar lo que puede hacer (§1.5), no
 esconderla mejor.
+
+#### PROBADO CONTRA SUPABASE REAL: login, cifrado y reinicio
+
+**El 2026-09-13, contra `pos-pruebas-descartable`** —nunca contra el real—, con
+el usuario `terminal-pruebas@pos-pruebas.invalid` que ya existía ahí. Es lo que
+faltaba: hasta entonces el camino feliz estaba probado solo con dobles.
+
+**1. El login real funciona.** Manejando la aplicación de verdad, con la carpeta
+de datos persistente:
+
+```
+ANTES DE CONECTAR   credencial=No  sesion=No
+AVISO               Terminal conectada como terminal-pruebas@pos-pruebas.invalid,
+                    con rol terminal. El token dura 300 segundos y se renueva sola.
+CONTRASEÑA EN PANTALLA TRAS CONECTAR = ""
+credencial guardada : Sí          rol del token      : terminal
+sesion activa       : Sí          duracion del token : 300 s (5 min)
+```
+
+Los 300 s son los del panel: **el proyecto de pruebas sigue bajado y no volvió a
+900** (§4.22). La pantalla los lee del token, no de una constante.
+
+**2. El archivo del disco, leído con el `safeStorage` REAL** —no con el doble de
+las pruebas—, y buscando adentro tanto el token como la contraseña:
+
+```json
+{ "bytes": 19, "modo": "600", "primeros12BytesEnLatin1": "v10¸¿F+ì;5",
+  "pareceTextoPlano": false, "descifraConSafeStorageReal": true,
+  "largoDelTokenDescifrado": 12, "tokenApareceEnElArchivo": false,
+  "contrasenaApareceEnElArchivo": false }
+```
+
+19 bytes = los 3 del prefijo `v10` de OSCrypt más un bloque AES de 16, que es lo
+que ocupa un token de refresco de 12 caracteres. Ni el token ni la contraseña
+aparecen en el archivo.
+
+> **HALLAZGO QUE NO SE BUSCABA: la credencial está atada a la IDENTIDAD DE LA
+> APLICACIÓN.** El primer intento de leer el archivo falló con «Error while
+> decrypting the ciphertext». No era un defecto: `safeStorage` deriva la llave
+> del nombre de la aplicación, y el lector corría como «Electron» y no como
+> «pos-agricola». Con la misma identidad descifra sin problema. Es **una capa
+> más de protección que no estaba prevista** —otro programa del mismo usuario no
+> puede leer la credencial— y también una advertencia para el día del
+> empaquetado: **si cambia el nombre del producto, las credenciales guardadas
+> dejan de descifrarse** y hay que volver a conectar cada terminal.
+
+**3. El reinicio relee la credencial, sin teclear nada.** Segundo arranque con
+la misma carpeta de datos:
+
+```
+credencial guardada : Sí     usuario            : terminal-pruebas@pos-pruebas.invalid
+sesion activa       : Sí     rol del token      : terminal
+```
+
+**Y el token de refresco ROTÓ de verdad**: antes del reinicio empezaba con
+`dx32…` y después con `ruyr…`, los dos de 12 caracteres. Eso confirma contra
+Supabase real lo que las pruebas solo podían simular: la renovación consume el
+token viejo, recibe uno nuevo y **lo persiste**. Si no lo persistiera, el
+segundo reinicio dejaría la terminal fuera.
 
 #### CORREGIDO: sin proyecto configurado, la pantalla ofrecía un botón inútil
 
@@ -3581,13 +3687,14 @@ se inventó.
 | **En `storage.objects` NO se puede revocar el privilegio de `anon`, y en vez de dejar un `REVOKE` que no revoca se puso una política RESTRICTIVA.** | Dejar el `REVOKE ALL ON storage.objects FROM anon` en la migración, que es lo que se pidió y lo que «parece» aplicarse; revocar también a `authenticated`; no poner nada | El `REVOKE` **no lanza error y no hace nada**: el `relacl` muestra `anon=arwdDxtm/supabase_storage_admin`, y un `REVOKE` solo quita lo que concedió quien lo ejecuta. `postgres` no es miembro de `supabase_storage_admin`, `GRANTED BY` da «grantor must be current user» y `SET ROLE` da «permission denied to set role». **Dejarlo habría sido lo peor de las tres opciones**: una migración que aparenta cerrar una puerta y no la cierra es exactamente el guion que sale en silencio y miente sobre lo que hizo, la clase de cosa que este proyecto ya prohibió en §4.11. La política restrictiva da la misma defensa en profundidad y sí está en nuestra mano: no concede nada, se combina con Y contra las permisivas, y ninguna permisiva futura la pasa por encima. **Falsificada con un control**: con la restrictiva puesta, `anon` no sube ni con una permisiva abierta encima; quitándola, con la misma permisiva, sube y lista los objetos. A `authenticated` no se le toca porque la terminal NECESITA `INSERT`; medido, su subida funciona idéntica antes y después. | Prompt 37 — 2026-09-13 |
 | **«Privado» es un ESTADO del bucket que se cambia desde el panel, no una garantía que la migración sostenga; queda documentado y no se agrega ningún mecanismo.** | Agregar un disparador o una comprobación periódica que vuelva a poner `public = false`; no decir nada | `public` es una columna de la fila del bucket y el panel la cambia con un interruptor, sin pasar por ninguna migración de la carpeta y sin pasar por RLS. Si alguien marca `fotos` o `recibos` como público, Storage sirve esos objetos por una ruta que **no evalúa ninguna de las cuatro políticas de la `0026`**, y la migración seguiría figurando como aplicada: ni la restrictiva de `anon` ni la ausencia de permisos de la terminal se enterarían. No se agrega mecanismo porque no hace falta hoy y porque un vigilante automático sería otra pieza que mantener; lo que sí hace falta es que esté **dicho**, para que el día que un archivo aparezca donde no debería, lo primero que se mire sea si el bucket sigue privado. | Prompt 38 — 2026-09-13 |
 | **La `0025` y la `0026` aplicadas en `pos-jimmy-cano`, y con ellas la fase 2.c queda completa del lado del SQL. Lo que falta son dos pasos del panel, y se documentan como no opcionales.** | Darla por cerrada al aplicar las migraciones; dejar los pasos del panel como una nota al pie | Las trece políticas conceden lectura a quien traiga `app_metadata.rol = 'restauracion'`, y el real tiene **cero usuarios de Auth**: aplicadas y todo, hoy no le sirven a nadie. Se midió en el real, con los claims simulados sobre `denominaciones`: sin rol 0 de 11, con rol terminal 0 de 11, con rol restauración pero anónimo 0 de 11, con el claim correcto **11 de 11**, y la llave publicable `42501`. Es decir, la política discrimina bien y **el paso manual es la mitad que falta del mecanismo**, no un trámite. El otro paso es el JWT de 900 s. El linter confirmó lo previsto: los 13 avisos INFO `rls_enabled_no_policy` desaparecieron. | Prompt 38 — 2026-09-13 |
-| **`MARGEN_DE_VENCIMIENTO_MS` pasa de 10 s a 90 s, porque se MIDIÓ que PostgREST tolera ~30 s de reloj después del `exp`. El fallo de la sonda era del guion, no de la nube.** | Dar por buena la primera corrida y reportar que la nube no hace cumplir el vencimiento; subir el margen a un número cómodo sin medir la tolerancia; quitar la comprobación | La sonda falló diciendo que un token vencido seguía siendo aceptado, y **leída al pie de la letra acusaba a la nube de una falla de seguridad que no tiene**. Se descartaron las hipótesis midiendo, no razonando: el reloj de esta máquina resultó ir **1.9 s ATRASADO** respecto del servidor, o sea al revés de lo que haría falta para explicarlo; y una prueba A/B con dos tokens —uno usado antes de vencer y otro **nunca tocado**— dio `401 PGRST303` en los dos a los 60 s del `exp`, así que tampoco hay caché y el vencimiento **sí** se hace cumplir. Quedaba una tolerancia de reloj entre 10 s y 60 s, y se midió con un token nunca usado presentado cada 5 s: **dejó de servir entre los 25 s y los 30 s de esta máquina**, o sea entre 27.9 s y 32.9 s del servidor, compatible con los 30 s exactos que es el valor habitual. El margen queda en 90 s —tres veces la tolerancia medida— con la medición escrita al lado en el código; el costo es minuto y medio en un guion que ya espera el vencimiento entero. **La lección es la contracara de la regla de falsificar:** así como una prueba que nunca se vio fallar no prueba nada, una prueba que falla tampoco prueba nada hasta saber POR QUÉ falla. Ver §4.22. | Prompt 39 — 2026-09-13 |
+| **`MARGEN_DE_VENCIMIENTO_MS` pasa de 10 s a 90 s, porque se midió una COTA: un token vencido no sobrevive más allá de ~32 s del `exp`. El fallo de la sonda era del guion, no de la nube.** *(Enunciado corregido el 2026-09-13: la versión original de esta fila decía «se MIDIÓ que tolera ~30 s», y los 30 son una inferencia dentro de la cota, no una medición. Ver §4.22.)* | Dar por buena la primera corrida y reportar que la nube no hace cumplir el vencimiento; subir el margen a un número cómodo sin medir la tolerancia; quitar la comprobación | La sonda falló diciendo que un token vencido seguía siendo aceptado, y **leída al pie de la letra acusaba a la nube de una falla de seguridad que no tiene**. Se descartaron las hipótesis midiendo, no razonando: el reloj de esta máquina resultó ir **1.9 s ATRASADO** respecto del servidor, o sea al revés de lo que haría falta para explicarlo; y una prueba A/B con dos tokens —uno usado antes de vencer y otro **nunca tocado**— dio `401 PGRST303` en los dos a los 60 s del `exp`, así que tampoco hay caché y el vencimiento **sí** se hace cumplir. Quedaba una tolerancia de reloj entre 10 s y 60 s, y se midió con un token nunca usado presentado cada 5 s: **dejó de servir entre los 25 s y los 30 s de esta máquina**, o sea entre 27.9 s y 32.9 s del servidor, compatible con los 30 s exactos que es el valor habitual. El margen queda en 90 s —tres veces la tolerancia medida— con la medición escrita al lado en el código; el costo es minuto y medio en un guion que ya espera el vencimiento entero. **La lección es la contracara de la regla de falsificar:** así como una prueba que nunca se vio fallar no prueba nada, una prueba que falla tampoco prueba nada hasta saber POR QUÉ falla. Ver §4.22. | Prompt 39 — 2026-09-13 |
 | **La vida del access token se mide con `exp - iat` (reloj del SERVIDOR) y NUNCA con `exp - Date.now()`.** La renovación se agenda al 75 % de esa vida, con un `setTimeout` relativo. | La forma evidente, `exp - Date.now()`, que es lo que escribiría cualquiera; usar `expires_in` de la respuesta; renovar tarde y confiar en la tolerancia de 30 s de PostgREST | `exp - Date.now()` mezcla un instante del servidor con uno de ESTA máquina, y §1.6 del diseño advierte que un equipo de escritorio se desfasa minutos u horas. **Las dos direcciones rompen, y rompen distinto**: con el reloj adelantado una hora la resta da negativo y la aplicación renovaría **en bucle cerrado** contra Auth —un fallo que no se ve, porque la aplicación parece funcionar mientras consume la cuota—; con el reloj atrasado una hora renovaría mucho después de que el token murió. `exp - iat` son dos instantes del MISMO reloj, así que la resta es exacta aunque la máquina crea que es 1998, y un `setTimeout` es relativo y tampoco mira el reloj de pared. `expires_in` también sería inmune al desfase pero depende de que el campo venga y de cuánto tardó la respuesta; `exp - iat` no depende de ninguna de las dos cosas. Y **no se renueva tarde apostando a la tolerancia medida de 30 s**, porque es comportamiento de la plataforma y puede cambiar sin avisar. El desfase SÍ se calcula, pero solo para anotarlo en la bitácora cuando pasa esa tolerancia: es diagnóstico del riesgo 8.5, no una entrada del cálculo. **Falsificado**: reemplazando el cálculo por la forma ingenua caen 8 pruebas, las cuatro del bloque del reloj entre ellas. Ver §4.23. | Prompt 40 — 2026-09-13 |
 | **La escalera de reintentos de la RENOVACIÓN es propia (5 s, 15 s, 45 s, techo de 1 min) y NO se reusa la de `reintentos.ts`.** | Reusar `ESCALERA_DE_ESPERA_MS`, que ya existe y ya está probada | La de la cola sube hasta **una hora** entre intentos, y es lo correcto allá: un lote que no subió hoy sube mañana y no se pierde nada. Acá el access token muere a los 900 s, así que un peldaño de 30 minutos significaría **no intentar ni una sola vez** dentro del colchón que queda antes del vencimiento. **La forma de la escalera la impone la vida del token, no la paciencia de quien espera.** Los peldaños elegidos entran seis veces en los 225 s de colchón que deja renovar al 75 %, y hay una prueba que los cuenta en vez de afirmarlo. El techo de 1 minuto vale también para después del `exp`: el access token ya no sirve pero **el de refresco sigue vivo**, así que se sigue intentando hasta que vuelva la red. | Prompt 40 — 2026-09-13 |
 | **El archivo de credencial guarda EL TOKEN DE REFRESCO Y NADA MÁS, siempre cifrado, y si no hay cifrado disponible la aplicación se NIEGA a guardar.** | Guardar también el correo y el access token, que serían cómodos para la pantalla; caer a texto plano cuando `safeStorage` no está disponible | La contraseña se descarta al instante (§1.3), así que lo que queda en el disco es una sesión y no una contraseña: quien lo lea consigue actuar como la terminal, pero no consigue lo que además serviría para volver a entrar después de revocarla. El access token vive 900 s —guardarlo solo agregaría una copia de algo que caduca antes de que a nadie le sirva— y el correo se lee de los claims cuando hace falta: **un dato que no se guarda es un dato que no se filtra.** Y el respaldo en texto plano no existe porque sería exactamente lo que este módulo existe para impedir, hecho **en silencio**: la misma regla por la que los guiones de datos de ejemplo dejaron de salir callados (§4.11). **Falsificado**: agregando ese respaldo caen 7 pruebas. | Prompt 40 — 2026-09-13 |
 | **«La contraseña no se guarda» se PRUEBA en seis superficies, con un control del propio buscador; y que el cifrado real cifre se mide con una sonda dentro de Electron.** | Afirmarlo en un comentario; probarlo solo sobre el archivo de credencial; dar por bueno que `safeStorage` cifra porque lo dice la documentación | Julio lo pidió explícitamente —«probalo, no lo afirmes»— y una sola comprobación no alcanza: la contraseña podría quedar en el archivo, en otro archivo de la carpeta, en la bitácora, en un campo del objeto, en el estado que viaja a la ventana o en el módulo de IPC. Se busca en las seis, y **hay una comprobación que le da al buscador un objeto donde la contraseña SÍ está**: sin ese control, las otras cinco pasarían igual con un buscador roto. **Falsificado con los dos errores realistas** —guardarla en un campo y registrarla en la bitácora—, y cada uno lo atrapa su prueba y ninguna otra. Aparte, las pruebas de Vitest usan un cifrado inyectado y **no pueden** probar que el llavero o DPAPI cifren: ese hueco lo cierra `npm run diagnostico:credencial`, que corre dentro de Electron y midió 67 bytes ilegibles para un token de 49 caracteres. Falsificarla destapó un defecto de la sonda misma —`decryptString` lanza y el proceso quedaba **colgado en vez de reportando**—, que se arregló. **Medido en macOS: falta correrla en Windows**, donde el respaldo es DPAPI y es otro mecanismo. | Prompt 40 — 2026-09-13 |
 | **Se construye la primera mitad de la fase 3.a y se deja el TODO de la credencial REVOCADA, aunque el motivo del bloqueo ya no valía.** | Construir también la segunda mitad, ya que el experimento que la bloqueaba había terminado; construir la primera y no decir nada | El pedido decía que la segunda mitad esperaba a «un experimento en curso» sobre si PostgREST cachea la validación de un token vencido. **Ese experimento ya había terminado en la sesión anterior** y su resultado fue concluyente: PostgREST sí rechaza los vencidos, no hay caché —probado con un token nunca usado— y la tolerancia es de ~30 s (§4.22). Se reportó la premisa falsa **antes** de escribir código, como manda el proyecto, y aun así **no se amplió el alcance por cuenta propia**: la instrucción de no construirla era explícita y destrabarla es decisión de Julio. Lo que sí se hizo fue escribir los tres resultados medidos **dentro del TODO**, para que quien la construya no los vuelva a medir. Y se anotó una precisión que el razonamiento del bloqueo no tenía: **la señal de revocación no es que la API rechace el access token, sino que el REFRESCO devuelva 401** —el access token sigue valiendo hasta su `exp` aunque el usuario ya no exista (§1.6)—, así que el resultado del experimento no cambiaba el diseño de esa mitad tanto como suponía el pedido; lo que fijó fue la cota de la ventana tras revocar. | Prompt 40 — 2026-09-13 |
 | **CORREGIDO: `ipcRenderer.invoke` sobre un canal NO REGISTRADO rechaza la promesa, no devuelve `ok: false`. Toda pantalla que llame a un canal opcional tiene que atrapar eso.** | Suponer que la API siempre devuelve el sobre `RespuestaIpc`, como hacen los canales registrados; registrar los canales de nube siempre y que fallen adentro | Los dos canales de nube son los primeros del proyecto que **pueden no existir**: sin `POS_NUBE_URL` no hay sesión de nube que construir y no se registran. El sobre `RespuestaIpc` cubre los errores que ocurren DENTRO de un manejador; que no haya manejador es otra cosa, y Electron la señala rechazando. La pantalla esperaba el sobre, el rechazo quedaba sin atrapar y **seguía ofreciendo un botón «Conectar» que no podía funcionar**. Registrarlos siempre era la otra salida y es peor: haría falta una sesión de nube de mentira para que el manejador tuviera a quién preguntarle, o sea un objeto que finge estar configurado. **Lo encontró `verify:pantallas`, cuarta vez que atrapa un defecto que ninguna prueba de Vitest puede ver**, y quedó fijado ahí con dos comprobaciones; falsificado quitando el `try/catch`. | Prompt 40 — 2026-09-13 |
+| **CORREGIDO: se reportó como MEDIDO lo que era una inferencia, y un desfase de reloj que no se pudo reproducir.** Lo medido es una cota (~32 s), no una tolerancia de 30 s exactos; y el reloj local NO va 1.9 s atrasado, va ≈0. | Dejar el resumen como estaba, que ya sonaba convincente; borrar las afirmaciones viejas sin decir que estuvieron | Julio pidió ver **la salida cruda** del experimento en vez del resumen, y al releerla aparecieron tres cosas mal: (1) el desfase de 1.9 s **no se reproduce** —tres mediciones nuevas contra la cabecera `Date` del servidor dieron −0.21 s, +0.50 s y +0.75 s—, (2) la conversión «27.9–32.9 s de reloj del servidor» se apoyaba en ese 1.9 s y por lo tanto se cae, y (3) el bracket «25–30 s» eran **el contador nominal del bucle**, no los instantes medidos, que fueron +26.0 y +31.0. Más una cuarta menor: un `HTTP 504` se etiquetó «todavía aceptado», y un 504 no es un veredicto. **El error estaba en cómo se reportó la medición, no en la medición**: la conclusión —la ventana está acotada— se sostiene, y se rehizo el experimento con timestamp de cada intento y sondeo cada 2 s para acotarla mejor (último aceptado exp+30.1 s, primer rechazado exp+32.3 s, y dos tokens **nunca usados** rechazados igual). Las afirmaciones viejas **no se borran**: quedan en una tabla de «qué decía / qué pasa de verdad», porque un documento que corrige en silencio no se puede auditar. Y la constante `TOLERANCIA_DE_RELOJ_MEDIDA_S` se renombró a `DESFASE_QUE_MERECE_AVISO_S`, porque el nombre afirmaba más que la evidencia. | Prompt 41 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
