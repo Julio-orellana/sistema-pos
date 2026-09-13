@@ -30,8 +30,14 @@ import type { EstadoDeNubeIpc, ResumenDeConexionIpc } from '@shared/types/ipc';
 /** Segundos que tiene un minuto, para mostrar la vida del token en minutos. */
 const SEGUNDOS_POR_MINUTO = 60;
 
-/** La tolerancia de reloj medida contra PostgREST. Ver CLAUDE.md §4.22. */
+/** El umbral a partir del cual un desfase de reloj merece avisarse (§4.22). */
 const TOLERANCIA_DE_RELOJ_S = 30;
+
+/** Una fecha ISO, escrita como la leería una persona en el mostrador. */
+function fechaLegible(iso: string): string {
+  const fecha = new Date(iso);
+  return Number.isNaN(fecha.getTime()) ? iso : fecha.toLocaleString();
+}
 
 export function PantallaDeNube({
   alVolver,
@@ -151,6 +157,38 @@ export function PantallaDeNube({
           lado</strong> y hay que volver a escribirla si algún día se reconecta.
         </p>
       </header>
+
+      {estado?.revocada === true && (
+        <section className="alerta" data-prueba="nube-revocada">
+          <h2>Esta terminal quedó sin credencial</h2>
+          <p>
+            La nube <strong>rechazó la credencial</strong> de esta terminal
+            {estado.revocadaDesde !== null && (
+              <> el <strong data-prueba="nube-revocada-desde">{fechaLegible(estado.revocadaDesde)}</strong></>
+            )}
+            . Desde entonces <strong>las ventas se siguen registrando y se siguen guardando en la
+            cola, pero no se están subiendo</strong>.
+          </p>
+          {estado.filasPendientes !== null && (
+            <p data-prueba="nube-pendientes">
+              Hay <strong>{estado.filasPendientes}</strong>{' '}
+              {estado.filasPendientes === 1 ? 'fila esperando' : 'filas esperando'} para subir. No se
+              pierde ninguna: suben todas en cuanto se vuelva a conectar.
+            </p>
+          )}
+          <p>
+            <strong>Qué hacer:</strong> crear una contraseña nueva para el usuario de terminal en el
+            panel de Supabase y volver a conectar abajo. No hay nada que arreglar en la caja.
+          </p>
+          {estado.exposicionHasta !== null && (
+            <p className="subtitulo" data-prueba="nube-exposicion">
+              Dato para la revisión: un token ya emitido pudo seguir siendo aceptado por la nube
+              hasta las {fechaLegible(estado.exposicionHasta)}, aunque esta terminal dejó de usarlo
+              de inmediato.
+            </p>
+          )}
+        </section>
+      )}
 
       {mensaje !== null && (
         <p className="alerta" data-prueba="nube-error">

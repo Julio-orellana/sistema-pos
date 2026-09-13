@@ -390,10 +390,15 @@ alguien más está escribiendo. Queda en 8.1.
 > durante el intento se reintenta con una escalera propia —5 s, 15 s, 45 s,
 > techo de 1 min— que entra seis veces en el colchón antes del vencimiento.
 >
-> **La fila «Revocación» NO está construida.** Hoy un 401 al refrescar se
-> reintenta como cualquier otro fallo, y no existe el estado «sin credencial»
-> ni el aviso en rojo. Es una decisión explícita de Julio, con el TODO escrito
-> en `sesion-de-nube.ts`. Ver CLAUDE.md §4.23.
+> **La fila «Revocación» TAMBIÉN está construida, desde el 2026-09-13**, y con
+> una corrección a lo que esta sección daba por supuesto: **el refresco no
+> devuelve 401 sino 400**. Medido: `{"error_code":"validation_failed","msg":
+> "Refresh token is not valid"}`. El 401 es de PostgREST ante un access token
+> vencido, que es otra cosa y pasa cada 900 s. La aplicación clasifica al revés
+> —enumera lo transitorio y lee el resto como credencial muerta—, pasa al
+> estado «sin credencial» con su aviso y su fecha, deja de entregar el access
+> token aunque todavía sirviera, no reintenta y no borra el archivo. La cola
+> sigue llenándose. Ver CLAUDE.md §4.23.
 
 ### 1.7 Lo que hay que hacer en el panel de Supabase, y que la aplicación no puede hacer sola
 

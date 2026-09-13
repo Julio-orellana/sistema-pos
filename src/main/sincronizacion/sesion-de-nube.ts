@@ -30,10 +30,12 @@ import { ErrorDeNegocio } from '@main/database/errores';
 import type { ClienteDeAuth, SesionDeAuth } from './auth-de-nube';
 import type { AlmacenDeCredencial } from './credencial';
 import {
+  COTA_DE_TOLERANCIA_MEDIDA_S,
   desfaseDeRelojEnSegundos,
   elDesfaseMerecePreocupar,
   esperaHastaRenovar,
   esperaTrasFalloDeRenovacion,
+  finDeLaVentanaDeExposicion,
   leerClaimsSinVerificar,
   vidaDelTokenEnSegundos,
   type ClaimsDelToken,
@@ -47,6 +49,64 @@ import {
  * devolvería cero filas sin ningún error visible.
  */
 export const ROL_DE_LA_TERMINAL = 'terminal';
+
+/**
+ * De qué clase es un fallo AL RENOVAR.
+ *
+ * ===========================================================================
+ * NO ES «401 = REVOCADA», Y ESO SE MIDIÓ ANTES DE ESCRIBIRLO
+ * ===========================================================================
+ *
+ * La forma evidente sería mirar el 401, y **habría sido un control que no
+ * dispara nunca**. Medido contra `pos-pruebas-descartable` el 2026-09-13,
+ * GoTrue contesta **400**, no 401, cuando el token de refresco no sirve:
+ *
+ *   refresco inventado    -> HTTP 400 {"error_code":"validation_failed",
+ *                                      "msg":"Refresh token is not valid"}
+ *   contraseña equivocada -> HTTP 400 {"error_code":"invalid_credentials"}
+ *   usuario inexistente   -> HTTP 400 {"error_code":"invalid_credentials"}
+ *
+ * (El 401 sí es lo que devuelve **PostgREST** ante un access token vencido,
+ * que es otra cosa completamente distinta y pasa cada 900 s de forma normal.
+ * Confundir las dos habría hecho que la aplicación se declarara revocada en
+ * cada renovación.)
+ *
+ * Por eso la regla se escribe **al revés**: se enumera lo que SÍ es
+ * transitorio, y todo lo demás se lee como credencial muerta. Es el criterio
+ * conservador en la dirección correcta: ante un código nuevo que nadie
+ * previó, la aplicación prefiere avisar de más —y que una persona mire— antes
+ * que reintentar en bucle una credencial que ya no sirve.
+ */
+export type ClaseDeFalloDeRenovacion =
+  /** Sin red, 5xx, 408, 425, 429. Se reintenta con la escalera. */
+  | 'transitorio'
+  /** El servidor rechazó la credencial. No se arregla reintentando. */
+  | 'credencial_muerta';
+
+const CODIGOS_TRANSITORIOS = {
+  tiempoDeEsperaAgotado: 408,
+  demasiadoPronto: 425,
+  limiteDeTasa: 429,
+  primerErrorDelServidor: 500,
+} as const;
+
+export function clasificarFalloDeRenovacion(estadoHttp: number | undefined): ClaseDeFalloDeRenovacion {
+  // Sin código no hubo respuesta: es el caso de la red caída, el más común.
+  if (estadoHttp === undefined) {
+    return 'transitorio';
+  }
+  if (estadoHttp >= CODIGOS_TRANSITORIOS.primerErrorDelServidor) {
+    return 'transitorio';
+  }
+  if (
+    estadoHttp === CODIGOS_TRANSITORIOS.tiempoDeEsperaAgotado ||
+    estadoHttp === CODIGOS_TRANSITORIOS.demasiadoPronto ||
+    estadoHttp === CODIGOS_TRANSITORIOS.limiteDeTasa
+  ) {
+    return 'transitorio';
+  }
+  return 'credencial_muerta';
+}
 
 /** Lo que la pantalla necesita saber, sin ningún secreto adentro. */
 export interface EstadoDeNube {
@@ -68,6 +128,23 @@ export interface EstadoDeNube {
   readonly renovacionesFallidas: number;
   /** Qué pasó la última vez, para mostrarlo. Nunca lleva tokens ni contraseñas. */
   readonly ultimoMotivo: string | null;
+
+  // --- Credencial revocada (fase 3.a, segunda mitad) ------------------------
+  /**
+   * `true` cuando el servidor rechazó la credencial y esta terminal quedó
+   * **sin credencial útil**: sigue encolando, no puede subir, y solo se sale
+   * volviendo a conectar con una contraseña nueva.
+   */
+  readonly revocada: boolean;
+  /** Desde cuándo, en ISO-8601. Es lo que el aviso muestra. */
+  readonly revocadaDesde: string | null;
+  /**
+   * Hasta qué instante un token YA EMITIDO pudo seguir escribiendo en la nube,
+   * usando la cota medida de §4.22. Es la ventana de exposición de §1.5.
+   */
+  readonly exposicionHasta: string | null;
+  /** Filas esperando en `sync_cola`, para que el aviso diga cuánto se acumula. */
+  readonly filasPendientes: number | null;
 }
 
 /** Lo que `conectar` devuelve cuando sale bien. */
@@ -91,6 +168,12 @@ export interface DependenciasDeLaSesionDeNube {
   readonly registrar?: (mensaje: string) => void;
   /** Variación del backoff. Se inyecta para fijarla en las pruebas. */
   readonly azar?: () => number;
+  /**
+   * Cuántas filas esperan en `sync_cola`. Opcional: solo sirve para que el
+   * aviso de credencial revocada diga cuánto se está acumulando, y la sesión
+   * funciona igual sin esto.
+   */
+  readonly contarPendientes?: () => number;
 }
 
 export class SesionDeNube {
@@ -101,6 +184,7 @@ export class SesionDeNube {
   private readonly cancelar: (identificador: unknown) => void;
   private readonly registrar: (mensaje: string) => void;
   private readonly azar: () => number;
+  private readonly contarPendientes: (() => number) | null;
 
   /** El único temporizador vivo. Uno solo, siempre, como en el planificador. */
   private pendiente: unknown = null;
@@ -111,6 +195,9 @@ export class SesionDeNube {
   private desfase: number | null = null;
   private fallidas = 0;
   private motivo: string | null = null;
+  private revocadaDesde: string | null = null;
+  /** El `exp` del último token que se llegó a tener, para la ventana de §1.5. */
+  private ultimoExp: number | null = null;
 
   public constructor(dependencias: DependenciasDeLaSesionDeNube) {
     this.auth = dependencias.auth;
@@ -133,6 +220,7 @@ export class SesionDeNube {
       });
     this.registrar = dependencias.registrar ?? ((): void => undefined);
     this.azar = dependencias.azar ?? Math.random;
+    this.contarPendientes = dependencias.contarPendientes ?? null;
   }
 
   // -------------------------------------------------------------------------
@@ -150,6 +238,13 @@ export class SesionDeNube {
       relojSospechoso: this.desfase !== null && elDesfaseMerecePreocupar(this.desfase),
       renovacionesFallidas: this.fallidas,
       ultimoMotivo: this.motivo,
+      revocada: this.revocadaDesde !== null,
+      revocadaDesde: this.revocadaDesde,
+      exposicionHasta:
+        this.revocadaDesde !== null && this.ultimoExp !== null
+          ? new Date(finDeLaVentanaDeExposicion({ exp: this.ultimoExp })).toISOString()
+          : null,
+      filasPendientes: this.contarPendientes === null ? null : this.contarPendientes(),
     };
   }
 
@@ -161,7 +256,21 @@ export class SesionDeNube {
    * comportamiento correcto y ya está construido (§4.18).
    */
   public accessTokenVigente(): string | null {
-    return this.accessToken;
+    /*
+      REVOCADA = SIN CREDENCIAL, aunque el token de memoria todavía no haya
+      vencido. Es una decisión y conviene que esté escrita: cuando el servidor
+      rechaza el refresco, el access token que ya se tiene **puede seguir
+      funcionando** hasta su `exp` más la cota medida de §4.22 —hasta 15
+      minutos y medio con los 900 s del real—, y la aplicación **renuncia a esa
+      ventana a propósito**.
+
+      El motivo es que la revocación existe para el escenario de §1.5, la
+      terminal robada. Seguir escribiendo con una credencial que el servidor ya
+      declaró muerta sería actuar contra lo que el dueño acaba de decidir, y lo
+      único que se gana son unos minutos de subida que igual no se pierden: la
+      cola vive en SQLite y sube entera al reaprovisionar.
+    */
+    return this.revocadaDesde === null ? this.accessToken : null;
   }
 
   // -------------------------------------------------------------------------
@@ -268,6 +377,8 @@ export class SesionDeNube {
    */
   public async arrancar(): Promise<void> {
     this.detenido = false;
+    // Arrancar RE-VERIFICA contra el servidor: ver el comentario de `renovar`.
+    this.revocadaDesde = null;
     const guardado = this.credencial.leer();
     if (guardado === null) {
       this.motivo =
@@ -287,6 +398,17 @@ export class SesionDeNube {
    */
   public async renovar(): Promise<void> {
     if (this.detenido) {
+      return;
+    }
+    /*
+      Ya se sabe que la credencial está muerta: no se vuelve a preguntar por un
+      temporizador. **Sí se vuelve a preguntar al ARRANCAR**, porque el estado
+      de revocada vive en memoria y no en el disco: un arranque nuevo re-verifica
+      contra el servidor en vez de creerle a una decisión vieja. Cuesta una
+      petición por arranque y evita que un 400 de plataforma deje a la terminal
+      declarada muerta para siempre.
+    */
+    if (this.revocadaDesde !== null) {
       return;
     }
 
@@ -318,44 +440,17 @@ export class SesionDeNube {
       return;
     }
 
-    /*
-      ======================================================================
-      TODO(sincronizacion, fase 3.a — SEGUNDA MITAD): distinguir «no hay red»
-      de «esta credencial fue REVOCADA», y actuar distinto.
-      ======================================================================
+    const clase = clasificarFalloDeRenovacion(resultado.fallo.estadoHttp);
+    const comoLlego =
+      resultado.fallo.estadoHttp === undefined
+        ? 'sin respuesta del servidor'
+        : `HTTP ${String(resultado.fallo.estadoHttp)}`;
 
-      HOY TODO FALLO SE REINTENTA IGUAL, incluido un 401. Es deliberado y es
-      lo conservador —una credencial que sigue siendo válida nunca se
-      descarta por un problema de red—, pero está incompleto en dos cosas
-      que hay que construir:
+    if (clase === 'credencial_muerta') {
+      this.declararRevocada(`${comoLlego}: ${resultado.fallo.mensaje}`);
+      return;
+    }
 
-        1. Un 401 al REFRESCAR significa que el token de refresco ya no
-           sirve: usuario borrado, baneado o contraseña cambiada (§1.6).
-           Reintentarlo cada minuto para siempre no lo va a arreglar y
-           consume cuota del plan gratuito sin ningún beneficio.
-        2. Falta el estado «sin credencial» visible: la barra de estado en
-           rojo, con la fecha desde la que está así, mientras la cola sigue
-           llenándose sin poder subir. La cola YA hace su parte (§4.18); lo
-           que falta es que alguien se entere.
-
-      LO QUE EL EXPERIMENTO DEL 2026-09-13 YA DEJÓ RESUELTO, para que quien
-      construya esto no lo vuelva a medir (CLAUDE.md §4.22):
-
-        · PostgREST SÍ rechaza un access token vencido, con
-          `401 PGRST303 «JWT expired»`.
-        · NO hay caché de validación: se probó con un token nunca usado y
-          con otro ya usado, y los dos fueron rechazados igual.
-        · La tolerancia de reloj es de ~30 segundos después del `exp`.
-
-        Es decir: la ventana tras una revocación está acotada, y vale
-        **la vida del token + 30 s**; con los 900 s medidos, 15 min y medio.
-
-      Y UNA PRECISIÓN QUE HAY QUE TENER PRESENTE AL CONSTRUIRLO: la señal de
-      «me revocaron» NO es que la API rechace el access token, sino que **el
-      REFRESCO devuelva 401**, que es acá. El access token sigue siendo
-      válido hasta su `exp` aunque el usuario ya no exista, porque PostgREST
-      verifica firma y vencimiento y no si la sesión existe (§1.6).
-    */
     this.fallidas += 1;
     this.motivo = resultado.fallo.mensaje;
     this.registrar(
@@ -375,8 +470,16 @@ export class SesionDeNube {
 
     this.accessToken = sesion.accessToken;
     this.claims = claims;
+    this.ultimoExp = claims.exp;
     this.fallidas = 0;
     this.motivo = null;
+    /*
+      Una sesión buena BORRA el estado de revocada. Es el único camino de
+      salida, y es el que corresponde: si el servidor volvió a dar tokens, la
+      credencial que hay sirve. Pasa al reconectar con contraseña nueva, y
+      también en el arranque siguiente si el 400 había sido de plataforma.
+    */
+    this.revocadaDesde = null;
 
     this.desfase = desfaseDeRelojEnSegundos(claims, this.ahora());
     if (elDesfaseMerecePreocupar(this.desfase)) {
@@ -400,6 +503,59 @@ export class SesionDeNube {
       this.pendiente = null;
       void this.renovar();
     }, ms);
+  }
+
+  /**
+   * La credencial ya no sirve: esta terminal queda **sin credencial**.
+   *
+   * ===========================================================================
+   * NO SE REINTENTA, Y NO SE BORRA EL ARCHIVO
+   * ===========================================================================
+   *
+   * **No se reintenta** porque no hay nada que un reintento arregle: el
+   * servidor no dijo «ahora no», dijo «esta credencial no». Reintentar cada
+   * minuto para siempre consumiría cuota del plan gratuito sin ningún
+   * beneficio, y —peor— dejaría el problema invisible detrás de un contador
+   * que sube. Es el mismo criterio con que la cola de subida trata un fallo
+   * determinístico (§4.18): detenerse **visiblemente** en vez de girar en
+   * falso. Se sale volviendo a conectar desde la pantalla.
+   *
+   * **No se borra el archivo de credencial**, y es deliberado: si este 400
+   * viniera de un problema de plataforma y no de una revocación real,
+   * borrarlo habría destruido una credencial que servía. Borrar es
+   * irreversible; marcarla muerta en memoria no. Al reconectar se reemplaza
+   * sola.
+   *
+   * **LA COLA SIGUE LLENÁNDOSE Y NO SE PIERDE NADA.** La bandeja de salida
+   * escribe en `sync_cola` dentro de la transacción de cada operación de
+   * negocio (§4.17) y no sabe ni le importa si hay credencial. Lo que se
+   * detiene es la subida, no la venta.
+   */
+  private declararRevocada(detalle: string): void {
+    const yaEstaba = this.revocadaDesde !== null;
+    if (!yaEstaba) {
+      this.revocadaDesde = new Date(this.ahora()).toISOString();
+    }
+    this.fallidas = 0;
+    this.motivo =
+      'La nube rechazó la credencial de esta terminal. Hay que volver a conectarla ' +
+      `desde «Conectar con la nube» con una contraseña nueva. (${detalle})`;
+    this.olvidarSesionEnMemoria();
+
+    if (!yaEstaba) {
+      const pendientes = this.contarPendientes === null ? null : this.contarPendientes();
+      const hasta =
+        this.ultimoExp === null
+          ? 'no se sabe: nunca se llegó a tener un token'
+          : new Date(finDeLaVentanaDeExposicion({ exp: this.ultimoExp })).toISOString();
+      this.registrar(
+        `CREDENCIAL RECHAZADA POR LA NUBE (${detalle}). La terminal queda SIN CREDENCIAL: ` +
+          `sigue encolando y no puede subir hasta que alguien la reconecte. ` +
+          `Filas esperando en la cola: ${pendientes === null ? 'no se contaron' : String(pendientes)}. ` +
+          `Un token ya emitido pudo seguir siendo aceptado hasta ${hasta} ` +
+          `(el exp más la cota medida de ${String(COTA_DE_TOLERANCIA_MEDIDA_S)} s, §4.22).`,
+      );
+    }
   }
 
   /** Igual que leer `this.detenido`, pero sin que TypeScript lo estreche. */

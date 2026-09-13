@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ClienteDeAuth, ResultadoDeAuth } from '../auth-de-nube';
 import { AlmacenDeCredencial, type CifradoSeguro } from '../credencial';
-import { SesionDeNube } from '../sesion-de-nube';
+import { clasificarFalloDeRenovacion, SesionDeNube } from '../sesion-de-nube';
+import { COTA_DE_TOLERANCIA_MEDIDA_S } from '../vida-del-token';
 
 const VIDA_MEDIDA = 900;
 const SEGUNDO = 1000;
@@ -494,5 +495,342 @@ describe('La sesión de la terminal contra Supabase Auth', () => {
       expect(auth.refrescosRecibidos).toHaveLength(refrescosAntes);
       expect(agendados).toHaveLength(agendadosAntes);
     });
+  });
+});
+
+// ===========================================================================
+// FASE 3.a, SEGUNDA MITAD: la credencial revocada
+// ===========================================================================
+
+describe('Clasificar un fallo de renovación: NO es «401 = revocada»', () => {
+  /*
+    La forma evidente sería mirar el 401, y sería un control que NO DISPARA
+    NUNCA: medido contra pos-pruebas-descartable, GoTrue contesta 400 cuando el
+    token de refresco no sirve. El 401 es lo que devuelve PostgREST ante un
+    access token vencido, que pasa cada 900 s de forma normal.
+  */
+  it('el 400 que GoTrue devuelve de verdad se lee como credencial muerta', () => {
+    expect(clasificarFalloDeRenovacion(400)).toBe('credencial_muerta');
+  });
+
+  it('un 401 también, aunque no sea el código que GoTrue usa acá', () => {
+    expect(clasificarFalloDeRenovacion(401)).toBe('credencial_muerta');
+  });
+
+  it('un 403 —usuario baneado— también', () => {
+    expect(clasificarFalloDeRenovacion(403)).toBe('credencial_muerta');
+  });
+
+  it('SIN código HTTP es transitorio: es el caso de la red caída', () => {
+    expect(clasificarFalloDeRenovacion(undefined)).toBe('transitorio');
+  });
+
+  it('los 5xx son transitorios: el problema es del servidor, no de la credencial', () => {
+    for (const codigo of [500, 502, 503, 504]) {
+      expect(clasificarFalloDeRenovacion(codigo)).toBe('transitorio');
+    }
+  });
+
+  it('408, 425 y 429 son transitorios: el propio protocolo pide reintentar', () => {
+    for (const codigo of [408, 425, 429]) {
+      expect(clasificarFalloDeRenovacion(codigo)).toBe('transitorio');
+    }
+  });
+
+  it('un código 4xx que nadie previó se lee como credencial muerta, no como transitorio', () => {
+    // La regla enumera lo transitorio y deja el resto del lado conservador:
+    // mejor avisar de más que reintentar en bucle algo que ya no sirve.
+    expect(clasificarFalloDeRenovacion(418)).toBe('credencial_muerta');
+    expect(clasificarFalloDeRenovacion(422)).toBe('credencial_muerta');
+  });
+});
+
+describe('Cuando la nube RECHAZA la credencial, la terminal queda SIN CREDENCIAL', () => {
+  const RECHAZO = {
+    ok: false as const,
+    fallo: { estadoHttp: 400, mensaje: 'Refresh token is not valid' },
+  };
+
+  let carpeta: string;
+  let auth: AuthDeMentira;
+  let credencial: AlmacenDeCredencial;
+  let bitacora: string[];
+  let agendados: { accion: () => void; ms: number }[];
+  let sesion: SesionDeNube;
+  let pendientes: number;
+
+  beforeEach(async () => {
+    carpeta = mkdtempSync(join(tmpdir(), 'pos-revocada-'));
+    auth = new AuthDeMentira();
+    credencial = new AlmacenDeCredencial(carpeta, new CifradoDeMentira());
+    bitacora = [];
+    agendados = [];
+    pendientes = 47;
+    sesion = new SesionDeNube({
+      auth,
+      credencial,
+      ahora: (): number => Date.UTC(2026, 8, 13, 22, 30, 0),
+      programar: (accion, ms): number => {
+        agendados.push({ accion, ms });
+        return agendados.length - 1;
+      },
+      cancelar: (): void => undefined,
+      registrar: (mensaje): number => bitacora.push(mensaje),
+      azar: (): number => 0.5,
+      contarPendientes: (): number => pendientes,
+    });
+    await sesion.conectar(CORREO, CONTRASENA);
+    agendados.length = 0;
+    bitacora.length = 0;
+  });
+
+  afterEach(() => {
+    sesion.detener();
+    rmSync(carpeta, { recursive: true, force: true });
+  });
+
+  it('el estado dice que está revocada, y DESDE CUÁNDO', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    expect(sesion.estado().revocada).toBe(true);
+    expect(sesion.estado().revocadaDesde).toBe('2026-09-13T22:30:00.000Z');
+  });
+
+  it('deja de haber sesión activa, aunque el access token todavía no venció', async () => {
+    expect(sesion.estado().conectada).toBe(true);
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    expect(sesion.estado().conectada).toBe(false);
+  });
+
+  it('EL ACCESS TOKEN DEJA DE ENTREGARSE: no se sube nada más con una credencial muerta', async () => {
+    expect(sesion.accessTokenVigente()).not.toBeNull();
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    expect(sesion.accessTokenVigente()).toBeNull();
+  });
+
+  it('NO SE REINTENTA: no queda ningún temporizador agendado', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    expect(agendados).toHaveLength(0);
+  });
+
+  it('y un temporizador que llegara tarde tampoco vuelve a preguntar', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+    await sesion.renovar();
+    const consultasAntes = auth.refrescosRecibidos.length;
+
+    await sesion.renovar();
+
+    expect(auth.refrescosRecibidos).toHaveLength(consultasAntes);
+  });
+
+  it('NO BORRA la credencial del disco: borrar es irreversible y el 400 podría no serlo', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    expect(credencial.leer()).not.toBeNull();
+    expect(sesion.estado().hayCredencial).toBe(true);
+  });
+
+  it('el motivo le dice a una persona QUÉ HACER, no solo qué pasó', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    expect(sesion.estado().ultimoMotivo).toMatch(/volver a conectarla/);
+    expect(sesion.estado().ultimoMotivo).toMatch(/Conectar con la nube/);
+  });
+
+  it('informa CUÁNTAS filas se están acumulando en la cola sin poder subir', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    expect(sesion.estado().filasPendientes).toBe(47);
+  });
+
+  it('informa hasta cuándo un token YA EMITIDO pudo seguir sirviendo (exp + cota medida)', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    // El token de las pruebas vence en iat+900 = 1_700_000_900.
+    const esperado = new Date((1_700_000_900 + COTA_DE_TOLERANCIA_MEDIDA_S) * 1000).toISOString();
+    expect(sesion.estado().exposicionHasta).toBe(esperado);
+  });
+
+  it('deja el hecho en la bitácora técnica, con la cola y la ventana', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+
+    await sesion.renovar();
+
+    const texto = bitacora.join('\n');
+    expect(texto).toMatch(/CREDENCIAL RECHAZADA POR LA NUBE/);
+    expect(texto).toMatch(/SIN CREDENCIAL/);
+    expect(texto).toMatch(/47/);
+  });
+
+  it('UN CORTE DE RED NO ES UNA REVOCACIÓN: sigue reintentando y no se declara muerta', async () => {
+    auth.respuestasDeRefresco = [{ ok: false, fallo: { mensaje: 'fetch failed' } }];
+
+    await sesion.renovar();
+
+    expect(sesion.estado().revocada).toBe(false);
+    expect(sesion.accessTokenVigente()).not.toBeNull();
+    expect(agendados).toHaveLength(1);
+  });
+
+  it('un 503 tampoco: el problema es del servidor, no de la credencial', async () => {
+    auth.respuestasDeRefresco = [{ ok: false, fallo: { estadoHttp: 503, mensaje: 'upstream' } }];
+
+    await sesion.renovar();
+
+    expect(sesion.estado().revocada).toBe(false);
+    expect(agendados).toHaveLength(1);
+  });
+
+  it('VOLVER A CONECTAR con una contraseña nueva es la salida, y limpia el estado', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+    await sesion.renovar();
+    expect(sesion.estado().revocada).toBe(true);
+
+    auth.respuestaDeLogin = sesionOk('terminal', 'v1.credencial-nueva');
+    await sesion.conectar(CORREO, 'una-contrasena-nueva');
+
+    expect(sesion.estado().revocada).toBe(false);
+    expect(sesion.estado().revocadaDesde).toBeNull();
+    expect(sesion.estado().conectada).toBe(true);
+    expect(sesion.accessTokenVigente()).not.toBeNull();
+    expect(credencial.leer()).toBe('v1.credencial-nueva');
+  });
+
+  it('ARRANCAR vuelve a preguntarle al servidor: no se cree una decisión vieja', async () => {
+    auth.respuestasDeRefresco = [RECHAZO];
+    await sesion.renovar();
+    const consultasAntes = auth.refrescosRecibidos.length;
+
+    // Como si la aplicación se reiniciara: el estado de revocada vive en
+    // memoria, así que el arranque re-verifica en vez de darlo por hecho.
+    auth.respuestasDeRefresco = [sesionOk('terminal', REFRESCO_ROTADO)];
+    await sesion.arrancar();
+
+    expect(auth.refrescosRecibidos.length).toBe(consultasAntes + 1);
+    expect(sesion.estado().revocada).toBe(false);
+    expect(sesion.estado().conectada).toBe(true);
+  });
+});
+
+// ===========================================================================
+describe('Una credencial que existe pero NO SE PUEDE DESCIFRAR', () => {
+  /*
+    ES EL CASO DEL CAMBIO DE NOMBRE DEL PRODUCTO, y no es hipotético: se
+    encontró midiendo. `safeStorage` deriva la llave de la IDENTIDAD de la
+    aplicación, así que un instalador que cambie el nombre del producto deja
+    ilegible toda credencial guardada por la versión anterior. Lo mismo pasa
+    con un archivo copiado de otra máquina o de otra cuenta de Windows.
+
+    Lo que NO puede hacer la aplicación es fallar en silencio ni colgarse: el
+    comportamiento esperado es detectarlo, decirlo, y ofrecer reconectar.
+    Ver CLAUDE.md §4.23.
+  */
+  let carpeta: string;
+  let auth: AuthDeMentira;
+  let credencial: AlmacenDeCredencial;
+  let bitacora: string[];
+  let sesion: SesionDeNube;
+
+  beforeEach(() => {
+    carpeta = mkdtempSync(join(tmpdir(), 'pos-ilegible-'));
+    auth = new AuthDeMentira();
+    // Un cifrado que escribe bien pero NO puede leer: es exactamente lo que le
+    // pasa a la aplicación renombrada frente a un archivo de la versión vieja.
+    const cifradoQueNoLee: CifradoSeguro = {
+      isEncryptionAvailable: () => true,
+      encryptString: (t) => Buffer.from(t, 'utf8'),
+      decryptString: () => {
+        throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
+      },
+    };
+    credencial = new AlmacenDeCredencial(carpeta, cifradoQueNoLee);
+    // La deja escrita una "versión anterior", con otro cifrado.
+    new AlmacenDeCredencial(carpeta, new CifradoDeMentira()).guardar(REFRESCO_INICIAL);
+    bitacora = [];
+    sesion = new SesionDeNube({
+      auth,
+      credencial,
+      ahora: (): number => 1_700_000_000 * SEGUNDO,
+      programar: (): number => 0,
+      cancelar: (): void => undefined,
+      registrar: (mensaje): number => bitacora.push(mensaje),
+    });
+  });
+
+  afterEach(() => {
+    sesion.detener();
+    rmSync(carpeta, { recursive: true, force: true });
+  });
+
+  it('arrancar NO lanza y NO cuelga la aplicación', async () => {
+    await expect(sesion.arrancar()).resolves.toBeUndefined();
+  });
+
+  it('NO se inventa una sesión: queda desconectada', async () => {
+    await sesion.arrancar();
+
+    expect(sesion.estado().conectada).toBe(false);
+    expect(sesion.accessTokenVigente()).toBeNull();
+  });
+
+  it('NO llama a la red con un token que no pudo leer', async () => {
+    await sesion.arrancar();
+
+    expect(auth.refrescosRecibidos).toEqual([]);
+  });
+
+  it('NO FALLA EN SILENCIO: el motivo explica que no se pudo descifrar', async () => {
+    await sesion.arrancar();
+
+    expect(sesion.estado().ultimoMotivo).toMatch(/no se pudo descifrar/);
+  });
+
+  it('el hecho queda en la bitácora técnica, no solo en la pantalla', async () => {
+    await sesion.arrancar();
+
+    expect(bitacora.join('\n')).toMatch(/no se pudo descifrar/);
+  });
+
+  it('dice que SÍ hay un archivo, para que no parezca una instalación nueva', async () => {
+    await sesion.arrancar();
+
+    expect(sesion.estado().hayCredencial).toBe(true);
+  });
+
+  it('NO se marca como revocada: no es lo mismo que la nube rechace la credencial', async () => {
+    await sesion.arrancar();
+
+    // Son dos problemas distintos con dos arreglos distintos: acá la
+    // credencial podría estar perfecta y el que no la puede leer es este
+    // programa. Confundirlos mandaría a revocar en el panel sin necesidad.
+    expect(sesion.estado().revocada).toBe(false);
+  });
+
+  it('LA SALIDA ES RECONECTAR, y funciona: reemplaza el archivo ilegible', async () => {
+    await sesion.arrancar();
+
+    await sesion.conectar(CORREO, CONTRASENA);
+
+    expect(sesion.estado().conectada).toBe(true);
+    expect(sesion.estado().ultimoMotivo).toBeNull();
   });
 });

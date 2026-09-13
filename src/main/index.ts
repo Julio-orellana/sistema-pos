@@ -577,6 +577,9 @@ app.whenReady().then(
       sesionDeNube = new SesionDeNube({
         auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube),
         credencial: new AlmacenDeCredencial(app.getPath('userData'), safeStorage),
+        // Para que el aviso de credencial revocada pueda decir cuántas filas
+        // se están acumulando sin poder subir.
+        contarPendientes: (): number => repositorios.syncCola.contarPendientes(),
         registrar: (mensaje): void => {
           logTecnico.registrar('sincronizacion', mensaje);
           console.info(`[nube] ${mensaje}`);

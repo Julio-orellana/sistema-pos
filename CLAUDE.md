@@ -3217,17 +3217,17 @@ pasan.** Antes del arreglo fallaban dos, y la segunda era falsa.
   esta comprobación vuelve a fallar, lo primero que hay que medir es la
   tolerancia otra vez, no concluir que la nube dejó de validar.
 
-### 4.23 La credencial de la terminal (Fase 3.a, PRIMERA MITAD)
+### 4.23 La credencial de la terminal (Fase 3.a, COMPLETA)
 
 **Construida el 2026-09-13.** Es la primera vez que la aplicación tiene código
 para hablar con Supabase de verdad, aunque **todavía no habla**: sin
 `POS_NUBE_URL` no se construye nada y la pantalla lo dice. El `SyncProvider`
 real —el que subiría lotes— sigue sin existir; esto es solo la credencial.
 
-> **ESTA FASE ESTÁ DELIBERADAMENTE INCOMPLETA.** Julio pidió construir la
-> primera mitad y dejar fuera la lógica de credencial REVOCADA. Ver «Lo que NO
-> se construyó» al final, que es la parte que hay que leer antes de darla por
-> terminada.
+> **LA FASE 3.a ESTÁ COMPLETA desde el 2026-09-13.** Se construyó en dos
+> tandas: primero la credencial y la renovación, y después —cuando Julio la
+> destrabó— la lógica de credencial revocada, que tiene su propio bloque más
+> abajo.
 
 #### Las cuatro piezas, y por qué son cuatro y no una
 
@@ -3410,15 +3410,73 @@ las pruebas—, y buscando adentro tanto el token como la contraseña:
 que ocupa un token de refresco de 12 caracteres. Ni el token ni la contraseña
 aparecen en el archivo.
 
-> **HALLAZGO QUE NO SE BUSCABA: la credencial está atada a la IDENTIDAD DE LA
-> APLICACIÓN.** El primer intento de leer el archivo falló con «Error while
-> decrypting the ciphertext». No era un defecto: `safeStorage` deriva la llave
-> del nombre de la aplicación, y el lector corría como «Electron» y no como
-> «pos-agricola». Con la misma identidad descifra sin problema. Es **una capa
-> más de protección que no estaba prevista** —otro programa del mismo usuario no
-> puede leer la credencial— y también una advertencia para el día del
-> empaquetado: **si cambia el nombre del producto, las credenciales guardadas
-> dejan de descifrarse** y hay que volver a conectar cada terminal.
+##### ADVERTENCIA PARA EL EMPAQUETADO: la credencial está atada al NOMBRE DE LA APLICACIÓN
+
+> **SI EL NOMBRE DEL PRODUCTO CAMBIA ENTRE VERSIONES, TODA CREDENCIAL YA
+> GUARDADA DEJA DE SER LEGIBLE, Y HAY QUE RECONECTAR CADA TERMINAL A MANO.**
+> Leer esto antes de tocar `name` o `productName` en `package.json`, o la
+> configuración de `electron-builder`.
+
+**Cómo se descubrió, que es lo que le da peso.** El primer intento de leer el
+archivo de credencial de la aplicación falló con «Error while decrypting the
+ciphertext provided to safeStorage.decryptString». No era un defecto del
+código: el lector corría como «Electron» y la aplicación había cifrado como
+«pos-agricola». Repitiendo la lectura con **la misma identidad** —un
+`package.json` con el mismo `name`— descifra sin problema. Medido las dos
+veces, no razonado.
+
+La causa es que `safeStorage` no cifra con una llave del archivo: la deriva de
+una entrada del llavero (macOS) o de DPAPI (Windows) **cuyo nombre sale del
+nombre del producto**. Cambiar ese nombre es, a efectos prácticos, cambiar la
+llave.
+
+**Tiene un lado bueno que no estaba previsto:** otro programa del mismo usuario,
+corriendo como otra aplicación, **no puede leer la credencial** aunque tenga el
+archivo delante. Es una capa de protección más de la que §1.4 del diseño
+prometía.
+
+**Y un lado caro, que es el que hay que vigilar.** Estos tres cambios, todos
+plausibles, rompen la credencial de todas las terminales instaladas:
+
+| Cambio | Por qué rompe |
+|---|---|
+| Renombrar `name` o agregar/cambiar `productName` en `package.json` | Es de donde sale la identidad hoy |
+| Cambiar el nombre del producto en `electron-builder` para el instalador | El paquete final puede tener otro nombre que el del desarrollo |
+| Firmar la aplicación con otra identidad, o pasar de sin firmar a firmada | En macOS la ACL del llavero se ata a la firma |
+
+**Qué hacer si pasa:** no hay recuperación automática ni la va a haber —la
+llave vieja no existe más—. Hay que **reconectar cada terminal** desde
+«Conectar con la nube» con la contraseña de su usuario. Con una sola caja es un
+minuto; el día que haya varias, hay que planificarlo antes de publicar la
+versión, no después.
+
+##### QUÉ HACE LA APLICACIÓN CUANDO NO PUEDE DESCIFRAR: comportamiento esperado, con pruebas
+
+**Está construido y probado, no es solo una intención.** El comportamiento
+esperado, y lo que efectivamente hace hoy:
+
+| Se espera que… | Está |
+|---|---|
+| **NO se cuelgue ni falle en silencio** | `arrancar()` no lanza; hay prueba |
+| **No se invente una sesión**: queda desconectada y sin access token | prueba |
+| **No llame a la red** con un token que no pudo leer | prueba |
+| **Diga el motivo**, con las palabras «no se pudo descifrar» | prueba |
+| Lo deje también en la **bitácora técnica**, no solo en la pantalla | prueba |
+| Diga que **SÍ hay un archivo**, para que no parezca una instalación nueva | prueba |
+| **NO lo confunda con una revocación** | prueba |
+| **Ofrezca reconectar**, y que reconectar lo arregle reemplazando el archivo | prueba |
+
+La distinción del anteúltimo renglón importa y por eso tiene prueba propia: una
+credencial ilegible y una credencial **revocada** son dos problemas distintos
+con dos arreglos distintos. En la ilegible, la credencial de la nube podría
+estar perfecta y el que no la puede leer es este programa; confundirlas mandaría
+a revocar en el panel sin ninguna necesidad.
+
+> **LO QUE FALTA, DICHO EN VOZ ALTA:** la pantalla muestra el motivo y ofrece
+> reconectar, pero **no distingue visualmente** «no se pudo descifrar» de
+> cualquier otro motivo: sale en el mismo renglón de detalle. Con una sola
+> terminal alcanza; el día del cambio de nombre convendría un aviso propio que
+> diga «esta versión no puede leer la credencial de la versión anterior».
 
 **3. El reinicio relee la credencial, sin teclear nada.** Segundo arranque con
 la misma carpeta de datos:
@@ -3487,30 +3545,98 @@ abra. Si falla, agenda el reintento y la cola sigue llenándose, que es lo que
 el trabajador ya hace desde la fase 1.b. La credencial **no se borra** ante un
 fallo de red: un corte no es una revocación.
 
-#### Lo que NO se construyó, y por qué está dicho acá
+#### La credencial REVOCADA (segunda mitad, construida el 2026-09-13)
 
-> **FALTA LA SEGUNDA MITAD: qué hace la aplicación cuando la credencial fue
-> REVOCADA.** Hoy **todo fallo de renovación se reintenta igual, incluido un
-> 401**. Es lo conservador —una credencial válida nunca se descarta por un
-> problema de red— pero está incompleto en dos cosas:
->
-> 1. Un 401 al refrescar significa que el token de refresco ya no sirve:
->    usuario borrado, baneado o contraseña cambiada. Reintentarlo cada minuto
->    para siempre no lo arregla y consume cuota.
-> 2. Falta el estado «sin credencial» visible: la barra de estado en rojo con
->    la fecha desde la que está así. La cola ya hace su parte; lo que falta es
->    que alguien se entere.
->
-> **El TODO está escrito en `sesion-de-nube.ts`, en el lugar exacto donde hay
-> que construirlo**, con los tres resultados del experimento de §4.22 ya
-> anotados para que nadie los vuelva a medir.
->
-> **Y una precisión que el razonamiento del bloqueo no tenía:** la señal de
-> «me revocaron» **no** es que la API rechace el access token, sino que **el
-> REFRESCO devuelva 401**. El access token sigue valiendo hasta su `exp` aunque
-> el usuario ya no exista, porque PostgREST verifica firma y vencimiento y no
-> si la sesión existe (§1.6). Lo que el experimento sí fijó es la **cota de la
-> ventana** tras revocar: la vida del token más 30 s, o sea 15 min y medio.
+Julio la destrabó después de ver la salida cruda del experimento. Es el estado
+«sin credencial» de §1.6 del diseño.
+
+##### LA SEÑAL NO ES 401, Y ESO SE MIDIÓ ANTES DE ESCRIBIR NADA
+
+El pedido decía que la señal de revocación era «el refresco devuelve 401».
+**Se midió contra `pos-pruebas-descartable` y es falso**: GoTrue contesta
+**400**, no 401.
+
+```
+refresco INVENTADO      HTTP 400  {"code":400,"error_code":"validation_failed",
+                                   "msg":"Refresh token is not valid"}
+contraseña EQUIVOCADA   HTTP 400  {"code":400,"error_code":"invalid_credentials"}
+usuario INEXISTENTE     HTTP 400  {"code":400,"error_code":"invalid_credentials"}
+```
+
+Construir la detección sobre el 401 habría dado **un control que no dispara
+nunca**: la aplicación habría reintentado en bucle para siempre una credencial
+muerta, exactamente el defecto que esta mitad venía a cerrar, y sin que nada
+fallara a la vista.
+
+**El 401 sí existe, pero es otra cosa**: es lo que devuelve **PostgREST** ante
+un access token vencido, y eso pasa cada 900 s de forma perfectamente normal.
+Confundir los dos habría hecho que la terminal se declarara revocada en cada
+renovación. Son dos servidores distintos contestando dos preguntas distintas.
+
+**Por eso la regla se escribe al revés**: `clasificarFalloDeRenovacion` enumera
+lo que SÍ es transitorio —sin respuesta, 5xx, 408, 425, 429— y **todo lo demás
+se lee como credencial muerta**. Es conservador en la dirección correcta: ante
+un código que nadie previó, la aplicación prefiere avisar de más y que una
+persona mire, antes que girar en falso.
+
+**Falsificado**: reemplazando el clasificador por «solo 401», caen **12
+comprobaciones**.
+
+##### Qué hace cuando la credencial está muerta
+
+| Decisión | Por qué |
+|---|---|
+| **Deja de entregar el access token**, aunque no haya vencido | Ver abajo: renuncia a propósito a una ventana medida |
+| **No reintenta**: no agenda ningún temporizador | El servidor no dijo «ahora no», dijo «esta credencial no». Reintentar cada minuto consume cuota y esconde el problema detrás de un contador que sube |
+| **No borra el archivo** de credencial | Borrar es irreversible. Si el 400 viniera de un problema de plataforma, habría destruido una credencial que servía. Al reconectar se reemplaza sola |
+| **La cola sigue llenándose** | La bandeja de salida escribe en `sync_cola` dentro de la transacción de negocio (§4.17) y no sabe si hay credencial. Se detiene la subida, no la venta |
+| **Se sale reconectando**, y eso limpia el estado | Es el único camino, y el correcto: si el servidor volvió a dar tokens, la credencial sirve |
+| **Al ARRANCAR vuelve a preguntar** | El estado vive en memoria, no en el disco: un arranque nuevo re-verifica contra el servidor en vez de creerle a una decisión vieja. Cuesta una petición y evita que un 400 de plataforma deje la terminal muerta para siempre |
+
+##### AQUÍ ENTRA LA COTA MEDIDA, Y ES UNA RENUNCIA DELIBERADA
+
+Cuando el refresco es rechazado, **el access token que ya se tiene puede seguir
+funcionando**: hasta su `exp` más la cota medida de §4.22 —hasta 15 minutos y
+medio con los 900 s del real—. La aplicación **renuncia a esa ventana**:
+`accessTokenVigente()` devuelve `null` en cuanto se declara revocada.
+
+El motivo es que la revocación existe para el escenario de §1.5, la terminal
+robada. Seguir escribiendo con una credencial que el dueño acaba de anular sería
+actuar contra esa decisión, y lo único que se gana son unos minutos de subida
+que **igual no se pierden**: la cola vive en SQLite y sube entera al
+reaprovisionar.
+
+La cota además se **muestra**: el estado expone `exposicionHasta`, calculada
+como `exp + COTA_DE_TOLERANCIA_MEDIDA_S`, y la pantalla la dice —«un token ya
+emitido pudo seguir siendo aceptado hasta las HH:MM:SS»—. Es el dato que hace
+falta para revisar qué pudo pasar entre la revocación y ese instante. La
+constante se redondea **hacia arriba** a 33 s a propósito: para estimar
+exposición, quedarse corto es el error caro.
+
+##### El aviso que ve una persona
+
+No es un renglón de detalle: es un bloque propio, en rojo, con **la fecha desde
+la que está así**, **cuántas filas se están acumulando** en la cola —para que se
+vea que nada se pierde— y **qué hacer**, que es crear una contraseña nueva en el
+panel y volver a conectar. Dice explícitamente que no hay nada que arreglar en
+la caja, porque el cajero no puede hacer nada al respecto y no tiene que creer
+que sí.
+
+##### Lo que sigue sin estar
+
+- **No se pudo provocar una revocación REAL.** Para borrar o banear un usuario
+  hace falta la `service_role` del proyecto de pruebas, que no está en esta
+  máquina (§4.20), y cambiarle la contraseña al usuario de terminal rompería
+  `.env.nube-pruebas` y la batería. Lo que sí se midió es **el código que
+  devuelve GoTrue ante un token de refresco que no sirve**, que es el mismo
+  camino que recorre una sesión borrada. El resto está probado con dobles.
+- **Un usuario BANEADO podría devolver 403 en vez de 400.** No se pudo medir,
+  por lo mismo. La clasificación ya lo cubre —403 cae del lado de credencial
+  muerta— pero eso es razonamiento, no medición.
+- **La reutilización del token padre tiene una ventana de gracia larga**:
+  medido, el token anterior seguía sirviendo a los 15 s de haber rotado. Es lo
+  que §1.6 del diseño anticipa y lo que hace que una respuesta perdida en la
+  red no termine la sesión. No se midió cuánto dura.
 
 Tampoco existe **desconectar**: volver a conectar reemplaza la credencial, que
 cubre el caso real —cambió la contraseña del usuario de terminal—, pero no hay
@@ -3695,6 +3821,9 @@ se inventó.
 | **Se construye la primera mitad de la fase 3.a y se deja el TODO de la credencial REVOCADA, aunque el motivo del bloqueo ya no valía.** | Construir también la segunda mitad, ya que el experimento que la bloqueaba había terminado; construir la primera y no decir nada | El pedido decía que la segunda mitad esperaba a «un experimento en curso» sobre si PostgREST cachea la validación de un token vencido. **Ese experimento ya había terminado en la sesión anterior** y su resultado fue concluyente: PostgREST sí rechaza los vencidos, no hay caché —probado con un token nunca usado— y la tolerancia es de ~30 s (§4.22). Se reportó la premisa falsa **antes** de escribir código, como manda el proyecto, y aun así **no se amplió el alcance por cuenta propia**: la instrucción de no construirla era explícita y destrabarla es decisión de Julio. Lo que sí se hizo fue escribir los tres resultados medidos **dentro del TODO**, para que quien la construya no los vuelva a medir. Y se anotó una precisión que el razonamiento del bloqueo no tenía: **la señal de revocación no es que la API rechace el access token, sino que el REFRESCO devuelva 401** —el access token sigue valiendo hasta su `exp` aunque el usuario ya no exista (§1.6)—, así que el resultado del experimento no cambiaba el diseño de esa mitad tanto como suponía el pedido; lo que fijó fue la cota de la ventana tras revocar. | Prompt 40 — 2026-09-13 |
 | **CORREGIDO: `ipcRenderer.invoke` sobre un canal NO REGISTRADO rechaza la promesa, no devuelve `ok: false`. Toda pantalla que llame a un canal opcional tiene que atrapar eso.** | Suponer que la API siempre devuelve el sobre `RespuestaIpc`, como hacen los canales registrados; registrar los canales de nube siempre y que fallen adentro | Los dos canales de nube son los primeros del proyecto que **pueden no existir**: sin `POS_NUBE_URL` no hay sesión de nube que construir y no se registran. El sobre `RespuestaIpc` cubre los errores que ocurren DENTRO de un manejador; que no haya manejador es otra cosa, y Electron la señala rechazando. La pantalla esperaba el sobre, el rechazo quedaba sin atrapar y **seguía ofreciendo un botón «Conectar» que no podía funcionar**. Registrarlos siempre era la otra salida y es peor: haría falta una sesión de nube de mentira para que el manejador tuviera a quién preguntarle, o sea un objeto que finge estar configurado. **Lo encontró `verify:pantallas`, cuarta vez que atrapa un defecto que ninguna prueba de Vitest puede ver**, y quedó fijado ahí con dos comprobaciones; falsificado quitando el `try/catch`. | Prompt 40 — 2026-09-13 |
 | **CORREGIDO: se reportó como MEDIDO lo que era una inferencia, y un desfase de reloj que no se pudo reproducir.** Lo medido es una cota (~32 s), no una tolerancia de 30 s exactos; y el reloj local NO va 1.9 s atrasado, va ≈0. | Dejar el resumen como estaba, que ya sonaba convincente; borrar las afirmaciones viejas sin decir que estuvieron | Julio pidió ver **la salida cruda** del experimento en vez del resumen, y al releerla aparecieron tres cosas mal: (1) el desfase de 1.9 s **no se reproduce** —tres mediciones nuevas contra la cabecera `Date` del servidor dieron −0.21 s, +0.50 s y +0.75 s—, (2) la conversión «27.9–32.9 s de reloj del servidor» se apoyaba en ese 1.9 s y por lo tanto se cae, y (3) el bracket «25–30 s» eran **el contador nominal del bucle**, no los instantes medidos, que fueron +26.0 y +31.0. Más una cuarta menor: un `HTTP 504` se etiquetó «todavía aceptado», y un 504 no es un veredicto. **El error estaba en cómo se reportó la medición, no en la medición**: la conclusión —la ventana está acotada— se sostiene, y se rehizo el experimento con timestamp de cada intento y sondeo cada 2 s para acotarla mejor (último aceptado exp+30.1 s, primer rechazado exp+32.3 s, y dos tokens **nunca usados** rechazados igual). Las afirmaciones viejas **no se borran**: quedan en una tabla de «qué decía / qué pasa de verdad», porque un documento que corrige en silencio no se puede auditar. Y la constante `TOLERANCIA_DE_RELOJ_MEDIDA_S` se renombró a `DESFASE_QUE_MERECE_AVISO_S`, porque el nombre afirmaba más que la evidencia. | Prompt 41 — 2026-09-13 |
+| **La señal de credencial REVOCADA no es el 401: GoTrue devuelve 400. La clasificación enumera lo TRANSITORIO y lee todo lo demás como credencial muerta.** | Detectar por 401, que es lo que decía el pedido y lo que parece evidente; enumerar los códigos «malos» en vez de los «buenos» | **Medido antes de escribir la detección**, contra `pos-pruebas-descartable`: un token de refresco que no sirve devuelve `HTTP 400 {"error_code":"validation_failed","msg":"Refresh token is not valid"}`, y una contraseña equivocada o un usuario inexistente devuelven 400 también. **Detectar por 401 habría sido un control que no dispara nunca**, y la aplicación habría reintentado en bucle para siempre una credencial muerta, que es el defecto exacto que esta mitad venía a cerrar. El 401 sí existe pero es de **otro servidor y otra pregunta**: es PostgREST rechazando un access token vencido, cosa que pasa cada 900 s de forma normal, y confundirlos habría hecho que la terminal se declarara revocada en cada renovación. La regla se escribe al revés —transitorio es sin respuesta, 5xx, 408, 425 y 429; todo lo demás es credencial muerta— porque ante un código que nadie previó conviene avisar de más y que una persona mire, antes que girar en falso. **Falsificado**: con «solo 401» caen 12 comprobaciones. | Prompt 42 — 2026-09-13 |
+| **Revocada = sin credencial: la aplicación RENUNCIA a la ventana en que su access token todavía serviría, no reintenta, y NO borra el archivo.** | Seguir subiendo con el token vigente hasta que venza, ya que funciona; reintentar el refresco con backoff; borrar la credencial muerta para dejar el estado limpio | Al detectarse la revocación, el access token en memoria **puede seguir siendo aceptado** hasta su `exp` más la cota medida de §4.22 —hasta 15 min y medio con los 900 s del real—. Se renuncia a esa ventana porque la revocación existe para el escenario de la terminal robada (§1.5): seguir escribiendo con una credencial que el dueño acaba de anular es actuar contra esa decisión, y lo único que se gana son minutos de subida **que igual no se pierden**, porque la cola vive en SQLite y sube entera al reaprovisionar. No se reintenta porque el servidor no dijo «ahora no» sino «esta credencial no», y un contador que sube esconde el problema en vez de mostrarlo: es el mismo criterio con que la cola trata un fallo determinístico (§4.18). Y **no se borra el archivo** porque borrar es irreversible: si ese 400 viniera de un problema de plataforma, se habría destruido una credencial que servía; marcarla muerta en memoria no cuesta nada y reconectar la reemplaza sola. El estado de revocada vive en memoria a propósito, así que **cada arranque vuelve a preguntarle al servidor** en vez de creerle a una decisión vieja. | Prompt 42 — 2026-09-13 |
+| **ADVERTENCIA DE EMPAQUETADO: la credencial cifrada está atada al NOMBRE DE LA APLICACIÓN. Si cambia, hay que reconectar cada terminal a mano.** | Darlo por sabido; intentar una migración automática de la credencial entre nombres | Se descubrió midiendo, no leyendo: el primer intento de leer el archivo desde un lector que corría como «Electron» falló con «Error while decrypting the ciphertext», y con la misma identidad —`name: pos-agricola`— descifra sin problema. `safeStorage` deriva la llave de una entrada del llavero o de DPAPI **cuyo nombre sale del nombre del producto**, así que renombrar `name`/`productName`, cambiar el nombre en `electron-builder` o cambiar la firma de la aplicación **deja ilegible toda credencial ya guardada**. Tiene un lado bueno no previsto —otro programa del mismo usuario no puede leerla— y uno caro, que es este. **No hay migración automática posible**: la llave vieja no existe más. Lo que sí se exige es que la aplicación **no falle en silencio ni se cuelgue**: detecta el fallo de descifrado, lo dice con esas palabras, lo deja en la bitácora, no lo confunde con una revocación y ofrece reconectar. Las ocho conductas tienen prueba. | Prompt 42 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -3820,19 +3949,19 @@ negocio:
     de Storage** de la `0026`. Aplicadas en los dos proyectos el 2026-09-13,
     con los dos pasos manuales del panel hechos y medidos (§4.22). **La fase 2
     queda cerrada entera.**
-  - **Fase 3.a, PRIMERA MITAD** (§4.23): la **credencial de la terminal**.
+  - **Fase 3.a** (§4.23): la **credencial de la terminal**.
     `safeStorage` cifrando el token de refresco en
     `<userData>/sincronizacion.credencial`, la pantalla «Conectar con la nube»
     solo para rol administrativo, la renovación automática antes del
     vencimiento —calculada con `exp - iat`, no con el reloj local— y el
-    reintento con backoff ante un corte de red.
+    reintento con backoff ante un corte de red. Y la **credencial revocada**:
+    el estado «sin credencial», su aviso con fecha y filas pendientes, y la
+    cola que se sigue llenando sin poder subir hasta reaprovisionar.
   **Lo que sigue sin existir:** el `SyncProvider`
   real contra Supabase —o sea que **la credencial existe y todavía no la usa
   nadie para subir nada**—, la detección de conexión, la sincronización de
-  archivos, la pantalla de sincronización, la restauración, y **la segunda
-  mitad de la fase 3.a**: qué hace la aplicación cuando la credencial fue
-  REVOCADA (§4.23). **La aplicación sigue sin haber hecho una llamada de red en
-  la tienda**: sin `POS_NUBE_URL` no se construye la sesión de nube, y las
+  archivos, la pantalla de sincronización y la restauración. **La aplicación
+  sigue sin haber hecho una llamada de red en la tienda**: sin `POS_NUBE_URL` no se construye la sesión de nube, y las
   únicas llamadas reales las hacen `npm run verify:nube` y
   `npm run diagnostico:credencial`, dos guiones de desarrollo.
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los

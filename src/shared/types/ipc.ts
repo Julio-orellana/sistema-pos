@@ -1010,6 +1010,18 @@ export interface EstadoDeNubeIpc {
   readonly renovacionesFallidas: number;
   /** Qué pasó la última vez. Nunca lleva tokens ni contraseñas. */
   readonly ultimoMotivo: string | null;
+  /**
+   * `true` cuando la nube RECHAZÓ la credencial: la terminal quedó sin poder
+   * subir y solo se sale volviendo a conectar. No es lo mismo que un corte de
+   * red, y tampoco que el access token venza, que pasa cada 900 s.
+   */
+  readonly revocada: boolean;
+  /** Desde cuándo está así, en ISO-8601. */
+  readonly revocadaDesde: string | null;
+  /** Hasta cuándo un token ya emitido pudo seguir escribiendo (§4.22). */
+  readonly exposicionHasta: string | null;
+  /** Filas esperando en `sync_cola` sin poder subir. */
+  readonly filasPendientes: number | null;
 }
 
 /** Lo que devuelve conectar cuando sale bien. */

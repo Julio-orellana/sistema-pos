@@ -168,6 +168,34 @@ export const ESPERA_MINIMA_MS = 5_000;
 export const DESFASE_QUE_MERECE_AVISO_S = 30;
 
 /**
+ * La COTA medida de cuánto sobrevive un access token después de su `exp`.
+ *
+ * **Es una cota superior medida, no una tolerancia exacta**, y la diferencia
+ * importa: lo que se observó en dos corridas contra `pos-pruebas-descartable`
+ * el 2026-09-13 es que el token deja de servir *en algún punto* por debajo de
+ * los ~32.3 s; no que la tolerancia sea de 30 (ver `DESFASE_QUE_MERECE_AVISO_S`
+ * y CLAUDE.md §4.22). Se redondea hacia ARRIBA a 33 a propósito: para lo que
+ * se usa —calcular hasta cuándo un token ya emitido PUDO seguir sirviendo—
+ * quedarse corto sería subestimar la exposición, y eso es el error caro.
+ *
+ * Sirve para una sola cosa: cuando se detecta que la credencial fue revocada,
+ * decir hasta qué instante un token ya emitido pudo seguir escribiendo en la
+ * nube. Es la cota de la ventana de §1.5 del diseño, la de la terminal robada.
+ */
+export const COTA_DE_TOLERANCIA_MEDIDA_S = 33;
+
+/**
+ * Hasta qué instante un token ya emitido pudo seguir siendo aceptado.
+ *
+ * `exp` más la cota medida. Se devuelve en milisegundos de época para que
+ * quien lo muestre decida el formato.
+ */
+export function finDeLaVentanaDeExposicion(claims: Pick<ClaimsDelToken, 'exp'>): number {
+  const MS_POR_SEGUNDO = 1000;
+  return (claims.exp + COTA_DE_TOLERANCIA_MEDIDA_S) * MS_POR_SEGUNDO;
+}
+
+/**
  * La vida del token en segundos, medida con el reloj del servidor.
  *
  * `exp` e `iat` los puso el mismo servidor en el mismo instante, así que su
