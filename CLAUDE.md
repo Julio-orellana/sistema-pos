@@ -329,8 +329,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) y **2026-09-12 (la `0023` y la `0024`, fase 2.c)** |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) **2026-09-12 (la `0023` y la `0024`)** y **2026-09-13 (la `0025` y la `0026`, con lo que la fase 2.c queda aplicada entera)** |
 | Plan | gratuito |
 
 Estado verificado contra el catálogo del proyecto, no contra el script, el
@@ -359,12 +359,21 @@ SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`.** La
-`0023_funciones_de_sincronizacion` y la `0024_privilegios_de_tabla` se aplicaron
-el **2026-09-12**, con la aprobación explícita de Julio y después de haberse
-probado durante días contra `pos-pruebas-descartable`. Lo que sigue pendiente de
-la fase 2.c no son migraciones: son **las políticas de RLS** (solo `SELECT` para
-`restauracion`) y **el JWT de 15 minutos**, que es configuración del panel de
-Auth y no se puede tocar ni desde el conector ni desde el código. Ver §4.20.
+`0023` y la `0024` se aplicaron el **2026-09-12**, y la `0025` y la `0026` el
+**2026-09-13**, todas con la aprobación explícita de Julio y después de haberse
+probado contra `pos-pruebas-descartable`. **Los dos proyectos tienen hoy las 21
+migraciones.**
+
+Lo que sigue pendiente de la fase 2.c **no son migraciones, son dos pasos
+manuales del panel** que ni el conector ni el código pueden hacer:
+
+1. **Poner `app_metadata.rol = 'restauracion'`** en el usuario de Julio. Hoy
+   `pos-jimmy-cano` tiene **cero usuarios de Auth**, así que las trece políticas
+   recién aplicadas **no le sirven todavía a nadie**, y eso está medido, no
+   supuesto (ver la tabla de abajo). No es opcional: sin ese claim la
+   restauración no puede leer una sola fila.
+2. **Bajar la expiración del JWT a 900 s**, que en el proyecto de pruebas ya
+   está hecha. Ver §4.20.
 
 Evidencia de esa aplicación, leída del catálogo del real y no del archivo:
 
@@ -521,9 +530,16 @@ Pendiente en la nube, para la fase 2.c de la sincronización:
   `authenticated_security_definer_function_executable`**, uno por función de
   escritura, y ninguno de `search_path`. **Son esperados y no se corrigen**:
   esas funciones son la única puerta de escritura de la terminal.
-- **El JWT de 15 minutos sigue pendiente en el real.** Es configuración del
-  panel de Auth y no se alcanza ni desde el conector ni desde el código; en
-  `pos-pruebas-descartable` ya está en 900 s. Ver §4.20.
+- **HECHO el 2026-09-13: la `0025` y la `0026` también están aplicadas en el
+  real.** Las trece tablas tienen su política de lectura para `restauracion` y
+  ninguna para la terminal; los dos buckets existen, privados. **El linter dejó
+  de reportar los 13 avisos INFO `rls_enabled_no_policy`**, que era la señal
+  buscada: pasó de 13 INFO + 7 WARN a **0 INFO + 7 WARN**, y los siete son los
+  cinco de las funciones DEFINER más los dos preexistentes de `rls_auto_enable`.
+- **Quedan DOS pasos manuales del panel, y ninguno es opcional**: marcar el
+  usuario de Julio con `app_metadata.rol = 'restauracion'` y bajar el JWT a
+  900 s. Sin el primero, las políticas de la `0025` no le sirven a nadie: hoy el
+  real tiene cero usuarios de Auth. Ver §4.21 y §4.20.
 
 **No tocar** la función `public.rls_auto_enable()` ni su disparador de eventos
 `ensure_rls`: son preexistentes del proyecto y ajenos a este esquema. Tienen dos
@@ -2825,9 +2841,26 @@ diferencias y sale con código 1.
 
 ### 4.21 Las políticas y los archivos (Fase 2.c)
 
-**Escritas, aplicadas y probadas SOLO en `pos-pruebas-descartable`, el
-2026-09-13.** En `pos-jimmy-cano` están pendientes de la revisión de Julio, por
-la vía de siempre: SQL a la vista y aprobación explícita.
+**Escritas y probadas en `pos-pruebas-descartable`, y aplicadas también en
+`pos-jimmy-cano` el 2026-09-13**, con la aprobación explícita de Julio y por la
+vía de siempre: SQL a la vista primero.
+
+> **LO QUE FALTA NO ES UNA MIGRACIÓN: ES UN PASO MANUAL, Y SIN ÉL ESTO NO SIRVE
+> DE NADA.** Las trece políticas conceden lectura a quien traiga
+> `app_metadata.rol = 'restauracion'` en su JWT, y **hoy `pos-jimmy-cano` tiene
+> CERO usuarios de Auth**. Medido en el real, simulando los claims sobre
+> `denominaciones`, que tiene sus 11 filas:
+>
+> | Quién consulta | Qué ve |
+> |---|---|
+> | Un autenticado sin rol | 0 de 11 |
+> | Un autenticado con rol `terminal` | 0 de 11 |
+> | Un autenticado con rol `restauracion` pero anónimo | 0 de 11 |
+> | Un autenticado con `app_metadata.rol = 'restauracion'` | **11 de 11** |
+> | La llave publicable sola | `42501 permission denied` |
+>
+> Es decir: la política funciona, y **no le sirve a nadie hasta que el usuario
+> exista y tenga ese claim**, que se pone desde el panel (§1.7, punto 4).
 
 | Migración | Qué crea |
 |---|---|
@@ -3148,6 +3181,8 @@ desaparecer los trece avisos `rls_enabled_no_policy`, que era su razón de ser.
 | **Storage: dos buckets PRIVADOS; la terminal solo SUBE fotos; nadie borra; y el bucket `recibos` se crea sin ningún permiso para la terminal.** | Buckets públicos, que es lo cómodo; darle a la terminal también lectura de sus fotos; conceder ya la subida de PDF | Un bucket público sirve sus objetos a cualquiera que consiga la URL, sin pasar por RLS, y un recibo lleva lo que compró una persona con su total. Que la terminal no lea las fotos que sube no es una limitación sino la forma correcta: §2.5.2 dice que una foto en una ruta es inmutable y que se sube sin `x-upsert`; medido contra la nube, la segunda subida a la misma ruta contesta `KeyAlreadyExists` —que el diseño lee como éxito de un reintento— y con `x-upsert` la rechaza RLS. Sobre `recibos` no se concede nada porque **§2.5.3 recomienda no subir los PDF** (son dato derivado y llenan el gigabyte del plan gratuito en unos ocho meses) y la decisión todavía no está tomada: rige el valor por omisión del proyecto, el permiso que no se pidió no se concede. Queda anotado que en `storage.objects` la única capa es RLS —la `0024` solo cubrió `public`— y que un bucket **no se borra por SQL**: lo impide el trigger `protect_buckets_delete`. | Prompt 36 — 2026-09-13 |
 | **CORREGIDO durante la falsificación: «la restauración lee X» no mordía, porque sin política un SELECT no falla, devuelve 200 con la lista vacía.** Ahora exige ver filas. | Dejar la comprobación mirando solo el código HTTP | Se borró `restauracion_lee_ventas` a propósito para ver si la batería lo notaba, **y no lo notó**: la comprobación afirmaba «lee» cuando lo único que había verificado es que la consulta no diera error. Es exactamente la clase de prueba que este proyecto considera peor que no tener prueba, porque da confianza sin darla. Corregida, exige `datos.length > 0` en las doce tablas que la batería deja con filas —`precios_especiales` queda vacía porque en producción nada la escribe (§4.17)— y borrar esa única política hace fallar exactamente una comprobación, que nombra la tabla y muestra `leer 200 []`. | Prompt 36 — 2026-09-13 |
 | **En `storage.objects` NO se puede revocar el privilegio de `anon`, y en vez de dejar un `REVOKE` que no revoca se puso una política RESTRICTIVA.** | Dejar el `REVOKE ALL ON storage.objects FROM anon` en la migración, que es lo que se pidió y lo que «parece» aplicarse; revocar también a `authenticated`; no poner nada | El `REVOKE` **no lanza error y no hace nada**: el `relacl` muestra `anon=arwdDxtm/supabase_storage_admin`, y un `REVOKE` solo quita lo que concedió quien lo ejecuta. `postgres` no es miembro de `supabase_storage_admin`, `GRANTED BY` da «grantor must be current user» y `SET ROLE` da «permission denied to set role». **Dejarlo habría sido lo peor de las tres opciones**: una migración que aparenta cerrar una puerta y no la cierra es exactamente el guion que sale en silencio y miente sobre lo que hizo, la clase de cosa que este proyecto ya prohibió en §4.11. La política restrictiva da la misma defensa en profundidad y sí está en nuestra mano: no concede nada, se combina con Y contra las permisivas, y ninguna permisiva futura la pasa por encima. **Falsificada con un control**: con la restrictiva puesta, `anon` no sube ni con una permisiva abierta encima; quitándola, con la misma permisiva, sube y lista los objetos. A `authenticated` no se le toca porque la terminal NECESITA `INSERT`; medido, su subida funciona idéntica antes y después. | Prompt 37 — 2026-09-13 |
+| **«Privado» es un ESTADO del bucket que se cambia desde el panel, no una garantía que la migración sostenga; queda documentado y no se agrega ningún mecanismo.** | Agregar un disparador o una comprobación periódica que vuelva a poner `public = false`; no decir nada | `public` es una columna de la fila del bucket y el panel la cambia con un interruptor, sin pasar por ninguna migración de la carpeta y sin pasar por RLS. Si alguien marca `fotos` o `recibos` como público, Storage sirve esos objetos por una ruta que **no evalúa ninguna de las cuatro políticas de la `0026`**, y la migración seguiría figurando como aplicada: ni la restrictiva de `anon` ni la ausencia de permisos de la terminal se enterarían. No se agrega mecanismo porque no hace falta hoy y porque un vigilante automático sería otra pieza que mantener; lo que sí hace falta es que esté **dicho**, para que el día que un archivo aparezca donde no debería, lo primero que se mire sea si el bucket sigue privado. | Prompt 38 — 2026-09-13 |
+| **La `0025` y la `0026` aplicadas en `pos-jimmy-cano`, y con ellas la fase 2.c queda completa del lado del SQL. Lo que falta son dos pasos del panel, y se documentan como no opcionales.** | Darla por cerrada al aplicar las migraciones; dejar los pasos del panel como una nota al pie | Las trece políticas conceden lectura a quien traiga `app_metadata.rol = 'restauracion'`, y el real tiene **cero usuarios de Auth**: aplicadas y todo, hoy no le sirven a nadie. Se midió en el real, con los claims simulados sobre `denominaciones`: sin rol 0 de 11, con rol terminal 0 de 11, con rol restauración pero anónimo 0 de 11, con el claim correcto **11 de 11**, y la llave publicable `42501`. Es decir, la política discrimina bien y **el paso manual es la mitad que falta del mecanismo**, no un trámite. El otro paso es el JWT de 900 s. El linter confirmó lo previsto: los 13 avisos INFO `rls_enabled_no_policy` desaparecieron. | Prompt 38 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
