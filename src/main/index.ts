@@ -70,6 +70,8 @@ import { observarLotesEncolados } from '@main/database/bandeja-de-salida';
 import { TrabajadorDeSincronizacion } from '@main/sincronizacion/trabajador';
 import { PlanificadorDeSincronizacion } from '@main/sincronizacion/planificador';
 import { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
+import { SupabaseSyncProvider } from '@main/sincronizacion/supabase-sync-provider';
+import { DetectorDeConexion } from '@main/sincronizacion/deteccion-de-conexion';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
 import { AlmacenDeCredencial } from '@main/sincronizacion/credencial';
 import { ATAJO_SALIDA_CONTROLADA, describirAtajo } from '@shared/kiosk-input';
@@ -171,6 +173,14 @@ let planificadorDeSincronizacion: PlanificadorDeSincronizacion | null = null;
  */
 let sesionDeNube: SesionDeNube | null = null;
 
+/** Para expresar «cada hora» sin números sueltos. */
+const MINUTOS_POR_HORA = 60;
+const SEGUNDOS_POR_MINUTO = 60;
+const MILISEGUNDOS_POR_SEGUNDO = 1000;
+
+/** El temporizador del latido diario, para poder pararlo en el cierre. */
+let latidoDiario: ReturnType<typeof setInterval> | null = null;
+
 function cerrarAplicacionOrdenadamente(): void {
   if (cierreEnCurso) {
     return;
@@ -203,6 +213,10 @@ function cerrarAplicacionOrdenadamente(): void {
   */
   sesionDeNube?.detener();
   sesionDeNube = null;
+  if (latidoDiario !== null) {
+    clearInterval(latidoDiario);
+    latidoDiario = null;
+  }
 
   quitarManejadoresIpc();
   ultimoCierre = cerrarBaseDeDatosOrdenadamente();
@@ -645,8 +659,42 @@ app.whenReady().then(
       console.info(`[sincronizacion] ${mensaje}`);
     };
 
+    /*
+      ===================================================================
+      EL PROVEEDOR REAL (fase 3.b)
+      ===================================================================
+      Solo existe si hay sesión de nube, o sea si el proyecto está
+      configurado. Si no, `crearSyncProvider` cae al simulado y avisa: la
+      cola sigue funcionando entera contra un adaptador que no toca la red,
+      que es como corrió toda la fase 1.b.
+
+      `net.fetch` y no el `fetch` de Node: en Windows respeta el proxy del
+      sistema, y el de Node no (§5.4 del diseño).
+    */
+    const detectorDeConexion =
+      sesionDeNube === null
+        ? null
+        : new DetectorDeConexion({
+            urlDelProyecto: urlDeLaNube,
+            referenciaDelProyecto: new URL(urlDeLaNube).hostname.split('.')[0] ?? '',
+            llavePublicable: llaveDeLaNube,
+            sistemaDiceQueHayRed: (): boolean => net.isOnline(),
+            buscar: net.fetch.bind(net),
+            registrar: anotarSincronizacion,
+          });
+
     const proveedorDeSincronizacion = crearSyncProvider(
       leerConfiguracionAdaptadoresDelEntorno(process.env),
+      sesionDeNube === null || detectorDeConexion === null
+        ? undefined
+        : new SupabaseSyncProvider({
+            urlDelProyecto: urlDeLaNube,
+            llavePublicable: llaveDeLaNube,
+            sesion: sesionDeNube,
+            conexion: detectorDeConexion,
+            buscar: net.fetch.bind(net),
+            registrar: anotarSincronizacion,
+          }),
     );
     const trabajadorDeSincronizacion = new TrabajadorDeSincronizacion({
       cola: repositorios.syncCola,
@@ -671,6 +719,30 @@ app.whenReady().then(
       abrir sin internet—, así que no hace falta envolverlo en un `catch`.
     */
     void sesionDeNube?.arrancar();
+
+    /*
+      ===================================================================
+      EL LATIDO DIARIO (§5.3, riesgo 8.3)
+      ===================================================================
+      NO es para detectar conexión: es para que el proyecto del plan gratuito
+      no se pause por inactividad. Por eso consulta la BASE y no el health de
+      Auth, que según §5.3 no cuenta como actividad de base.
+
+      Se revisa cada hora y late cuando toca, en vez de agendar un
+      temporizador de 24 horas: una terminal que se apaga cada noche nunca
+      llegaría a dispararlo. `unref` para que no retenga el proceso en el
+      cierre ordenado, igual que el resto de los temporizadores del módulo.
+    */
+    if (detectorDeConexion !== null) {
+      const CADA_HORA_MS = MINUTOS_POR_HORA * SEGUNDOS_POR_MINUTO * MILISEGUNDOS_POR_SEGUNDO;
+      latidoDiario = setInterval(() => {
+        const token = sesionDeNube?.accessTokenVigente() ?? null;
+        if (token !== null && detectorDeConexion.tocaLatido()) {
+          void detectorDeConexion.latir(token);
+        }
+      }, CADA_HORA_MS);
+      latidoDiario.unref();
+    }
     const avisoDeArranque =
       `trabajador en marcha con ${proveedorDeSincronizacion.nombre}; ` +
       `primer ciclo en 30 s. Pendientes en la cola: ` +

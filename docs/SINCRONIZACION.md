@@ -1029,6 +1029,28 @@ La comprobación no corre en un intervalo fijo. Corre **cuando tiene sentido**:
 | **Cambio de estado del sistema** | `net.isOnline()` pasa de `false` a `true`; `powerMonitor` emite `resume` o `on-ac`; el renderer recibe el evento `online` de la ventana y lo reenvía por IPC. Cualquiera de esos dispara una comprobación **inmediata** (con 15 s de gracia tras despertar). |
 | **Latido diario** | Una vez al día, aunque no haya pendientes, una consulta mínima a PostgREST: `GET /rest/v1/configuracion_negocio?select=id&limit=1`. | **Esta no es para detectar conexión: es para que el proyecto no se pause** (8.3). La documentación dice que «unas pocas consultas de usuario a la base por día» bastan, y que el health de Auth no cuenta como actividad de base. |
 
+> **COMO QUEDÓ CONSTRUIDO (fase 3.b, 2026-09-13) — con DOS correcciones
+> medidas a esta misma sección.**
+>
+> **1. `HEAD /auth/v1/health` NO FUNCIONA.** Medido: devuelve `405 Method Not
+> Allowed` con `allow: GET`. Un detector que use HEAD reportaría «sin
+> internet» siempre, con la red perfecta. Se usa `GET` —que además es lo único
+> coherente con «un 200 con el cuerpo esperado» de esta misma fila, porque un
+> HEAD no tiene cuerpo—: 200, 107 bytes, `content-type: application/json`.
+>
+> **2. Se comprueba la cabecera `sb-project-ref`, que esta sección no
+> preveía.** La respuesta la trae con la referencia del proyecto, y es mejor
+> discriminador de portal cautivo que el tipo de contenido: un portal puede
+> devolver `application/json`, pero no puede firmar con la referencia de ESTE
+> proyecto.
+>
+> Lo demás quedó como está escrito: al sistema operativo solo se le cree el
+> `false`, con la cola vacía no se comprueba nada, y la escalera es 30 s / 1 /
+> 2 / 5 min. **El latido diario NO usa el health**, por lo que dice la última
+> fila de 5.3: consulta `configuracion_negocio`, y medido como terminal
+> devuelve 200 con `[]` —sin política de lectura— **habiendo tocado Postgres
+> igual**, que es lo único que cuenta para que el proyecto no se pause.
+
 ### 5.4 Lo específico de Windows
 
 - **Espera de 15 segundos tras `resume`**: al despertar de suspensión, Windows

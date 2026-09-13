@@ -3643,6 +3643,131 @@ cubre el caso real —cambió la contraseña del usuario de terminal—, pero no
 forma de dejar la terminal sin credencial desde la pantalla. No se pidió y no
 se inventó.
 
+### 4.24 El proveedor real y la detección de conexión (Fase 3.b)
+
+**Construida el 2026-09-13.** Es quien **usa por primera vez** la credencial de
+la fase 3.a para escribir en la nube. Con esto la aplicación ya puede subir,
+aunque en la máquina de desarrollo siga sin hacerlo: sin `POS_NUBE_URL` la
+fábrica cae al simulado y avisa.
+
+> **TRES COSAS DEL PEDIDO YA EXISTÍAN, y no se rehicieron:** la constante
+> `VERSION_DEL_CONTRATO_DE_SINCRONIZACION` (desde la fase 2.b), la mitad B de
+> la prueba de deriva (`npm run verify:nube`, también 2.b) y su modo
+> `--tomar-foto`. Sobre «regenerar la foto si coinciden»: es un no-op y **hay
+> una decisión de §5 que deliberadamente no lo hace**, para que la foto solo
+> cambie por un commit que alguien lea.
+
+#### EL ENRUTADOR NO MIRA LA PRIMERA TABLA, y ahí estaba la trampa
+
+CLAUDE.md §4.20 lo dejó anotado para este día, y era exacto: **una venta y un
+lote simple de catálogo empiezan los dos por `productos`**. Enrutar por
+`orden_en_lote = 0` —la forma evidente— mandaría toda venta a
+`sincronizar_lote_simple`, que la rechazaría por nombre y **detendría la cola
+por la razón equivocada**.
+
+Se enruta por **presencia** de una tabla decisiva, no por posición:
+
+| Trae… | Va a |
+|---|---|
+| una fila de `ventas` | `sincronizar_venta` |
+| una fila de `usuarios` | `sincronizar_usuario` |
+| `caja_sesiones` con `estado = 'abierta'` | `sincronizar_apertura_de_caja` |
+| `caja_sesiones` con `estado = 'cerrada'` | `sincronizar_cierre_de_caja` |
+| lo demás | `sincronizar_lote_simple` |
+
+**La apertura y el cierre son el par peligroso**: reciben lotes con exactamente
+las MISMAS tablas y lo único que los distingue es el `estado`. Tienen pruebas
+propias que exigen que uno nunca termine llamando a la función del otro.
+
+**Ante un lote incoherente no se adivina**: uno que mezcle `ventas` y
+`usuarios` no lo aceptaría ninguna función, así que se rechaza acá —sin salir a
+la red— con el motivo verdadero, y el lote queda bloqueante.
+
+**Falsificado**: enrutando por la primera tabla caen **6 comprobaciones**, las
+tres de venta entre ellas.
+
+#### DOS CORRECCIONES AL DISEÑO DE §5, LAS DOS MEDIDAS
+
+**1. §5.2 pide `HEAD /auth/v1/health`, y con HEAD el detector NO FUNCIONA.**
+Medido contra `pos-pruebas-descartable`:
+
+```
+HEAD /auth/v1/health  ->  HTTP 405 Method Not Allowed   (allow: GET)
+GET  /auth/v1/health  ->  HTTP 200, 107 bytes, content-type: application/json
+                          sb-project-ref: ztidrshifrblhfraiowg
+                          {"version":"v2.196.0","name":"GoTrue",…}
+```
+
+Un detector con `HEAD` reportaría «sin internet» **siempre**, con la red
+perfecta. Se usa `GET`, que además es lo único coherente con la otra mitad de
+esa misma fila del diseño —«solo un 200 con el cuerpo esperado»—, porque **un
+HEAD no tiene cuerpo**.
+
+**2. Se comprueba algo mejor que el tipo de contenido: la cabecera
+`sb-project-ref`.** Un portal cautivo puede devolver 200 con
+`application/json` si se lo propone; lo que no puede es firmar la respuesta con
+la referencia de ESTE proyecto. Se exigen las tres cosas: 200, la referencia
+correcta y el cuerpo de GoTrue.
+
+Las tres capas de §5.2 quedan como el diseño quería: al sistema operativo
+**solo se le cree el `false`**, la capa 2 cuesta 107 bytes medidos, y la capa 3
+es el intento que ya se iba a hacer. Con la cola vacía **no se comprueba nada**.
+Un día entero sin internet son 288 comprobaciones: **menos de 31 KB**.
+
+#### El latido diario NO pega al health, y por eso no lo detecta la conexión
+
+§5.3 lo dice y es fácil de pasar por alto: **el health de Auth no cuenta como
+actividad de base**, y el latido existe para que el proyecto gratuito no se
+pause (riesgo 8.3), no para detectar conexión. Así que consulta PostgREST:
+`GET /rest/v1/configuracion_negocio?select=id&limit=1`.
+
+Medido como terminal: devuelve **200 con `[]`**, porque la terminal no tiene
+política de lectura sobre ninguna tabla (§4.21) —**y aun así la consulta llegó
+a Postgres**, que es lo único que hace falta. Una lista vacía acá es el
+resultado correcto, no un fallo.
+
+> El pedido proponía usar `contrato_de_sincronizacion()` para el latido. **No
+> sirve**: esa función exige el rol `restauracion` en su primera línea y la
+> terminal tiene el rol `terminal`, así que le contestaría `403` siempre. Un
+> latido que siempre falla no es un latido.
+
+#### Sin credencial no es un error de red, y la cola no se toca
+
+`accessTokenVigente()` devuelve `null` en los tres casos —nunca se conectó, no
+se pudo descifrar, la nube la rechazó— y el proveedor **ni arma el payload**.
+Lo reporta con `estadoHttp: 401`, que `reintentos.ts` clasifica como clase
+**credencial**, y ahí el trabajador ya sabía qué hacer desde la fase 1.b: no
+suma intento, no agenda reintento y **no bloquea**. Probado de punta a punta
+con la cola SQLite real: el lote sigue pendiente, con `intentos = 0`, y sube
+entero en cuanto vuelve la credencial.
+
+#### Cómo se probó, y qué queda sin probar
+
+**89 comprobaciones nuevas, todas sin red.** El `fetch` se inyecta y las
+pruebas afirman sobre la URL exacta, las cabeceras y el cuerpo. La prueba de
+integración usa **base SQLite real, servicios reales y trabajador real**: cobra
+una venta de verdad y comprueba que llamó a `sincronizar_venta` y que las filas
+quedaron con `sincronizado_en`.
+
+Las dos mitades de la prueba de deriva **se volvieron a falsificar con los
+cinco casos de §9.3**, y las cinco muerden nombrando la diferencia:
+
+| Deriva reintroducida | Qué dijo |
+|---|---|
+| Quitar `ventas.total` de la foto | mitad B: «ventas.total está en la nube y no en la foto», código 1 |
+| Agregar `ventas.propina` a la foto | «ventas.propina está en la foto y no en la nube» |
+| Subir el contrato de la foto a 2 | «la nube declara el contrato 1 y la foto dice 2» |
+| Quitarle `search_path` a `sincronizar_venta` | «la función sincronizar_venta cambió: la foto dice … y la nube …» |
+| Ponerla como INVOKER | lo mismo, con `security_definer` |
+| La misma foto sin `ventas.total`, **sin red** | mitad A: cae la prueba de `ventas`, nombrando la tabla |
+
+> **LO QUE NO SE PROBÓ: nada de esto habló nunca con Supabase de verdad.** El
+> proveedor está probado contra un `fetch` de mentira que devuelve lo que las
+> funciones de la `0023` **deberían** devolver, escrito leyendo la migración.
+> Si la respuesta real difiere en algo que las pruebas no previeron, se vería
+> recién al correrlo contra la nube. Lo que sí se midió de verdad es el health,
+> el latido y los códigos de GoTrue.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -3824,6 +3949,10 @@ se inventó.
 | **La señal de credencial REVOCADA no es el 401: GoTrue devuelve 400. La clasificación enumera lo TRANSITORIO y lee todo lo demás como credencial muerta.** | Detectar por 401, que es lo que decía el pedido y lo que parece evidente; enumerar los códigos «malos» en vez de los «buenos» | **Medido antes de escribir la detección**, contra `pos-pruebas-descartable`: un token de refresco que no sirve devuelve `HTTP 400 {"error_code":"validation_failed","msg":"Refresh token is not valid"}`, y una contraseña equivocada o un usuario inexistente devuelven 400 también. **Detectar por 401 habría sido un control que no dispara nunca**, y la aplicación habría reintentado en bucle para siempre una credencial muerta, que es el defecto exacto que esta mitad venía a cerrar. El 401 sí existe pero es de **otro servidor y otra pregunta**: es PostgREST rechazando un access token vencido, cosa que pasa cada 900 s de forma normal, y confundirlos habría hecho que la terminal se declarara revocada en cada renovación. La regla se escribe al revés —transitorio es sin respuesta, 5xx, 408, 425 y 429; todo lo demás es credencial muerta— porque ante un código que nadie previó conviene avisar de más y que una persona mire, antes que girar en falso. **Falsificado**: con «solo 401» caen 12 comprobaciones. | Prompt 42 — 2026-09-13 |
 | **Revocada = sin credencial: la aplicación RENUNCIA a la ventana en que su access token todavía serviría, no reintenta, y NO borra el archivo.** | Seguir subiendo con el token vigente hasta que venza, ya que funciona; reintentar el refresco con backoff; borrar la credencial muerta para dejar el estado limpio | Al detectarse la revocación, el access token en memoria **puede seguir siendo aceptado** hasta su `exp` más la cota medida de §4.22 —hasta 15 min y medio con los 900 s del real—. Se renuncia a esa ventana porque la revocación existe para el escenario de la terminal robada (§1.5): seguir escribiendo con una credencial que el dueño acaba de anular es actuar contra esa decisión, y lo único que se gana son minutos de subida **que igual no se pierden**, porque la cola vive en SQLite y sube entera al reaprovisionar. No se reintenta porque el servidor no dijo «ahora no» sino «esta credencial no», y un contador que sube esconde el problema en vez de mostrarlo: es el mismo criterio con que la cola trata un fallo determinístico (§4.18). Y **no se borra el archivo** porque borrar es irreversible: si ese 400 viniera de un problema de plataforma, se habría destruido una credencial que servía; marcarla muerta en memoria no cuesta nada y reconectar la reemplaza sola. El estado de revocada vive en memoria a propósito, así que **cada arranque vuelve a preguntarle al servidor** en vez de creerle a una decisión vieja. | Prompt 42 — 2026-09-13 |
 | **ADVERTENCIA DE EMPAQUETADO: la credencial cifrada está atada al NOMBRE DE LA APLICACIÓN. Si cambia, hay que reconectar cada terminal a mano.** | Darlo por sabido; intentar una migración automática de la credencial entre nombres | Se descubrió midiendo, no leyendo: el primer intento de leer el archivo desde un lector que corría como «Electron» falló con «Error while decrypting the ciphertext», y con la misma identidad —`name: pos-agricola`— descifra sin problema. `safeStorage` deriva la llave de una entrada del llavero o de DPAPI **cuyo nombre sale del nombre del producto**, así que renombrar `name`/`productName`, cambiar el nombre en `electron-builder` o cambiar la firma de la aplicación **deja ilegible toda credencial ya guardada**. Tiene un lado bueno no previsto —otro programa del mismo usuario no puede leerla— y uno caro, que es este. **No hay migración automática posible**: la llave vieja no existe más. Lo que sí se exige es que la aplicación **no falle en silencio ni se cuelgue**: detecta el fallo de descifrado, lo dice con esas palabras, lo deja en la bitácora, no lo confunde con una revocación y ofrece reconectar. Las ocho conductas tienen prueba. | Prompt 42 — 2026-09-13 |
+| **El enrutador de lotes decide por PRESENCIA de una tabla decisiva, nunca por la primera fila del lote.** | Enrutar por `orden_en_lote = 0`, que es lo evidente; preferir una función cuando el lote mezcla tablas de varias | Una venta y un lote simple de catálogo **empiezan los dos por `productos`** —CLAUDE.md §4.20 lo había dejado anotado para este día—, así que enrutar por la primera fila mandaría toda venta a `sincronizar_lote_simple`, que la rechazaría por nombre y **detendría la cola con un error de forma sobre una tabla que nadie mencionó**: ruidoso, pero por la razón equivocada. Se enruta por presencia, en orden de especificidad. La apertura y el cierre de caja son el par peligroso, porque reciben lotes con **exactamente las mismas tablas** y solo los distingue el `estado`; tienen pruebas propias que exigen que uno nunca llame a la función del otro, y un estado que no sea `abierta` ni `cerrada` **se rechaza en vez de adivinarse**. Y un lote que mezcle tablas de funciones distintas no se manda: ninguna lo aceptaría, así que se rechaza acá con el motivo verdadero y sin gastar una petición. **Falsificado**: enrutando por la primera tabla caen 6 comprobaciones. | Prompt 43 — 2026-09-13 |
+| **CORREGIDO: la detección de conexión usa `GET /auth/v1/health`, no `HEAD` como pedía §5.2, y comprueba la cabecera `sb-project-ref` además del cuerpo.** | Seguir el diseño al pie de la letra con `HEAD`; conformarse con el código 200; comprobar solo el `content-type` | **Medido: `HEAD` devuelve `405 Method Not Allowed` con `allow: GET`.** Un detector que use HEAD reportaría «sin internet» **siempre**, con la red perfecta —el peor falso negativo posible, porque dejaría la cola sin subir nunca sin que nada pareciera roto—. Y `HEAD` era además incoherente con la otra mitad de su propia fila del diseño, que exige «un 200 con el cuerpo esperado»: un HEAD no tiene cuerpo. Con `GET` la respuesta medida son **107 bytes** y trae algo mejor de lo previsto: la cabecera `sb-project-ref` con la referencia del proyecto. Un portal cautivo puede devolver 200 con `application/json` si se lo propone; **lo que no puede es firmar la respuesta con la referencia de ESTE proyecto**. Se exigen las tres cosas. | Prompt 43 — 2026-09-13 |
+| **El latido diario consulta la BASE (`configuracion_negocio`), no `contrato_de_sincronizacion()` como proponía el pedido.** | Usar la función del contrato, que ya existe y es liviana; usar el health de Auth | Dos razones, y la primera es dirimente: **`contrato_de_sincronizacion()` exige el rol `restauracion` en su primera línea, y la terminal tiene el rol `terminal`**, así que le contestaría `403` siempre. Un latido que siempre falla no es un latido. La segunda es la que ya estaba en §5.3: el latido no existe para detectar conexión sino **para que el proyecto del plan gratuito no se pause** (riesgo 8.3), y para eso hace falta tocar Postgres —el health de Auth explícitamente no cuenta como actividad de base—. Medido como terminal, la consulta devuelve **200 con `[]`**, porque no hay política de lectura para ese rol, **y aun así llegó a Postgres**, que es lo único que importa: la lista vacía es el resultado correcto, no un fallo. | Prompt 43 — 2026-09-13 |
+| **Sin credencial usable el proveedor NI ARMA el payload, y lo reporta como clase «credencial» (401), no como fallo de red.** | Devolverlo sin código, que se leería como transitorio; devolver un 4xx cualquiera, que detendría la cola | Los tres casos —nunca se conectó, no se pudo descifrar, la nube la rechazó— los cubre un solo chequeo, porque `accessTokenVigente()` ya devuelve `null` en los tres desde la fase 3.a. Reportarlo **sin** código HTTP lo haría leer como transitorio y gastaría la escalera de reintentos esperando algo que el tiempo no arregla; reportarlo como determinístico **bloquearía un lote que es perfectamente válido**. La clase «credencial» ya existía en `reintentos.ts` desde la fase 1.b con la semántica exacta de §3.2: la cola **no se toca** —no suma intento, no agenda, no bloquea— porque lo que falta se resuelve reconectando la terminal. Probado de punta a punta contra la cola SQLite real: el lote queda pendiente con `intentos = 0` y sube entero cuando vuelve la credencial. | Prompt 43 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -3957,9 +4086,11 @@ negocio:
     reintento con backoff ante un corte de red. Y la **credencial revocada**:
     el estado «sin credencial», su aviso con fecha y filas pendientes, y la
     cola que se sigue llenando sin poder subir hasta reaprovisionar.
-  **Lo que sigue sin existir:** el `SyncProvider`
-  real contra Supabase —o sea que **la credencial existe y todavía no la usa
-  nadie para subir nada**—, la detección de conexión, la sincronización de
+  - **Fase 3.b** (§4.24): el **`SupabaseSyncProvider` real**, que enruta cada
+    lote a una de las cinco funciones de la `0023` y usa por primera vez la
+    credencial de la 3.a; la **detección de conexión** de tres capas y el
+    latido diario que evita que el proyecto gratuito se pause.
+  **Lo que sigue sin existir:** la sincronización de
   archivos, la pantalla de sincronización y la restauración. **La aplicación
   sigue sin haber hecho una llamada de red en la tienda**: sin `POS_NUBE_URL` no se construye la sesión de nube, y las
   únicas llamadas reales las hacen `npm run verify:nube` y

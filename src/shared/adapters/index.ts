@@ -64,21 +64,36 @@ export function crearReceiptPrinterProvider(
 /**
  * Construye el proveedor de sincronización indicado.
  *
- * `supabase` todavía no existe: llega con el módulo de sincronización. Se cae
- * al simulado para que ninguna sesión de desarrollo consuma cuota del plan
- * gratuito por accidente.
+ * El `supabase` real llega por parámetro desde el proceso principal (fase
+ * 3.b). Sin él se cae al simulado, para que ninguna sesión de desarrollo
+ * consuma cuota del plan gratuito por accidente.
  */
 export function crearSyncProvider(
   configuracion: ConfiguracionAdaptadores = CONFIGURACION_ADAPTADORES_POR_DEFECTO,
+  proveedorReal?: SyncProvider,
 ): SyncProvider {
   switch (configuracion.sincronizacion) {
     case 'simulado':
       return new SimulatedSyncProvider();
     case 'supabase':
-      // TODO(sincronizacion): implementar SupabaseSyncProvider en el prompt del
-      // módulo de sincronización. Ver docs/INTEGRACIONES.md.
+      /*
+        El `SupabaseSyncProvider` de la fase 3.b se construye en el proceso
+        principal y se pasa por parámetro, no se importa acá. **No es un
+        rodeo**: ese proveedor necesita la sesión con la nube, la credencial
+        cifrada y `net.fetch` de Electron, y este archivo lo comparten el
+        proceso principal y el renderer. Importarlo lo arrastraría a la ventana,
+        que es justo donde no debe estar nada que sepa de credenciales.
+
+        Sin él —porque falta `POS_NUBE_URL`— se cae al simulado con una
+        advertencia, que es el valor seguro de siempre: nunca una sincronización
+        a medias que parezca real.
+      */
+      if (proveedorReal !== undefined) {
+        return proveedorReal;
+      }
       console.warn(
-        '[adaptadores] El adaptador de Supabase aún no está implementado; se usa SimulatedSyncProvider.',
+        '[adaptadores] Se pidió el adaptador de Supabase pero no se construyó ninguno ' +
+          '(¿falta POS_NUBE_URL?); se usa SimulatedSyncProvider.',
       );
       return new SimulatedSyncProvider();
     default:
