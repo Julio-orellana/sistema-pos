@@ -48,19 +48,39 @@ export function PantallaDeNube({
   const [configurada, setConfigurada] = useState(true);
 
   const releerEstado = useCallback(async (): Promise<void> => {
-    const respuesta = await window.pos.nube.estado();
-    if (respuesta.ok) {
-      setEstado(respuesta.datos);
-      setConfigurada(true);
-      return;
-    }
     /*
-      Si los canales no se registraron —porque falta `POS_NUBE_URL`—, Electron
-      contesta que no hay manejador. Se distingue de un error de permiso para
-      no decirle al administrador que le falta un permiso que sí tiene.
+      ===================================================================
+      EL CANAL PUEDE NO EXISTIR, Y ENTONCES `invoke` RECHAZA
+      ===================================================================
+      Cuando falta `POS_NUBE_URL`, el proceso principal **no registra** los
+      dos canales de nube, y `ipcRenderer.invoke` sobre un canal sin
+      manejador **lanza** en vez de devolver un `RespuestaIpc` con `ok:
+      false`. Es la única parte de la API donde eso puede pasar: los demás
+      canales se registran siempre.
+
+      Sin este `try`, la promesa quedaba rechazada sin que nadie la
+      atrapara, `setConfigurada(false)` nunca corría y la pantalla seguía
+      ofreciendo el botón «Conectar» —que no podía funcionar— en vez de
+      explicar que falta configurar el proyecto. **Lo encontró la sonda que
+      maneja la aplicación real, no una prueba de Vitest**, que es
+      exactamente la clase de defecto para la que existe ese mecanismo
+      (§4.11 de CLAUDE.md).
     */
-    setConfigurada(!/No handler registered|no handler/i.test(respuesta.error.mensaje));
-    setMensaje(respuesta.error.mensaje);
+    try {
+      const respuesta = await window.pos.nube.estado();
+      if (respuesta.ok) {
+        setEstado(respuesta.datos);
+        setConfigurada(true);
+        return;
+      }
+      // Un `ok: false` sí llegó del proceso principal: el canal existe y
+      // rechazó por otra razón, típicamente el guard de rol.
+      setConfigurada(true);
+      setMensaje(respuesta.error.mensaje);
+    } catch {
+      // No hay manejador: esta copia no tiene proyecto configurado.
+      setConfigurada(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -85,6 +105,11 @@ export function PantallaDeNube({
       } else {
         setMensaje(respuesta.error.mensaje);
       }
+    } catch {
+      // Mismo caso que en `releerEstado`: el canal puede no estar registrado.
+      // No debería llegarse acá —sin canales no se dibuja el botón— pero un
+      // rechazo sin atrapar dejaría la pantalla en «Conectando…» para siempre.
+      setConfigurada(false);
     } finally {
       // Pase lo que pase, la contraseña deja de estar en pantalla. Ver la
       // cabecera: en un mostrador, dejarla escrita tras un error es peor.

@@ -601,6 +601,45 @@ async function main() {
       filas === 2,
     );
 
+    // =======================================================================
+    // La pantalla «Conectar con la nube» SIN proyecto configurado.
+    // =======================================================================
+    /*
+      Este arnés corre sin `POS_NUBE_URL`, así que el proceso principal NO
+      registra los canales de nube y `ipcRenderer.invoke` sobre ellos RECHAZA
+      —no devuelve un `RespuestaIpc` con `ok: false`, como todos los demás—.
+
+      La primera versión de la pantalla no atrapaba ese rechazo: la promesa
+      quedaba sin manejar y la pantalla seguía ofreciendo el botón «Conectar»,
+      que en esa copia no podía funcionar. **Lo encontró esta comprobación
+      manejando la aplicación real, no una prueba de Vitest**, que es
+      exactamente para lo que existe.
+    */
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-nube').click();
+    await prueba('pantalla-de-nube').waitFor({ timeout: ESPERA_CORTA });
+
+    let avisoDeSinConfigurar = true;
+    try {
+      await prueba('nube-sin-configurar').waitFor({ timeout: ESPERA_CORTA });
+    } catch {
+      avisoDeSinConfigurar = false;
+    }
+    comprobar(
+      'sin proyecto configurado, la pantalla de nube lo explica en vez de ofrecer conectar',
+      'se ve el aviso de «sin configurar»',
+      avisoDeSinConfigurar ? 'se ve' : 'NO se ve: la pantalla ofrece un botón que no puede funcionar',
+      avisoDeSinConfigurar,
+    );
+    const botonesDeConectar = await prueba('nube-conectar').count();
+    comprobar(
+      'sin proyecto configurado NO se dibuja el botón de conectar',
+      '0 botones',
+      `${String(botonesDeConectar)} botones`,
+      botonesDeConectar === 0,
+    );
+
     // Y el alta sirve para algo solo si esa persona puede entrar: tiene que
     // aparecer ofrecida en la pantalla de ingreso.
     await ventana.getByRole('button', { name: 'Volver' }).click();
