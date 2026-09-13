@@ -55,6 +55,7 @@ beforeEach(() => {
     auditoria: repos.auditoria,
   });
   autenticacion = new ServicioDeAutenticacion({
+    base,
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,

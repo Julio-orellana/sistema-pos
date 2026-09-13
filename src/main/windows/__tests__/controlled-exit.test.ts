@@ -98,6 +98,7 @@ function crearEscenario(): {
   });
 
   const autenticacion = new ServicioDeAutenticacion({
+    base: prueba.base,
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
@@ -346,6 +347,7 @@ describe('Instalación sin ningún administrador', () => {
     const repos = crearRepositorios(prueba.base);
     const controlador = new ControladorDeSalidaControlada({
       autenticacion: new ServicioDeAutenticacion({
+        base: prueba.base,
         usuarios: repos.usuarios,
         auditoria: repos.auditoria,
         bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,

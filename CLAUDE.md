@@ -3768,6 +3768,129 @@ cinco casos de §9.3**, y las cinco muerden nombrando la diferencia:
 > recién al correrlo contra la nube. Lo que sí se midió de verdad es el health,
 > el latido y los códigos de GoTrue.
 
+### 4.25 La venta real contra la nube, y el defecto que destapó
+
+**Corrida el 2026-09-13 contra `pos-pruebas-descartable`**, con el caso
+combinado de §4.13: una línea con **precio especial vigente** y un **descuento
+del 25 % que excede el tope del rol**, con su autorización presencial. Cuatro
+lotes, en el orden que las llaves foráneas de Postgres exigen, ejercitando
+cuatro de las cinco funciones.
+
+> El pedido la llamaba «el caso del Prompt #7». El Prompt 7 fue el de **cero
+> reintentos ante conflicto de inventario**; el caso combinado es del
+> **Prompt 19** (§4.13). Se corrió el combinado, que es lo que importaba.
+
+#### DEFECTO ENCONTRADO: el primer administrador NO se sincronizaba, y eso mataba la cola entera
+
+**Lo destapó la primera corrida, y es el hallazgo más importante de la fase.**
+
+```
+sincronizar_lote_simple -> HTTP 409
+{"code":"23503",
+ "details":"Key (usuario_id)=(d4021171-…) is not present in table \"usuarios\".",
+ "message":"insert or update on table \"auditoria_log\" violates foreign key
+            constraint \"auditoria_log_usuario_id_fkey\""}
+```
+
+**La causa:** `ServicioDeAutenticacion.crearPrimerAdministrador` escribía
+`usuarios` y `auditoria_log` **sueltas, sin transacción y sin encolar**. Era el
+único camino de escritura del proyecto que no pasaba por
+`conBandejaDeSalida` —se le había escapado a la fase 1.a, que agregó la
+transacción a los otros seis servicios—.
+
+**La consecuencia, que no es menor:** `auditoria_log.usuario_id` tiene llave
+foránea hacia `usuarios`, y **todo** asiento de la tienda lleva el id de quien
+hizo la operación. Con el primer administrador sin subir, **el primer lote que
+se intentara subir en una instalación nueva moría con `23503` y la cola quedaba
+detenida para siempre**. No es un caso raro: es *todas* las instalaciones.
+
+**Arreglado**: ahora encola sus dos filas en un solo lote, con el usuario
+primero y su asiento después. `DependenciasDeAutenticacion` gana `base`, y se
+hizo **obligatoria a propósito**: opcional habría dejado el hueco abierto en
+silencio en cualquier sitio que se olvidara de pasarla.
+
+**Con prueba propia que lo fija**, y que dice en su nombre por qué existe: «EL
+PRIMER ADMINISTRADOR SE ENCOLA: sin esto no se sincroniza nada, nunca». Exige
+las dos filas, en un solo lote y en orden.
+
+> **ESTO SOLO PODÍA APARECER CORRIENDO CONTRA POSTGRES DE VERDAD.** Las 89
+> pruebas de la fase 3.b usan un `fetch` de mentira, y ninguna podía saber que
+> `auditoria_log` tiene esa llave foránea: la restricción vive en la nube. Es
+> exactamente lo que Julio pidió al no conformarse con el doble.
+
+#### La comparación fila por fila
+
+Tras el arreglo, la venta subió entera. **Local contra nube, leído del catálogo
+de los dos lados:**
+
+| Campo | SQLite local | Postgres | |
+|---|---|---|---|
+| `ventas.subtotal` | `4.17` | `4.17` | igual |
+| `ventas.descuento_tipo` | `porcentaje` | `porcentaje` | igual |
+| `ventas.descuento_valor` | `25.00` | `25.00` | igual |
+| `ventas.total` | `3.12` | `3.12` | igual |
+| `ventas.descuento_autorizado_via` | `presencial` | `presencial` | igual |
+| `ventas.forma_pago` | `efectivo` | `efectivo` | igual |
+| `venta_detalle.orden_linea` | `0` | `0` | igual |
+| `venta_detalle.cantidad` | `3.500` | `3.500` | igual |
+| `venta_detalle.precio_unitario_snap` | `1.19` | `1.19` | igual |
+| `venta_detalle.subtotal_impreso` | `3.12` | `3.12` | igual |
+| `venta_detalle.subtotal_exacto` | `4.165` | **`4.165000`** | **mismo número, otro texto** |
+| `productos.cantidad_vendida` | `3.500` | `3.500` | igual |
+| `productos.contador_ventas` | `1` | `1` | igual |
+| `productos.inventario_disponible` | `96.500` | `96.500` | igual |
+
+Y la constancia que devolvió `sincronizar_venta`, fila por fila:
+
+```
+public.productos      insertada   recibido_en=2026-09-13T23:33:59.986686+00:00
+public.ventas         insertada   recibido_en=2026-09-13T23:33:59.986686+00:00
+public.venta_detalle  insertada   recibido_en=…
+public.auditoria_log  insertada   recibido_en=…   (la venta)
+public.auditoria_log  insertada   recibido_en=…   (la autorización del descuento)
+```
+
+Los **dos** asientos de auditoría están, que es lo que §4.13 exige: la venta y
+la autorización del descuento son dos hechos distintos con dos responsables
+distintos. Y el `recibido_en` es idéntico en las cinco filas: **una sola
+transacción del lado de la nube**.
+
+> **UNA DIFERENCIA DE REPRESENTACIÓN QUE HAY QUE TENER PRESENTE PARA LA
+> RESTAURACIÓN (fase 4.b).** `subtotal_exacto` sale de SQLite como `4.165` y
+> Postgres lo devuelve como `4.165000`: **el mismo número**, pero
+> `NUMERIC(20,10)` rellena hasta su escala declarada. No afecta a la subida
+> —el valor viaja y se guarda bien— pero una restauración que copie el texto
+> tal cual le estaría dando a SQLite una forma distinta de la que escribió. El
+> CHECK local admite hasta diez decimales, así que probablemente pase; **queda
+> anotado como algo a comprobar el día de la restauración, no a suponer.**
+
+#### Lo que la corrida confirmó de paso, sin buscarlo
+
+- **La cola se detiene de verdad ante un error determinístico de Postgres.** Se
+  vio dos veces con errores reales, no simulados: el `23503` de arriba y un
+  `23505` sobre `idx_caja_sesiones_una_abierta` al repetir la corrida —el
+  invariante de «una sola caja abierta en todo el sistema» (§4.9) funcionando
+  **en la nube**—. En los dos casos: lote bloqueante, nada detrás se subió.
+- **El precio especial se aplicó**: 1 de 1 líneas, y `precio_unitario_snap`
+  quedó en `1.19` en vez de los `6.69` de lista.
+- **El CHECK `ventas_autorizacion_de_descuento_coherente` muerde.** Un error de
+  tecleo al armar la prueba —`autorizadaPor` en vez de `autorizadoPor`— lo hizo
+  saltar en SQLite antes de llegar a ninguna red.
+
+#### Los disparadores de cambio de estado, ya conectados
+
+`olvidarLaEspera()` dejó de ser una pieza suelta. Sin esto, tras una hora sin
+internet la terminal esperaría hasta 5 minutos para enterarse de que la red
+volvió, aunque el sistema operativo ya lo supiera.
+
+| Disparador | Qué hace | Por qué |
+|---|---|---|
+| `powerMonitor.on('resume')` | olvida la espera y llama a `alDespertar()` | Los **15 s de §5.4** los pone `alDespertar()`, que existía desde la fase 1.b esperando este día: en Windows el adaptador de red tarda unos segundos en levantar y comprobar en el instante cero da un falso «sin internet» |
+| `powerMonitor.on('on-ac')` | lo mismo | No dice nada de la red por sí solo, pero acompaña a que alguien volvió y encendió cosas |
+| `net.isOnline()` de `false` a `true` | lo mismo | **Electron no emite ningún evento para esto**: el módulo `net` no es un EventEmitter. Se sondea cada 30 s, que es una lectura en memoria sin red ni costo, y **solo se actúa en la transición hacia arriba** |
+
+Los tres se desconectan en el cierre ordenado, junto con el latido.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -3953,6 +4076,8 @@ cinco casos de §9.3**, y las cinco muerden nombrando la diferencia:
 | **CORREGIDO: la detección de conexión usa `GET /auth/v1/health`, no `HEAD` como pedía §5.2, y comprueba la cabecera `sb-project-ref` además del cuerpo.** | Seguir el diseño al pie de la letra con `HEAD`; conformarse con el código 200; comprobar solo el `content-type` | **Medido: `HEAD` devuelve `405 Method Not Allowed` con `allow: GET`.** Un detector que use HEAD reportaría «sin internet» **siempre**, con la red perfecta —el peor falso negativo posible, porque dejaría la cola sin subir nunca sin que nada pareciera roto—. Y `HEAD` era además incoherente con la otra mitad de su propia fila del diseño, que exige «un 200 con el cuerpo esperado»: un HEAD no tiene cuerpo. Con `GET` la respuesta medida son **107 bytes** y trae algo mejor de lo previsto: la cabecera `sb-project-ref` con la referencia del proyecto. Un portal cautivo puede devolver 200 con `application/json` si se lo propone; **lo que no puede es firmar la respuesta con la referencia de ESTE proyecto**. Se exigen las tres cosas. | Prompt 43 — 2026-09-13 |
 | **El latido diario consulta la BASE (`configuracion_negocio`), no `contrato_de_sincronizacion()` como proponía el pedido.** | Usar la función del contrato, que ya existe y es liviana; usar el health de Auth | Dos razones, y la primera es dirimente: **`contrato_de_sincronizacion()` exige el rol `restauracion` en su primera línea, y la terminal tiene el rol `terminal`**, así que le contestaría `403` siempre. Un latido que siempre falla no es un latido. La segunda es la que ya estaba en §5.3: el latido no existe para detectar conexión sino **para que el proyecto del plan gratuito no se pause** (riesgo 8.3), y para eso hace falta tocar Postgres —el health de Auth explícitamente no cuenta como actividad de base—. Medido como terminal, la consulta devuelve **200 con `[]`**, porque no hay política de lectura para ese rol, **y aun así llegó a Postgres**, que es lo único que importa: la lista vacía es el resultado correcto, no un fallo. | Prompt 43 — 2026-09-13 |
 | **Sin credencial usable el proveedor NI ARMA el payload, y lo reporta como clase «credencial» (401), no como fallo de red.** | Devolverlo sin código, que se leería como transitorio; devolver un 4xx cualquiera, que detendría la cola | Los tres casos —nunca se conectó, no se pudo descifrar, la nube la rechazó— los cubre un solo chequeo, porque `accessTokenVigente()` ya devuelve `null` en los tres desde la fase 3.a. Reportarlo **sin** código HTTP lo haría leer como transitorio y gastaría la escalera de reintentos esperando algo que el tiempo no arregla; reportarlo como determinístico **bloquearía un lote que es perfectamente válido**. La clase «credencial» ya existía en `reintentos.ts` desde la fase 1.b con la semántica exacta de §3.2: la cola **no se toca** —no suma intento, no agenda, no bloquea— porque lo que falta se resuelve reconectando la terminal. Probado de punta a punta contra la cola SQLite real: el lote queda pendiente con `intentos = 0` y sube entero cuando vuelve la credencial. | Prompt 43 — 2026-09-13 |
+| **CORREGIDO: `crearPrimerAdministrador` ahora ENCOLA. Sin eso, la cola de toda instalación nueva quedaba detenida para siempre en el primer lote.** | Dejarlo como estaba, que «solo» no subía un usuario; hacer opcional la dependencia `base` para no tocar los seis sitios de construcción | **Lo destapó una venta real contra Postgres, y no podía verlo ninguna prueba con dobles**: la restricción vive en la nube. `auditoria_log.usuario_id` tiene llave foránea hacia `usuarios`, y **todo** asiento de la tienda lleva el id de quien hizo la operación; con el primer administrador sin subir, el primer lote moría con `23503 auditoria_log_usuario_id_fkey` y la cola quedaba **detenida para siempre**. No era un caso raro: era *todas* las instalaciones. Era además el único camino de escritura del proyecto fuera de `conBandejaDeSalida` —se le escapó a la fase 1.a, que agregó la transacción a los otros seis servicios—, así que arreglarlo cierra de paso un hueco de atomicidad. `base` se hizo **obligatoria y no opcional**: opcional habría dejado el hueco abierto, en silencio, en cualquier sitio que se olvidara de pasarla, y el compilador no habría dicho nada. Tiene prueba propia que exige las dos filas, en un solo lote y en orden. | Prompt 44 — 2026-09-13 |
+| **`olvidarLaEspera()` se conecta a tres disparadores reales, y el sondeo de `net.isOnline()` es un intervalo porque Electron NO emite evento.** | Dejarlo para una fase futura, como estaba; confiar solo en `powerMonitor`; sondear más seguido | Sin disparadores, la escalera de recomprobación manda siempre: tras una hora sin internet la terminal esperaría hasta 5 minutos para enterarse de que la red volvió, **aunque el sistema operativo ya lo supiera**. Los tres son `resume` y `on-ac` de `powerMonitor`, más la transición `false → true` de `net.isOnline()`. Ese último **no puede ser un evento**: el módulo `net` de Electron no es un EventEmitter, así que se sondea cada 30 s —una lectura en memoria del Network List Manager, sin red y sin costo— y **solo se actúa en la transición hacia arriba**, porque al sistema operativo se le cree únicamente el «no» (§5.2). Los 15 s de gracia tras despertar no se pusieron acá: los pone `alDespertar()` del planificador, que existía desde la fase 1.b con ese número escrito esperando este día. | Prompt 44 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

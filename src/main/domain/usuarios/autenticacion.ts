@@ -30,7 +30,10 @@
  */
 
 import { generarHashDePin, verificarPin } from '@shared/auth';
+import type { Database } from 'better-sqlite3';
+
 import { ErrorDeNegocio } from '@main/database/errores';
+import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import { tieneFormatoDePinValido } from '@shared/pin';
 import type { Usuario, ViaDeAutorizacion } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
@@ -173,6 +176,17 @@ export interface ResultadoDeAutenticacion {
 
 /** Dependencias del servicio. Se inyectan para poder probarlo entero. */
 export interface DependenciasDeAutenticacion {
+  /**
+   * La conexión, para que `crearPrimerAdministrador` pueda ENCOLAR.
+   *
+   * **No es opcional a propósito.** Este servicio no abría ninguna transacción
+   * hasta la fase 3.b, y por eso no la tenía; el día que se descubrió que el
+   * primer administrador no llegaba nunca a la nube (§4.25), hacerla opcional
+   * habría dejado el hueco abierto en cualquier sitio que se olvidara de
+   * pasarla, y en silencio. Con ella obligatoria, el compilador nombra los
+   * lugares.
+   */
+  readonly base: Database;
   readonly usuarios: RepositorioDeUsuarios;
   readonly auditoria: RepositorioDeAuditoria;
   /** Candado por superficie del diálogo de autorización. */
@@ -190,12 +204,14 @@ export interface DependenciasDeAutenticacion {
 export type OrigenDeSalida = 'atajo_de_teclado' | 'cierre_del_sistema' | 'boton_de_interfaz';
 
 export class ServicioDeAutenticacion {
+  private readonly base: Database;
   private readonly usuarios: RepositorioDeUsuarios;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly bloqueos: RepositorioDeBloqueosDeAutorizacion;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeAutenticacion) {
+    this.base = dependencias.base;
     this.usuarios = dependencias.usuarios;
     this.auditoria = dependencias.auditoria;
     this.bloqueos = dependencias.bloqueosDeAutorizacion;
@@ -407,16 +423,36 @@ export class ServicioDeAutenticacion {
       );
     }
 
-    const creado = this.usuarios.crear({ nombre, rol: 'administrativo', pinHash });
-    this.auditoria.registrar({
-      usuarioId: creado.id,
-      accion: ACCIONES_DE_AUDITORIA.primerAdministradorCreado,
-      entidadTipo: 'usuarios',
-      entidadId: creado.id,
-      valorNuevo: { nombre: creado.nombre, rol: creado.rol },
-      fecha: new Date(this.ahora()).toISOString(),
+    /*
+      ===================================================================
+      ENCOLA, Y ESO NO ES UN DETALLE: SIN ESTO NO SE SINCRONIZA NADA
+      ===================================================================
+      Hasta la fase 3.b esto escribía las dos filas sueltas, sin transacción y
+      **sin encolar**. La consecuencia se descubrió corriendo una venta real
+      contra Postgres: `auditoria_log.usuario_id` tiene llave foránea hacia
+      `usuarios`, y **todo** asiento de auditoría de la tienda lleva el id de
+      quien hizo la operación. Con el primer administrador sin subir, el primer
+      lote que se intentara subir moría con `23503` y **la cola quedaba
+      detenida para siempre en una instalación nueva**. Ver §4.25.
+    */
+    return conBandejaDeSalida(this.base, () => {
+      const creado = this.usuarios.crear({ nombre, rol: 'administrativo', pinHash });
+      const asiento = this.auditoria.registrar({
+        usuarioId: creado.id,
+        accion: ACCIONES_DE_AUDITORIA.primerAdministradorCreado,
+        entidadTipo: 'usuarios',
+        entidadId: creado.id,
+        valorNuevo: { nombre: creado.nombre, rol: creado.rol },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+      return {
+        resultado: creado,
+        entradas: [
+          { tabla: 'usuarios' as const, id: creado.id, operacion: 'insertar' as const },
+          { tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const },
+        ],
+      };
     });
-    return creado;
   }
 
   /**

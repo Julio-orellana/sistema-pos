@@ -12,7 +12,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, net, protocol, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, net, powerMonitor, protocol, safeStorage } from 'electron';
 
 import {
   abrirBaseDeDatos,
@@ -175,11 +175,15 @@ let sesionDeNube: SesionDeNube | null = null;
 
 /** Para expresar «cada hora» sin números sueltos. */
 const MINUTOS_POR_HORA = 60;
+const SEGUNDOS_ENTRE_SONDEOS_DEL_ENLACE = 30;
 const SEGUNDOS_POR_MINUTO = 60;
 const MILISEGUNDOS_POR_SEGUNDO = 1000;
 
 /** El temporizador del latido diario, para poder pararlo en el cierre. */
 let latidoDiario: ReturnType<typeof setInterval> | null = null;
+
+/** El sondeo del enlace de red, que Electron no expone como evento. */
+let vigilanteDelEnlace: ReturnType<typeof setInterval> | null = null;
 
 function cerrarAplicacionOrdenadamente(): void {
   if (cierreEnCurso) {
@@ -217,6 +221,12 @@ function cerrarAplicacionOrdenadamente(): void {
     clearInterval(latidoDiario);
     latidoDiario = null;
   }
+  if (vigilanteDelEnlace !== null) {
+    clearInterval(vigilanteDelEnlace);
+    vigilanteDelEnlace = null;
+  }
+  powerMonitor.removeAllListeners('resume');
+  powerMonitor.removeAllListeners('on-ac');
 
   quitarManejadoresIpc();
   ultimoCierre = cerrarBaseDeDatosOrdenadamente();
@@ -422,6 +432,7 @@ app.whenReady().then(
     const baseDeDatos = obtenerBaseDeDatos();
     const repositorios = crearRepositorios(baseDeDatos);
     const autenticacion = new ServicioDeAutenticacion({
+      base: baseDeDatos,
       usuarios: repositorios.usuarios,
       auditoria: repositorios.auditoria,
       bloqueosDeAutorizacion: repositorios.bloqueosDeAutorizacion,
@@ -733,7 +744,64 @@ app.whenReady().then(
       llegaría a dispararlo. `unref` para que no retenga el proceso en el
       cierre ordenado, igual que el resto de los temporizadores del módulo.
     */
+    /*
+      ===================================================================
+      LOS DISPARADORES DE CAMBIO DE ESTADO (§5.3, tercera fila)
+      ===================================================================
+      Sin esto, `olvidarLaEspera()` sería una pieza suelta y la escalera de
+      recomprobación mandaría siempre: tras una hora sin internet la terminal
+      esperaría hasta 5 minutos para darse cuenta de que la red volvió, aunque
+      el sistema operativo ya lo supiera. Con esto, se entera enseguida.
+
+      Los tres disparadores, y por qué cada uno:
+
+        · `resume` de powerMonitor — la máquina despertó de suspensión. Va con
+          la espera de 15 s de §5.4: **en Windows el adaptador de red tarda
+          unos segundos en levantar después de que el sistema ya corre**, y
+          comprobar en el instante cero da un falso «sin internet» y mete el
+          backoff donde no hacía falta. Los 15 s los pone `alDespertar()` del
+          planificador, que existía desde la fase 1.b esperando este día.
+        · `on-ac` — la enchufaron. No dice nada de la red por sí solo, pero en
+          la práctica acompaña a que alguien volvió a la tienda y encendió
+          cosas.
+        · La transición `false → true` de `net.isOnline()`. **Electron no
+          emite ningún evento para esto** —el módulo `net` no es un
+          EventEmitter—, así que se sondea. Es una lectura en memoria del
+          Network List Manager de Windows, sin red y sin costo, y solo se
+          actúa cuando CAMBIA: pasar de «no hay enlace» a «hay enlace» es la
+          señal más barata que existe de que vale la pena recomprobar.
+    */
     if (detectorDeConexion !== null) {
+      const olvidarYReintentar = (motivo: string): void => {
+        detectorDeConexion.olvidarLaEspera();
+        planificadorDeSincronizacion?.alDespertar();
+        anotarSincronizacion(`${motivo}: se recomprueba la conexión sin esperar la escalera.`);
+      };
+
+      powerMonitor.on('resume', () => {
+        olvidarYReintentar('la máquina despertó de suspensión');
+      });
+      powerMonitor.on('on-ac', () => {
+        olvidarYReintentar('la máquina volvió a la corriente');
+      });
+
+      /*
+        El sondeo del enlace. Solo dispara en la transición hacia arriba: al
+        sistema operativo se le cree el «no» (§5.2), así que pasar a `true` no
+        prueba que haya nube —lo prueba la capa 2— pero sí es el momento en que
+        vale la pena preguntarlo.
+      */
+      let habiaEnlace = net.isOnline();
+      const CADA_MEDIO_MINUTO_MS = SEGUNDOS_ENTRE_SONDEOS_DEL_ENLACE * MILISEGUNDOS_POR_SEGUNDO;
+      vigilanteDelEnlace = setInterval(() => {
+        const hayEnlace = net.isOnline();
+        if (hayEnlace && !habiaEnlace) {
+          olvidarYReintentar('el sistema operativo volvió a ver una red');
+        }
+        habiaEnlace = hayEnlace;
+      }, CADA_MEDIO_MINUTO_MS);
+      vigilanteDelEnlace.unref();
+
       const CADA_HORA_MS = MINUTOS_POR_HORA * SEGUNDOS_POR_MINUTO * MILISEGUNDOS_POR_SEGUNDO;
       latidoDiario = setInterval(() => {
         const token = sesionDeNube?.accessTokenVigente() ?? null;

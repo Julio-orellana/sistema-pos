@@ -55,6 +55,7 @@ beforeEach(() => {
   instante = Date.UTC(2026, 8, 6, 12, 0, 0);
 
   servicio = new ServicioDeAutenticacion({
+    base,
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
@@ -211,6 +212,7 @@ describe('Bloqueo por intentos, POR USUARIO y persistido en la base', () => {
 
     // Se simula reiniciar la aplicación: servicio nuevo, misma base.
     const servicioReiniciado = new ServicioDeAutenticacion({
+      base,
       usuarios: repos.usuarios,
       auditoria: repos.auditoria,
       bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
@@ -273,6 +275,7 @@ describe('Autorización administrativa (la que usa la salida controlada)', () =>
     const prueba = crearBaseMigrada();
     const otrosRepos = crearRepositorios(prueba.base);
     const sinAdmins = new ServicioDeAutenticacion({
+      base,
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
       bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
@@ -293,6 +296,7 @@ describe('Primer arranque', () => {
     const prueba = crearBaseMigrada();
     const otrosRepos = crearRepositorios(prueba.base);
     const recienInstalado = new ServicioDeAutenticacion({
+      base: prueba.base,
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
       bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
@@ -302,10 +306,50 @@ describe('Primer arranque', () => {
     prueba.limpiar();
   });
 
+  it('EL PRIMER ADMINISTRADOR SE ENCOLA: sin esto no se sincroniza nada, nunca', () => {
+    /*
+      ===================================================================
+      NO ES UNA PRUEBA DE PROLIJIDAD: SIN ESTO LA NUBE QUEDA MUERTA
+      ===================================================================
+      Hasta la fase 3.b esto escribía las dos filas sin encolar, y se descubrió
+      corriendo una venta real contra Postgres. `auditoria_log.usuario_id` tiene
+      llave foránea hacia `usuarios`, y **todo** asiento de la tienda lleva el id
+      de quien hizo la operación. Con el primer administrador sin subir, el
+      primer lote moría con `23503` y la cola quedaba detenida **para siempre**
+      en una instalación nueva. Ver CLAUDE.md §4.25.
+    */
+    const prueba = crearBaseMigrada();
+    const otrosRepos = crearRepositorios(prueba.base);
+    const recienInstalado = new ServicioDeAutenticacion({
+      base: prueba.base,
+      usuarios: otrosRepos.usuarios,
+      auditoria: otrosRepos.auditoria,
+      bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
+    });
+
+    const creado = recienInstalado.crearPrimerAdministrador('Jimmy', generarHashDePin('4321'));
+
+    const encolado = prueba.base
+      .prepare('SELECT entidad_tipo, entidad_id, orden_en_lote FROM sync_cola ORDER BY orden_en_lote')
+      .all() as { entidad_tipo: string; entidad_id: string; orden_en_lote: number }[];
+
+    expect(encolado.map((f) => f.entidad_tipo)).toEqual(['usuarios', 'auditoria_log']);
+    expect(encolado[0]?.entidad_id).toBe(creado.id);
+    // Padres antes que hijos: el usuario va PRIMERO, y su asiento después.
+    expect(encolado[0]?.orden_en_lote).toBeLessThan(encolado[1]?.orden_en_lote ?? -1);
+
+    // Y en UN SOLO lote: o suben las dos o no sube ninguna.
+    const lotes = prueba.base.prepare('SELECT DISTINCT lote_id FROM sync_cola').all();
+    expect(lotes).toHaveLength(1);
+
+    prueba.limpiar();
+  });
+
   it('crea el primer administrador y deja asiento de auditoría', () => {
     const prueba = crearBaseMigrada();
     const otrosRepos = crearRepositorios(prueba.base);
     const recienInstalado = new ServicioDeAutenticacion({
+      base: prueba.base,
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
       bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
@@ -385,6 +429,7 @@ describe('LOS DOS CANDADOS ESTÁN SEPARADOS (ingreso vs. diálogo de autorizaci�
     servicio.autorizarComoAdministrador(PIN_EQUIVOCADO);
 
     const reiniciado = new ServicioDeAutenticacion({
+      base,
       usuarios: repos.usuarios,
       auditoria: repos.auditoria,
       bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
