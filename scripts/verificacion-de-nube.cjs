@@ -1007,6 +1007,42 @@ async function correrPoliticasDeStorage(cliente, sesiones, informe) {
   informe.observar(`la foto de prueba queda en el bucket: Storage no deja borrarla con estas credenciales, y en un proyecto descartable no importa (objeto ${objeto}, ${String(PNG_DE_UN_PIXEL.length)} bytes)`);
 }
 
+// ---------------------------------------------------------------------------
+// `--reinicio-hecho` es una PROMESA de quien lo pasa: «ya vacié las tablas».
+// Nadie la comprobaba, y una promesa incumplida no se veía como tal: la
+// batería seguía adelante y fallaba treinta líneas después en «dar de baja al
+// único administrador activo se rechaza», que es una comprobación de SEGURIDAD.
+// Un mensaje que miente sobre la causa manda a investigar el lugar equivocado
+// (§4.13 de CLAUDE.md), y encima el lugar equivocado era un invariante.
+//
+// Ahora se comprueba, y se comprueba con la credencial de restauración, que es
+// la única que puede leer: es el primer uso real de las políticas de la 2.c.
+// ---------------------------------------------------------------------------
+
+const TABLAS_QUE_NO_SE_VACIAN = new Set(['denominaciones', 'configuracion_negocio']);
+
+async function exigirTablasVacias(cliente, restauracion, foto) {
+  const conFilas = [];
+  for (const tabla of Object.keys(foto.tablas).sort()) {
+    if (TABLAS_QUE_NO_SE_VACIAN.has(tabla)) continue;
+    const r = await cliente.pedir('GET', `/rest/v1/${tabla}?select=id&limit=1`, { token: restauracion.token });
+    if (r.estado !== HTTP.ok || !Array.isArray(r.datos)) {
+      throw new Incompleto(
+        `No se pudo comprobar que ${tabla} esté vacía: HTTP ${String(r.estado)} ${resumir(r.datos)}. ` +
+          'Sin la política de lectura de la restauración (migración 0025) esta comprobación no es posible.',
+      );
+    }
+    if (r.datos.length > 0) conFilas.push(tabla);
+  }
+  if (conFilas.length > 0) {
+    throw new Incompleto(
+      `--reinicio-hecho dice que las tablas están vacías y NO lo están: ${conFilas.join(', ')}. ` +
+        'Vaciálas por SQL o corré sin --reinicio-hecho con POS_NUBE_PRUEBAS_SERVICE_ROLE puesta. ' +
+        'Se detiene acá a propósito: con filas viejas, el invariante de administradores falla por la razón equivocada.',
+    );
+  }
+}
+
 async function correrModoDestructivo(entorno, opciones, informe) {
   exigirVariables(entorno, [...VARIABLES_BASE, ...VARIABLES_DE.terminal, ...VARIABLES_DE.restauracion, ...VARIABLES_DE.sinRol]);
 
@@ -1036,6 +1072,10 @@ async function correrModoDestructivo(entorno, opciones, informe) {
     restauracion: await cliente.iniciarSesion(entorno.POS_NUBE_RESTAURACION_CORREO, entorno.POS_NUBE_RESTAURACION_CLAVE),
     sinRol: await cliente.iniciarSesion(entorno.POS_NUBE_SIN_ROL_CORREO, entorno.POS_NUBE_SIN_ROL_CLAVE),
   };
+  if (opciones.reinicioHecho) {
+    await exigirTablasVacias(cliente, sesiones.restauracion, foto);
+    informe.observar('comprobado con la credencial de restauración: las once tablas de negocio están vacías');
+  }
   await correrBateria(cliente, sesiones, foto, informe);
   return informe.cerrar({ proyecto: entorno.POS_NUBE_PROYECTO });
 }

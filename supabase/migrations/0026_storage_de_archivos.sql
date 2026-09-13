@@ -22,6 +22,19 @@
 -- tienda. Nada de eso es contenido público. Es la misma postura que las trece
 -- tablas: nadie lee salvo la restauración.
 --
+-- > **«PRIVADO» NO ES UNA GARANTÍA PERPETUA: ES UN ESTADO QUE HAY QUE
+-- > VIGILAR.** `public` es una propiedad de la fila del bucket, y **se cambia
+-- > desde el panel de Supabase con un interruptor, sin pasar por ninguna
+-- > migración de esta carpeta y sin pasar por RLS.** Si alguien marca `fotos` o
+-- > `recibos` como público —por error o por conveniencia de un rato—, Storage
+-- > empieza a servir esos objetos por una ruta que **no evalúa ninguna de las
+-- > políticas de este archivo**, y ni la restrictiva de `anon` ni la ausencia
+-- > de permisos de la terminal se enterarían. Ninguna de las cuatro políticas
+-- > de acá lo notaría, y la migración seguiría figurando como aplicada.
+-- > No se agrega ningún mecanismo para impedirlo: queda dicho para que quien
+-- > lea esto sepa que el día que un archivo aparezca donde no debería, lo
+-- > primero que hay que mirar es si el bucket sigue siendo privado.
+--
 -- Los límites del bucket `fotos` NO son inventados: salen de §4.11 de
 -- CLAUDE.md, que ya fija 5 MB y JPG o PNG para la foto de un producto, y que
 -- la aplicación comprueba además por firma binaria antes de copiar el archivo.
