@@ -329,8 +329,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única) y 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio` y la de `descuento_autorizado_via`) |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) y **2026-09-12 (la `0023` y la `0024`, fase 2.c)** |
 | Plan | gratuito |
 
 Estado verificado contra el catálogo del proyecto, no contra el script, el
@@ -358,12 +358,26 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**QUEDA UNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`: la
-`0023_funciones_de_sincronizacion`, de la fase 2.b.** Está escrita, aplicada y
-probada **solo en `pos-pruebas-descartable`**, por instrucción explícita de Julio
-(«no apliques nada contra pos-jimmy-cano en esta fase»). Se aplica en la fase
-2.c, junto con las políticas de RLS, por la vía de siempre: SQL a la vista y
-aprobación explícita. Ver §4.20.
+**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`.** La
+`0023_funciones_de_sincronizacion` y la `0024_privilegios_de_tabla` se aplicaron
+el **2026-09-12**, con la aprobación explícita de Julio y después de haberse
+probado durante días contra `pos-pruebas-descartable`. Lo que sigue pendiente de
+la fase 2.c no son migraciones: son **las políticas de RLS** (solo `SELECT` para
+`restauracion`) y **el JWT de 15 minutos**, que es configuración del panel de
+Auth y no se puede tocar ni desde el conector ni desde el código. Ver §4.20.
+
+Evidencia de esa aplicación, leída del catálogo del real y no del archivo:
+
+| Qué se comprobó | Resultado |
+|---|---|
+| Definiciones de función idénticas a las del proyecto de pruebas (`md5(pg_get_functiondef)`) | **13 de 13** |
+| md5 del registro de la `0023` frente al archivo del repositorio | `a77ae68229c1fdc8245e139916e5b943`, igual |
+| md5 del registro de la `0024` frente al archivo | `5286ab2a46775abc49030f6ec54e1c3c`, igual |
+| Dueño de las 13 tablas y de las 5 funciones DEFINER (`relowner` / `proowner`) | `postgres` las dos; **dueños distintos: 1** |
+| `has_table_privilege('authenticated', …, 'MAINTAIN')` en alguna de las 13 | `false` |
+| Privilegios de tabla de `authenticated` / de `anon` | `SELECT` / ninguno |
+| Huella del contrato contra `supabase/esquema-nube.json` y contra el proyecto de pruebas | `81b685b17f47750bb6c56812ae89c99e` en los tres |
+| Filas de negocio antes y después | 0 en las ocho tablas; `denominaciones` con sus 11 |
 
 Las últimas aplicadas en el real fueron las **cuatro de la fase 2.a de la sincronización**, el
 2026-09-11: `0019_recibido_en`, `0020_quitar_estado_sincronizacion`,
@@ -495,16 +509,18 @@ Pendiente en la nube, para la fase 2.c de la sincronización:
   es `SELECT` al rol `restauracion`. Mientras tanto, los 13 avisos
   `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
   problema.
-- Revocar los privilegios de tabla que Supabase concede por omisión a `anon` y
-  `authenticated` (§4.20, migración `0024`, **ya escrita, aplicada y medida en
-  `pos-pruebas-descartable` el 2026-09-12**): hoy la única capa que frena a la
-  terminal en el real es RLS sin políticas.
-- Aplicar la `0023_funciones_de_sincronizacion` (§4.20). En cuanto esté, el
-  linter va a sumar **cinco avisos WARN
+- **HECHO el 2026-09-12: la `0023` y la `0024` ya están aplicadas en el real.**
+  La terminal no tiene privilegio de tabla para escribir nada (`anon` sin
+  ninguno, `authenticated` solo con `SELECT`, `MAINTAIN` incluido en la
+  revocación) y su único camino de escritura es `EXECUTE` sobre las cinco
+  funciones DEFINER. El linter sumó, como estaba previsto y medido en el
+  proyecto de pruebas, **cinco avisos WARN
   `authenticated_security_definer_function_executable`**, uno por función de
-  escritura, y ninguno de `search_path`. Medido en el proyecto de pruebas:
-  exactamente esos cinco. **Son esperados y no se corrigen**: esas funciones
-  son la única puerta de escritura de la terminal.
+  escritura, y ninguno de `search_path`. **Son esperados y no se corrigen**:
+  esas funciones son la única puerta de escritura de la terminal.
+- **El JWT de 15 minutos sigue pendiente en el real.** Es configuración del
+  panel de Auth y no se alcanza ni desde el conector ni desde el código; en
+  `pos-pruebas-descartable` ya está en 900 s. Ver §4.20.
 
 **No tocar** la función `public.rls_auto_enable()` ni su disparador de eventos
 `ensure_rls`: son preexistentes del proyecto y ajenos a este esquema. Tienen dos
@@ -2608,12 +2624,12 @@ triggers, 0 políticas. Los tres `DROP COLUMN` pasaron sin `CASCADE` y con
 
 ### 4.20 Las funciones de sincronización de la nube (Fase 2.b)
 
-**Están construidas, probadas y aplicadas SOLO en `pos-pruebas-descartable`.**
-`pos-jimmy-cano` no tiene la `0023` todavía, por instrucción explícita de
-Julio; se aplica en la fase 2.c con las políticas de RLS, con el SQL a la vista
-y su aprobación. El registro de `schema_migrations` del proyecto de pruebas
-guarda byte a byte el archivo del repositorio (mismo md5, sin el salto de línea
-final).
+**Construidas y probadas en `pos-pruebas-descartable`, y desde el 2026-09-12
+aplicadas también en `pos-jimmy-cano`**, con la aprobación explícita de Julio.
+El registro de `schema_migrations` de los DOS proyectos guarda byte a byte el
+archivo del repositorio (mismo md5, sin el salto de línea final), y las trece
+definiciones de función del real son idénticas a las del de pruebas, comparadas
+con `md5(pg_get_functiondef(oid))`. Ver la tabla de evidencia en §4.4.
 
 #### El riesgo 8.4 se midió, y cambió el diseño
 
@@ -2762,10 +2778,12 @@ diferencias y sale con código 1.
   66/67). **Falta el mismo cambio en `pos-jimmy-cano`.** `--esperar-vencimiento`
   comprueba que un token efectivamente venza a los 15 minutos; ya se puede
   correr contra el proyecto de pruebas, y todavía no se corrió (son 15 minutos
-  de espera).
+  de espera). **En `pos-jimmy-cano` es hoy el ÚNICO punto del diseño que sigue
+  sin aplicarse, y no lo puede aplicar esta sesión**: hay que entrar al panel
+  del proyecto real y ponerlo en `900`.
 - **Revocar los privilegios de tabla a `anon` y `authenticated`**, migración
-  `0024`. **Escrita, aplicada y medida solo en `pos-pruebas-descartable` el
-  2026-09-12**; en `pos-jimmy-cano` es parte de la fase 2.c. Leído del catálogo
+  `0024`. **Escrita y medida en `pos-pruebas-descartable`, y aplicada también en
+  `pos-jimmy-cano` el 2026-09-12** (evidencia en §4.4). Leído del catálogo
   de los DOS proyectos: Supabase concede por omisión a los dos roles TODOS los
   privilegios de tabla —en Postgres 17 son OCHO: `SELECT, INSERT, UPDATE,
   DELETE, TRUNCATE, REFERENCES, TRIGGER` y `MAINTAIN`—, y lo mismo a toda tabla
@@ -2965,6 +2983,7 @@ diferencias y sale con código 1.
 | **Las funciones se prueban ÚNICAMENTE con red, contra el proyecto de pruebas, con `npm run verify:nube -- --destructivo`; y se dice lo que no se ejercitó: el reinicio con `service_role`.** | Simular Postgres en Vitest; probar contra el real «con cuidado» | Vitest corre contra SQLite y no sabe nada de RLS, `auth.jwt()` ni triggers: cualquier simulación probaría la simulación. La batería son 67 comprobaciones por PostgREST con los JWT reales de los tres usuarios; antes, 91 mediciones en SQL directo. La `service_role` del proyecto de pruebas no está en esta máquina —la pone Julio si quiere que el guion vacíe por su cuenta—, así que el reinicio se hizo por SQL y con `--reinicio-hecho`, y ese código queda escrito y no visto correr. `auditoria_log` no se puede vaciar por PostgREST ni con `service_role`: es inmutable; se trunca por SQL. | Prompt 33 — 2026-09-11 |
 | **El JWT de 15 minutos (decisión 2 del diseño) NO se pudo aplicar desde acá: es configuración de Auth, fuera del alcance del conector y del código. Queda pendiente en el panel, y la batería lo mide y FALLA mientras siga en 3600.** | Darlo por hecho; quitar la comprobación para que la batería pase en verde | Una batería en verde con un JWT de una hora diría que la nube está como pide el diseño, y no lo está. La comprobación falla a propósito hasta que se cambie en Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time» —primero en el de pruebas, después en el real—, y `--esperar-vencimiento` comprueba que un token efectivamente venza. | Prompt 33 — 2026-09-11 |
 | **La `0024` revoca los privilegios de tabla con `REVOKE ALL` + `GRANT SELECT`, no con una lista de privilegios; se aplicó y midió en `pos-pruebas-descartable` sin cambiar ningún comportamiento de función.** | Enumerar los privilegios a revocar; revocar también `SELECT`; escribir la migración directo contra el real | Supabase concede a `anon` y `authenticated` los OCHO privilegios de tabla de Postgres 17. La primera versión de la `0024` enumeraba seis y **se le escapó `MAINTAIN`**, nuevo en PG17, que no aparece en `information_schema.role_table_grants` y sí en `pg_class.relacl` (la letra `m`); se vio leyendo `relacl` tras aplicarla. `REVOKE ALL` seguido de `GRANT SELECT` no puede dejar un privilegio afuera y sobrevive a que Postgres agregue otro mañana. `SELECT` se conserva para `authenticated` porque terminal y restauración son el MISMO rol de Postgres —el rol es un claim del JWT— y quién lee lo decide RLS. El criterio de aplicación fue que la misma batería, antes y después, diera lo mismo en TODAS las funciones: medido, 90/93 filas del arnés SQL byte a byte iguales (cambian solo los dos marcadores de privilegios y la sonda 152, de «viola RLS» a «permission denied», mismo `42501`) y 67/67 en PostgREST, con las tres sondas de acceso directo pasando de RLS a «permission denied». Queda anotado lo que NO cubre: el `pg_default_acl` del rol de plataforma `supabase_admin`, que `postgres` no puede alterar. Aplicada solo en el proyecto de pruebas; en `pos-jimmy-cano` va en la fase 2.c. | Prompt 34 — 2026-09-12 |
+| **La `0023` y la `0024` se aplicaron a `pos-jimmy-cano` el 2026-09-12, y lo que prueba que se aplicó lo correcto NO es el texto de la migración sino la huella de los OBJETOS: las 13 definiciones de función del real comparadas una a una con las del proyecto de pruebas.** | Confiar en que el texto enviado al conector era el del archivo; comparar solo el md5 del registro de `schema_migrations`; pedirle a Julio que las pegara a mano en el editor SQL del panel | Aplicar una migración de 43 KB por el conector obliga a que el texto pase entero por la sesión, y una diferencia de un byte produciría en producción funciones parecidas pero distintas. El md5 del registro detecta eso, pero mide **la entrada**; lo que importa es **el efecto**. Por eso la verificación fuerte es `md5(pg_get_functiondef(oid))` de las trece funciones contra las del proyecto de pruebas: dio **13 de 13**, y el md5 de los dos registros coincidió además con el de los archivos (`a77ae682…` y `5286ab2a…`). Se sumó una tercera comprobación independiente del mecanismo: la huella canónica del contrato que declara cada nube, que dio `81b685b17f47750bb6c56812ae89c99e` en el real, en el de pruebas y en `supabase/esquema-nube.json`. La aplicación se hizo con el real en 0 filas de negocio, y se comprobó que siguiera en 0 después. **La batería destructiva NO se corrió contra el real, y no puede correrse**: el seguro la rechaza por nombre, el real no tiene usuarios de Auth, y escribiría asientos en `auditoria_log`, que es inmutable por trigger y solo se vacía con TRUNCATE. En su lugar se corrieron 40 sondas que no escriben nada. | Prompt 35 — 2026-09-12 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

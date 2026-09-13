@@ -181,11 +181,15 @@ número que use queda reservado también del lado local.
 | `0020_quitar_estado_sincronizacion.sql` | Sí — aplicada el 2026-09-11 |
 | `0021_quitar_hashes_de_pin.sql` | Sí — aplicada el 2026-09-11 |
 | `0022_fijar_search_path_auditoria.sql` | Sí — el CAMBIO estaba desde el 2026-09-05; el archivo se escribió y se aplicó el 2026-09-11, y fue un no-op comprobado |
-| `0023_funciones_de_sincronizacion.sql` | **NO, todavía.** Aplicada y probada solo en `pos-pruebas-descartable` el 2026-09-11, por instrucción de Julio. Se aplica en la fase 2.c con las políticas de RLS, con el SQL a la vista y su aprobación. |
-| `0024_privilegios_de_tabla.sql` | **NO, todavía.** Escrita y aplicada solo en `pos-pruebas-descartable` el 2026-09-12. Se aplica en `pos-jimmy-cano` en la fase 2.c, junto con la `0023` y las políticas de RLS. |
+| `0023_funciones_de_sincronizacion.sql` | Sí — aplicada el 2026-09-12, después de probarse en `pos-pruebas-descartable` desde el 2026-09-11. Las 13 definiciones de función del real son idénticas a las del de pruebas (`md5(pg_get_functiondef)`), y el registro guarda el archivo byte a byte. |
+| `0024_privilegios_de_tabla.sql` | Sí — aplicada el 2026-09-12, justo después de la `0023`. `anon` quedó sin ningún privilegio de tabla y `authenticated` solo con `SELECT`; `has_table_privilege(…, 'MAINTAIN')` da `false` en las trece. |
 
-**Quedan DOS migraciones pendientes de aplicar en `pos-jimmy-cano`: la `0023` y
-la `0024`.**
+**No queda ninguna migración pendiente de aplicar en `pos-jimmy-cano`.** Las dos
+últimas fueron la `0023` y la `0024`, el 2026-09-12. Lo que sigue pendiente de la
+fase 2.c no es una migración: son las políticas de RLS y el JWT de 15 minutos,
+que es configuración del panel de Auth.
+
+Antes de ellas,
 Las cuatro anteriores son las de la fase 2.a, aplicadas el 2026-09-11 por la
 vía de siempre:
 primero contra `pos-pruebas-descartable`, después el SQL completo a la vista, y
@@ -223,8 +227,11 @@ Creado el 2026-09-11 en `us-east-2`, plan gratuito, para lo que manda §9.5 del
 diseño. **Tiene aplicadas las dieciocho migraciones**: las doce del esquema, la
 `0022`, las tres de la fase 2.a, la `0023` de la fase 2.b y la `0024` de la fase
 2.c. Es el único proyecto donde las de la nube se prueban antes de existir en la
-tienda, y **el único que hoy tiene las funciones de sincronización y los
-privilegios de tabla cerrados**.
+tienda. Desde el 2026-09-12 **el real tiene el mismo juego**: la huella del
+contrato que declaran los dos, y la de la foto de este repositorio, es la misma
+(`81b685b17f47750bb6c56812ae89c99e`). Lo que sigue siendo exclusivo del proyecto
+de pruebas es que **acá se puede escribir y borrar**: sus tres usuarios de Auth y
+la batería destructiva no existen ni pueden existir del lado del real.
 
 Su registro de `schema_migrations` guarda la `0023` byte a byte igual al archivo
 de esta carpeta (mismo md5, sin el salto de línea final), y la FOTO de su

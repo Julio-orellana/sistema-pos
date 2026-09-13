@@ -433,8 +433,8 @@ de Postgres 17 —`SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
 y `MAINTAIN`— sobre las trece tablas, y los privilegios por omisión
 (`pg_default_acl`) conceden lo mismo a toda tabla nueva. Es una sola capa, y
 `TRUNCATE` ni siquiera pasa por RLS. **La fase 2.c agrega la segunda capa** con
-la migración `0024`, **ya aplicada y medida en `pos-pruebas-descartable` el
-2026-09-12**: `REVOKE ALL` a `anon` y a `authenticated` sobre las trece tablas,
+la migración `0024`, **aplicada y medida en `pos-pruebas-descartable` y, desde
+el 2026-09-12, también en `pos-jimmy-cano`**: `REVOKE ALL` a `anon` y a `authenticated` sobre las trece tablas,
 seguido de `GRANT SELECT` a `authenticated`, y lo mismo en los privilegios por
 omisión para las tablas futuras. Se escribe `REVOKE ALL` y no una lista de
 privilegios a propósito: la primera versión enumeraba seis y dejaba `MAINTAIN`
