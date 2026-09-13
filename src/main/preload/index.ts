@@ -29,6 +29,9 @@ import {
   type ReporteDeVentasPorProductoIpc,
   type ReporteDeInventarioIpc,
   type LimiteDeDescuentoIpc,
+  type ConexionDeNubeIpc,
+  type EstadoDeNubeIpc,
+  type ResumenDeConexionIpc,
   type CambioDeLimiteIpc,
   type UsuarioEditadoIpc,
   type UsuarioIpc,
@@ -250,6 +253,24 @@ const apiPos: ApiPos = {
     fijar: (cambio: CambioDeLimiteIpc): Promise<RespuestaIpc<LimiteDeDescuentoIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.limitesFijar, cambio) as Promise<
         RespuestaIpc<LimiteDeDescuentoIpc>
+      >,
+  },
+
+  /*
+    Conexión con la nube. Los dos canales exigen rol administrativo del lado
+    del proceso principal; que la pantalla solo se ofrezca a un administrador
+    es comodidad, no control.
+
+    NOTA sobre `conectar`: la contraseña cruza este puente UNA vez, dentro del
+    payload, y no se guarda de este lado. El preload no la registra ni la
+    conserva; lo único que devuelve es el resumen, que no la incluye.
+  */
+  nube: {
+    estado: (): Promise<RespuestaIpc<EstadoDeNubeIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.nubeEstado) as Promise<RespuestaIpc<EstadoDeNubeIpc>>,
+    conectar: (datos: ConexionDeNubeIpc): Promise<RespuestaIpc<ResumenDeConexionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.nubeConectar, datos) as Promise<
+        RespuestaIpc<ResumenDeConexionIpc>
       >,
   },
 

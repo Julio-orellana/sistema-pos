@@ -18,6 +18,7 @@ import { PantallaDeNegocio } from './PantallaDeNegocio';
 import { PantallaDeRecibos } from './PantallaDeRecibos';
 import { PantallaDeReportes } from './PantallaDeReportes';
 import { PantallaDeLimites } from './PantallaDeLimites';
+import { PantallaDeNube } from './PantallaDeNube';
 import { PantallaDeVenta } from './PantallaDeVenta';
 
 export interface PantallaDeSesionProps {
@@ -37,7 +38,8 @@ type Vista =
   | 'negocio'
   | 'recibos'
   | 'reportes'
-  | 'limites';
+  | 'limites'
+  | 'nube';
 
 export function PantallaDeSesion({
   sesion,
@@ -79,6 +81,9 @@ export function PantallaDeSesion({
   }
   if (vista === 'limites') {
     return <PantallaDeLimites alVolver={() => { setVista('menu'); }} />;
+  }
+  if (vista === 'nube') {
+    return <PantallaDeNube alVolver={() => { setVista('menu'); }} />;
   }
 
   return (
@@ -152,6 +157,13 @@ export function PantallaDeSesion({
               onClick={() => { setVista('negocio'); }}
             >
               Datos del negocio
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-nube"
+              onClick={() => { setVista('nube'); }}
+            >
+              Conectar con la nube
             </button>
             <button
               type="button"

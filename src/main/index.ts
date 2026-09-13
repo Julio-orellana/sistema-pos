@@ -12,7 +12,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, net, protocol } from 'electron';
+import { app, BrowserWindow, dialog, net, protocol, safeStorage } from 'electron';
 
 import {
   abrirBaseDeDatos,
@@ -69,6 +69,9 @@ import {
 import { observarLotesEncolados } from '@main/database/bandeja-de-salida';
 import { TrabajadorDeSincronizacion } from '@main/sincronizacion/trabajador';
 import { PlanificadorDeSincronizacion } from '@main/sincronizacion/planificador';
+import { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
+import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
+import { AlmacenDeCredencial } from '@main/sincronizacion/credencial';
 import { ATAJO_SALIDA_CONTROLADA, describirAtajo } from '@shared/kiosk-input';
 
 /** Ruta al preload compilado, relativa a dist-electron/main. */
@@ -160,6 +163,14 @@ let controladorDeSalidaActivo: ControladorDeSalidaControlada | null = null;
 /** El planificador vivo, para poder detenerlo en el cierre ordenado. */
 let planificadorDeSincronizacion: PlanificadorDeSincronizacion | null = null;
 
+/**
+ * La sesión con Supabase Auth, para dejar de renovar en el cierre ordenado.
+ *
+ * `null` cuando la nube no está configurada, que hoy es el caso normal en
+ * desarrollo: sin `POS_NUBE_URL` no hay a quién conectarse.
+ */
+let sesionDeNube: SesionDeNube | null = null;
+
 function cerrarAplicacionOrdenadamente(): void {
   if (cierreEnCurso) {
     return;
@@ -183,6 +194,15 @@ function cerrarAplicacionOrdenadamente(): void {
   observarLotesEncolados(null);
   planificadorDeSincronizacion?.detener();
   planificadorDeSincronizacion = null;
+
+  /*
+    La renovación del token también se DETIENE y no se apura, por la misma
+    razón. Y `detener()` NO borra la credencial: cerrar el punto de venta por
+    la noche no es desconectar la terminal de la nube, y al día siguiente tiene
+    que arrancar sola sin que nadie teclee nada.
+  */
+  sesionDeNube?.detener();
+  sesionDeNube = null;
 
   quitarManejadoresIpc();
   ultimoCierre = cerrarBaseDeDatosOrdenadamente();
@@ -537,6 +557,33 @@ app.whenReady().then(
       }
     });
 
+    /*
+      ===================================================================
+      SESIÓN CON LA NUBE (fase 3.a, primera mitad)
+      ===================================================================
+      Solo se construye si el proyecto está configurado. Sin `POS_NUBE_URL`
+      no hay a quién conectarse, y montar la pantalla igual sería ofrecer un
+      botón que no puede funcionar: la pantalla dice que falta configurar.
+
+      La llave publicable NO es un secreto —solo identifica el proyecto, y
+      sola no puede nada porque RLS está activo sin políticas para `anon`
+      (§1.2)—, así que viaja por variable de entorno hoy y va a viajar dentro
+      del instalador el día del empaquetado. **La `service_role` no aparece
+      por ningún lado, y no debe aparecer nunca.**
+    */
+    const urlDeLaNube = process.env.POS_NUBE_URL ?? '';
+    const llaveDeLaNube = process.env.POS_NUBE_LLAVE_PUBLICABLE ?? '';
+    if (urlDeLaNube !== '' && llaveDeLaNube !== '') {
+      sesionDeNube = new SesionDeNube({
+        auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube),
+        credencial: new AlmacenDeCredencial(app.getPath('userData'), safeStorage),
+        registrar: (mensaje): void => {
+          logTecnico.registrar('sincronizacion', mensaje);
+          console.info(`[nube] ${mensaje}`);
+        },
+      });
+    }
+
     registrarManejadoresIpc({
       controladorDeSalida,
       autenticacion,
@@ -551,6 +598,7 @@ app.whenReady().then(
       preciosEspeciales: repositorios.preciosEspeciales,
       reportes: servicioDeReportes,
       limitesDeDescuento: servicioDeLimites,
+      nube: sesionDeNube ?? undefined,
       catalogo: {
         categorias: servicioDeCategorias,
         productos: servicioDeProductos,
@@ -612,6 +660,14 @@ app.whenReady().then(
       planificadorDeSincronizacion?.alConfirmarTransaccion();
     });
     planificadorDeSincronizacion.arrancar();
+
+    /*
+      La sesión con la nube arranca acá, después de la ventana, por la misma
+      razón que el trabajador: no competir con el arranque en un i3. `arrancar`
+      NO lanza aunque no haya red ni credencial —la tienda tiene que poder
+      abrir sin internet—, así que no hace falta envolverlo en un `catch`.
+    */
+    void sesionDeNube?.arrancar();
     const avisoDeArranque =
       `trabajador en marcha con ${proveedorDeSincronizacion.nombre}; ` +
       `primer ciclo en 30 s. Pendientes en la cola: ` +

@@ -53,6 +53,7 @@ import type { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-d
 import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
+import type { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
 import { generarHashDePin } from '@shared/auth';
 import { montoACadena } from '@shared/money';
 import { ejecutarConRespuesta } from './respuesta';
@@ -62,6 +63,7 @@ import {
 } from './catalogo';
 import { registrarManejadoresDeVenta } from './venta';
 import { registrarManejadoresDeUsuarios } from './usuarios';
+import { registrarManejadoresDeNube } from './nube';
 import { registrarManejadoresDeRecibos } from './recibos';
 import { registrarManejadoresDeReportes } from './reportes';
 
@@ -95,6 +97,15 @@ export interface DependenciasDeIpc {
   readonly reportes: ServicioDeReportes;
   /** Topes de descuento por rol, ya configurables desde la aplicación. */
   readonly limitesDeDescuento: ServicioDeLimitesDeDescuento;
+  /**
+   * La sesión de la terminal contra Supabase Auth (fase 3.a).
+   *
+   * **Opcional a propósito.** Los modos semilla y la verificación de arranque
+   * construyen los manejadores sin nube: no tienen a quién conectarse y no
+   * deberían tocar credenciales. Cuando falta, los dos canales no se
+   * registran y la pantalla lo dice, en vez de fingir que existen.
+   */
+  readonly nube?: SesionDeNube | undefined;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -141,6 +152,11 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     reportes: dependencias.reportes,
     limites: dependencias.limitesDeDescuento,
   });
+  // Conexión con la nube: los dos canales exigen rol administrativo. Solo se
+  // registran si hay sesión de nube construida; ver el comentario del campo.
+  if (dependencias.nube !== undefined) {
+    registrarManejadoresDeNube({ sesion: dependencias.sesion, nube: dependencias.nube });
+  }
 
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,

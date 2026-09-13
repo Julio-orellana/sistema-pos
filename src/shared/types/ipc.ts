@@ -152,6 +152,23 @@ export const CANALES_IPC = {
   /** Topes de descuento por rol. Reemplazan la dependencia de `seed:limites`. */
   limitesListar: 'limites:listar',
   limitesFijar: 'limites:fijar',
+
+  // --- Conexión con la nube (fase 3.a) --------------------------------------
+  /**
+   * Estado de la credencial de la terminal. Solo rol administrativo.
+   *
+   * **NO devuelve ningún secreto**: ni el token de refresco, ni el access
+   * token, ni por supuesto la contraseña. Solo si hay credencial, con qué
+   * correo y cómo va la renovación.
+   */
+  nubeEstado: 'nube:estado',
+  /**
+   * Conecta la terminal: inicia sesión contra Supabase Auth y guarda **solo**
+   * el token de refresco, cifrado. Solo rol administrativo.
+   *
+   * La contraseña viaja por este canal una vez y no se guarda en ningún lado.
+   */
+  nubeConectar: 'nube:conectar',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -939,6 +956,73 @@ export const esquemaConfiguracionDeNegocio = z.object({
 /** Configuración del negocio, ya validada. */
 export type ConfiguracionDeNegocioIpc = z.infer<typeof esquemaConfiguracionDeNegocio>;
 
+// ---------------------------------------------------------------------------
+// Conexión con la nube (fase 3.a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Correo y contraseña del usuario de terminal, tecleados UNA vez.
+ *
+ * No hay tope de largo para la contraseña: §1.2 del diseño pide una
+ * «contraseña larga aleatoria», y un `max()` acá sería un techo inventado que
+ * empujaría hacia contraseñas más cortas. El piso sí existe, para atrapar el
+ * campo vacío antes de gastar una petición de red.
+ */
+const LARGOS_DEL_CORREO = {
+  /** `a@b` es lo más corto que puede parecerse a un correo. */
+  minimo: 3,
+  /** El tope del RFC 5321 para una dirección completa. */
+  maximo: 320,
+} as const;
+
+export const esquemaConexionDeNube = z.object({
+  correo: z.string().min(LARGOS_DEL_CORREO.minimo).max(LARGOS_DEL_CORREO.maximo),
+  contrasena: z.string().min(1),
+});
+
+/** Lo que la pantalla manda para conectar. */
+export type ConexionDeNubeIpc = z.infer<typeof esquemaConexionDeNube>;
+
+/**
+ * Estado de la credencial, tal como lo ve la pantalla.
+ *
+ * **Ningún campo de esta interfaz es un secreto**, y es deliberado: si el
+ * token de refresco o el access token viajaran hasta el renderer, quedarían al
+ * alcance de cualquier cosa que corra ahí, y todo el cuidado de guardarlos
+ * cifrados en el disco no serviría de nada.
+ */
+export interface EstadoDeNubeIpc {
+  /** Hay un archivo de credencial guardado. */
+  readonly hayCredencial: boolean;
+  /** Hay un access token vigente ahora mismo. */
+  readonly conectada: boolean;
+  /** Con qué usuario, leído de los claims del token. */
+  readonly correo: string | null;
+  /** El rol del token. Debería ser siempre `'terminal'`. */
+  readonly rol: string | null;
+  /** `exp - iat`: la vida real que emite el proyecto, en segundos. */
+  readonly vidaDelTokenSegundos: number | null;
+  /** Segundos que el reloj local va adelantado respecto del servidor. */
+  readonly desfaseDeRelojSegundos: number | null;
+  /** `true` si ese desfase pasa la tolerancia medida de PostgREST (30 s). */
+  readonly relojSospechoso: boolean;
+  /** Renovaciones seguidas que fallaron. Cero cuando todo va bien. */
+  readonly renovacionesFallidas: number;
+  /** Qué pasó la última vez. Nunca lleva tokens ni contraseñas. */
+  readonly ultimoMotivo: string | null;
+}
+
+/** Lo que devuelve conectar cuando sale bien. */
+export interface ResumenDeConexionIpc {
+  readonly correo: string | null;
+  readonly rol: string | null;
+  readonly vidaDelTokenSegundos: number;
+  /** Lo que el servidor DIJO que dura, para poder compararlo con la vida real. */
+  readonly duracionDeclaradaEnSegundos: number | null;
+  readonly desfaseDeRelojSegundos: number;
+  readonly relojSospechoso: boolean;
+}
+
 /** Payload que identifica un recibo. */
 export const esquemaReciboPorId = z.object({
   id: z.uuid(),
@@ -1255,6 +1339,20 @@ export interface ApiPos {
   readonly limites: {
     listar(): Promise<RespuestaIpc<readonly LimiteDeDescuentoIpc[]>>;
     fijar(cambio: CambioDeLimiteIpc): Promise<RespuestaIpc<LimiteDeDescuentoIpc>>;
+  };
+
+  /**
+   * Conexión de la terminal con la nube. Solo rol administrativo.
+   *
+   * Es el aprovisionamiento de §1.3 del diseño: un acto manual de una sola vez
+   * por terminal. Lo que queda en el disco es una sesión —el token de refresco
+   * cifrado—, nunca la contraseña.
+   */
+  readonly nube: {
+    /** Cómo está la credencial. No devuelve ningún secreto. */
+    estado(): Promise<RespuestaIpc<EstadoDeNubeIpc>>;
+    /** Inicia sesión y guarda el token de refresco. La contraseña se descarta. */
+    conectar(datos: ConexionDeNubeIpc): Promise<RespuestaIpc<ResumenDeConexionIpc>>;
   };
 
   /**

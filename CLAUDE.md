@@ -3170,6 +3170,226 @@ pasan.** Antes del arreglo fallaban dos, y la segunda era falsa.
   esta comprobación vuelve a fallar, lo primero que hay que medir es la
   tolerancia otra vez, no concluir que la nube dejó de validar.
 
+### 4.23 La credencial de la terminal (Fase 3.a, PRIMERA MITAD)
+
+**Construida el 2026-09-13.** Es la primera vez que la aplicación tiene código
+para hablar con Supabase de verdad, aunque **todavía no habla**: sin
+`POS_NUBE_URL` no se construye nada y la pantalla lo dice. El `SyncProvider`
+real —el que subiría lotes— sigue sin existir; esto es solo la credencial.
+
+> **ESTA FASE ESTÁ DELIBERADAMENTE INCOMPLETA.** Julio pidió construir la
+> primera mitad y dejar fuera la lógica de credencial REVOCADA. Ver «Lo que NO
+> se construyó» al final, que es la parte que hay que leer antes de darla por
+> terminada.
+
+#### Las cuatro piezas, y por qué son cuatro y no una
+
+| Archivo | Qué decide | Se prueba |
+|---|---|---|
+| `vida-del-token.ts` | Cuándo renovar, cuánto esperar tras un fallo, si el reloj está mal | **Puro**: sin red, sin reloj, sin Electron |
+| `credencial.ts` | Dónde y cómo se guarda el token de refresco | Con un cifrado inyectado |
+| `auth-de-nube.ts` | Las dos peticiones HTTP a GoTrue | Se inyecta un doble |
+| `sesion-de-nube.ts` | La coreografía de las tres anteriores | Con los tres dobles |
+
+Están separadas para que la lógica —que es donde están los errores caros— se
+pueda probar sin red y sin Electron. Es el mismo criterio que separó
+`reintentos.ts` del trabajador en la fase 1.b.
+
+#### LA VIDA DEL TOKEN SE MIDE CON EL RELOJ DEL SERVIDOR, NUNCA CON EL LOCAL
+
+Es la decisión central del módulo y la que más pruebas tiene.
+
+**Nunca se calcula `exp - Date.now()`**, que es la forma evidente y la
+equivocada: mezcla un instante del servidor con uno de esta máquina, y §1.6 del
+diseño advierte que un equipo de escritorio se desfasa minutos u horas. Las dos
+direcciones rompen, y rompen distinto:
+
+- Reloj **adelantado** una hora → la resta da negativo → la aplicación
+  renovaría en bucle cerrado contra Auth, consumiendo cuota sin que nada falle
+  visiblemente.
+- Reloj **atrasado** una hora → da hora y media → renovaría mucho después de
+  que el token ya murió.
+
+La vida sale de **`exp - iat`**, dos instantes del MISMO reloj, así que la
+resta es exacta aunque la máquina crea que es 1998. La espera se le pasa a un
+`setTimeout`, que es relativo y tampoco mira el reloj de pared.
+
+**Falsificado:** reemplazando el cálculo por `exp - Date.now()`, **caen 8
+pruebas**, incluidas las cuatro del bloque «EL RELOJ LOCAL NO ENTRA EN EL
+CÁLCULO» (reloj en hora, una hora adelantado, una hora atrasado y en 1998).
+
+El desfase **sí se calcula**, pero solo para anotarlo en la bitácora técnica
+cuando pasa la tolerancia medida de 30 s (§4.22). Es diagnóstico del riesgo
+8.5, no una entrada del cálculo: si entrara, un reloj mal puesto dejaría de ser
+un dato molesto y pasaría a poder romper la renovación.
+
+#### Se renueva al 75 % de la vida, y ese colchón es un presupuesto
+
+Con los 900 s medidos: renovar a los **675 s** deja **225 s** antes del
+vencimiento. No es un margen decorativo: es lo que permite reintentar si la red
+está caída justo en ese momento. La escalera de reintentos —5 s, 15 s, 45 s y
+techo de 1 minuto— entra **seis veces** en esos 225 s, y hay una prueba que lo
+cuenta en vez de afirmarlo.
+
+**La fracción NO está atada a 900.** Con un token de 300 s renueva a los 225 s,
+y con los 3600 s de antes renovaría a los 2700. Hay pruebas de los tres, más
+una que recorre toda vida de 10 s a 2 horas exigiendo que la renovación caiga
+siempre antes del `exp`.
+
+> **LA ESCALERA DE RENOVACIÓN NO ES LA DE `reintentos.ts`, Y NO SE PUEDE
+> REUSAR.** Aquella sube hasta **una hora** entre intentos, que es correcto
+> para la cola de subida —un lote que no subió hoy sube mañana— y sería
+> absurdo acá: un peldaño de 30 minutos significa **no intentar ni una vez**
+> dentro del colchón antes del vencimiento. La forma de la escalera la impone
+> la vida del token, no la paciencia de quien espera.
+
+#### LA CONTRASEÑA NO SE GUARDA, Y ESTÁ PROBADO, NO AFIRMADO
+
+Entra por el canal IPC, se le pasa a Auth y sale del alcance. **Seis
+comprobaciones la persiguen** por todas las superficies donde podría quedar:
+
+| Dónde se busca | Cómo |
+|---|---|
+| El archivo de credencial | En UTF-8, en latin1 y como secuencia de bytes |
+| **Todos** los archivos de la carpeta de datos | Recorriendo el directorio entero |
+| La bitácora técnica | Sobre el texto acumulado |
+| Cualquier campo del objeto de sesión | Recorriendo el grafo completo, a cualquier profundidad |
+| El estado que viaja a la pantalla | El mismo recorrido |
+| El módulo de IPC | Una prueba sobre el código fuente |
+
+**Y hay un control del propio buscador**: una comprobación que le da un objeto
+donde la contraseña SÍ está y exige que la encuentre. Sin ese control, las
+otras cinco pasarían igual con un buscador roto.
+
+**Falsificado con los dos errores realistas**: guardarla en un campo del objeto
+y registrarla en la bitácora. Cada uno lo atrapa su prueba —«no queda colgada
+en NINGÚN campo» y «no aparece en la bitácora técnica»— y ninguna otra, que es
+la señal de que cada una cubre su superficie.
+
+La pantalla además **limpia el campo también cuando el intento FALLA**: si
+quedara escrita, un error de tecleo dejaría la contraseña de la terminal a la
+vista en el mostrador.
+
+#### El archivo: solo el token de refresco, y nunca en claro
+
+`<userData>/sincronizacion.credencial` guarda **el token de refresco cifrado y
+nada más**. Ni el access token —vive 900 s, guardarlo solo agregaría una copia
+de algo que caduca—, ni el correo, que se lee de los claims del token cuando
+hace falta. Un dato que no se guarda es un dato que no se filtra.
+
+**Si `safeStorage.isEncryptionAvailable()` da `false`, la clase LANZA y no
+escribe nada.** No hay respaldo en texto plano y no lo va a haber: un archivo
+en claro sería exactamente lo que este módulo existe para impedir, y escribirlo
+«por esta vez» lo haría en silencio.
+
+**Falsificado**: agregando ese respaldo en texto plano caen **7 pruebas**,
+entre ellas «EL TOKEN NO QUEDA EN TEXTO PLANO», «NO deja ningún archivo detrás»
+y «pasa SIEMPRE por el cifrado del sistema».
+
+##### Y el cifrado REAL se midió, no se supuso
+
+Las pruebas de Vitest usan un cifrado inyectado, así que prueban el contrato
+del almacén y **no** que el llavero o DPAPI cifren de verdad. Ese hueco lo
+cierra una sonda que corre dentro de Electron:
+
+```bash
+npm run diagnostico:credencial
+```
+
+Resultado en la máquina de desarrollo, el 2026-09-13:
+
+```
+Plataforma            : darwin
+Cifrado disponible    : sí
+Bytes en el archivo   : 67      (para un token de 49 caracteres)
+Token legible en él   : no
+Descifra igual        : sí
+Permisos del archivo  : 600
+```
+
+**Falsificada**: escribiendo el token en claro, la sonda dice «SÍ — GRAVE» y
+sale con código 1. Y esa falsificación destapó de paso un defecto de la propia
+sonda: `decryptString` **lanza** con bytes que no son suyos, y sin envoltorio
+el proceso quedaba vivo sin ventana y sin imprimir nada, o sea **colgado en vez
+de reportando**. Se arregló con un `descifrarSinRomper` y una última red
+alrededor de todo, por la misma regla de §4.11: un guion que se cuelga es peor
+que uno que falla.
+
+> **ESTO SE MIDIÓ EN macOS, Y macOS NO ES VERIFICACIÓN.** El respaldo de
+> `safeStorage` en macOS es el llavero y en Windows es DPAPI: son dos
+> mecanismos distintos y que uno funcione no dice nada del otro. **Hay que
+> correr `npm run diagnostico:credencial` en Windows**, y hasta entonces esta
+> mitad queda como pendiente de confirmar (punto 12 de §6.2).
+
+Vale además la advertencia de §1.4 del diseño, que no cambia: DPAPI cifra con
+material de la cuenta de Windows, así que **protege contra quien se lleve el
+disco, no contra quien encienda la máquina y entre como ese usuario**. Una
+terminal en kiosko probablemente inicie sesión sola. La credencial **es
+extraíble**, y el trabajo de verdad es acotar lo que puede hacer (§1.5), no
+esconderla mejor.
+
+#### Se rechaza la credencial equivocada ANTES de guardarla
+
+Si el token que devuelve Auth no trae `app_metadata.rol = 'terminal'`, o la
+sesión es anónima, **se rechaza y no se guarda nada**. No es una barrera de
+seguridad —la barrera es RLS— sino un aviso temprano: si el administrador
+teclea por error su propia cuenta de restauración, la terminal quedaría con una
+credencial que no puede escribir ni una fila, y el síntoma aparecería mucho
+después como lotes rechazados con `42501`. Es mejor decírselo mientras tiene el
+teclado en la mano, y el mensaje nombra el rol que trajo.
+
+#### El token de refresco ROTA, y por eso se guarda antes que nada
+
+Los tokens de refresco de Supabase son de un solo uso: cada renovación devuelve
+uno nuevo y quema el anterior. **Si una renovación sale bien y no se persiste
+el token nuevo, la sesión queda perdida** y hay que volver a teclear la
+contraseña. Por eso lo PRIMERO que hace `aplicarSesion` es escribir la
+credencial —antes del estado en memoria, antes de agendar, antes de registrar—,
+y hay una prueba que comprueba que la segunda renovación usa el token rotado y
+no el original.
+
+La otra mitad la cubre GoTrue: §1.6 documenta que reutilizar el token padre
+dentro del mismo linaje devuelve el activo, así que una respuesta perdida en la
+red no termina la sesión.
+
+#### Un corte de red no es un fallo duro
+
+`arrancar()` **no lanza nunca**: que no haya internet al encender la
+computadora de la tienda es normal, y no puede impedir que el punto de venta
+abra. Si falla, agenda el reintento y la cola sigue llenándose, que es lo que
+el trabajador ya hace desde la fase 1.b. La credencial **no se borra** ante un
+fallo de red: un corte no es una revocación.
+
+#### Lo que NO se construyó, y por qué está dicho acá
+
+> **FALTA LA SEGUNDA MITAD: qué hace la aplicación cuando la credencial fue
+> REVOCADA.** Hoy **todo fallo de renovación se reintenta igual, incluido un
+> 401**. Es lo conservador —una credencial válida nunca se descarta por un
+> problema de red— pero está incompleto en dos cosas:
+>
+> 1. Un 401 al refrescar significa que el token de refresco ya no sirve:
+>    usuario borrado, baneado o contraseña cambiada. Reintentarlo cada minuto
+>    para siempre no lo arregla y consume cuota.
+> 2. Falta el estado «sin credencial» visible: la barra de estado en rojo con
+>    la fecha desde la que está así. La cola ya hace su parte; lo que falta es
+>    que alguien se entere.
+>
+> **El TODO está escrito en `sesion-de-nube.ts`, en el lugar exacto donde hay
+> que construirlo**, con los tres resultados del experimento de §4.22 ya
+> anotados para que nadie los vuelva a medir.
+>
+> **Y una precisión que el razonamiento del bloqueo no tenía:** la señal de
+> «me revocaron» **no** es que la API rechace el access token, sino que **el
+> REFRESCO devuelva 401**. El access token sigue valiendo hasta su `exp` aunque
+> el usuario ya no exista, porque PostgREST verifica firma y vencimiento y no
+> si la sesión existe (§1.6). Lo que el experimento sí fijó es la **cota de la
+> ventana** tras revocar: la vida del token más 30 s, o sea 15 min y medio.
+
+Tampoco existe **desconectar**: volver a conectar reemplaza la credencial, que
+cubre el caso real —cambió la contraseña del usuario de terminal—, pero no hay
+forma de dejar la terminal sin credencial desde la pantalla. No se pidió y no
+se inventó.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -3341,6 +3561,11 @@ pasan.** Antes del arreglo fallaban dos, y la segunda era falsa.
 | **«Privado» es un ESTADO del bucket que se cambia desde el panel, no una garantía que la migración sostenga; queda documentado y no se agrega ningún mecanismo.** | Agregar un disparador o una comprobación periódica que vuelva a poner `public = false`; no decir nada | `public` es una columna de la fila del bucket y el panel la cambia con un interruptor, sin pasar por ninguna migración de la carpeta y sin pasar por RLS. Si alguien marca `fotos` o `recibos` como público, Storage sirve esos objetos por una ruta que **no evalúa ninguna de las cuatro políticas de la `0026`**, y la migración seguiría figurando como aplicada: ni la restrictiva de `anon` ni la ausencia de permisos de la terminal se enterarían. No se agrega mecanismo porque no hace falta hoy y porque un vigilante automático sería otra pieza que mantener; lo que sí hace falta es que esté **dicho**, para que el día que un archivo aparezca donde no debería, lo primero que se mire sea si el bucket sigue privado. | Prompt 38 — 2026-09-13 |
 | **La `0025` y la `0026` aplicadas en `pos-jimmy-cano`, y con ellas la fase 2.c queda completa del lado del SQL. Lo que falta son dos pasos del panel, y se documentan como no opcionales.** | Darla por cerrada al aplicar las migraciones; dejar los pasos del panel como una nota al pie | Las trece políticas conceden lectura a quien traiga `app_metadata.rol = 'restauracion'`, y el real tiene **cero usuarios de Auth**: aplicadas y todo, hoy no le sirven a nadie. Se midió en el real, con los claims simulados sobre `denominaciones`: sin rol 0 de 11, con rol terminal 0 de 11, con rol restauración pero anónimo 0 de 11, con el claim correcto **11 de 11**, y la llave publicable `42501`. Es decir, la política discrimina bien y **el paso manual es la mitad que falta del mecanismo**, no un trámite. El otro paso es el JWT de 900 s. El linter confirmó lo previsto: los 13 avisos INFO `rls_enabled_no_policy` desaparecieron. | Prompt 38 — 2026-09-13 |
 | **`MARGEN_DE_VENCIMIENTO_MS` pasa de 10 s a 90 s, porque se MIDIÓ que PostgREST tolera ~30 s de reloj después del `exp`. El fallo de la sonda era del guion, no de la nube.** | Dar por buena la primera corrida y reportar que la nube no hace cumplir el vencimiento; subir el margen a un número cómodo sin medir la tolerancia; quitar la comprobación | La sonda falló diciendo que un token vencido seguía siendo aceptado, y **leída al pie de la letra acusaba a la nube de una falla de seguridad que no tiene**. Se descartaron las hipótesis midiendo, no razonando: el reloj de esta máquina resultó ir **1.9 s ATRASADO** respecto del servidor, o sea al revés de lo que haría falta para explicarlo; y una prueba A/B con dos tokens —uno usado antes de vencer y otro **nunca tocado**— dio `401 PGRST303` en los dos a los 60 s del `exp`, así que tampoco hay caché y el vencimiento **sí** se hace cumplir. Quedaba una tolerancia de reloj entre 10 s y 60 s, y se midió con un token nunca usado presentado cada 5 s: **dejó de servir entre los 25 s y los 30 s de esta máquina**, o sea entre 27.9 s y 32.9 s del servidor, compatible con los 30 s exactos que es el valor habitual. El margen queda en 90 s —tres veces la tolerancia medida— con la medición escrita al lado en el código; el costo es minuto y medio en un guion que ya espera el vencimiento entero. **La lección es la contracara de la regla de falsificar:** así como una prueba que nunca se vio fallar no prueba nada, una prueba que falla tampoco prueba nada hasta saber POR QUÉ falla. Ver §4.22. | Prompt 39 — 2026-09-13 |
+| **La vida del access token se mide con `exp - iat` (reloj del SERVIDOR) y NUNCA con `exp - Date.now()`.** La renovación se agenda al 75 % de esa vida, con un `setTimeout` relativo. | La forma evidente, `exp - Date.now()`, que es lo que escribiría cualquiera; usar `expires_in` de la respuesta; renovar tarde y confiar en la tolerancia de 30 s de PostgREST | `exp - Date.now()` mezcla un instante del servidor con uno de ESTA máquina, y §1.6 del diseño advierte que un equipo de escritorio se desfasa minutos u horas. **Las dos direcciones rompen, y rompen distinto**: con el reloj adelantado una hora la resta da negativo y la aplicación renovaría **en bucle cerrado** contra Auth —un fallo que no se ve, porque la aplicación parece funcionar mientras consume la cuota—; con el reloj atrasado una hora renovaría mucho después de que el token murió. `exp - iat` son dos instantes del MISMO reloj, así que la resta es exacta aunque la máquina crea que es 1998, y un `setTimeout` es relativo y tampoco mira el reloj de pared. `expires_in` también sería inmune al desfase pero depende de que el campo venga y de cuánto tardó la respuesta; `exp - iat` no depende de ninguna de las dos cosas. Y **no se renueva tarde apostando a la tolerancia medida de 30 s**, porque es comportamiento de la plataforma y puede cambiar sin avisar. El desfase SÍ se calcula, pero solo para anotarlo en la bitácora cuando pasa esa tolerancia: es diagnóstico del riesgo 8.5, no una entrada del cálculo. **Falsificado**: reemplazando el cálculo por la forma ingenua caen 8 pruebas, las cuatro del bloque del reloj entre ellas. Ver §4.23. | Prompt 40 — 2026-09-13 |
+| **La escalera de reintentos de la RENOVACIÓN es propia (5 s, 15 s, 45 s, techo de 1 min) y NO se reusa la de `reintentos.ts`.** | Reusar `ESCALERA_DE_ESPERA_MS`, que ya existe y ya está probada | La de la cola sube hasta **una hora** entre intentos, y es lo correcto allá: un lote que no subió hoy sube mañana y no se pierde nada. Acá el access token muere a los 900 s, así que un peldaño de 30 minutos significaría **no intentar ni una sola vez** dentro del colchón que queda antes del vencimiento. **La forma de la escalera la impone la vida del token, no la paciencia de quien espera.** Los peldaños elegidos entran seis veces en los 225 s de colchón que deja renovar al 75 %, y hay una prueba que los cuenta en vez de afirmarlo. El techo de 1 minuto vale también para después del `exp`: el access token ya no sirve pero **el de refresco sigue vivo**, así que se sigue intentando hasta que vuelva la red. | Prompt 40 — 2026-09-13 |
+| **El archivo de credencial guarda EL TOKEN DE REFRESCO Y NADA MÁS, siempre cifrado, y si no hay cifrado disponible la aplicación se NIEGA a guardar.** | Guardar también el correo y el access token, que serían cómodos para la pantalla; caer a texto plano cuando `safeStorage` no está disponible | La contraseña se descarta al instante (§1.3), así que lo que queda en el disco es una sesión y no una contraseña: quien lo lea consigue actuar como la terminal, pero no consigue lo que además serviría para volver a entrar después de revocarla. El access token vive 900 s —guardarlo solo agregaría una copia de algo que caduca antes de que a nadie le sirva— y el correo se lee de los claims cuando hace falta: **un dato que no se guarda es un dato que no se filtra.** Y el respaldo en texto plano no existe porque sería exactamente lo que este módulo existe para impedir, hecho **en silencio**: la misma regla por la que los guiones de datos de ejemplo dejaron de salir callados (§4.11). **Falsificado**: agregando ese respaldo caen 7 pruebas. | Prompt 40 — 2026-09-13 |
+| **«La contraseña no se guarda» se PRUEBA en seis superficies, con un control del propio buscador; y que el cifrado real cifre se mide con una sonda dentro de Electron.** | Afirmarlo en un comentario; probarlo solo sobre el archivo de credencial; dar por bueno que `safeStorage` cifra porque lo dice la documentación | Julio lo pidió explícitamente —«probalo, no lo afirmes»— y una sola comprobación no alcanza: la contraseña podría quedar en el archivo, en otro archivo de la carpeta, en la bitácora, en un campo del objeto, en el estado que viaja a la ventana o en el módulo de IPC. Se busca en las seis, y **hay una comprobación que le da al buscador un objeto donde la contraseña SÍ está**: sin ese control, las otras cinco pasarían igual con un buscador roto. **Falsificado con los dos errores realistas** —guardarla en un campo y registrarla en la bitácora—, y cada uno lo atrapa su prueba y ninguna otra. Aparte, las pruebas de Vitest usan un cifrado inyectado y **no pueden** probar que el llavero o DPAPI cifren: ese hueco lo cierra `npm run diagnostico:credencial`, que corre dentro de Electron y midió 67 bytes ilegibles para un token de 49 caracteres. Falsificarla destapó un defecto de la sonda misma —`decryptString` lanza y el proceso quedaba **colgado en vez de reportando**—, que se arregló. **Medido en macOS: falta correrla en Windows**, donde el respaldo es DPAPI y es otro mecanismo. | Prompt 40 — 2026-09-13 |
+| **Se construye la primera mitad de la fase 3.a y se deja el TODO de la credencial REVOCADA, aunque el motivo del bloqueo ya no valía.** | Construir también la segunda mitad, ya que el experimento que la bloqueaba había terminado; construir la primera y no decir nada | El pedido decía que la segunda mitad esperaba a «un experimento en curso» sobre si PostgREST cachea la validación de un token vencido. **Ese experimento ya había terminado en la sesión anterior** y su resultado fue concluyente: PostgREST sí rechaza los vencidos, no hay caché —probado con un token nunca usado— y la tolerancia es de ~30 s (§4.22). Se reportó la premisa falsa **antes** de escribir código, como manda el proyecto, y aun así **no se amplió el alcance por cuenta propia**: la instrucción de no construirla era explícita y destrabarla es decisión de Julio. Lo que sí se hizo fue escribir los tres resultados medidos **dentro del TODO**, para que quien la construya no los vuelva a medir. Y se anotó una precisión que el razonamiento del bloqueo no tenía: **la señal de revocación no es que la API rechace el access token, sino que el REFRESCO devuelva 401** —el access token sigue valiendo hasta su `exp` aunque el usuario ya no exista (§1.6)—, así que el resultado del experimento no cambiaba el diseño de esa mitad tanto como suponía el pedido; lo que fijó fue la cota de la ventana tras revocar. | Prompt 40 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -3381,7 +3606,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
-| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
+| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`**, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
@@ -3466,12 +3691,21 @@ negocio:
     de Storage** de la `0026`. Aplicadas en los dos proyectos el 2026-09-13,
     con los dos pasos manuales del panel hechos y medidos (§4.22). **La fase 2
     queda cerrada entera.**
+  - **Fase 3.a, PRIMERA MITAD** (§4.23): la **credencial de la terminal**.
+    `safeStorage` cifrando el token de refresco en
+    `<userData>/sincronizacion.credencial`, la pantalla «Conectar con la nube»
+    solo para rol administrativo, la renovación automática antes del
+    vencimiento —calculada con `exp - iat`, no con el reloj local— y el
+    reintento con backoff ante un corte de red.
   **Lo que sigue sin existir:** el `SyncProvider`
-  real contra Supabase y las credenciales en la terminal (3), la detección de
-  conexión, la sincronización de archivos, la pantalla de sincronización y la
-  restauración. **La aplicación no ha hecho ni una llamada de red**: las únicas
-  llamadas reales las hace `npm run verify:nube`, un guion de desarrollo,
-  contra el proyecto de pruebas.
+  real contra Supabase —o sea que **la credencial existe y todavía no la usa
+  nadie para subir nada**—, la detección de conexión, la sincronización de
+  archivos, la pantalla de sincronización, la restauración, y **la segunda
+  mitad de la fase 3.a**: qué hace la aplicación cuando la credencial fue
+  REVOCADA (§4.23). **La aplicación sigue sin haber hecho una llamada de red en
+  la tienda**: sin `POS_NUBE_URL` no se construye la sesión de nube, y las
+  únicas llamadas reales las hacen `npm run verify:nube` y
+  `npm run diagnostico:credencial`, dos guiones de desarrollo.
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
   canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.
@@ -3499,6 +3733,9 @@ npm run verify:nube      # compara lo que la nube declara con supabase/esquema-n
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
                                        # se niega ante cualquier otro (código 3)
+npm run diagnostico:credencial   # ¿el safeStorage REAL de este sistema cifra la credencial?
+                                 # Corre dentro de Electron. Código 0 cifrada, 1 legible (GRAVE),
+                                 # 2 sin cifrado disponible. HAY QUE CORRERLO EN WINDOWS (§4.23).
 npm run verify:nube -- --esperar-vencimiento   # comprueba que un token VENCIDO sea rechazado.
                                        # TARDA la vida del token + 90 s de margen: con el JWT
                                        # en 900 s son ~16 minutos. El margen NO se baja de 60 s

@@ -144,6 +144,23 @@ volver a aprovisionar —revocación, reinstalación— se repite el paso 2 con 
 contraseña nueva, y la vieja deja de servir cuando la cambies o borres el
 usuario.
 
+> **COMO QUEDÓ CONSTRUIDO (fase 3.a, primera mitad, 2026-09-13).** Los pasos 2
+> y 3 existen: la pantalla «Conectar con la nube» (solo rol administrativo) y
+> `SesionDeNube.conectar`, que inicia sesión y guarda **únicamente el token de
+> refresco**. La contraseña se descarta al terminar esa llamada, y eso está
+> **probado en seis superficies distintas y falsificado**, no afirmado
+> (CLAUDE.md §4.23).
+>
+> Se agregó una comprobación que esta sección no pedía: **si el token que
+> devuelve Auth no trae `app_metadata.rol = 'terminal'`, se rechaza y no se
+> guarda nada.** No es una barrera de seguridad —la barrera es RLS— sino un
+> aviso temprano: tecleando por error la cuenta de restauración, la terminal
+> quedaría con una credencial que no puede escribir ni una fila y el síntoma
+> aparecería mucho después, como lotes rechazados con `42501`.
+>
+> El paso 1 sigue siendo manual y de Julio, como dice el texto. El paso 4 está
+> construido salvo la mitad de la revocación (§1.6).
+
 ### 1.4 Dónde y cómo se guarda
 
 **Con `safeStorage` de Electron**, que en Windows usa DPAPI y en macOS el
@@ -161,6 +178,23 @@ encender —o tiene la contraseña pegada al monitor—, así que en la práctic
 este diseño asume, como pide el prompt, que la credencial **es extraíble**, y
 el trabajo de verdad está en la sección 1.5: limitar lo que esa credencial
 puede hacer.
+
+> **COMO QUEDÓ CONSTRUIDO (fase 3.a, primera mitad, 2026-09-13).**
+> `AlmacenDeCredencial` guarda el token de refresco en
+> `<userData>/sincronizacion.credencial` con `safeStorage`, con permisos 0600
+> donde el sistema los respeta. **Si el cifrado no está disponible, la clase
+> LANZA y no escribe nada**: no hay respaldo en texto plano, porque escribirlo
+> «por esta vez» haría en silencio exactamente lo que este módulo evita.
+>
+> Y se midió que el cifrado real cifra, con `npm run diagnostico:credencial`,
+> que corre dentro de Electron: un token de 49 caracteres quedó en 67 bytes
+> ilegibles, con el prefijo `v10` del llavero de macOS, y descifró igual.
+> **Medido en macOS, que no es la plataforma de producción**: en Windows el
+> respaldo es DPAPI y hay que volver a correrlo allá.
+>
+> Lo que esta sección dice sobre el alcance de DPAPI **no cambia y sigue
+> valiendo**: la credencial es extraíble por quien encienda la máquina, y el
+> trabajo de verdad es 1.5.
 
 ### 1.5 El escenario que le da sentido al módulo: la terminal robada
 
@@ -344,6 +378,20 @@ alguien más está escribiendo. Queda en 8.1.
 > de reloj **de segundos** no rompe nada; el riesgo 8.5 sigue siendo el de un
 > desfase de minutos u horas. El detalle completo, con la tabla de la
 > medición, está en CLAUDE.md §4.22.
+
+> **COMO QUEDÓ CONSTRUIDO (fase 3.a, primera mitad, 2026-09-13) — la mitad de
+> la RENOVACIÓN, no la de la revocación.** La aplicación renueva sola al 75 %
+> de la vida del token, calculada con **`exp - iat`** y no con el reloj local,
+> justamente por la fila «Reloj de la máquina mal puesto» de esta tabla: con
+> `exp - Date.now()`, un reloj adelantado dejaría a la aplicación renovando en
+> bucle y uno atrasado renovando después de que el token murió. Un corte de red
+> durante el intento se reintenta con una escalera propia —5 s, 15 s, 45 s,
+> techo de 1 min— que entra seis veces en el colchón antes del vencimiento.
+>
+> **La fila «Revocación» NO está construida.** Hoy un 401 al refrescar se
+> reintenta como cualquier otro fallo, y no existe el estado «sin credencial»
+> ni el aviso en rojo. Es una decisión explícita de Julio, con el TODO escrito
+> en `sesion-de-nube.ts`. Ver CLAUDE.md §4.23.
 
 ### 1.7 Lo que hay que hacer en el panel de Supabase, y que la aplicación no puede hacer sola
 
