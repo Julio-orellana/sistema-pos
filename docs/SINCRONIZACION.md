@@ -426,20 +426,28 @@ el claim `rol = 'terminal'`; los ayudantes internos no son ejecutables ni por
 no lee, no actualiza ni borra nada directamente —lista vacía, cero filas
 afectadas, `42501` al insertar—, aunque acabe de escribir por función.
 
-**Lo que hoy frena a la terminal es RLS, no la ausencia de GRANT, y hay que
-decirlo.** Leído del catálogo de los dos proyectos el 2026-09-12: `anon` y
-`authenticated` tienen, por omisión de Supabase, `SELECT, INSERT, UPDATE,
-DELETE, TRUNCATE, REFERENCES, TRIGGER` sobre las trece tablas, y los privilegios
-por omisión (`pg_default_acl`) conceden lo mismo a toda tabla nueva. Es una
-sola capa, y `TRUNCATE` ni siquiera pasa por RLS. **La fase 2.c agrega la
-segunda capa** con una migración `0024`: `REVOKE INSERT, UPDATE, DELETE,
-TRUNCATE, REFERENCES, TRIGGER` a `anon` y `authenticated` sobre las trece
-tablas, `REVOKE ALL` a `anon`, y los mismos privilegios por omisión revocados
-para las tablas futuras. `SELECT` se conserva concedido a `authenticated`
+**Lo que hoy frena a la terminal en el real es RLS, no la ausencia de GRANT, y
+hay que decirlo.** Leído del catálogo de los dos proyectos el 2026-09-12: `anon`
+y `authenticated` tienen, por omisión de Supabase, los OCHO privilegios de tabla
+de Postgres 17 —`SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER`
+y `MAINTAIN`— sobre las trece tablas, y los privilegios por omisión
+(`pg_default_acl`) conceden lo mismo a toda tabla nueva. Es una sola capa, y
+`TRUNCATE` ni siquiera pasa por RLS. **La fase 2.c agrega la segunda capa** con
+la migración `0024`, **ya aplicada y medida en `pos-pruebas-descartable` el
+2026-09-12**: `REVOKE ALL` a `anon` y a `authenticated` sobre las trece tablas,
+seguido de `GRANT SELECT` a `authenticated`, y lo mismo en los privilegios por
+omisión para las tablas futuras. Se escribe `REVOKE ALL` y no una lista de
+privilegios a propósito: la primera versión enumeraba seis y dejaba `MAINTAIN`
+—nuevo en PG17, invisible en `information_schema` y visible en `pg_class.relacl`
+como la letra `m`— puesto; con `REVOKE ALL` no puede escaparse ninguno, ni uno
+que Postgres agregue mañana. `SELECT` se conserva concedido a `authenticated`
 porque restauración y terminal son el MISMO rol de Postgres —el rol del diseño
 es un claim del JWT, no un rol de la base— y es la política `R` la que decide
 quién lo ejerce. Las funciones `SECURITY DEFINER` no dependen de nada de esto:
-corren como `postgres`, el dueño de las tablas.
+corren como `postgres`, el dueño de las tablas. Lo que la `0024` NO puede cubrir
+es el `pg_default_acl` del rol de plataforma `supabase_admin`, que `postgres` no
+es miembro y no puede alterar; no afecta a este esquema, cuyas trece tablas y
+migraciones corren como `postgres`.
 
 Hoy las 13 tablas tienen RLS activo y **cero políticas**: nadie puede leer ni
 escribir, y eso es correcto hasta que exista esto. Las políticas van en una
@@ -1518,7 +1526,11 @@ un lugar libre no hay proyecto de pruebas, y que las opciones son tres:
 > Sobre «borra lo que insertó»: el reinicio con `service_role` está escrito
 > pero no se ejercitó (no hay `service_role` del proyecto de pruebas en la
 > máquina), y `auditoria_log` no se puede vaciar por PostgREST porque es
-> inmutable: se trunca por SQL. Detalle en CLAUDE.md §4.20.
+> inmutable: se trunca por SQL. **Con la `0024` aplicada en el proyecto de
+> pruebas (2026-09-12), la misma batería sigue dando 67/67 sin cambiar ninguna
+> comprobación de función**: solo las sondas de acceso directo pasan de «viola
+> RLS» a «permission denied» (403 para la terminal, 401 para la llave
+> publicable). Detalle en CLAUDE.md §4.20.
 
 | Qué | Por qué solo se puede probar allá |
 |---|---|

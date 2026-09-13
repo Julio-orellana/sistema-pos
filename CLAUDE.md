@@ -496,8 +496,9 @@ Pendiente en la nube, para la fase 2.c de la sincronización:
   `rls_enabled_no_policy` de nivel INFO son el resultado buscado, no un
   problema.
 - Revocar los privilegios de tabla que Supabase concede por omisión a `anon` y
-  `authenticated` (§4.20, migración `0024`): hoy la única capa que frena a la
-  terminal es RLS sin políticas.
+  `authenticated` (§4.20, migración `0024`, **ya escrita, aplicada y medida en
+  `pos-pruebas-descartable` el 2026-09-12**): hoy la única capa que frena a la
+  terminal en el real es RLS sin políticas.
 - Aplicar la `0023_funciones_de_sincronizacion` (§4.20). En cuanto esté, el
   linter va a sumar **cinco avisos WARN
   `authenticated_security_definer_function_executable`**, uno por función de
@@ -2755,19 +2756,45 @@ diferencias y sale con código 1.
 - **JWT de 15 minutos.** No se puede cambiar desde el conector —llega solo a la
   base— ni desde el código: es configuración de Auth. Se cambia en el panel,
   Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time»,
-  a `900`, **primero en el proyecto de pruebas y después en el real**. La
-  batería ya mide `expires_in` y falla mientras no sea 900, y
-  `--esperar-vencimiento` comprueba que un token efectivamente venza.
-- **Revocar los privilegios de tabla a `anon` y `authenticated`** (fase 2.c,
-  migración `0024`). Leído del catálogo de los DOS proyectos el 2026-09-12:
-  Supabase les concede por omisión `SELECT, INSERT, UPDATE, DELETE, TRUNCATE,
-  REFERENCES, TRIGGER` sobre las trece tablas, y lo mismo a toda tabla nueva.
-  Hoy los frena RLS con cero políticas, y la batería lo midió; pero es una sola
-  capa, y `TRUNCATE` ni siquiera pasa por RLS. Se revoca todo menos `SELECT` a
-  `authenticated`, que la política de restauración necesita porque terminal y
-  restauración son el mismo rol de Postgres. Las funciones DEFINER corren como
-  `postgres` y no dependen de esos privilegios. La tabla vigente de políticas
-  está en §2.3 del diseño.
+  a `900`. **Hecho en `pos-pruebas-descartable` el 2026-09-12**: medido con una
+  sesión directa, el proyecto de pruebas emite tokens de 900 s, y la batería,
+  que exige exactamente 900, ya pasa esa comprobación (por eso da 67/67 y no
+  66/67). **Falta el mismo cambio en `pos-jimmy-cano`.** `--esperar-vencimiento`
+  comprueba que un token efectivamente venza a los 15 minutos; ya se puede
+  correr contra el proyecto de pruebas, y todavía no se corrió (son 15 minutos
+  de espera).
+- **Revocar los privilegios de tabla a `anon` y `authenticated`**, migración
+  `0024`. **Escrita, aplicada y medida solo en `pos-pruebas-descartable` el
+  2026-09-12**; en `pos-jimmy-cano` es parte de la fase 2.c. Leído del catálogo
+  de los DOS proyectos: Supabase concede por omisión a los dos roles TODOS los
+  privilegios de tabla —en Postgres 17 son OCHO: `SELECT, INSERT, UPDATE,
+  DELETE, TRUNCATE, REFERENCES, TRIGGER` y `MAINTAIN`—, y lo mismo a toda tabla
+  nueva. Hoy los frena RLS con cero políticas, y la batería lo midió; pero es
+  una sola capa, y `TRUNCATE` ni siquiera pasa por RLS. La `0024` deja a `anon`
+  sin ningún privilegio y a `authenticated` con `SELECT` y nada más, que la
+  restauración necesita porque terminal y restauración son el MISMO rol de
+  Postgres. Las funciones DEFINER corren como `postgres` y no dependen de esos
+  privilegios. La tabla vigente de políticas está en §2.3 del diseño.
+  - **`MAINTAIN` (Postgres 17) fue el detalle que casi se escapa.** La primera
+    versión enumeraba seis privilegios en el `REVOKE` y dejaba `MAINTAIN`
+    puesto: no aparece en `information_schema.role_table_grants`, sí en
+    `pg_class.relacl` (la letra `m`). Se vio leyendo `relacl` tras aplicarla. La
+    versión definitiva escribe `REVOKE ALL` y vuelve a conceder solo `SELECT`,
+    así que cualquier privilegio que Postgres agregue mañana queda revocado sin
+    tocar el archivo.
+  - **Lo que la `0024` NO cubre:** `pg_default_acl` tiene además un juego de
+    privilegios por omisión del rol de plataforma `supabase_admin`, del que
+    `postgres` no es miembro y no puede alterar. No afecta a este esquema —sus
+    trece tablas y toda migración del repositorio corren como `postgres`—, pero
+    una tabla creada por otra vía llegaría con esos privilegios y habría que
+    revocárselos a mano.
+  - **Medido, antes y después de la `0024`, con el criterio de que nada de
+    función cambie:** el arnés SQL de 91 mediciones dio 90 de 93 filas idénticas
+    —las dos únicas que cambian son los marcadores de estado de privilegios y la
+    sonda 152, que pasa de «viola RLS» a «permission denied», mismo `42501`—, y
+    la batería PostgREST da 67/67. Sus únicas sondas que cambiaron son las tres
+    de acceso directo (403 para la terminal, 401 para la llave publicable, las
+    dos «permission denied»); las 64 de función, idénticas.
 - **Aplicar la `0023` a `pos-jimmy-cano`** y escribir las políticas de
   `restauracion`: fase 2.c.
 - **El enrutador de lotes** —qué función llama el `SyncProvider` real para cada
@@ -2937,6 +2964,7 @@ diferencias y sale con código 1.
 | **El seguro del modo destructivo de `verify:nube`: lista FIJA en `scripts/proyectos-de-prueba.cjs`, la referencia de `pos-jimmy-cano` prohibida POR NOMBRE antes de mirar la lista, la URL cotejada con la referencia, y negativa total si la lista llegara a contener el real.** | Una variable de entorno o un argumento `--proyecto`; solo la lista, sin nombrar al real | Equivocarse de proyecto tiene que ser imposible, no improbable (§9.5). Una variable de entorno se pisa y un argumento se tipea. Nombrar al real aparte hace que ni agregarlo a la lista lo habilite: la lista envenenada se rechaza entera. La URL se coteja porque sin eso alguien podría declarar la referencia de prueba y apuntar al real. Vive en su propio módulo para que las diez pruebas de Vitest ejerciten la misma función que usa el guion, y una comprueba que el guion la llame antes de crear el cliente de red. Se probó que muerde con el guion real: código 3, sin peticiones. | Prompt 33 — 2026-09-11 |
 | **Las funciones se prueban ÚNICAMENTE con red, contra el proyecto de pruebas, con `npm run verify:nube -- --destructivo`; y se dice lo que no se ejercitó: el reinicio con `service_role`.** | Simular Postgres en Vitest; probar contra el real «con cuidado» | Vitest corre contra SQLite y no sabe nada de RLS, `auth.jwt()` ni triggers: cualquier simulación probaría la simulación. La batería son 67 comprobaciones por PostgREST con los JWT reales de los tres usuarios; antes, 91 mediciones en SQL directo. La `service_role` del proyecto de pruebas no está en esta máquina —la pone Julio si quiere que el guion vacíe por su cuenta—, así que el reinicio se hizo por SQL y con `--reinicio-hecho`, y ese código queda escrito y no visto correr. `auditoria_log` no se puede vaciar por PostgREST ni con `service_role`: es inmutable; se trunca por SQL. | Prompt 33 — 2026-09-11 |
 | **El JWT de 15 minutos (decisión 2 del diseño) NO se pudo aplicar desde acá: es configuración de Auth, fuera del alcance del conector y del código. Queda pendiente en el panel, y la batería lo mide y FALLA mientras siga en 3600.** | Darlo por hecho; quitar la comprobación para que la batería pase en verde | Una batería en verde con un JWT de una hora diría que la nube está como pide el diseño, y no lo está. La comprobación falla a propósito hasta que se cambie en Project Settings → JWT Keys → Legacy JWT Secret → «Access token expiry time» —primero en el de pruebas, después en el real—, y `--esperar-vencimiento` comprueba que un token efectivamente venza. | Prompt 33 — 2026-09-11 |
+| **La `0024` revoca los privilegios de tabla con `REVOKE ALL` + `GRANT SELECT`, no con una lista de privilegios; se aplicó y midió en `pos-pruebas-descartable` sin cambiar ningún comportamiento de función.** | Enumerar los privilegios a revocar; revocar también `SELECT`; escribir la migración directo contra el real | Supabase concede a `anon` y `authenticated` los OCHO privilegios de tabla de Postgres 17. La primera versión de la `0024` enumeraba seis y **se le escapó `MAINTAIN`**, nuevo en PG17, que no aparece en `information_schema.role_table_grants` y sí en `pg_class.relacl` (la letra `m`); se vio leyendo `relacl` tras aplicarla. `REVOKE ALL` seguido de `GRANT SELECT` no puede dejar un privilegio afuera y sobrevive a que Postgres agregue otro mañana. `SELECT` se conserva para `authenticated` porque terminal y restauración son el MISMO rol de Postgres —el rol es un claim del JWT— y quién lee lo decide RLS. El criterio de aplicación fue que la misma batería, antes y después, diera lo mismo en TODAS las funciones: medido, 90/93 filas del arnés SQL byte a byte iguales (cambian solo los dos marcadores de privilegios y la sonda 152, de «viola RLS» a «permission denied», mismo `42501`) y 67/67 en PostgREST, con las tres sondas de acceso directo pasando de RLS a «permission denied». Queda anotado lo que NO cubre: el `pg_default_acl` del rol de plataforma `supabase_admin`, que `postgres` no puede alterar. Aplicada solo en el proyecto de pruebas; en `pos-jimmy-cano` va en la fase 2.c. | Prompt 34 — 2026-09-12 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

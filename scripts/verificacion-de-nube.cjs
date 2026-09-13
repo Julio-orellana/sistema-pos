@@ -552,16 +552,17 @@ async function correrBateria(cliente, sesiones, version, informe) {
     texto: `manda la versión ${String(version + 1)} y la nube declara la ${String(version)}`,
   });
 
-  informe.seccion('Acceso directo a las tablas: ninguno');
+  informe.seccion('Acceso directo a las tablas: ninguno (0024: sin privilegio de tabla, y RLS sin políticas detrás)');
   const categoriaDirecta = filaCategoria(randomUUID(), `Directa ${randomUUID().slice(0, 8)}`);
-  esperar(informe, 'la llave publicable sola no puede escribir en categorias', await cliente.pedir('POST', '/rest/v1/categorias', { cuerpo: categoriaDirecta, prefer: 'return=minimal' }), {
+  esperar(informe, 'la llave publicable sola no puede escribir en categorias: sin privilegio de tabla (0024)', await cliente.pedir('POST', '/rest/v1/categorias', { cuerpo: categoriaDirecta, prefer: 'return=minimal' }), {
     estado: HTTP.sinAutenticar,
+    texto: 'permission denied',
   });
   esperar(
     informe,
-    'la terminal no puede escribir directamente en categorias (RLS sin políticas)',
+    'la terminal no puede escribir directamente en categorias: sin privilegio de tabla (0024)',
     await cliente.pedir('POST', '/rest/v1/categorias', { token: terminal.token, cuerpo: categoriaDirecta, prefer: 'return=minimal' }),
-    { estado: HTTP.prohibido },
+    { estado: HTTP.prohibido, texto: 'permission denied' },
   );
 
   informe.seccion('Usuarios');
@@ -691,8 +692,12 @@ async function correrBateria(cliente, sesiones, version, informe) {
     await rpc('sincronizar_cierre_de_caja', [cambio('caja_sesiones', 'actualizar', filaCaja(randomUUID(), admin, '100.00', cierreCuadrado)), asiento(admin, 'caja_sesion', caja)], terminal.token),
     { estado: HTTP.peticionInvalida, texto: 'no tiene su apertura' },
   );
-  const reabrir = await cliente.pedir('PATCH', `/rest/v1/caja_sesiones?id=eq.${caja}`, { token: terminal.token, cuerpo: { estado: 'abierta' }, prefer: 'return=representation' });
-  informe.comprobar('la terminal no puede actualizar caja_sesiones directamente: 0 filas afectadas', reabrir.estado < 300 && JSON.stringify(reabrir.datos) === '[]', `HTTP ${String(reabrir.estado)} ${resumir(reabrir.datos)}`);
+  esperar(
+    informe,
+    'la terminal no puede actualizar caja_sesiones directamente: sin privilegio de tabla (0024)',
+    await cliente.pedir('PATCH', `/rest/v1/caja_sesiones?id=eq.${caja}`, { token: terminal.token, cuerpo: { estado: 'abierta' }, prefer: 'return=representation' }),
+    { estado: HTTP.prohibido, texto: 'permission denied' },
+  );
 
   informe.seccion('Venta: todo o nada');
   const caja2 = randomUUID();
@@ -752,19 +757,23 @@ async function correrBateria(cliente, sesiones, version, informe) {
   for (const tabla of ['ventas', 'venta_detalle', 'recibos', 'auditoria_log', 'usuarios', 'caja_sesiones']) {
     const lectura = await cliente.pedir('GET', `/rest/v1/${tabla}?select=id&limit=5`, { token: terminal.token });
     informe.comprobar(
-      `la terminal no lee ${tabla} directamente: RLS sin políticas devuelve la lista vacía`,
+      `la terminal no lee ${tabla} directamente: conserva SELECT (es el mismo rol que la restauración) y RLS sin políticas devuelve la lista vacía`,
       lectura.estado === HTTP.ok && Array.isArray(lectura.datos) && lectura.datos.length === 0,
       `HTTP ${String(lectura.estado)} ${resumir(lectura.datos)}`,
     );
   }
-  const lecturaAnonima = await cliente.pedir('GET', '/rest/v1/ventas?select=id&limit=5');
-  informe.comprobar(
-    'la llave publicable sola no lee ventas: lista vacía',
-    lecturaAnonima.estado === HTTP.ok && Array.isArray(lecturaAnonima.datos) && lecturaAnonima.datos.length === 0,
-    `HTTP ${String(lecturaAnonima.estado)} ${resumir(lecturaAnonima.datos)}`,
+  esperar(
+    informe,
+    'la llave publicable sola no lee ventas: sin privilegio de tabla (0024)',
+    await cliente.pedir('GET', '/rest/v1/ventas?select=id&limit=5'),
+    { estado: HTTP.sinAutenticar, texto: 'permission denied' },
   );
-  const borrado = await cliente.pedir('DELETE', `/rest/v1/usuarios?id=eq.${admin}`, { token: terminal.token, prefer: 'return=representation' });
-  informe.comprobar('la terminal no puede borrar usuarios directamente: 0 filas afectadas', borrado.estado < 300 && JSON.stringify(borrado.datos) === '[]', `HTTP ${String(borrado.estado)} ${resumir(borrado.datos)}`);
+  esperar(
+    informe,
+    'la terminal no puede borrar usuarios directamente: sin privilegio de tabla (0024)',
+    await cliente.pedir('DELETE', `/rest/v1/usuarios?id=eq.${admin}`, { token: terminal.token, prefer: 'return=representation' }),
+    { estado: HTTP.prohibido, texto: 'permission denied' },
+  );
 
   informe.seccion('Auth: la vida del token');
   informe.comprobar(

@@ -65,7 +65,7 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
 | **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018 |
-| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022 |
+| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024 |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
 2026-09-11. Antes todos los huecos eran de la primera clase, y por eso este
@@ -124,12 +124,13 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 
 ### Dirección 2 — el cambio es solo de la nube, y allá no hay archivo
 
-**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021 ni 023.**
+**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023 ni 024.**
 Las tres primeras de esta dirección llegaron juntas, con la fase 2.a de la
 sincronización, y nacen de la misma pregunta: qué tiene que haber en la nube que
 no tiene por qué estar en la terminal, y qué hay hoy en la nube que nunca debió
 estar. La `0023` llegó con la fase 2.b y es de otra clase: código que corre en
-Postgres.
+Postgres. La `0024` llegó con la fase 2.c y es de una tercera: privilegios de
+tabla, un concepto que en SQLite no existe.
 
 | Archivo aquí | Migración local | Por qué no la hay, en concreto |
 |---|---|---|
@@ -138,6 +139,7 @@ Postgres.
 | `0022_fijar_search_path_auditoria.sql` | **(ninguna, a propósito)** | Le fija `search_path = ''` a `auditoria_log_es_inmutable`. En SQLite no existe el concepto. **Este cambio ya estaba aplicado en `pos-jimmy-cano` desde el 2026-09-05, pero nunca se había escrito el archivo**: se aplicó directamente para callar un aviso del linter. Lo detectó el proyecto de pruebas al comparar los dos catálogos, que es exactamente para lo que existe (§9.5). Sin este archivo, aplicar esta carpeta sobre un proyecto vacío no reproducía el esquema real. |
 | `0021_quitar_hashes_de_pin.sql` | **(ninguna, a propósito)** | Quita `usuarios.pin_hash` y `pin_remoto_hash` **de Postgres**. Las dos columnas **siguen existiendo en SQLite**, donde son lo que hace funcionar el ingreso y el diálogo de autorización: quitarlas allá dejaría a la tienda sin poder abrir. Se quitan acá porque un PIN de cuatro dígitos tiene 10 000 valores y quien lea esa tabla en la nube los saca todos, y porque **no hacen falta**: toda restauración resetea los PIN sin mirarlos (decisión 15). Decisión 17. |
 | `0023_funciones_de_sincronizacion.sql` | **(ninguna, a propósito)** | Las **funciones de sincronización**: las cinco `SECURITY DEFINER` por las que escribe la terminal —usuario, apertura de caja, cierre de caja, venta y lote simple—, sus ayudantes internos y `contrato_de_sincronizacion()` para la prueba de deriva. Son código que corre **en Postgres**, con `auth.jwt()`, RLS y `jsonb_populate_record`: en SQLite no existe nada de eso ni hace falta, porque la terminal es quien llama, no quien recibe. Ver CLAUDE.md §4.20. **Aplicada solo en `pos-pruebas-descartable`**; en `pos-jimmy-cano` está pendiente (fase 2.c). |
+| `0024_privilegios_de_tabla.sql` | **(ninguna, a propósito)** | Revoca los privilegios de tabla que Supabase concede por omisión a `anon` y `authenticated`, y deja a `authenticated` con `SELECT` y nada más. **En SQLite no existe el concepto**: no hay roles ni privilegios de tabla, y el único que abre la base es el proceso principal. Se escribe `REVOKE ALL` + `GRANT SELECT` en vez de enumerar privilegios, porque enumerar dejó afuera `MAINTAIN` (nuevo en Postgres 17, invisible en `information_schema`). Ver CLAUDE.md §4.20. **Aplicada solo en `pos-pruebas-descartable`** el 2026-09-12; en `pos-jimmy-cano` está pendiente (fase 2.c). |
 
 **Las cuatro tienen la misma forma y conviene verla:** ninguna es «la nube va
 atrasada respecto de lo local». Dos de ellas *quitan* de la nube algo que lo
@@ -180,8 +182,10 @@ número que use queda reservado también del lado local.
 | `0021_quitar_hashes_de_pin.sql` | Sí — aplicada el 2026-09-11 |
 | `0022_fijar_search_path_auditoria.sql` | Sí — el CAMBIO estaba desde el 2026-09-05; el archivo se escribió y se aplicó el 2026-09-11, y fue un no-op comprobado |
 | `0023_funciones_de_sincronizacion.sql` | **NO, todavía.** Aplicada y probada solo en `pos-pruebas-descartable` el 2026-09-11, por instrucción de Julio. Se aplica en la fase 2.c con las políticas de RLS, con el SQL a la vista y su aprobación. |
+| `0024_privilegios_de_tabla.sql` | **NO, todavía.** Escrita y aplicada solo en `pos-pruebas-descartable` el 2026-09-12. Se aplica en `pos-jimmy-cano` en la fase 2.c, junto con la `0023` y las políticas de RLS. |
 
-**Queda UNA migración pendiente de aplicar en `pos-jimmy-cano`: la `0023`.**
+**Quedan DOS migraciones pendientes de aplicar en `pos-jimmy-cano`: la `0023` y
+la `0024`.**
 Las cuatro anteriores son las de la fase 2.a, aplicadas el 2026-09-11 por la
 vía de siempre:
 primero contra `pos-pruebas-descartable`, después el SQL completo a la vista, y
@@ -216,10 +220,11 @@ porque es `SECURITY INVOKER`.
 ### Estado en `pos-pruebas-descartable` (referencia `ztidrshifrblhfraiowg`)
 
 Creado el 2026-09-11 en `us-east-2`, plan gratuito, para lo que manda §9.5 del
-diseño. **Tiene aplicadas las diecisiete migraciones**: las doce del esquema, la
-`0022`, las tres de la fase 2.a y la `0023` de la fase 2.b. Es el único proyecto
-donde las de la nube se prueban antes de existir en la tienda, y **el único que
-hoy tiene las funciones de sincronización**.
+diseño. **Tiene aplicadas las dieciocho migraciones**: las doce del esquema, la
+`0022`, las tres de la fase 2.a, la `0023` de la fase 2.b y la `0024` de la fase
+2.c. Es el único proyecto donde las de la nube se prueban antes de existir en la
+tienda, y **el único que hoy tiene las funciones de sincronización y los
+privilegios de tabla cerrados**.
 
 Su registro de `schema_migrations` guarda la `0023` byte a byte igual al archivo
 de esta carpeta (mismo md5, sin el salto de línea final), y la FOTO de su
