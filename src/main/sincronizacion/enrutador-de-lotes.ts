@@ -105,6 +105,18 @@ export function elegirFuncionDelLote(filas: readonly CambioSincronizable[]): Fun
     return funcionDeCaja(filas);
   }
 
+  /*
+    UN LOTE DE PUROS ASIENTOS tiene su propia función desde la `0027`.
+    Va antes que `funcionSimple` porque `sincronizar_lote_simple` **rechaza**
+    `auditoria_log` como fila principal, y con razón: ese `CASE` es lo que
+    obliga a que la fila de negocio vaya primera. Medido contra la nube antes
+    de que existiera la `0027`: `FORMA: la tabla auditoria_log no se sincroniza
+    como lote simple`, y la cola se detenía. Ver CLAUDE.md §4.29.
+  */
+  if (tablas.size === 1 && tablas.has('auditoria_log')) {
+    return 'sincronizar_asiento';
+  }
+
   return funcionSimple(tablas);
 }
 

@@ -65,7 +65,7 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
 | **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018 |
-| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026 |
+| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027 |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
 2026-09-11. Antes todos los huecos eran de la primera clase, y por eso este
@@ -186,8 +186,18 @@ número que use queda reservado también del lado local.
 | `0023_funciones_de_sincronizacion.sql` | Sí — aplicada el 2026-09-12, después de probarse en `pos-pruebas-descartable` desde el 2026-09-11. Las 13 definiciones de función del real son idénticas a las del de pruebas (`md5(pg_get_functiondef)`), y el registro guarda el archivo byte a byte. |
 | `0024_privilegios_de_tabla.sql` | Sí — aplicada el 2026-09-12, justo después de la `0023`. `anon` quedó sin ningún privilegio de tabla y `authenticated` solo con `SELECT`; `has_table_privilege(…, 'MAINTAIN')` da `false` en las trece. |
 
-**No queda ninguna migración pendiente de aplicar en `pos-jimmy-cano`: los dos
-proyectos tienen hoy las 21.** Las dos últimas fueron la `0025` y la `0026`, el
+> **LA `0027` SÍ ESTÁ PENDIENTE EN `pos-jimmy-cano`, y no es opcional.** Crea
+> `sincronizar_asiento`, la puerta para los lotes que son solo un asiento de
+> auditoría —un ingreso fallido, un candado, una salida controlada—. **El código
+> de la terminal ya la necesita**: sin ella, esos lotes detienen la cola entera
+> (medido: `HTTP 400 FORMA: la tabla auditoria_log no se sincroniza como lote
+> simple`). Hoy no hay riesgo porque el real no tiene usuario de terminal ni
+> sincronización corriendo, pero **hay que aplicarla antes de conectar la
+> terminal al real**. Aplicada en `pos-pruebas-descartable` el 2026-09-14; en el
+> real, pendiente de la revisión de Julio. Ver CLAUDE.md §4.29.
+
+**Fuera de la `0027`, no queda ninguna migración pendiente de aplicar en
+`pos-jimmy-cano`: los dos proyectos tienen las 21 anteriores.** Las dos últimas fueron la `0025` y la `0026`, el
 2026-09-13; antes, la `0023` y la `0024`, el 2026-09-12.
 
 **Los dos pasos del panel que la fase 2.c necesitaba también están HECHOS y

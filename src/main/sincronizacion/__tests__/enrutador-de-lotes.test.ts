@@ -131,6 +131,40 @@ describe('LA APERTURA Y EL CIERRE NO SE CONFUNDEN, que es el par peligroso', () 
   });
 });
 
+describe('UN LOTE DE PUROS ASIENTOS tiene su propia función (la 0027)', () => {
+  /*
+    Las cinco funciones de la 0023 exigen una fila principal de negocio, y hay
+    hechos que no la tienen: un ingreso fallido, un candado, una salida
+    controlada. Sin la 0027, esos lotes iban a `sincronizar_lote_simple` y la
+    nube los rechazaba con «FORMA: la tabla auditoria_log no se sincroniza como
+    lote simple», **deteniendo la cola entera**. Medido, no supuesto.
+  */
+  it('un asiento suelto va a sincronizar_asiento', () => {
+    expect(elegirFuncionDelLote([fila('auditoria_log')])).toBe('sincronizar_asiento');
+  });
+
+  it('varios asientos juntos, también', () => {
+    const tres = [fila('auditoria_log'), fila('auditoria_log'), fila('auditoria_log')];
+
+    expect(elegirFuncionDelLote(tres)).toBe('sincronizar_asiento');
+  });
+
+  it('NO va a sincronizar_lote_simple, que es donde iba y donde lo rechazaban', () => {
+    expect(elegirFuncionDelLote([fila('auditoria_log')])).not.toBe('sincronizar_lote_simple');
+  });
+
+  it('un asiento CON su fila de negocio delante sigue yendo al lote simple', () => {
+    // La 0027 es para los asientos SUELTOS. Un lote de catálogo no cambia.
+    expect(elegirFuncionDelLote([fila('categorias'), fila('auditoria_log')])).toBe(
+      'sincronizar_lote_simple',
+    );
+  });
+
+  it('y uno con una venta delante sigue yendo a sincronizar_venta', () => {
+    expect(elegirFuncionDelLote([fila('ventas'), fila('auditoria_log')])).toBe('sincronizar_venta');
+  });
+});
+
 describe('NO SE ENRUTA POR LA PRIMERA TABLA, y este es el caso que lo prueba', () => {
   /*
     CLAUDE.md §4.20 lo dejó anotado para este día: una venta y un lote simple

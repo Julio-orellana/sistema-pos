@@ -64,6 +64,14 @@
       ],
       "security_definer": true
     },
+    "sincronizar_asiento": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
     "sincronizar_cierre_de_caja": {
       "argumentos": "lote jsonb, version_de_contrato integer",
       "devuelve": "jsonb",

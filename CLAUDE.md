@@ -4010,6 +4010,112 @@ se comprobó después: `Wi-Fi Power (en0): On`, y un `200` del health.
 - Queda en el bucket **una foto de prueba de 70 bytes** por corrida: con estas
   credenciales Storage no deja borrarla, y es un proyecto descartable.
 
+### 4.29 El asiento suelto: la puerta que faltaba en la nube (migración 0027)
+
+**El arreglo de §4.26 estaba incompleto, y lo destapó subirlo a Postgres de
+verdad.** Julio insistió en no conformarse con que las 1442 pruebas locales
+pasaran: *«este asiento específico es el que se creía sincronizado durante no
+sabemos cuánto tiempo sin estarlo; merece verse llegar a la nube con sus
+propios ojos»*. Tenía razón.
+
+#### Lo que pasó al subirlo
+
+Los cinco asientos que §4.26 puso a encolar producen lotes de **un solo
+`auditoria_log`, sin fila principal de negocio**. Y las cinco funciones de la
+`0023` exigen una: `sincronizar_lote_simple` mira la primera fila contra su
+lista cerrada, donde `auditoria_log` no está.
+
+```
+sincronizar_usuario     -> HTTP 200
+sincronizar_lote_simple -> HTTP 400
+  {"code":"P0001","message":"FORMA: la tabla auditoria_log no se sincroniza
+                             como lote simple"}
+ciclo: cola_detenida; pendientes: 3
+```
+
+> **EL ARREGLO ANTERIOR ERA PEOR QUE EL DEFECTO.** Antes, esos asientos no
+> subían **en silencio**. Después de §4.26, el primer **ingreso fallido** de un
+> cajero —tres PIN mal tecleados— habría **detenido toda la sincronización de
+> la tienda**. Un defecto silencioso se convirtió en uno que para la caja.
+
+#### La migración `0027`, y por qué una función nueva
+
+`sincronizar_asiento(lote, version_de_contrato)`: misma forma que las cinco,
+mismo endurecimiento de §1.5.1, y una **lista cerrada de un solo elemento**.
+
+**No se amplió `sincronizar_lote_simple`**, que habría sido una línea. Su
+`CASE` de la fila principal es justamente lo que obliga a que la fila de
+negocio vaya primera y el asiento detrás; admitiendo `auditoria_log` ahí, un
+lote de catálogo con el asiento delante pasaría en vez de rechazarse, y se
+perdería la comprobación de orden que §2.4 sostiene.
+
+**La versión de contrato NO sube.** La `0027` *agrega* una puerta y no cambia
+ninguna existente, así que una terminal vieja sigue funcionando igual contra
+esta nube. Subirla obligaría a actualizar todas las terminales para nada.
+
+#### UNA SEGUNDA COSA QUE SOLO SE VIO MIDIENDO
+
+Tras crear la función, **la prueba de deriva seguía en verde y la foto seguía
+diciendo «13 funciones»**. `contrato_de_sincronizacion()` enumera por nombre,
+con un `proname IN (...)` literal: una función nueva es **invisible** para ella.
+
+Es decir: había una función `SECURITY DEFINER` nueva en la nube **que nada
+vigilaba**. La `0027` reemplaza también el contrato para que la conozca. Ahora
+la foto declara **14 funciones** y la mitad A exige que
+`sincronizar_asiento` exista, sea DEFINER y tenga `search_path` vacío.
+
+> **PARA LA PRÓXIMA FUNCIÓN, QUE VA A PASAR:** agregarla al `proname IN (...)`
+> de `contrato_de_sincronizacion` es parte de crearla, no un paso opcional. Sin
+> eso queda fuera del contrato y la prueba de deriva no la ve.
+
+#### El asiento, leído en la nube
+
+Con la `0027` aplicada, el mismo caso sube entero: `sincronizar_usuario` y
+**tres** `sincronizar_asiento`, cola vaciada. Leído de `auditoria_log` en
+Postgres:
+
+| accion | valor_nuevo | recibido_en |
+|---|---|---|
+| `primer_administrador_creado` | `{"rol":"administrativo","nombre":"Jimmy …"}` | 00:10:19.145 |
+| `ingreso_fallido` | `{"bloqueadoHasta":null,"intentosFallidos":1}` | 00:10:19.625 |
+| `ingreso_fallido` | `{"bloqueadoHasta":null,"intentosFallidos":2}` | 00:10:20.064 |
+| **`usuario_bloqueado`** | `{"bloqueadoHasta":"2026-09-14T00:10:48.771Z","intentosFallidos":3}` | 00:10:20.358 |
+
+**Es la primera vez en la vida del proyecto que un `usuario_bloqueado` llega a
+la nube**, y §4.8 lo prometía desde que se escribió.
+
+#### Estado de la 0027, y lo que falta
+
+- **Aplicada SOLO en `pos-pruebas-descartable`.** En `pos-jimmy-cano` está
+  **pendiente de la revisión y aprobación de Julio**, como manda el protocolo:
+  el SQL a la vista primero.
+- **El código de la terminal YA la necesita.** El enrutador manda los lotes de
+  asiento suelto a `sincronizar_asiento`; contra una nube que no la tenga, esos
+  lotes detendrían la cola. Hoy no hay riesgo —el real no tiene usuario de
+  terminal ni sincronización corriendo— pero **la 0027 tiene que aplicarse
+  antes de conectar la terminal al real.**
+- Batería completa tras todo esto, sobre el proyecto vaciado: **136 de 136**.
+
+### 4.30 Pendiente explícito: `resume` y `on-ac` sin ejercitar
+
+De los tres disparadores de §4.27, **solo se ejercitó el sondeo de
+`net.isOnline()`**, apagando y prendiendo el WiFi (evidencia con timestamps
+allá). Los otros dos siguen **construidos y no vistos correr**:
+
+| Disparador | Cómo se provocaría | Estado |
+|---|---|---|
+| `powerMonitor.on('resume')` | suspender la máquina de verdad y despertarla | **sin ejercitar** |
+| `powerMonitor.on('on-ac')` | desenchufar y volver a enchufar | **sin ejercitar** |
+
+Los dos comparten el mismo `olvidarYReintentar` que el sondeo, que sí se vio
+funcionar de punta a punta. **Lo que quedó sin comprobar es que Electron emita
+esos dos eventos en esta aplicación**, no lo que hacen cuando llegan. Decisión
+de Julio: no forzarlo ahora y anotarlo.
+
+Y sigue valiendo lo de siempre: esto se midió en macOS, y **Windows es la
+plataforma de producción**. `powerMonitor` es justamente donde las dos difieren
+más.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -4199,6 +4305,8 @@ se comprobó después: `Wi-Fi Power (en0): On`, y un `200` del health.
 | **`olvidarLaEspera()` se conecta a tres disparadores reales, y el sondeo de `net.isOnline()` es un intervalo porque Electron NO emite evento.** | Dejarlo para una fase futura, como estaba; confiar solo en `powerMonitor`; sondear más seguido | Sin disparadores, la escalera de recomprobación manda siempre: tras una hora sin internet la terminal esperaría hasta 5 minutos para enterarse de que la red volvió, **aunque el sistema operativo ya lo supiera**. Los tres son `resume` y `on-ac` de `powerMonitor`, más la transición `false → true` de `net.isOnline()`. Ese último **no puede ser un evento**: el módulo `net` de Electron no es un EventEmitter, así que se sondea cada 30 s —una lectura en memoria del Network List Manager, sin red y sin costo— y **solo se actúa en la transición hacia arriba**, porque al sistema operativo se le cree únicamente el «no» (§5.2). Los 15 s de gracia tras despertar no se pusieron acá: los pone `alDespertar()` del planificador, que existía desde la fase 1.b con ese número escrito esperando este día. | Prompt 44 — 2026-09-13 |
 | **PRUEBA ESTRUCTURAL NUEVA: cada `auditoria.registrar(` del dominio tiene que estar dentro de `conBandejaDeSalida` o de `enTransaccionDeNegocio`.** Encontró CINCO hechos de negocio que no llegaban a la nube. | Confiar en que la próxima vez alguien lo revise a mano; exigir solo `conBandejaDeSalida`, que es el molde común | La prueba que ya había —«solo tres archivos nombran `.transaction(`»— protege de que alguien **abra** una transacción por su cuenta, y no de lo contrario, **que es peor: no abrir ninguna**. `crearPrimerAdministrador` no nombraba `.transaction(` precisamente porque no abría transacción, así que pasaba limpio; el defecto vivió desde el Prompt 3. El asiento de auditoría es el marcador exacto de «acá pasó un hecho del negocio» —§4.17 lo dice al revés— y `auditoria_log` se sincroniza, así que un asiento fuera del envoltorio es por definición un hecho que no llega. **Se aceptan DOS envoltorios y no uno**: §4.17 ya había decidido que la venta y los dos métodos de caja usan `enTransaccionDeNegocio` + `encolarLote` directo, y la primera versión de la prueba los marcó como falsos positivos hasta que se comprobó que sí encolan. La lista de excepciones está vacía y una entrada sin motivo escrito hace fallar otra comprobación; hay además un control del propio detector, porque uno roto que dijera siempre «está dentro» dejaría la prueba pasando en falso. **Falsificada**: quitando un envoltorio, falla nombrando archivo y línea. | Prompt 45 — 2026-09-13 |
 | **CORREGIDO: cinco asientos de auditoría de `autenticacion.ts` no se encolaban, y DOS de ellos contradecían lo que §4.8 afirma.** | Excusarlos en la lista de excepciones; dejarlos y anotarlos como pendiente | Los cinco son `autorizacion_bloqueada`, `pin_remoto_configurado`, la salida controlada, el ingreso correcto y el ingreso fallido / `usuario_bloqueado`. **§4.8 decía con todas las letras** que el candado no viaja pero «el hecho auditable sí: `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada»: **no estaba espejada**, y esa afirmación de la documentación era falsa desde que se escribió. Excusarlos habría sido documentar como aceptado un comportamiento que el propio diseño declara incorrecto. En cada uno se distingue lo que viaja de lo que no: el contador de intentos y el candado por superficie se quedan acá —estado operativo de la terminal (§4.4), que ni existe en Postgres— y lo que se encola es el asiento; en `configurarPinRemoto` se encola además la fila de `usuarios`, cuyo hash de PIN remoto no viaja porque `COLUMNAS_EXCLUIDAS` lo saca (decisión 17). | Prompt 45 — 2026-09-13 |
+| **Migración `0027`: una función NUEVA, `sincronizar_asiento`, para el lote que no tiene fila principal de negocio. NO se amplió `sincronizar_lote_simple`.** | Agregar `auditoria_log` al `CASE` de la fila principal del lote simple, que era una línea; revertir los cinco arreglos de §4.26 | **El arreglo de §4.26 estaba incompleto y era peor que el defecto**: esos cinco producen lotes de un solo asiento, y las cinco funciones de la `0023` exigen una fila principal. Medido contra la nube: `HTTP 400 FORMA: la tabla auditoria_log no se sincroniza como lote simple`, `cola_detenida`. O sea que **el primer ingreso fallido de un cajero habría detenido toda la sincronización de la tienda** — un defecto silencioso convertido en uno que para la caja. No se amplió el lote simple porque su `CASE` de la fila principal es lo que obliga a que la fila de negocio vaya primera y el asiento detrás: admitiendo `auditoria_log` ahí, un lote de catálogo con el asiento delante pasaría en vez de rechazarse y se perdería la comprobación de orden de §2.4. Una función aparte dice en su nombre lo que acepta y su lista cerrada tiene un solo elemento. **La versión de contrato no sube**: agrega una puerta, no cambia ninguna, así que una terminal vieja sigue funcionando. Aplicada solo en el proyecto de pruebas; en el real está pendiente de aprobación. | Prompt 46 — 2026-09-14 |
+| **La `0027` reemplaza TAMBIÉN `contrato_de_sincronizacion`, porque una función nueva es invisible para la prueba de deriva si no se agrega a su lista fija.** | Dejar el contrato como estaba: la función nueva funcionaba igual | **Medido, y es el hallazgo incómodo**: tras crear `sincronizar_asiento`, `npm run verify:nube` seguía en verde y la foto seguía diciendo «13 funciones». `contrato_de_sincronizacion()` enumera por nombre con un `proname IN (...)` literal —lo cual es correcto, porque declara el contrato y no cualquier función que aparezca en `public`— pero significa que **había una función `SECURITY DEFINER` nueva en la nube que nada vigilaba**. La prueba de deriva no puede detectar lo que el contrato no declara. Queda como regla para la próxima función: agregarla a esa lista **es parte de crearla**, no un paso opcional. Con el reemplazo, la foto declara 14 funciones y la mitad A exige que la nueva exista, sea DEFINER y tenga `search_path` vacío. | Prompt 46 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

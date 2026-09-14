@@ -38,6 +38,14 @@ export const FUNCIONES_DE_ESCRITURA = [
   'sincronizar_cierre_de_caja',
   'sincronizar_venta',
   'sincronizar_lote_simple',
+  /**
+   * La sexta, agregada por la `0027`: un lote de asientos SUELTOS.
+   *
+   * Las cinco de la `0023` exigen una fila principal de negocio, y hay hechos
+   * que no la tienen —un ingreso fallido, un candado, una salida controlada—.
+   * Sin esta puerta, esos lotes detenían la cola entera. Ver CLAUDE.md §4.29.
+   */
+  'sincronizar_asiento',
 ] as const;
 
 export type FuncionDeEscritura = (typeof FUNCIONES_DE_ESCRITURA)[number];
@@ -73,6 +81,7 @@ export const TABLAS_ADMITIDAS_POR_FUNCION: Readonly<Record<FuncionDeEscritura, r
   sincronizar_apertura_de_caja: ['caja_sesiones', 'caja_sesion_denominaciones', 'auditoria_log'],
   sincronizar_cierre_de_caja: ['caja_sesiones', 'caja_sesion_denominaciones', 'auditoria_log'],
   sincronizar_venta: ['productos', 'ventas', 'venta_detalle', 'auditoria_log'],
+  sincronizar_asiento: ['auditoria_log'],
   sincronizar_lote_simple: [
     'categorias',
     'productos',
