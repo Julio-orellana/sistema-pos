@@ -130,11 +130,21 @@ const MARGEN_DE_VENCIMIENTO_MS = 90_000;
 const DENOMINACION_Q5 = 'c11a36fb-5100-4459-8fde-740bb784d3aa';
 
 /**
- * El tope del rol venta se escribe con un id FIJO: `limites_descuento.rol` es
- * UNIQUE y esa tabla no se vacía entre corridas, así que un id nuevo por
- * corrida chocaría contra la fila de la corrida anterior.
+ * El tope del rol venta, con el UUID fijo de la migración 028.
+ *
+ * ESTE GUION YA HABÍA TROPEZADO CON EL DEFECTO Y LO TAPÓ SIN DARSE CUENTA. La
+ * versión anterior usaba un id fijo INVENTADO ACÁ (`ab5c4e1e-…`) con este
+ * comentario: «`limites_descuento.rol` es UNIQUE y esa tabla no se vacía entre
+ * corridas, así que un id nuevo por corrida chocaría contra la fila de la
+ * corrida anterior». El diagnóstico era exacto —y nadie lo conectó con que **la
+ * aplicación sorteaba ese id**, así que el mismo choque le esperaba a cualquier
+ * reinstalación o segunda terminal (CLAUDE.md §4.31).
+ *
+ * Desde la migración 028 el id lo fija el esquema y la nube lo hace cumplir con
+ * un CHECK, así que acá se usa ESE, no uno propio: un id inventado en el guion
+ * ahora sería rechazado, que es exactamente lo que se busca.
  */
-const ID_TOPE_VENTA = 'ab5c4e1e-2c7c-4c6e-9d7b-1c9d5f3a7e01';
+const ID_TOPE_VENTA = '0c2ebde1-fe5f-4d8b-a7c4-d137888109ca';
 
 /** Las cinco funciones de escritura y la de lectura, tal como se llaman por RPC. */
 const FUNCIONES_DE_ESCRITURA = Object.freeze([

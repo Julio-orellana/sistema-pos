@@ -329,7 +329,7 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos`<br>`0027_sincronizar_asiento` |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos`<br>`0027_sincronizar_asiento`<br>`0028_limites_descuento_id_determinista` |
 | Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) **2026-09-12 (la `0023` y la `0024`)** y **2026-09-13 (la `0025` y la `0026`, con lo que la fase 2.c queda aplicada entera)** |
 | Plan | gratuito |
 
@@ -360,10 +360,12 @@ ella.
 
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`.** La
 `0023` y la `0024` se aplicaron el **2026-09-12**, la `0025` y la `0026` el
-**2026-09-13**, y la **`0027` el 2026-09-14**, todas con la aprobación explícita
-de Julio y después de haberse probado contra `pos-pruebas-descartable`. **Los
-dos proyectos tienen hoy las 22 migraciones**, y la huella de las 14 funciones
-del contrato es `1b0bcbf6c033cb163c4bc396dbe52e37` en los dos. Ver §4.29.
+**2026-09-13**, y la **`0027` y la `0028` el 2026-09-14**, todas con la aprobación
+explícita de Julio y después de haberse probado contra `pos-pruebas-descartable`.
+**Los dos proyectos tienen hoy las 23 migraciones**, la huella de las 14
+funciones del contrato es `1b0bcbf6c033cb163c4bc396dbe52e37` en los dos, y los
+cuatro CHECK de `limites_descuento` tienen el mismo `md5(pg_get_constraintdef)`
+en los dos. Ver §4.29 y §4.32.
 
 De los dos pasos manuales que la fase 2.c necesitaba, **uno está hecho y
 verificado, y el otro está hecho pero NO verificado desde acá**:
@@ -4260,11 +4262,9 @@ también la de una restauración (fase 4.b) y la de una segunda terminal —dond
 Que esos tres escenarios lo disparen es **inferencia a partir del mecanismo
 medido**, no una medición de cada uno.
 
-> **NO SE ARREGLÓ, y es deliberado.** Las salidas posibles son varias y ninguna
-> es obvia —hacer que `escribir_fila` conozca la clave natural de cada tabla,
-> derivar los UUID de la clave natural, o clasificar el `23505` de otro modo—, y
-> todas tocan el contrato con la nube. **Es una decisión de diseño y le
-> corresponde a Julio**: queda como el punto 19 de §6.2.
+> **UNA DE LAS NUEVE YA ESTÁ CERRADA: `limites_descuento`, con la migración
+> `028`/`0028` del 2026-09-14 (§4.32).** Las otras ocho siguen abiertas y son
+> decisión de diseño: quedan en el punto 19 de §6.2.
 
 #### El arnés no quedó en el repositorio
 
@@ -4279,6 +4279,99 @@ envoltorio— y las 25 del enrutador.
 > diagnóstico, porque escribí `ultimo_error` donde la columna se llama `error`.
 > El fondo estaba bien y lo roto era mi guion, igual que el
 > `--config /dev/null` de una vuelta anterior. Se corrigió y se repitió entera.
+
+
+### 4.32 El id de un tope de descuento es FIJO por rol (migraciones 028 / 0028)
+
+Cierra **la primera de las nueve** restricciones únicas de §4.31, la única donde
+la clave natural **es** la identidad de la fila.
+
+#### Los dos valores, que ahora son parte del esquema
+
+| rol | id |
+|---|---|
+| `venta` | `0c2ebde1-fe5f-4d8b-a7c4-d137888109ca` |
+| `administrativo` | `a6385986-bf18-4bb2-841d-cf154702cc1f` |
+
+Viven en tres lugares que tienen que decir lo mismo: la migración local `028`,
+su espejo `0028`, y `ID_DE_LIMITE_POR_ROL` en
+`src/main/database/repositories/limites-descuento.ts`. **Cambiarlos rompería la
+correspondencia con lo ya subido**, así que no se tocan.
+
+#### Por qué UUID fijos y no `id = rol`
+
+`id = 'venta'` sería más legible y **no se puede sin reconstruir la tabla**: en
+SQLite el CHECK exige `length(id) = 36` y en Postgres la columna es `UUID`.
+Cambiar el tipo obligaría al rebuild de doce pasos que este proyecto ya descartó
+en las migraciones 008 y 015.
+
+El precedente correcto ya existía: **`denominaciones`**, cuyos UUID son fijos en
+la migración desde el Prompt 13, por la misma razón —una tabla cuyo contenido es
+el mismo en toda instalación no puede sortear sus ids—. `limites_descuento` es
+ese caso exacto: como mucho dos filas, siempre las mismas dos.
+
+Rompe a propósito la regla de «UUID generados en el cliente», y es la excepción
+correcta: esa regla existe para que dos filas creadas sin internet en máquinas
+distintas **no** colisionen al subir, y acá **la colisión es justamente lo que
+se busca**. Es el mismo argumento del `id = 'unica'` de `configuracion_negocio`.
+
+#### La prueba que importa: dos bases distintas, contra la nube de verdad
+
+No alcanza con que el repositorio devuelva el id correcto. Se corrieron **dos
+instalaciones independientes** —cada una con su SQLite nuevo y su propio primer
+administrador— subiendo el tope del rol `venta` a `pos-pruebas-descartable`:
+
+```
+INSTALACIÓN A: id del tope = 0c2ebde1-fe5f-4d8b-a7c4-d137888109ca
+   ciclo: cola_vaciada; pendientes: 0
+INSTALACIÓN B: id del tope = 0c2ebde1-fe5f-4d8b-a7c4-d137888109ca
+   ciclo: cola_vaciada; pendientes: 0
+
+   sincronizar_usuario      HTTP 200
+   sincronizar_lote_simple  HTTP 200
+   sincronizar_usuario      HTTP 200
+   sincronizar_lote_simple  HTTP 200
+```
+
+**Antes de este arreglo, la segunda daba `HTTP 409` con `23505` y
+`cola_detenida`** (§4.31). En la nube quedó **una** fila, con el id fijo y con
+los valores de B: el upsert por `(id)` la actualizó, que es exactamente lo que
+tiene que pasar.
+
+#### La base lo hace cumplir, y se falsificó en las dos nubes
+
+`limites_descuento_id_fijo_por_rol`, `convalidated = true` en los dos proyectos,
+y los **cuatro** CHECK de la tabla con `md5(pg_get_constraintdef)` idéntico en
+ambos. Falsificado contra el REAL, sin dejar ninguna fila escrita: un id
+sorteado se rechaza, y cruzar los dos ids también.
+
+Trece pruebas locales lo fijan, en `limite-con-id-fijo.test.ts`, incluida la que
+recorre el camino de migración —una base con la fila ya sembrada con id
+sorteado— y la que comprueba que **lo que estaba esperando en `sync_cola` se
+mueve con ella, id y payload**. Sin eso, la propia migración habría dejado un
+lote pendiente apuntando a una llave primaria que ya no existe, provocando el
+`23505` que vino a cerrar. **Falsificadas**: volviendo a `nuevoId()` caen 7 de
+las 13, y las 6 que sobreviven son justo las de la base y la migración, que no
+dependen del repositorio.
+
+> **EL GUION DE LA BATERÍA YA HABÍA TROPEZADO CON ESTE DEFECTO Y LO TAPÓ.**
+> `verificacion-de-nube.cjs` usaba un id fijo **inventado ahí**, con este
+> comentario: «`limites_descuento.rol` es UNIQUE y esa tabla no se vacía entre
+> corridas, así que un id nuevo por corrida chocaría contra la fila de la
+> corrida anterior». **El diagnóstico era exacto**, y nadie lo conectó con que
+> la aplicación sorteaba ese mismo id, así que el mismo choque le esperaba a
+> cualquier reinstalación. El arreglo estaba en la prueba y no en el producto, y
+> por eso el defecto sobrevivió. Ahora el guion usa el id del esquema.
+
+#### Lo que esta migración NO resuelve
+
+Las otras ocho restricciones únicas de §4.31 siguen igual, y **no son el mismo
+problema**: `usuarios.nombre`, `categorias.nombre` y `productos.nombre` no son
+la identidad de la fila —dos instalaciones pueden tener legítimamente un «Maíz
+blanco» distinto— y ahí la respuesta es que la restauración de la fase 4.b traiga
+los UUID de la nube en vez de generarlos; `recibos.numero_recibo` es un
+correlativo POR terminal y se resuelve en el diseño del multi-sucursal. Siguen en
+el punto 19 de §6.2.
 
 ## 5. Registro de decisiones técnicas
 
@@ -4475,6 +4568,9 @@ envoltorio— y las 25 del enrutador.
 | **CORREGIDO: el `0027b` del proyecto de pruebas había reescrito `contrato_de_sincronizacion` a mano y derivó del archivo.** El descartable se realineó con el repositorio. | Dejarlo, porque la salida del contrato era idéntica igual; realinear el real en vez del descartable | Lo detectó la comprobación de §4.4 al cotejar `md5(pg_get_functiondef)` entre los dos proyectos: **no coincidían**, que es exactamente para lo que existe. La causa fue mía: el `0027b` del día anterior reescribió la función en vez de copiar el cuerpo de la `0023`, cambiando `pg_get_function_arguments` por `identity_arguments` y `p.proconfig` por `coalesce(p.proconfig, ARRAY[]::text[])`. **El real tenía la versión correcta** —el registro de su `0023` es byte a byte el archivo del repositorio— así que se corrigió el descartable. La divergencia resultó ser de TEXTO y no de comportamiento (ver la fila siguiente), pero se corrige igual: el `coalesce` sí cambiaría la salida el día que una función perdiera su `search_path`, y dos proyectos que corren código distinto invalidan la premisa de probar en uno para aplicar en el otro. | Prompt 47 — 2026-09-14 |
 | **MEDIDO, contra una suposición mía: `pg_get_function_arguments` e `identity_arguments` devuelven LO MISMO para las funciones de este esquema.** | Dar por buena mi lectura de que una trae nombres de parámetro y la otra solo tipos, y concluir que los dos proyectos declaraban contratos distintos | Iba a reportar que la foto y el real declaraban argumentos distintos. **Se midió antes de afirmarlo y era falso**: `iguales = true` en las tres funciones probadas. Las dos formas se separan solo con parámetros `OUT`/`INOUT`/`VARIADIC` o con valores por omisión, y ninguna función de este esquema tiene eso. La confirmación definitiva fue comparar la SALIDA del contrato en los dos proyectos con los claims de `restauracion`: `92d5b3e7374cdcf36aaa9f185acadf67` en los dos. Es el mismo tipo de error que §4.22 ya dejó anotado —reportar como medido lo que era razonamiento— y esta vez se atrapó antes de escribirlo. | Prompt 47 — 2026-09-14 |
 | **NO se arregla el `23505` de las restricciones únicas que no son la llave primaria: se documenta y lo decide Julio.** | Cambiar `escribir_fila` para que conozca la clave natural de cada tabla; derivar los UUID de la clave natural; clasificar el `23505` como transitorio | El arnés exhaustivo lo destapó midiendo: `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, o sea que el upsert solo absorbe choques contra la **llave primaria**, y hay **nueve restricciones únicas que no lo son** en tablas que la terminal escribe (`usuarios.nombre`, `categorias.nombre`, `productos.nombre`, `limites_descuento.rol`, `recibos.numero_recibo`, `recibos.venta_id`, `venta_detalle(venta_id,orden_linea)`, el desglose de caja y la caja única). Un choque contra cualquiera sale como `23505` crudo, se clasifica como determinístico —correctamente— y **detiene la cola**. Hoy la tienda no lo puede provocar, porque nada se borra y una clave natural queda atada a su UUID para siempre dentro de una misma base; lo disparan una reinstalación, una restauración o una segunda terminal. **No se arregla por cuenta propia** porque las tres salidas posibles tocan el contrato con la nube y ninguna es obviamente la correcta: es definición de diseño y va como el punto 19 de §6.2. | Prompt 47 — 2026-09-14 |
+| **El id de `limites_descuento` pasa a ser FIJO por rol, con UUID en la migración (028 / 0028).** | `id = rol`, que sería más legible; derivar el UUID de la clave natural con un hash; dejarlo sorteado y enseñarle a `escribir_fila` la clave natural de cada tabla | Cierra la PRIMERA de las nueve restricciones únicas de §4.31, y es la única donde la clave natural **es** la identidad: `limites_descuento` tiene como mucho dos filas y siempre las mismas dos, una por rol. `id = 'venta'` no se puede sin reconstruir la tabla —SQLite exige `length(id) = 36` y Postgres es `UUID`—, y el rebuild de doce pasos ya se descartó en las migraciones 008 y 015. Derivar el UUID de un hash escondería en código una correspondencia que así queda **escrita en el esquema y comprobable a simple vista**. Y no se tocó `escribir_fila`, porque las otras ocho restricciones no son el mismo problema y una regla genérica les aplicaría una respuesta que no les corresponde. Rompe a propósito la regla de «UUID en el cliente», que existe para EVITAR colisiones entre instalaciones: acá la colisión es lo que se busca, igual que en `denominaciones` (Prompt 13) y en el `id = 'unica'` de `configuracion_negocio`. | Prompt 48 — 2026-09-14 |
+| **La migración mueve también lo que estaba esperando en `sync_cola`, no solo la fila de negocio.** | Mover solo `limites_descuento` y dejar la cola como estaba | Una migración que cambia una llave primaria tiene que mover con ella todo lo que la nombra. Si un lote quedara pendiente apuntando al id viejo —y con el id viejo adentro del payload—, al subirlo la nube recibiría la fila con una llave primaria que en esa base ya no existe y chocaría contra `UNIQUE (rol)`: **la propia migración provocando el `23505` que vino a cerrar**. Se mueven `entidad_id` y el `id` de adentro del payload JUNTOS, con `json_set`, porque §4.17 sostiene que el payload es byte a byte lo que quedó guardado. Tiene prueba propia, sobre una base a la que se le aplican todas las migraciones MENOS esta, se le siembra la fila con id sorteado y recién entonces se corre. | Prompt 48 — 2026-09-14 |
+| **El guion de la batería usa el id del ESQUEMA, no uno inventado por él.** | Dejarle su propio id fijo, que funcionaba | `verificacion-de-nube.cjs` ya tenía un id fijo propio con este comentario: «`limites_descuento.rol` es UNIQUE y esa tabla no se vacía entre corridas, así que un id nuevo por corrida chocaría contra la fila de la corrida anterior». **El diagnóstico era exacto y el arreglo estaba en el lugar equivocado**: nadie conectó que la aplicación sorteaba ese mismo id, así que el choque le esperaba igual a cualquier reinstalación o segunda terminal. Es una lección más general que este caso: **un arnés de prueba que esquiva un problema en vez de exhibirlo lo esconde**, y acá lo escondió durante dos fases. Ahora usa el id del esquema, y uno inventado sería rechazado por el CHECK. | Prompt 48 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -4514,7 +4610,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 18 | **¿Qué umbral de «stock bajo» tiene cada producto, y quién lo define?** | El reporte de inventario muestra la fotografía de hoy y **no tiene umbral ni alertas, a propósito** (§4.15): cuál es el mínimo de cada producto es una definición de negocio, y un umbral inventado convertiría una suposición nuestra en un aviso que parece una regla de la tienda. Hace falta saber si el mínimo es por producto, por categoría o uno solo para todo, y si depende de la temporada. Es un módulo futuro con su propio prompt. | Abierto — bloquea las alertas de stock, no el reporte |
 | 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
-| 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria. Hay **nueve** restricciones únicas que no lo son (§4.31), y un choque contra cualquiera sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
+| 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`**, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 

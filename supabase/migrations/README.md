@@ -97,6 +97,7 @@ carpetas: el hueco es información, y renumerar la destruye.
 | `016_configuracion_negocio` | `0016_configuracion_negocio.sql` | Datos de la tienda: salen impresos en el recibo |
 | `017_descuento_autorizado_via` | `0017_descuento_autorizado_via.sql` | Columna de `ventas`: dato de negocio |
 | `018_sync_cola_lotes` | **(ninguno, a propósito)** | Amplía `sync_cola`, que no se espeja |
+| `028_limites_descuento_id_determinista` | `0028_limites_descuento_id_determinista.sql` | El id de un tope pasa a ser FIJO por rol. Tiene que ser el MISMO valor de los dos lados, o la fila llega a la nube con una llave primaria distinta de la que allá ya existe |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
@@ -188,9 +189,19 @@ número que use queda reservado también del lado local.
 
 | `0027_sincronizar_asiento.sql` | Sí — aplicada el 2026-09-14, el mismo día que en `pos-pruebas-descartable`. Crea `sincronizar_asiento` y reemplaza `contrato_de_sincronizacion` para que la conozca. La huella de las 14 funciones del contrato es `1b0bcbf6c033cb163c4bc396dbe52e37` **en los dos proyectos**. |
 
+| `0028_limites_descuento_id_determinista.sql` | Sí — aplicada el 2026-09-14, después de probarse en `pos-pruebas-descartable` el mismo día. El CHECK `limites_descuento_id_fijo_por_rol` quedó `convalidated = true`, y los CUATRO CHECK de la tabla tienen `md5(pg_get_constraintdef)` idéntico en los dos proyectos. Falsificado en el real: un id sorteado y un id cruzado se rechazan los dos, sin dejar ninguna fila. |
+
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`: los dos
-proyectos tienen las 22.** La última fue la `0027`, el 2026-09-14; antes la
-`0025` y la `0026`, el 2026-09-13, y la `0023` y la `0024`, el 2026-09-12.
+proyectos tienen las 23.** Las dos últimas fueron la `0027` y la `0028`, el
+2026-09-14; antes la `0025` y la `0026`, el 2026-09-13, y la `0023` y la `0024`,
+el 2026-09-12.
+
+> **LA `0028` ES LA PRIMERA MIGRACIÓN PAREJA DESDE LA `0017`, y el par importa
+> más de lo habitual.** Fija los mismos dos UUID de los dos lados. Si corriera
+> una sola de las dos, la terminal escribiría un id y la nube esperaría otro
+> para la misma fila de negocio, que es exactamente el estado que la migración
+> viene a impedir. **Al reconstruir el proyecto descartable desde estos
+> archivos, las dos van juntas.**
 
 > **POR QUÉ LA `0027` SE APLICÓ TEMPRANO, ANTES DE QUE HICIERA FALTA.** Es
 > puramente aditiva —agrega una función, no cambia ninguna, y la versión de

@@ -1,8 +1,33 @@
 /** Acceso a datos de los topes de descuento por rol. */
 
 import type { LimiteDescuento, NuevoLimiteDescuento, Rol } from './entidades';
-import { RepositorioBase, ahora, nuevoId } from './base';
+import { RepositorioBase, ahora } from './base';
 import { aColumnaMonto, desdeColumnaDecimal } from '../decimal-columns';
+
+/**
+ * EL ID DE UN TOPE NO SE SORTEA: ES FIJO POR ROL.
+ *
+ * Rompe a propósito la regla general de «UUID generados en el cliente», por la
+ * misma razón que `denominaciones` la rompe desde el Prompt 13: esa regla
+ * existe para que dos filas creadas sin internet en máquinas distintas no
+ * colisionen al subir, y acá **la colisión es justamente lo que se busca**. Hay
+ * como mucho dos filas, siempre las mismas dos, una por rol.
+ *
+ * Con el id sorteado había un defecto real, medido contra la nube el
+ * 2026-09-14: `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que un
+ * mismo `rol` bajo dos id distintos no lo absorbe el upsert y choca contra
+ * `UNIQUE (rol)` con un `23505` que **detiene la cola entera**. Con el id fijo,
+ * la misma fila de negocio tiene la misma llave primaria en toda instalación y
+ * el choque no puede ocurrir.
+ *
+ * **Estos dos valores son parte del esquema**, no un detalle de este archivo:
+ * los fija la migración 028 con un CHECK, y su espejo `0028` hace lo mismo en
+ * Postgres. Cambiarlos rompería la correspondencia con lo ya subido.
+ */
+export const ID_DE_LIMITE_POR_ROL: Readonly<Record<Rol, string>> = {
+  venta: '0c2ebde1-fe5f-4d8b-a7c4-d137888109ca',
+  administrativo: 'a6385986-bf18-4bb2-841d-cf154702cc1f',
+};
 
 /** Fila cruda de la tabla `limites_descuento`. */
 interface FilaLimiteDescuento {
@@ -71,7 +96,7 @@ export class RepositorioDeLimitesDescuento extends RepositorioBase {
              )`,
           )
           .run({
-            id: nuevoId(),
+            id: ID_DE_LIMITE_POR_ROL[datos.rol],
             rol: datos.rol,
             porcentaje: aColumnaMonto(datos.descuentoMaxPorcentaje),
             monto: aColumnaMonto(datos.descuentoMaxMontoFijo),

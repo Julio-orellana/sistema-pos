@@ -21,6 +21,7 @@ import {
   sembrarProducto,
   sembrarUsuario,
 } from './ayuda-base-de-datos';
+import { ID_DE_LIMITE_POR_ROL } from '../repositories/limites-descuento';
 
 let base: Database;
 let limpiar: () => void;
@@ -291,7 +292,9 @@ describe('Pisos de no negatividad: qué NO puede ser negativo', () => {
              id, rol, descuento_max_porcentaje, descuento_max_monto_fijo, creado_en, actualizado_en
            ) VALUES (?, 'venta', ?, ?, ?, ?)`,
         )
-        .run(IDS_DE_PRUEBA.generico, porcentaje, monto, FECHA_DE_PRUEBA, FECHA_DE_PRUEBA);
+        // NO puede ser un id cualquiera: desde la migración 028 el id de un tope
+        // es FIJO por rol y la base lo hace cumplir. Ver `id-fijo-por-rol.test.ts`.
+        .run(ID_DE_LIMITE_POR_ROL.venta, porcentaje, monto, FECHA_DE_PRUEBA, FECHA_DE_PRUEBA);
     };
 
     expect(() => { insertar('-10.00', '50.00'); }).toThrow(/CHECK constraint failed/);

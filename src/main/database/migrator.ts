@@ -33,6 +33,12 @@ import sqlCantidadVendida from './migrations/015_cantidad_vendida.sql?raw';
 import sqlConfiguracionNegocio from './migrations/016_configuracion_negocio.sql?raw';
 import sqlDescuentoAutorizadoVia from './migrations/017_descuento_autorizado_via.sql?raw';
 import sqlSyncColaLotes from './migrations/018_sync_cola_lotes.sql?raw';
+/*
+  Salta de la 018 a la 028 a propósito: los números 019 a 027 los usaron
+  migraciones que solo existen del lado de la nube, y el espacio de numeración
+  es UNO SOLO para las dos carpetas. Ver `supabase/migrations/README.md`.
+*/
+import sqlLimitesIdDeterminista from './migrations/028_limites_descuento_id_determinista.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -86,6 +92,11 @@ export const MIGRACIONES: readonly Migracion[] = [
     sql: sqlDescuentoAutorizadoVia,
   },
   { orden: 18, nombre: '018_sync_cola_lotes', sql: sqlSyncColaLotes },
+  {
+    orden: 28,
+    nombre: '028_limites_descuento_id_determinista',
+    sql: sqlLimitesIdDeterminista,
+  },
 ];
 
 /** Tabla de control. La crea el propio migrador antes que nada. */
