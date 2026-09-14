@@ -40,7 +40,8 @@
     "diagnostico:imagen": "electron scripts/sonda-de-imagen.cjs",
     "verify:restauracion": "vitest run --config vitest.nube.config.ts",
     "verify:restauracion:renovacion": "POS_NUBE_RENOVACION=1 vitest run --config vitest.nube.config.ts renovacion-de-sesion",
-    "verify:pantallas:restauracion": "npm run build && node scripts/verificacion-de-restauracion-en-pantalla.cjs"
+    "verify:pantallas:restauracion": "npm run build && node scripts/verificacion-de-restauracion-en-pantalla.cjs",
+    "ensayo:restauracion": "npm run build && node scripts/ensayo-de-restauracion.cjs"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

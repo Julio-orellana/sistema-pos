@@ -1415,8 +1415,9 @@ Cada una se tomó a la vista y está en el registro de decisiones de CLAUDE.md
 13. **Un fallo transitorio de la nube a mitad de la transferencia deja la
     restauración «detenida» con el motivo, y se retoma a mano.** No hay
     escalera de reintentos en el cliente de restauración; la subida sí la
-    tiene porque corre sin nadie delante. Es una decisión que este diseño no
-    tomó y que queda para Julio (CLAUDE.md §5, Prompt 52).
+    tiene porque corre sin nadie delante. Este diseño no lo decía; **Julio lo
+    confirmó como decisión FINAL el 2026-09-14**: detenida y visible, con su
+    motivo, sin reintento automático (CLAUDE.md §5, Prompts 52 y 53).
 
 14. **Una restauración más larga que el token se renueva sola, medido**
     (`npm run verify:restauracion:renovacion`, 2026-09-14): restauración real
@@ -1425,6 +1426,21 @@ Cada una se tomó a la vista y está en el registro de decisiones de CLAUDE.md
     bajar; las 24 lecturas posteriores con el token nuevo; y el token viejo,
     presentado a mano 110 s después de su `exp`, rechazado con `401 PGRST303`.
     Ver CLAUDE.md §4.35.
+
+15. **La restauración contra el proyecto REAL se ensaya con
+    `ensayo:restauracion`** (`scripts/ensayo-de-restauracion.cjs`, 2026-09-14):
+    abre la aplicación real sobre una carpeta descartable, la persona teclea
+    la contraseña en la ventana —el guion no la conoce—, y el guion sigue la
+    transferencia, exige que «Terminar» se niegue (ningún usuario restaurado
+    tiene PIN y el guion no asigna ninguno), deja la restauración para después
+    y vuelca la base y la bitácora. No siembra ni sube nada: la restauración
+    es solo lectura. Y cada petición de la restauración queda desde entonces
+    en `log-tecnico.log` con método, ruta y código: la evidencia cruda la
+    escribe la aplicación, no el arnés. Ensayado contra el descartable (9 de
+    9) con la nube en el estado del real de hoy: sin usuarios, la restauración
+    llega a la revisión cuadrando y no se puede terminar («no queda ningún
+    administrador activo»), que es lo correcto. Y la `0029` ya está en el
+    real desde ese día (CLAUDE.md §4.4).
 
 ---
 

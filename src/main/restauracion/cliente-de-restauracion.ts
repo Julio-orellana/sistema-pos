@@ -286,13 +286,19 @@ export class ClienteDeRestauracionHttp implements ClienteDeRestauracion {
     if (opciones.prefer !== undefined) {
       headers.Prefer = opciones.prefer;
     }
+    const metodo = opciones.metodo ?? 'GET';
     try {
-      return await this.buscar(`${this.urlDelProyecto}${ruta}`, {
-        method: opciones.metodo ?? 'GET',
+      const respuesta = await this.buscar(`${this.urlDelProyecto}${ruta}`, {
+        method: metodo,
         headers,
         ...(opciones.cuerpo === undefined ? {} : { body: JSON.stringify(opciones.cuerpo) }),
         signal: AbortSignal.timeout(opciones.tiempoMaximoMs ?? TIEMPO_MAXIMO_DE_LECTURA_MS),
       });
+      // Cada petición queda en la bitácora técnica con su método, su ruta y su
+      // código: es la evidencia cruda de una restauración, la misma que los
+      // arneses anotaban por su cuenta. Nunca el token, que va en la cabecera.
+      this.registrar(`${metodo} ${rutaParaLaBitacora(ruta)} -> HTTP ${String(respuesta.status)}`);
+      return respuesta;
     } catch (error) {
       throw new ErrorDeNegocio(
         'DATO_INVALIDO',
@@ -405,4 +411,23 @@ export class ClienteDeRestauracionHttp implements ClienteDeRestauracion {
       `HTTP ${String(respuesta.status)} al bajar ${objeto}`,
     );
   }
+}
+
+/**
+ * La ruta tal como va a la bitácora: sin la lista `select=` ni el `order=`,
+ * que son largos y siempre iguales para una tabla, y con lo que sí distingue
+ * una petición de otra (`limit`, `id=gt.…`, `id=eq.…`). El token nunca está
+ * acá: viaja en la cabecera `Authorization`, que no se registra.
+ */
+export function rutaParaLaBitacora(ruta: string): string {
+  const separador = ruta.indexOf('?');
+  if (separador === -1) {
+    return ruta;
+  }
+  const camino = ruta.slice(0, separador);
+  const parametros = new URLSearchParams(ruta.slice(separador + 1));
+  parametros.delete('select');
+  parametros.delete('order');
+  const resto = parametros.toString();
+  return resto === '' ? camino : `${camino}?${resto}`;
 }
