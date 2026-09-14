@@ -5562,6 +5562,192 @@ con teclado latinoamericano.
   sobre 50 000 filas sembradas.
 - **Windows**, como siempre.
 
+### 4.37 El empaquetado de producción para Windows (v1.0.0)
+
+La primera vez que el proyecto entero se compila como instalador real. **No
+está probado en Windows**: lo que sigue separa con cuidado lo que se verificó
+inspeccionando el paquete en macOS de lo que solo puede confirmarse cuando el
+`.exe` corra en la máquina de Jimmy.
+
+#### El nombre, que es una decisión irreversible
+
+**`POS Jimmy Cano`**, y no se elige por gusto: de `productName` salen tres
+cosas que quedan atadas a los datos de la tienda.
+
+| De ahí sale | Qué pasa si cambia después |
+|---|---|
+| `%APPDATA%\POS Jimmy Cano\` | La base con TODAS las ventas, los PDF, las fotos y la bitácora quedan huérfanas: la aplicación nueva abre una carpeta vacía |
+| La llave de `safeStorage` (DPAPI en Windows) | **Toda credencial de nube guardada queda ilegible**, medido en §4.23: un lector con otra identidad no la descifra ni con el archivo delante |
+| El `.exe`, el acceso directo y el menú de inicio | Lo que Jimmy ve y busca |
+
+Se descartó «POS Agricola», que era el valor anterior y nunca llegó a un
+instalador: sin tilde se lee como un error de tecleo y con tilde mete un
+carácter no ASCII en una ruta de Windows sin ganar nada.
+
+**El `appId` NO cambió** (`gt.posagricola.desktop`): es un identificador, no un
+nombre visible, y de él salen la clave de desinstalación del registro y la
+agrupación en la barra de tareas. Cambiarlo haría que una versión nueva se
+instalara AL LADO de la vieja en vez de actualizarla.
+
+**Los nombres exactos, verificados sobre el paquete armado:**
+
+| Qué | Nombre |
+|---|---|
+| Instalador | `POS-Jimmy-Cano-Setup-1.0.0.exe` |
+| Ejecutable instalado | `POS Jimmy Cano.exe` |
+| `app.getName()` dentro del paquete | `POS Jimmy Cano` |
+| Carpeta de datos en Windows | `%APPDATA%\POS Jimmy Cano\` |
+
+`app.getName()` sale del `package.json` que viaja DENTRO del asar, no de
+`electron-builder.yml`. El `package.json` del repositorio **no tiene**
+`productName` a propósito y el nombre se inyecta con `extraMetadata`: así la
+aplicación de desarrollo sigue llamándose `pos-agricola` y **no comparte
+carpeta de datos ni credencial con la instalada**, que es lo correcto. Leído
+del asar del paquete final: `{"name":"pos-agricola","productName":"POS Jimmy
+Cano","version":"1.0.0"}`.
+
+#### El módulo nativo: NO hace falta una máquina Windows, y está medido
+
+`better-sqlite3` es la única dependencia nativa del proyecto. Desde la versión
+13 trae **binarios precompilados de todas las plataformas dentro del propio
+paquete de npm** (`prebuilds/`), elegidos en tiempo de ejecución por
+`process.platform` y `process.arch` (`lib/binding.js`), y hechos con N-API, así
+que **no hay un ABI por versión de Electron que perseguir**. Medido en esta
+máquina:
+
+```
+node_modules/better-sqlite3/prebuilds/win32-x64.node: PE32+ executable (DLL) (GUI) x86-64, for MS Windows
+node_modules/better-sqlite3/build/Release/  ->  no existe ningún .node compilado localmente
+```
+
+O sea que la aplicación en macOS ya corre con un prebuild y nunca compiló nada.
+Por eso `npmRebuild: false`: no hay nada que recompilar, y dejarlo en `true`
+haría que el empaquetado intentara compilar C++ para Windows desde macOS, que
+es lo único de todo esto que sí necesitaría una máquina Windows.
+
+**Verificado sobre el paquete final**, que es lo que contesta la pregunta:
+
+```
+release/1.0.0/win-unpacked/resources/app.asar.unpacked/node_modules/better-sqlite3/prebuilds/
+  win32-x64.node: PE32+ executable (DLL) (GUI) x86-64, for MS Windows
+release/1.0.0/win-unpacked/POS Jimmy Cano.exe: PE32+ executable (GUI) x86-64, for MS Windows
+```
+
+**Cross-compilar no hace falta, y eso no es una suposición: es que no hay nada
+que compilar.** Lo que sigue sin estar medido es que ese `.node` CARGUE en
+Windows, que es distinto de que sea el archivo correcto.
+
+> **Y sobraban 14 MB.** El primer paquete llevó los OCHO prebuilds —macOS,
+> Linux, Windows ARM— de los que solo `win32-x64` sirve: 16 MB para usar 1.9.
+> Se excluyen bajo `win:`, y el paquete de macOS conserva el suyo.
+
+#### Lo que el empaquetado destapó, y es lo más importante de esta fase
+
+> **EL PRIMER INSTALADOR LLEVABA `.env.nube-pruebas` Y `.env.nube-real`
+> ADENTRO**, o sea las contraseñas de los tres usuarios de Supabase del
+> proyecto de pruebas, dentro del `.exe` que se le manda a Jimmy. También
+> `src/` entero con sus 93 archivos de prueba, `docs/`, `scripts/`,
+> `supabase/` y los `tsconfig`.
+
+La causa son dos comportamientos de electron-builder que hay que medir y no
+deducir, y los dos se midieron listando el asar:
+
+1. **`files` no es una lista blanca.** electron-builder parte de `**/*` y le
+   SUMA los patrones positivos. Para que algo no viaje hay que excluirlo por
+   nombre.
+2. **`win.files` REEMPLAZA a `files`, no lo completa.** Con las exclusiones
+   solo arriba y un `win.files` que sacaba unos prebuilds, el paquete de
+   Windows seguía llevando los `.env`. Por eso la lista vive completa bajo
+   `win:`, duplicada.
+
+Antes y después, contando el asar:
+
+| | Archivos en el asar | `.env` | Raíz |
+|---|---|---|---|
+| Primer paquete | 1262 | **4** | `dist`, `dist-electron`, `package.json`, `node_modules`, `.env*`, `CLAUDE.md`, `docs`, `scripts`, `src`, `supabase`, `tsconfig*`, … |
+| Paquete final | **925** | **0** | `dist`, `dist-electron`, `package.json`, `node_modules` |
+
+**Falta una salvaguarda permanente.** Hoy esto se comprobó a mano listando el
+asar; nada impide que un archivo nuevo vuelva a colarse mañana. Lo que
+corresponde es un guion que liste el paquete y falle si aparece algo que no
+debería —un `verify:paquete`, con el mismo criterio de §4.11—, y **no se hizo
+en esta fase**: queda como lo primero de la próxima.
+
+#### El modo kiosko no depende de estar en desarrollo
+
+Auditado sobre el proceso principal entero. **Hay UNA sola bandera de entorno
+en la ventana**, `enDesarrollo = process.env.ELECTRON_RENDERER_URL !== undefined`
+—esa variable la pone el servidor de desarrollo de electron-vite y en el
+paquete no existe—, y controla exactamente dos cosas, **las dos hacia el lado
+MÁS estricto en producción**:
+
+| Qué controla | En desarrollo | En el `.exe` |
+|---|---|---|
+| `webPreferences.devTools` | habilitadas | **deshabilitadas** |
+| El bloqueo de los atajos de recarga y de herramientas | no se bloquean | **se bloquean** |
+
+**Todo lo demás no tiene ninguna rama por entorno**, y se leyó uno por uno:
+pantalla completa, `frame: false`, sin barra de menú, `contextIsolation`,
+`nodeIntegration: false`, el bloqueo del zoom y del menú contextual, el atajo
+`Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4` y del cierre del sistema, y el
+botón de la barra de estado. `controlled-exit.ts` no nombra `process.env` ni
+`isPackaged` en ninguna línea. El único `app.isPackaged` del proyecto está en
+un informe de diagnóstico y no decide nada.
+
+**Sigue sin estar probado en Windows**, que es otra cosa: lo verificado es que
+ninguna protección se apoya en una variable de desarrollo.
+
+#### El instalador
+
+| Dato | Valor |
+|---|---|
+| Ruta | `release/1.0.0/POS-Jimmy-Cano-Setup-1.0.0.exe` |
+| Tamaño | **110 MB** (115 841 244 bytes) |
+| Instalación descomprimida | 400 MB |
+| Tipo | `PE32 executable (GUI) Intel 80386, Nullsoft Installer self-extracting archive` |
+| Destino | Windows x64, NSIS con asistente |
+| Firma | **ninguna**, a propósito |
+
+El asistente deja elegir la carpeta, instala para todos los usuarios de la
+máquina (`perMachine`, una elevación al instalar) y crea acceso directo en el
+escritorio y en el menú de inicio. `deleteAppDataOnUninstall: false`:
+desinstalar **no borra la base de datos de la tienda**.
+
+**Sin firmar, a propósito**: Windows va a mostrar «Windows protegió tu PC» la
+primera vez, que se saltea con «Más información» → «Ejecutar de todas formas» y
+no impide instalar. No hay ningún certificado configurado ni variable `CSC_` en
+el entorno, comprobado.
+
+#### El ícono
+
+`npm run icono` lo genera con el Chromium que Electron ya trae —el mismo
+criterio por el que el recibo se maqueta en HTML (§5)— y escribe
+`build/icon.png` (512 px) y `build/icon.ico` con los seis tamaños que Windows
+usa (16, 32, 48, 64, 128, 256). El `.ico` se arma a mano, con su cabecera de
+seis bytes y una entrada de dieciséis por imagen, para no sumar una dependencia
+por cuarenta líneas: la misma decisión que §4.33 tomó con `nativeImage` en vez
+de `sharp`. Es un saco de grano abierto sobre el verde de la pantalla de venta,
+sin texto: un ícono de 16 px con letras es una mancha.
+
+#### Lo que NO se verificó, y solo se puede verificar en Windows
+
+- **Que el instalador instale.** Nada de esto se ejecutó: se inspeccionó el
+  paquete, no se corrió. Que el asistente abra, que pida elevación, que cree
+  los accesos directos y que el `.exe` arranque son cinco cosas por confirmar.
+- **Que `better-sqlite3` CARGUE.** El archivo correcto está en el lugar
+  correcto; que Windows lo cargue y que la base abra es otra cosa.
+- **Que el modo kiosko se comporte igual**: el atajo con teclado
+  latinoamericano, `Alt+F4`, y que el Administrador de tareas siga disponible
+  (§4.6).
+- **`npm run diagnostico:credencial` en el `.exe`**, que es donde DPAPI entra
+  en juego por primera vez (§4.23), y `npm run diagnostico:imagen`.
+- **Que la advertencia de Windows sea la esperada** y no un bloqueo.
+- **El rendimiento en el i3**, que es el riesgo 8.8 entero (§4.36).
+- **Que la aplicación instalada no tenga nube configurada**, que es lo previsto
+  para esta entrega: sin `POS_NUBE_URL` las pantallas de nube y de restauración
+  van a decir «sin configurar», y eso es correcto hasta que se decida cómo
+  viaja esa configuración al instalador.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -5799,6 +5985,9 @@ con teclado latinoamericano.
 | **`sync_cola` SE PODA: se borra de verdad lo ya subido hace más de 30 días, en un ciclo del trabajador y como mucho una vez por día. Lo pendiente, lo bloqueante, los archivos apartados y LO SALTADO A MANO no se tocan nunca.** | No podar y aceptar que la cola crezca; podar por cantidad de filas en vez de por antigüedad; borrar también los lotes saltados; un índice sobre `sincronizado_en` para acelerarlo | Riesgo 8.6: unas 150 000 filas al año, con su payload, en un disco que además guarda PDF. **Borrar rompe la regla del proyecto —nada se borra (§4.11)— y por eso la justificación tiene que ser exacta:** `sync_cola` no es historial del negocio, es una lista de TAREAS; el hecho vive en su tabla, la nube ya tiene su copia confirmada por `sincronizado_en`, y lo que se borra es la anotación de que faltaba subirlo. Si la tabla se borrara entera no se perdería un dato del negocio. Treinta días porque la pregunta más tardía que se le hace es la del cierre de mes («esta venta de fin de mes, ¿subió?»), y no tiene que cubrir ni una tienda sin internet —lo pendiente no se borra— ni la escalera de reintentos, que topa en una hora. **Lo saltado a mano se excluye porque la justificación no lo alcanza**: es una tarea que alguien decidió NO cumplir, y esa nota es su única marca en el disco. Por antigüedad y no por cantidad, porque la pregunta que protege es «¿cuándo?» y no «¿cuántas?». Sin índice: es un recorrido una vez por día de una tabla que la propia poda mantiene chica, y el índice encarecería cada inserción. Medido: 49 950 de 50 000 filas en 61 ms, en macOS. | Prompt 54 — 2026-09-14 |
 | **El desfase del reloj se mide con el PUNTO MEDIO entre envío y recepción contra el CENTRO del segundo del servidor, con una incertidumbre explícita, y se avisa solo si pasa el minuto DESCONTADA esa incertidumbre.** | La resta directa `Date.now() - Date.parse(cabecera)`; medir solo en el ingreso, como ya hace `vida-del-token.ts`; corregir el reloj | Riesgo 8.5, que estaba «propuesto, no diseñado». La resta directa mide el desfase Y el viaje de ida y vuelta mezclados, y la cabecera `Date` tiene resolución de un segundo: con una conexión de tienda eso alcanza para inventar avisos que no existen, y un aviso falso repetido enseña a ignorarlo. Midiendo contra el punto medio y descontando la incertidumbre, **una conexión lenta no puede disparar el aviso: solo agranda la duda**, y hay prueba de que el mismo desfase avisa con una conexión normal y no con una lenta. Se mide en CADA respuesta de los cuatro caminos (proveedor, Auth, detector y restauración) con un observador compartido, que es lo que hace que el aviso salga una vez por hora y no una por camino. **No corrige la hora**: cambiarla es una acción administrativa que §4.6 prohíbe. Su umbral (60 s, del texto de §8.5) NO es el de §4.22 (30 s, cota medida de PostgREST): son dos diagnósticos por dos fuentes, y mezclarlos afirmaría como medido lo que no lo está. | Prompt 54 — 2026-09-14 |
 | **Un rechazo de Auth queda en la bitácora técnica con su código HTTP y su `error_code`; un ingreso correcto no escribe nada.** | Dejarlo como estaba; registrar solo el mensaje legible; registrar también el cuerpo entero de la respuesta | Lo pidió un problema real del 2026-09-14: un ingreso de restauración rechazado mostraba «Supabase rechazó ese correo y esa contraseña» y el `invalid_credentials` no quedaba en ningún lado —Auth no recibía registrador y la causa técnica va al renderer sin pasar por `log-tecnico.log`—, así que hubo que reproducirlo con `curl`. Se registra el `error_code` y no solo el mensaje porque el código es estable y el mensaje es texto que puede cambiar de redacción. «No contestó» se distingue de «contestó que no», que se diagnostican distinto. El cuerpo entero no, porque un servidor puede devolver en él lo que se le mandó. Con pruebas de que la contraseña no aparece por ningún camino, incluido ese, y su control del buscador. | Prompt 54 — 2026-09-14 |
+| **EL PAQUETE SE ARMA CON LISTA NEGRA, NO CON LISTA BLANCA, y `win.files` reemplaza a `files`. Las dos cosas se midieron listando el asar, y la primera evitó mandarle a Jimmy un instalador con las contraseñas de Supabase adentro.** | Confiar en que `files` sea una lista blanca, que es lo que el nombre sugiere; revisar el paquete a ojo | electron-builder parte de `**/*` y le SUMA los patrones positivos: con `files: [dist/**, dist-electron/**, package.json]`, el primer instalador de esta fase llevó `src/` entero con 93 archivos de prueba, `docs/`, `scripts/`, `supabase/`, los `tsconfig` y **`.env.nube-pruebas` y `.env.nube-real`**, o sea contraseñas de verdad dentro del `.exe`. Y con las exclusiones puestas seguía llevándolas, porque `win.files` REEMPLAZA la lista de arriba en vez de completarla, así que hay que repetirla entera bajo `win:`. Ninguna de las dos cosas se dedujo: se vio listando el asar antes y después (1262 archivos con 4 `.env`, contra 925 con ninguno). **Falta la salvaguarda permanente**: un `verify:paquete` que falle si algo se cuela, que queda como lo primero de la próxima fase. | Prompt 55 — 2026-09-14 |
+| **El nombre del producto es `POS Jimmy Cano`, y el `appId` NO cambia.** | Dejar «POS Agricola»; «POS Agrícola» con tilde; renombrar también el appId por coherencia | De `productName` salen la carpeta de datos (`%APPDATA%\POS Jimmy Cano\`, donde vive la base con todas las ventas), la llave con que DPAPI cifra la credencial de la nube (§4.23, medido) y el nombre del ejecutable: **cambiarlo en una versión futura deja huérfana la base y deja ilegible toda credencial guardada**, sin recuperación automática. «POS Agricola» sin tilde se lee como un error de tecleo y con tilde mete un carácter no ASCII en una ruta de Windows sin ganar nada; el nombre del dueño hace inconfundible el ícono en su escritorio. El `appId` es un identificador y no un nombre visible: de él salen la clave de desinstalación del registro y la agrupación en la barra de tareas, así que cambiarlo instalaría la versión nueva AL LADO de la vieja en vez de actualizarla. El nombre se inyecta al paquete con `extraMetadata` y NO al `package.json` del repositorio, así que la aplicación de desarrollo sigue siendo `pos-agricola` y no comparte datos ni credencial con la instalada. | Prompt 55 — 2026-09-14 |
+| **Empaquetar para Windows desde macOS NO necesita cross-compilar, porque no hay nada que compilar: `npmRebuild: false`.** | Dejar `npmRebuild: true` y confiar; montar una máquina Windows para el build; agregar un paso de CI en Windows | `better-sqlite3` 13 —la única dependencia nativa— trae los binarios de todas las plataformas dentro del paquete de npm (`prebuilds/`), elegidos en tiempo de ejecución por `process.platform` y hechos con N-API, así que el mismo archivo sirve para cualquier versión de Electron. Medido: en esta máquina no existe ningún `.node` compilado localmente, y el `prebuilds/win32-x64.node` es un `PE32+ DLL x86-64`. Con `npmRebuild: true` el empaquetado intentaría compilar C++ para Windows desde macOS, que es lo único que sí necesitaría una máquina Windows. **Lo que sigue sin medirse es que ese binario CARGUE en Windows**, que es distinto de que sea el archivo correcto. Si algún día entra una segunda dependencia nativa sin prebuilds, esta línea deja de alcanzar. | Prompt 55 — 2026-09-14 |
 | **La pantalla de restauración nombra el proyecto de Supabase ANTES de que el usuario escriba nada.** | Dejarlo como estaba; mostrarlo solo en el error; mostrar solo la URL | El 2026-09-14 se tecleó la credencial del proyecto de PRUEBAS contra el REAL: cada proyecto tiene su propia tabla de usuarios, así que la credencial de uno nunca sirve en el otro, y GoTrue contesta `invalid_credentials`, que la pantalla traduce a «revisá que sean los de tu usuario de restauración». O sea que el síntoma apunta a la contraseña cuando el problema es el proyecto. Mostrarlo en el error llegaría tarde: lo que hay que evitar es tipear la credencial equivocada, no explicarla después. Se muestra la REFERENCIA —lo que el panel usa como nombre y lo que una persona reconoce— con la URL al lado. El dato ya viajaba en el progreso; lo que faltaba era mostrarlo. | Prompt 54 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor

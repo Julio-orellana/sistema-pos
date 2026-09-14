@@ -1,25 +1,212 @@
-# Empaquetado de la aplicación de escritorio.
-# El artefacto final se entrega a Jimmy Cano como instalador; el módulo nativo
-# better-sqlite3 se recompila contra el ABI de Electron vía `npm run rebuild`.
+# ===========================================================================
+# Empaquetado de producción. El artefacto que Jimmy Cano instala.
+# ===========================================================================
+#
+# ---------------------------------------------------------------------------
+# EL NOMBRE FIJA LA IDENTIDAD DE LA APLICACIÓN, Y ESO NO SE PUEDE DESHACER
+# ---------------------------------------------------------------------------
+# `productName` no es solo lo que se lee en el escritorio. De él salen TRES
+# cosas que quedan atadas para siempre a los datos de la tienda:
+#
+#   1. **La carpeta de datos**, `%APPDATA%\POS Jimmy Cano\`, donde viven
+#      `pos-agricola.db` con todas las ventas, los PDF de los recibos, las
+#      fotos de los productos y la bitácora técnica (§8 de CLAUDE.md).
+#   2. **La llave con que `safeStorage` cifra la credencial de la nube.** En
+#      Windows es DPAPI, y la entrada se deriva del nombre del producto: medido
+#      en la fase 3.a (§4.23), un lector con otra identidad NO puede descifrar
+#      el archivo, ni siquiera con el archivo delante.
+#   3. El nombre del ejecutable y las entradas del menú de inicio.
+#
+# **Cambiar este nombre en una versión futura deja ilegible toda credencial ya
+# guardada y deja huérfana la carpeta de datos de toda terminal instalada**, y
+# no hay recuperación automática: habría que reconectar cada terminal a mano y
+# mover la base. Con una sola caja es un rato; el día que haya varias, se
+# planifica antes de publicar, no después. Está escrito en §4.23 con la
+# medición al lado.
+#
+# Se eligió **POS Jimmy Cano** y no «POS Agricola», que era el valor anterior y
+# que nunca llegó a un instalador: sin tilde se lee como un error de tecleo, y
+# con tilde mete un carácter no ASCII en una ruta de Windows sin ganar nada. El
+# nombre del dueño es además lo que hace inconfundible el ícono en un
+# escritorio donde puede haber otras cosas.
+#
+# `appId` NO cambia: es un identificador, no un nombre visible, y de él salen
+# la clave de desinstalación del registro de Windows y la agrupación en la
+# barra de tareas. Cambiarlo haría que una versión nueva se instalara al lado
+# de la vieja en vez de actualizarla.
+# ---------------------------------------------------------------------------
 appId: gt.posagricola.desktop
-productName: POS Agricola
-copyright: Copyright (c) 2026
+productName: POS Jimmy Cano
+copyright: Copyright (c) 2026 Julio Orellana
+
 directories:
   buildResources: build
   output: release/${version}
+
+# ---------------------------------------------------------------------------
+# QUÉ ENTRA AL PAQUETE. DOS COSAS QUE SE MIDIERON Y QUE NO SON OBVIAS
+# ---------------------------------------------------------------------------
+# **1. Listar lo que se quiere NO alcanza: hay que excluir por nombre.**
+# electron-builder parte de `**/*` y le SUMA los patrones positivos; no los
+# usa como lista blanca. El primer instalador que armó esta fase, con solo las
+# tres líneas positivas, llevó adentro `src/` entero con sus 93 archivos de
+# prueba, `docs/`, `scripts/`, `supabase/`, los `tsconfig` y —lo grave—
+# **`.env.nube-pruebas` y `.env.nube-real`**: las contraseñas de los tres
+# usuarios de Supabase del proyecto de pruebas, dentro del `.exe` que se le
+# manda a Jimmy. Se vio listando el asar del paquete, no leyendo la
+# documentación.
+#
+# **2. `win.files` REEMPLAZA esta lista, no la completa.** También medido: con
+# las exclusiones acá arriba y un `win.files` que solo sacaba unos prebuilds,
+# el paquete de Windows seguía llevando los `.env`. Por eso la lista vive
+# COMPLETA bajo `win:` y esta de acá queda para el paquete de macOS. Si algún
+# día se agrega otra plataforma, hay que repetirla ahí también; duplicarla es
+# feo y es lo que la herramienta impone.
+#
+# Comprobado sobre el paquete final: 925 archivos en el asar, ninguno `.env`, y
+# en la raíz solo `dist`, `dist-electron`, `package.json` y `node_modules`.
 files:
   - dist/**
   - dist-electron/**
   - package.json
+  - '!**/.env*'
+  - '!src'
+  - '!src/**'
+  - '!scripts/**'
+  - '!docs/**'
+  - '!supabase/**'
+  - '!build/**'
+  - '!release/**'
+  - '!coverage/**'
+  - '!**/*.md'
+  - '!tsconfig*.json'
+  - '!*.config.{ts,mts,cts,js,mjs,cjs}'
+  - '!electron-builder.yml'
+  - '!.vscode/**'
+  - '!.github/**'
+
+# ---------------------------------------------------------------------------
+# `app.getName()` DENTRO DE LA APLICACIÓN EMPAQUETADA
+# ---------------------------------------------------------------------------
+# Electron decide la carpeta de datos y la identidad de `safeStorage` con
+# `app.getName()`, que lee `productName` —o, si no está, `name`— del
+# `package.json` que viaja DENTRO del paquete, no de este archivo. El
+# `package.json` del repositorio no tiene `productName` a propósito, así que en
+# desarrollo la aplicación se llama `pos-agricola`; `extraMetadata` inyecta el
+# nombre solo en el paquete.
+#
+# **La consecuencia es deliberada: la aplicación de desarrollo y la instalada
+# NO comparten carpeta de datos ni credencial.** Es lo correcto —los datos de
+# prueba de una máquina de desarrollo no tienen por qué mezclarse con los de la
+# tienda— y hay que saberlo para no buscar en la carpeta equivocada.
+extraMetadata:
+  productName: POS Jimmy Cano
+
+# El módulo nativo no puede cargarse desde dentro del asar: Windows necesita el
+# `.node` como archivo suelto en el disco.
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
+
+# ---------------------------------------------------------------------------
+# NO SE RECOMPILA NADA, Y ESO ES LO QUE HACE POSIBLE EMPAQUETAR PARA WINDOWS
+# DESDE macOS
+# ---------------------------------------------------------------------------
+# `better-sqlite3` 13 es la única dependencia nativa del proyecto, y desde esa
+# versión trae **binarios precompilados para todas las plataformas dentro del
+# propio paquete** (`node_modules/better-sqlite3/prebuilds/`), elegidos en
+# tiempo de ejecución por `process.platform`/`process.arch` (ver
+# `lib/binding.js`). Están hechos con N-API, así que el mismo archivo sirve
+# para cualquier versión de Node o de Electron: no hay un ABI por versión que
+# haya que perseguir.
+#
+# Por eso `npmRebuild` va en `false`: no hay nada que recompilar, y dejarlo en
+# `true` haría que el empaquetado intentara compilar C++ para Windows desde
+# macOS, que es lo único de todo esto que NO se puede hacer sin una máquina
+# Windows. Con esto, el paquete se arma en macOS y se lleva el
+# `prebuilds/win32-x64.node` que npm ya bajó.
+#
+# **Si algún día se agrega una segunda dependencia nativa, hay que comprobar si
+# trae prebuilds igual.** Si no los trae, esta línea deja de alcanzar y el
+# empaquetado para Windows pasa a necesitar una máquina Windows.
+npmRebuild: false
+
+win:
+  # ---------------------------------------------------------------------------
+  # LOS BINARIOS DE LAS OTRAS PLATAFORMAS NO VIAJAN AL INSTALADOR DE WINDOWS
+  # ---------------------------------------------------------------------------
+  # `better-sqlite3` trae los ocho prebuilds en el paquete, y sin esto los ocho
+  # terminan dentro del instalador de Jimmy: **16 MB de los cuales solo 1.9 MB
+  # sirven** (medido sobre el primer paquete armado). Los de macOS y Linux no
+  # los puede cargar Windows ni por casualidad, y el de Windows ARM no
+  # corresponde al único destino declarado arriba, `x64`.
+  #
+  # La lista de arriba se repite acá entera porque `win.files` REEMPLAZA a
+  # `files`, no lo completa (medido; ver el comentario de `files`). Y la
+  # exclusión de los prebuilds ajenos no puede ir arriba: el paquete de macOS
+  # necesita `darwin-arm64.node` para poder abrirse en esta misma máquina.
+  #
+  # **Si algún día la tienda tuviera una máquina Windows ARM**, hay que quitar
+  # la tercera línea Y agregar `arm64` al destino; con el `.exe` de x64 andaría
+  # igual por emulación, pero eso no está medido y no se afirma.
+  files:
+    - dist/**
+    - dist-electron/**
+    - package.json
+    - '!**/.env*'
+    - '!src'
+    - '!src/**'
+    - '!scripts/**'
+    - '!docs/**'
+    - '!supabase/**'
+    - '!build/**'
+    - '!release/**'
+    - '!coverage/**'
+    - '!**/*.md'
+    - '!tsconfig*.json'
+    - '!*.config.{ts,mts,cts,js,mjs,cjs}'
+    - '!electron-builder.yml'
+    - '!.vscode/**'
+    - '!.github/**'
+    - '!**/node_modules/better-sqlite3/prebuilds/darwin-*.node'
+    - '!**/node_modules/better-sqlite3/prebuilds/linux*.node'
+    - '!**/node_modules/better-sqlite3/prebuilds/win32-arm64.node'
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  # El nombre del `.exe` dentro de la instalación. Se escribe explícito aunque
+  # coincida con `productName`, porque de acá sale lo que Jimmy ve en el
+  # Administrador de tareas.
+  executableName: POS Jimmy Cano
+  # Sin firma: decisión pendiente. Windows va a mostrar «Windows protegió tu
+  # PC» en la primera ejecución, que se saltea con «Más información» → «Ejecutar
+  # de todas formas» y no impide instalar.
+  signAndEditExecutable: true
+
+nsis:
+  # Con asistente, no de un clic: Jimmy tiene que poder ver y elegir dónde se
+  # instala en vez de que aparezca instalado sin haber preguntado.
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Un acceso directo en el escritorio y otro en el menú de inicio: es una
+  # terminal de mostrador, y encontrar el programa no puede depender de buscar.
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: POS Jimmy Cano
+  # Para todos los usuarios de la máquina, no solo para quien instala: la
+  # terminal de la tienda puede tener una cuenta distinta a la de quien la
+  # configura. Pide elevación una vez, al instalar.
+  perMachine: true
+  allowElevation: true
+  # El instalador que se le manda a Jimmy, sin espacios: viaja por correo o por
+  # un pendrive, y un nombre sin espacios no se rompe en ninguna de las dos.
+  artifactName: POS-Jimmy-Cano-Setup-${version}.${ext}
+  uninstallDisplayName: POS Jimmy Cano
+  deleteAppDataOnUninstall: false
+
 mac:
   target:
     - dmg
   category: public.app-category.business
-win:
-  target:
-    - nsis
-nsis:
-  oneClick: false
-  allowToChangeInstallationDirectory: true
+  icon: build/icon.png

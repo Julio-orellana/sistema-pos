@@ -1,6 +1,6 @@
 {
   "name": "pos-agricola",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Sistema de punto de venta de escritorio para tienda de productos agricolas (venta a granel y por unidad, detalle y mayoreo). Cliente: Jimmy Cano, Guatemala.",
   "author": "Julio Orellana",
@@ -38,6 +38,7 @@
     "verify:nube": "node scripts/verificacion-de-nube.cjs",
     "fotos:reducir": "npm run build && electron . --reducir-fotos",
     "diagnostico:imagen": "electron scripts/sonda-de-imagen.cjs",
+    "icono": "electron scripts/generar-icono.cjs",
     "verify:restauracion": "vitest run --config vitest.nube.config.ts",
     "verify:restauracion:renovacion": "POS_NUBE_RENOVACION=1 vitest run --config vitest.nube.config.ts renovacion-de-sesion",
     "verify:pantallas:restauracion": "npm run build && node scripts/verificacion-de-restauracion-en-pantalla.cjs",
