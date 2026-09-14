@@ -23,6 +23,8 @@
  * archivo de credencial y la bitácora buscándola.
  */
 
+import type { ObservadorDelRelojDeLaNube } from './reloj-de-la-nube';
+
 /** Lo que devuelve Auth cuando la cosa sale bien. */
 export interface SesionDeAuth {
   readonly accessToken: string;
@@ -75,6 +77,17 @@ interface CuerpoDeAuth {
   readonly error_description?: unknown;
   readonly msg?: unknown;
   readonly error?: unknown;
+  /** El código estable de GoTrue: `invalid_credentials`, `validation_failed`, … */
+  readonly error_code?: unknown;
+}
+
+/**
+ * El `error_code` de GoTrue, si vino. Es el dato que de verdad identifica el
+ * rechazo: el `msg` es texto para una persona y puede cambiar de redacción,
+ * el código no.
+ */
+function codigoDelCuerpo(cuerpo: CuerpoDeAuth | null): string {
+  return typeof cuerpo?.error_code === 'string' && cuerpo.error_code !== '' ? cuerpo.error_code : 'sin error_code';
 }
 
 /**
@@ -91,25 +104,56 @@ function mensajeDelCuerpo(cuerpo: CuerpoDeAuth | null, estado: number): string {
   return `Supabase Auth respondió ${String(estado)} sin explicar por qué.`;
 }
 
+/** Lo opcional del cliente de Auth: dónde anotar y con qué medir el reloj. */
+export interface OpcionesDelClienteDeAuth {
+  /**
+   * Dónde queda el rechazo, con su código. Va a la bitácora TÉCNICA.
+   *
+   * **Esto nació de un problema real, el 2026-09-14.** Un ingreso de
+   * restauración fue rechazado y la aplicación solo mostró «Supabase rechazó
+   * ese correo y esa contraseña»: el `error_code` exacto no quedaba en ningún
+   * lado —Auth no recibía ningún registrador, y la causa técnica viaja al
+   * renderer dentro de la respuesta IPC sin pasar por `log-tecnico.log`—, así
+   * que hubo que reproducirlo por fuera con `curl` para verlo. Con esto, el
+   * `invalid_credentials` queda escrito la primera vez.
+   */
+  readonly registrar?: (mensaje: string) => void;
+  /** Mide el reloj de esta máquina contra el del servidor (riesgo 8.5). */
+  readonly relojDeLaNube?: ObservadorDelRelojDeLaNube;
+}
+
 /** Cliente real, por HTTPS, contra el endpoint de Auth del proyecto. */
 export class ClienteDeAuthHttp implements ClienteDeAuth {
+  private readonly registrar: (mensaje: string) => void;
+  private readonly relojDeLaNube: ObservadorDelRelojDeLaNube | null;
+
   public constructor(
     private readonly urlDelProyecto: string,
     private readonly llavePublicable: string,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    opciones: OpcionesDelClienteDeAuth = {},
+  ) {
+    this.registrar = opciones.registrar ?? ((): void => undefined);
+    this.relojDeLaNube = opciones.relojDeLaNube ?? null;
+  }
 
   public iniciarSesionConContrasena(correo: string, contrasena: string): Promise<ResultadoDeAuth> {
-    return this.pedirToken('password', { email: correo, password: contrasena });
+    return this.pedirToken('password', { email: correo, password: contrasena }, `el ingreso de ${correo}`);
   }
 
   public refrescar(tokenDeRefresco: string): Promise<ResultadoDeAuth> {
-    return this.pedirToken('refresh_token', { refresh_token: tokenDeRefresco });
+    return this.pedirToken('refresh_token', { refresh_token: tokenDeRefresco }, 'la renovación de la sesión');
   }
 
   private async pedirToken(
     tipo: 'password' | 'refresh_token',
     cuerpo: Readonly<Record<string, string>>,
+    /**
+     * Qué se estaba intentando, para la bitácora. **Nunca lleva la contraseña
+     * ni el token de refresco**: solo el correo, que no es secreto y ya se
+     * registra al iniciar sesión bien.
+     */
+    queSeIntentaba: string,
   ): Promise<ResultadoDeAuth> {
     const url = `${this.urlDelProyecto.replace(/\/+$/, '')}/auth/v1/token?grant_type=${tipo}`;
     const cancelacion = new AbortController();
@@ -117,6 +161,7 @@ export class ClienteDeAuthHttp implements ClienteDeAuth {
       cancelacion.abort();
     }, TIEMPO_MAXIMO_DE_AUTH_MS);
 
+    const enviadoEn = Date.now();
     try {
       const respuesta = await this.fetchImpl(url, {
         method: 'POST',
@@ -126,6 +171,11 @@ export class ClienteDeAuthHttp implements ClienteDeAuth {
         },
         body: JSON.stringify(cuerpo),
         signal: cancelacion.signal,
+      });
+      this.relojDeLaNube?.observar({
+        cabeceraDate: respuesta.headers.get('date'),
+        enviadoEn,
+        recibidoEn: Date.now(),
       });
 
       const texto = await respuesta.text();
@@ -137,9 +187,13 @@ export class ClienteDeAuthHttp implements ClienteDeAuth {
       }
 
       if (!respuesta.ok) {
+        const mensaje = mensajeDelCuerpo(leido, respuesta.status);
+        this.registrar(
+          `Auth rechazó ${queSeIntentaba}: HTTP ${String(respuesta.status)} ${codigoDelCuerpo(leido)} «${mensaje}»`,
+        );
         return {
           ok: false,
-          fallo: { estadoHttp: respuesta.status, mensaje: mensajeDelCuerpo(leido, respuesta.status) },
+          fallo: { estadoHttp: respuesta.status, mensaje },
         };
       }
 
@@ -169,12 +223,16 @@ export class ClienteDeAuthHttp implements ClienteDeAuth {
       // transitorio, que es lo correcto para un corte de red.
       const detalle = error instanceof Error ? error.message : String(error);
       const agotado = error instanceof Error && error.name === 'AbortError';
+      const mensaje = agotado
+        ? `Supabase Auth no contestó en ${String(TIEMPO_MAXIMO_DE_AUTH_MS / MS_POR_SEGUNDO)} s.`
+        : `No se pudo hablar con Supabase Auth: ${detalle}`;
+      // Sin código: no hubo respuesta. Queda igual en la bitácora, porque «no
+      // contestó» y «contestó que no» se diagnostican distinto.
+      this.registrar(`Auth no contestó a ${queSeIntentaba}: ${mensaje}`);
       return {
         ok: false,
         fallo: {
-          mensaje: agotado
-            ? `Supabase Auth no contestó en ${String(TIEMPO_MAXIMO_DE_AUTH_MS / MS_POR_SEGUNDO)} s.`
-            : `No se pudo hablar con Supabase Auth: ${detalle}`,
+          mensaje,
         },
       };
     } finally {

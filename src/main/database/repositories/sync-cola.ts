@@ -9,6 +9,17 @@
 import type { ElementoSyncCola, NuevoElementoSyncCola, OperacionSync } from './entidades';
 import { RepositorioBase, ahora, nuevoId } from './base';
 
+/**
+ * Con qué empieza la nota que `marcarLoteSaltado` deja en `error`.
+ *
+ * Vive acá, y no dentro del servicio que la escribe, porque hay DOS lugares
+ * que tienen que estar de acuerdo sobre qué significa esa marca: el que la
+ * pone y la PODA, que a esas filas no las toca (ver
+ * `podarSincronizadasAntesDe`). Dos textos escritos por separado que tienen
+ * que coincidir siempre son una discrepancia esperando a ocurrir.
+ */
+export const PREFIJO_DE_LOTE_SALTADO = 'SALTADO A MANO';
+
 /** Cuántos pendientes hay, agrupados por qué tabla o tipo de archivo son. */
 export interface PendientesPorTabla {
   readonly entidadTipo: string;
@@ -253,6 +264,48 @@ export class RepositorioDeSyncCola extends RepositorioBase {
             WHERE lote_id = ? AND sincronizado_en IS NULL`,
         )
         .run(ahora(), loteId);
+      return resultado.changes;
+    });
+  }
+
+  /**
+   * LA PODA (riesgo 8.6): borra de verdad las filas ya subidas y viejas.
+   *
+   * **Es una de las poquísimas operaciones del proyecto que BORRA**, en un
+   * sistema cuya regla es que nada se borra (§4.11), así que el criterio tiene
+   * que ser explícito. Se justifica igual que el guion de datos de ejemplo:
+   * **esto no es historial de negocio, es una lista de tareas ya cumplidas.**
+   * El hecho de negocio vive en su tabla —la venta en `ventas`, el asiento en
+   * `auditoria_log`— y la copia de la nube lo tiene; lo que se borra acá es la
+   * anotación de que faltaba subirlo, cuya razón de existir se agotó el día que
+   * se subió.
+   *
+   * Tres cosas que NO borra, y cada una por su motivo:
+   *
+   *   · **Lo pendiente** (`sincronizado_en IS NULL`): es exactamente lo que la
+   *     cola existe para no perder. Incluye los lotes bloqueantes y los
+   *     archivos apartados por no estar en el disco (§2.5.4), que son
+   *     pendientes con otro nombre.
+   *   · **Lo saltado a mano**: la justificación de arriba no los cubre. Un
+   *     lote saltado es una tarea que una persona decidió NO cumplir, un hueco
+   *     deliberado en el respaldo (decisión 9), y esta nota es su única marca
+   *     en el disco. El registro completo vive en `auditoria_log`, pero borrar
+   *     la marca local dejaría la fila indistinguible de una subida real, que
+   *     es justo lo que `marcarLoteSaltado` evita.
+   *   · **Lo reciente**: lo decide quien llama, con `limiteIso`.
+   *
+   * Devuelve cuántas filas borró, para que quede en la bitácora.
+   */
+  public podarSincronizadasAntesDe(limiteIso: string): number {
+    return this.ejecutar(() => {
+      const resultado = this.base
+        .prepare(
+          `DELETE FROM sync_cola
+            WHERE sincronizado_en IS NOT NULL
+              AND sincronizado_en < ?
+              AND (error IS NULL OR error NOT LIKE ?)`,
+        )
+        .run(limiteIso, `${PREFIJO_DE_LOTE_SALTADO}%`);
       return resultado.changes;
     });
   }

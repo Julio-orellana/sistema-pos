@@ -44,6 +44,7 @@ import { VERSION_DEL_CONTRATO_DE_SINCRONIZACION } from '@shared/contrato-de-sinc
 
 import { PREFIJO_DE_ARCHIVO, type ArchivoParaSubir } from '@main/database/bandeja-de-salida';
 import type { DetectorDeConexion } from './deteccion-de-conexion';
+import type { ObservadorDelRelojDeLaNube } from './reloj-de-la-nube';
 import { elegirFuncionDelLote, LoteNoEnrutable } from './enrutador-de-lotes';
 import type { SesionDeNube } from './sesion-de-nube';
 import type { SubidorDeFotos } from './subida-de-fotos';
@@ -147,6 +148,8 @@ export interface DependenciasDelProveedor {
    */
   readonly subidorDeFotos?: SubidorDeFotos;
   readonly registrar?: (mensaje: string) => void;
+  /** Mide el reloj de esta máquina contra el del servidor, en cada respuesta (riesgo 8.5). */
+  readonly relojDeLaNube?: ObservadorDelRelojDeLaNube;
 }
 
 export class SupabaseSyncProvider implements SyncProvider {
@@ -160,6 +163,7 @@ export class SupabaseSyncProvider implements SyncProvider {
   private readonly registrar: (mensaje: string) => void;
 
   private readonly subidorDeFotos: SubidorDeFotos | undefined;
+  private readonly relojDeLaNube: ObservadorDelRelojDeLaNube | null;
 
   public constructor(dependencias: DependenciasDelProveedor) {
     this.urlDelProyecto = dependencias.urlDelProyecto.replace(/\/+$/, '');
@@ -169,6 +173,7 @@ export class SupabaseSyncProvider implements SyncProvider {
     this.buscar = dependencias.buscar ?? fetch;
     this.registrar = dependencias.registrar ?? ((): void => undefined);
     this.subidorDeFotos = dependencias.subidorDeFotos;
+    this.relojDeLaNube = dependencias.relojDeLaNube ?? null;
   }
 
   public async empujarCambios(cambios: readonly CambioSincronizable[]): Promise<ResultadoEmpuje> {
@@ -226,6 +231,7 @@ export class SupabaseSyncProvider implements SyncProvider {
     const reloj = setTimeout(() => {
       cancelacion.abort();
     }, TIEMPO_MAXIMO_DE_RPC_MS);
+    const enviadoEn = Date.now();
     try {
       const respuesta = await this.buscar(`${this.urlDelProyecto}/rest/v1/rpc/${funcion}`, {
         method: 'POST',
@@ -239,6 +245,11 @@ export class SupabaseSyncProvider implements SyncProvider {
           version_de_contrato: VERSION_DEL_CONTRATO_DE_SINCRONIZACION,
         }),
         signal: cancelacion.signal,
+      });
+      this.relojDeLaNube?.observar({
+        cabeceraDate: respuesta.headers.get('date'),
+        enviadoEn,
+        recibidoEn: Date.now(),
       });
 
       const texto = await respuesta.text();

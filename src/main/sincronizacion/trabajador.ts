@@ -55,6 +55,7 @@ import type { SyncProvider, CambioSincronizable } from '@shared/adapters';
 import type { ElementoSyncCola } from '@main/database/repositories/entidades';
 import type { RepositorioDeSyncCola } from '@main/database/repositories/sync-cola';
 import { hayTransaccionDeNegocioEnCurso } from '@main/database/transaccion-en-curso';
+import type { PodaDeLaCola } from './poda-de-la-cola';
 import {
   clasificarFallo,
   ESPERA_POR_ARCHIVO_AUSENTE_MS,
@@ -156,6 +157,12 @@ export interface DependenciasDelTrabajador {
    * CLAUDE.md §4.14 ya rechazó para los fallos de impresión.
    */
   readonly registrar?: (mensaje: string) => void;
+  /**
+   * La poda de la cola (riesgo 8.6). Opcional: sin ella el trabajador se
+   * comporta exactamente como antes, y las pruebas que no la miran no tienen
+   * que construirla.
+   */
+  readonly poda?: PodaDeLaCola;
 }
 
 /** Una fila de la cola, lista para viajar. */
@@ -188,6 +195,7 @@ export class TrabajadorDeSincronizacion {
   private readonly ahora: () => number;
   private readonly azar: () => number;
   private readonly registrar: (mensaje: string) => void;
+  private readonly poda: PodaDeLaCola | null;
   public readonly presupuesto: PresupuestoDeCiclo;
 
   /** `true` mientras hay un ciclo corriendo. Impide que se encimen dos. */
@@ -199,6 +207,7 @@ export class TrabajadorDeSincronizacion {
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
     this.azar = dependencias.azar ?? Math.random;
     this.registrar = dependencias.registrar ?? ((): void => undefined);
+    this.poda = dependencias.poda ?? null;
     this.presupuesto = { ...PRESUPUESTO_POR_DEFECTO, ...dependencias.presupuesto };
   }
 
@@ -229,6 +238,16 @@ export class TrabajadorDeSincronizacion {
 
     this.corriendo = true;
     try {
+      /*
+        LA PODA VA ACÁ, antes de subir nada (riesgo 8.6). Es mantenimiento, no
+        parte de la subida: no cuenta como lote, no entra en el presupuesto del
+        ciclo y no puede hacerlo fallar. Cede ante una transacción de negocio
+        por la misma razón que todo lo demás —una sola conexión (§4.18)—, y en
+        ese caso sencillamente le toca en el próximo ciclo.
+      */
+      if (this.poda !== null && !hayTransaccionDeNegocioEnCurso()) {
+        this.poda.podarSiTocaba();
+      }
       return await this.subirLotes(inicio);
     } finally {
       this.corriendo = false;

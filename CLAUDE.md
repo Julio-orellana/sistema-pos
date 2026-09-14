@@ -5327,6 +5327,241 @@ correrlo:
    explica además cómo cortar el ensayo: Ctrl+C, porque desde la aplicación no
    se puede.
 
+### 4.36 La poda, el reloj, y el cierre del módulo (Fase 4.c)
+
+La última fase. Cierra los dos riesgos de §8 que quedaban con una propuesta y
+sin diseño —el reloj y el crecimiento de la cola— y suma las dos mejoras que
+el ensayo contra el proyecto real había dejado señaladas el mismo día.
+
+#### 1. La poda de `sync_cola` (riesgo 8.6): 30 días, en el trabajador
+
+Cada fila de negocio deja una fila en la cola, para siempre, con su payload al
+lado: unas **150 000 al año** según §8.6, y nada las borraba.
+
+**Es de las poquísimas operaciones del proyecto que BORRA de verdad**, en un
+sistema cuya regla es que nada se borra (§4.11), así que la justificación tiene
+que ser precisa y no un «total, no sirve»:
+
+> `sync_cola` **no es historial del negocio: es una lista de tareas.** El hecho
+> —la venta, el asiento, el recibo— vive en SU tabla y no se toca, y la nube ya
+> tiene su copia, confirmada por la marca `sincronizado_en`, que solo se
+> escribe cuando la función de Postgres respondió que sí. Lo que se borra es la
+> anotación de que eso faltaba subir, cuya razón de existir se agotó el día que
+> se subió. Dicho al revés, que es como conviene comprobarlo: **si esta tabla
+> se borrara entera, no se perdería ni un dato del negocio**; lo que se
+> perdería es poder contestar «¿esta venta llegó a la nube, y cuándo?» sin ir a
+> mirar la nube.
+
+**Por qué treinta días.** El número tiene que cubrir la pregunta más tardía que
+alguien le hace a esta tabla, y esa pregunta es de auditoría y llega con el
+cierre del mes: «esta venta de fin de mes, ¿subió?». Treinta días cubren un
+ciclo mensual entero más la revisión que viene justo después. Y lo que NO tiene
+que cubrir, dicho para que nadie lo agrande por las dudas: una tienda mucho
+tiempo sin internet (lo que no subió no se borra nunca), la escalera de
+reintentos (techo de una hora) ni un lote detenido (es un pendiente). Con la
+estimación de §8.6, treinta días dejan la cola en el orden de **12 000 filas**
+en vez de crecer sin fin. **Es un número elegido, no medido**, vive en una
+constante y no hay ninguna otra regla que dependa de él.
+
+**Qué NO borra, que es lo que hace que borrar se justifique:**
+
+| No se toca | Por qué |
+|---|---|
+| Lo **pendiente** (`sincronizado_en IS NULL`) | Es justo lo que la cola existe para no perder, por viejo que sea |
+| Un lote **bloqueante** | Es un pendiente con otro nombre |
+| Un **archivo apartado** por no estar en el disco (§2.5.4) | Ídem: sigue pendiente |
+| Un lote **SALTADO A MANO** | **La justificación de arriba no lo cubre.** Un lote saltado es una tarea que una persona decidió NO cumplir, un hueco deliberado en el respaldo (decisión 9), y esa nota es su única marca en el disco. El registro completo vive en `auditoria_log`, pero borrar la marca local dejaría la fila indistinguible de una subida real, que es exactamente lo que `marcarLoteSaltado` evita |
+
+Para que ese último caso no dependa de dos textos escritos por separado, el
+prefijo `SALTADO A MANO` pasó a ser una constante del repositorio
+(`PREFIJO_DE_LOTE_SALTADO`), que usan el que la escribe y la poda que la
+respeta.
+
+**Cuándo corre.** §8.6 dejaba sin decidir «si se hace en arranque o en un ciclo
+del trabajador»; la respuesta es **las dos cosas, y sale gratis**: corre al
+principio de un ciclo del trabajador y como mucho una vez cada 24 h, y como el
+planificador agenda un ciclo 30 s después de abrir la ventana (§4.18), la
+primera poda de cada arranque ocurre ahí. El contador vive en memoria a
+propósito: persistirlo sería una columna nueva para ahorrar un `DELETE` por
+arranque que ya es barato, y en la tienda la aplicación se apaga todas las
+noches. **Cede ante una transacción de negocio**, como todo lo que el trabajador
+hace; si le toca en medio de una venta, le toca en el próximo ciclo. Y **no
+lanza nunca**: es mantenimiento, y que falle no puede impedir que la cola suba.
+
+**Medido, sobre una base SQLite real** (`poda-de-la-cola.test.ts`, 18 pruebas):
+
+```
+[poda] 49950 de 50000 filas borradas en 61 ms (macOS, no es la máquina de la tienda)
+```
+
+Las 50 filas que sobreviven son las pendientes que la prueba sembró a
+propósito, una de cada mil. **No se agregó ningún índice** para esto: es un
+recorrido de una tabla que la propia poda mantiene chica, una vez por día, y un
+índice sobre `sincronizado_en` encarecería cada inserción para acelerar eso.
+
+**Y se vio correr en la APLICACIÓN REAL, no solo en Vitest.** Con un guion de
+una sola vez —que no quedó en el repositorio, como el arnés de §4.31— se abrió
+`electron .` sobre una carpeta temporal, se sembraron tres filas con los tres
+estados que importan, y se relanzó para que llegara el primer ciclo del
+trabajador:
+
+```
+sembradas: [{"id":…0001,"subida":1,"error":null},
+            {"id":…0002,"subida":0,"error":null},
+            {"id":…0003,"subida":1,"error":"SALTADO A MANO el 2025-01-01: categorias"}]
+log: 17:39:36.980Z [sincronizacion] poda de sync_cola: 1 fila(s) ya subidas hace más de 30 días
+     (antes de 2026-08-15T17:39:36.978Z). Lo pendiente y lo saltado a mano no se tocan.
+log: 17:39:37.235Z [sincronizacion] ciclo: cola_vaciada; 1 lotes, 1 filas, 257 ms
+quedaron:  [{"id":…0002,"error":null},
+            {"id":…0003,"error":"SALTADO A MANO el 2025-01-01: categorias"}]
+```
+
+Borró la vieja ya subida, y dejó la pendiente y la saltada. La pendiente que
+quedó la subió después el trabajador en el mismo ciclo, que es lo que tenía que
+pasar: la poda corre ANTES y no le saca lotes de la mano.
+
+#### 2. El reloj de esta máquina contra el de Supabase (riesgo 8.5)
+
+§8.5 lo dejó propuesto y sin diseñar: «podría compararlo contra la cabecera
+`Date` de las respuestas de Supabase y avisar si el desfase pasa de un minuto».
+
+**La resta ingenua no sirve, y por eso esto no es una resta.**
+`Date.now() - Date.parse(cabecera)` mide dos cosas mezcladas —el desfase real y
+el viaje de ida y vuelta— y no hay forma de separarlas después; encima, la
+cabecera `Date` tiene resolución de **un segundo**, así que la hora real del
+servidor está en algún punto de ese segundo y no en su borde. Se mide entonces
+como se mide la hora contra un servidor de tiempo, en chico:
+
+- se anota el reloj local **antes de enviar** y **después de recibir**;
+- se compara el **punto medio** de esos dos contra el **centro** del segundo
+  que declara el servidor;
+- se calcula una **incertidumbre explícita**: la mitad del viaje más medio
+  segundo de resolución;
+- y se avisa solo cuando el desfase pasa el minuto **descontada esa
+  incertidumbre**.
+
+Con eso, **una conexión lenta no puede inventar un aviso**: lo único que hace
+es agrandar la duda. Hay pruebas de las dos direcciones, incluida la que
+importa: un viaje de 20 s con 61 s de desfase NO avisa, y el MISMO desfase con
+una conexión normal SÍ.
+
+**Lo miden los cuatro caminos que hablan con Supabase** —el proveedor de
+sincronización, Auth, el detector de conexión y el cliente de restauración—
+con un observador **compartido**: así el aviso sale una vez por hora y no una
+por camino. El detector es el que más veces mide, porque con la cola con
+pendientes pega al health cada pocos minutos.
+
+**No corrige el reloj, y no debe**: cambiar la hora del sistema es una acción
+administrativa que §4.6 prohíbe. Avisa, en la bitácora técnica:
+
+```
+AVISO: el reloj de esta máquina va 300 s ADELANTADO (±1 s) respecto del servidor de
+Supabase. Con más de un minuto de diferencia, la fecha de las ventas y el corte del
+día del reporte dejan de ser confiables. Revisá la hora del sistema; la aplicación
+no la cambia.
+```
+
+> **ESTE UMBRAL NO ES EL DE §4.22, y no se mezclan.** El de allá
+> (`DESFASE_QUE_MERECE_AVISO_S`, 30 s) mide el `iat` del JWT contra el reloj
+> local, una vez por sesión, y su número sale de la cota MEDIDA de tolerancia
+> de PostgREST. El de acá son los 60 s que pide el texto de §8.5, medidos en
+> cada respuesta. Son dos diagnósticos del mismo hecho por dos fuentes;
+> confundir sus números sería afirmar que uno está medido cuando lo que está
+> medido es el otro.
+
+**Un defecto que encontró su propia prueba:** la primera versión del observador
+podía LANZAR si la bitácora fallaba —el `try` no envolvía al registrador—, y
+como `observar` se llama en el camino de cada petición, eso habría convertido
+un disco lleno en una subida caída. Un diagnóstico no puede tirar abajo lo que
+observa. Corregido, con la prueba que lo dice en su nombre.
+
+#### 3. El rechazo de Auth, con su código, en la bitácora
+
+Lo señaló el ensayo contra `pos-jimmy-cano` el mismo día (§4.35): un ingreso
+rechazado solo mostraba «Supabase rechazó ese correo y esa contraseña», y el
+`error_code` exacto no quedaba en ningún lado —`ClienteDeAuthHttp` no recibía
+ningún registrador, y la causa técnica viaja al renderer dentro de la respuesta
+IPC sin pasar por `log-tecnico.log`—, así que hubo que reproducirlo por fuera
+con `curl`. Ahora queda escrito la primera vez:
+
+```
+Auth rechazó el ingreso de restauracion@pruebas.invalid: HTTP 400 invalid_credentials «Invalid login credentials»
+Auth rechazó la renovación de la sesión: HTTP 400 validation_failed «Refresh token is not valid»
+Auth no contestó a el ingreso de …: No se pudo hablar con Supabase Auth: fetch failed
+```
+
+Se registra el **código estable** (`error_code`) y no solo el mensaje, porque el
+mensaje es texto para una persona y puede cambiar de redacción. «No contestó» y
+«contestó que no» quedan distinguidos, porque se diagnostican distinto. Un
+ingreso que sale bien **no escribe nada**. Y la contraseña no aparece por
+ningún camino: hay prueba de los tres casos —incluido el feo, un servidor que
+devuelve lo que se le mandó— con su control del buscador.
+
+#### 4. La pantalla de restauración dice a qué proyecto se conecta
+
+También del ensayo del mismo día: se tecleó la credencial del proyecto de
+PRUEBAS contra el proyecto REAL, y la pantalla no daba ninguna pista de contra
+cuál estaba por conectarse. Cada proyecto de Supabase tiene su propia tabla de
+usuarios, así que la credencial de uno nunca sirve en el otro **y el rechazo se
+lee como «la contraseña está mal»**. Ahora, antes de que nadie escriba nada:
+
+> Se va a restaurar desde el proyecto **zgsdaelmbxufgcsideep** de Supabase. Usá
+> la contraseña del usuario de restauración **de ese proyecto**.
+> `https://zgsdaelmbxufgcsideep.supabase.co`
+
+Se muestra la REFERENCIA del proyecto —lo que el panel usa como nombre— con la
+URL entera al lado. El dato ya viajaba en el progreso (`proyecto`); lo que
+faltaba era mostrarlo. `ensayo:restauracion` lo comprueba.
+
+#### Los diez riesgos de §8, uno por uno
+
+| Riesgo | Estado |
+|---|---|
+| 8.1 Ventana entre el robo y la revocación | **ABIERTO, y ningún software lo cierra.** Se acotó lo que se podía: la ventana después de revocar, la renuncia al token vigente y la visibilidad de la sincronización. Enterarse del robo no es problema de software |
+| 8.2 Hashes de PIN en la nube | **CERRADO.** La `0021` los quitó de Postgres y no se mandan; toda restauración resetea los PIN, así que allá no tenían función |
+| 8.3 El proyecto gratuito se pausa solo | **ABIERTO a propósito: es de negocio.** El latido diario lo evita con la terminal encendida; el resto lo cierra el plan Pro, que decide Julio |
+| 8.4 `ON CONFLICT` bajo RLS | **CERRADO midiendo**, y cambió el diseño (§4.20) |
+| 8.5 El reloj de la máquina | **CERRADO acá** |
+| 8.6 `sync_cola` crece sin límite | **CERRADO acá** |
+| 8.7 Dependencia nueva en el proceso principal | **CERRADO evitándola:** no se agregó `supabase-js`; todo habla con tres endpoints REST por `net.fetch` y el refresco está escrito y probado acá |
+| 8.8 Lo que el hardware no midió | **ABIERTO, y no se puede cerrar sin la máquina.** Ver abajo |
+| 8.9 Las funciones `SECURITY DEFINER` | **CERRADO en lo medible:** las seis endurecidas punto por punto y verificadas contra el descartable. Lo que queda es operativo: que nadie las «arregle» dentro de un año |
+| 8.10 Restaurar sobre una terminal con datos | **ABIERTO a propósito: es de negocio.** La respuesta correcta es un respaldo local, punto 11 de §6.2 |
+
+#### Riesgo 8.8: qué falta medir en la máquina de la tienda
+
+**Todo número de rendimiento de este módulo es una estimación sobre hardware
+que nadie midió.** Se midieron en un MacBook, con la conexión de una casa; la
+tienda tiene un i3 de 2011. Ninguno es falso, todos son de otra máquina. La
+lista concreta, para el día que exista el equipo:
+
+| Qué medir | Número de hoy | Dónde salió |
+|---|---|---|
+| La poda sobre una cola de 50 000 filas | **61 ms** | `poda-de-la-cola.test.ts`, macOS |
+| El hueco máximo del bucle de eventos durante un ciclo de 20 lotes | **2 ms** (umbral 15) | §4.18, macOS |
+| Una página de 1 000 filas al restaurar | **2 s, estimado y nunca medido** | §2.4 del diseño |
+| Reducir una foto de teléfono a 800 px | **8.02 MB → 110 KB**, tiempo sin medir | §4.33, macOS |
+| Subir un lote de venta entero | ~1 s contra el descartable | §4.25, conexión de casa |
+| Una restauración completa | 13 páginas en ~25 s con la nube vacía | §4.35, conexión de casa |
+| El arranque del trabajador y su primer ciclo | 30 s por diseño, no por medición | §4.18 |
+
+Y lo que hay que **correr** en Windows, que es lo mismo del punto 12 de §6.2:
+`npm run diagnostico:credencial` (allá el respaldo es DPAPI y no el llavero),
+`npm run diagnostico:imagen`, `npm run verify:pantallas`, y el atajo de salida
+con teclado latinoamericano.
+
+#### Lo que esta fase NO verificó
+
+- **Nada de esto se corrió contra la nube de verdad.** La poda no habla con la
+  red; el reloj sí, pero su medición se probó con respuestas construidas, no
+  con las de Supabase. Lo que sí se sabe de las respuestas reales es que traen
+  la cabecera `Date`: está en cada línea de las corridas de §4.35. **Que el
+  aviso dispare contra un reloj de verdad mal puesto no se ejercitó**, porque
+  habría que cambiarle la hora a esta máquina.
+- **La poda nunca corrió sobre una cola de la tienda**, que no existe: corrió
+  sobre 50 000 filas sembradas.
+- **Windows**, como siempre.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -5561,6 +5796,10 @@ correrlo:
 | **Toda migración local se corre además sobre una COPIA de una base con datos reales antes de darse por hecha, y «ya está aplicada» se afirma leyendo `migraciones_aplicadas`, no por suponerlo.** | Darla por verificada con Vitest y con los arneses, que parten de bases nuevas | Julio pidió confirmar que la 030 «se aplica igual de limpia contra cualquier base con datos reales». Al mirar la base de trabajo de esta máquina resultó que NO la tenía —estaba en la 018 desde el 12 de septiembre, con la 028 y la 029 tampoco aplicadas— y que no tiene recibos, así que sobre ella la 030 no convertía nada. Se emitió un recibo con el código ANTERIOR (`09903de`) sobre una copia y se migró con el actual: fila, payload pendiente, PDF en su sitio y reimpresión, con salida cruda (§4.14); después se migró la base de trabajo, con respaldo. Las pruebas usan filas que yo invento con la forma que creo que tienen los datos, y una base con historia puede tener lo que ninguna previó. De paso: `verify:arranque` arranca contra una base temporal propia, no contra la de trabajo. | Prompt 53 — 2026-09-14 |
 | **La restauración contra el proyecto REAL se ensaya con un guion aparte, `ensayo:restauracion`, que no siembra ni sube nada y en el que la contraseña la teclea la persona en la ventana.** | Aflojar el seguro para que `verify:restauracion` corra contra el real; pedirle a Julio la contraseña o un token para correrlo desde acá; darlo por bueno con el ensayo del descartable | Los dos arneses existentes siembran y suben una terminal de origen: contra el real escribirían datos falsos, y por eso el seguro los rechaza por nombre, y eso no se toca. La restauración en sí es solo lectura, así que lo que faltaba era un guion que SOLO restaure. La contraseña del usuario de restauración es la del dueño y no pasa por esta sesión ni por un archivo: el guion abre la aplicación real sobre una carpeta descartable, espera a que la persona la teclee, sigue la transferencia, exige que «Terminar» se niegue (nadie tiene PIN y el guion no asigna ninguno), deja la restauración para después y vuelca la base y la bitácora. Solo contra un proyecto que el seguro admita llena el formulario por su cuenta. Ensayado contra el descartable, 9 de 9, antes de proponerlo para el real (§4.35). | Prompt 53 — 2026-09-14 |
 | **Cada petición HTTP de la restauración queda en la bitácora técnica con su método, su ruta (sin `select=` ni `order=`) y su código; nunca el token ni la contraseña.** | Seguir anotándolo solo en los arneses; anotar la URL entera; no anotar nada | La evidencia cruda que Julio exige la anotaban los arneses con su propio `fetch`, así que una restauración en la tienda —justo la que habría que poder auditar— no dejaba ese rastro. La lista de columnas es larga y siempre igual por tabla, y taparía lo que sí distingue una petición de otra (`limit`, `id=gt.…`); el token va en la cabecera y no se registra. Con prueba de que ni la contraseña ni los dos tokens aparecen en la bitácora, y de que lo que se recorta es solo lo que se anota: la petición sigue viajando entera. | Prompt 53 — 2026-09-14 |
+| **`sync_cola` SE PODA: se borra de verdad lo ya subido hace más de 30 días, en un ciclo del trabajador y como mucho una vez por día. Lo pendiente, lo bloqueante, los archivos apartados y LO SALTADO A MANO no se tocan nunca.** | No podar y aceptar que la cola crezca; podar por cantidad de filas en vez de por antigüedad; borrar también los lotes saltados; un índice sobre `sincronizado_en` para acelerarlo | Riesgo 8.6: unas 150 000 filas al año, con su payload, en un disco que además guarda PDF. **Borrar rompe la regla del proyecto —nada se borra (§4.11)— y por eso la justificación tiene que ser exacta:** `sync_cola` no es historial del negocio, es una lista de TAREAS; el hecho vive en su tabla, la nube ya tiene su copia confirmada por `sincronizado_en`, y lo que se borra es la anotación de que faltaba subirlo. Si la tabla se borrara entera no se perdería un dato del negocio. Treinta días porque la pregunta más tardía que se le hace es la del cierre de mes («esta venta de fin de mes, ¿subió?»), y no tiene que cubrir ni una tienda sin internet —lo pendiente no se borra— ni la escalera de reintentos, que topa en una hora. **Lo saltado a mano se excluye porque la justificación no lo alcanza**: es una tarea que alguien decidió NO cumplir, y esa nota es su única marca en el disco. Por antigüedad y no por cantidad, porque la pregunta que protege es «¿cuándo?» y no «¿cuántas?». Sin índice: es un recorrido una vez por día de una tabla que la propia poda mantiene chica, y el índice encarecería cada inserción. Medido: 49 950 de 50 000 filas en 61 ms, en macOS. | Prompt 54 — 2026-09-14 |
+| **El desfase del reloj se mide con el PUNTO MEDIO entre envío y recepción contra el CENTRO del segundo del servidor, con una incertidumbre explícita, y se avisa solo si pasa el minuto DESCONTADA esa incertidumbre.** | La resta directa `Date.now() - Date.parse(cabecera)`; medir solo en el ingreso, como ya hace `vida-del-token.ts`; corregir el reloj | Riesgo 8.5, que estaba «propuesto, no diseñado». La resta directa mide el desfase Y el viaje de ida y vuelta mezclados, y la cabecera `Date` tiene resolución de un segundo: con una conexión de tienda eso alcanza para inventar avisos que no existen, y un aviso falso repetido enseña a ignorarlo. Midiendo contra el punto medio y descontando la incertidumbre, **una conexión lenta no puede disparar el aviso: solo agranda la duda**, y hay prueba de que el mismo desfase avisa con una conexión normal y no con una lenta. Se mide en CADA respuesta de los cuatro caminos (proveedor, Auth, detector y restauración) con un observador compartido, que es lo que hace que el aviso salga una vez por hora y no una por camino. **No corrige la hora**: cambiarla es una acción administrativa que §4.6 prohíbe. Su umbral (60 s, del texto de §8.5) NO es el de §4.22 (30 s, cota medida de PostgREST): son dos diagnósticos por dos fuentes, y mezclarlos afirmaría como medido lo que no lo está. | Prompt 54 — 2026-09-14 |
+| **Un rechazo de Auth queda en la bitácora técnica con su código HTTP y su `error_code`; un ingreso correcto no escribe nada.** | Dejarlo como estaba; registrar solo el mensaje legible; registrar también el cuerpo entero de la respuesta | Lo pidió un problema real del 2026-09-14: un ingreso de restauración rechazado mostraba «Supabase rechazó ese correo y esa contraseña» y el `invalid_credentials` no quedaba en ningún lado —Auth no recibía registrador y la causa técnica va al renderer sin pasar por `log-tecnico.log`—, así que hubo que reproducirlo con `curl`. Se registra el `error_code` y no solo el mensaje porque el código es estable y el mensaje es texto que puede cambiar de redacción. «No contestó» se distingue de «contestó que no», que se diagnostican distinto. El cuerpo entero no, porque un servidor puede devolver en él lo que se le mandó. Con pruebas de que la contraseña no aparece por ningún camino, incluido ese, y su control del buscador. | Prompt 54 — 2026-09-14 |
+| **La pantalla de restauración nombra el proyecto de Supabase ANTES de que el usuario escriba nada.** | Dejarlo como estaba; mostrarlo solo en el error; mostrar solo la URL | El 2026-09-14 se tecleó la credencial del proyecto de PRUEBAS contra el REAL: cada proyecto tiene su propia tabla de usuarios, así que la credencial de uno nunca sirve en el otro, y GoTrue contesta `invalid_credentials`, que la pantalla traduce a «revisá que sean los de tu usuario de restauración». O sea que el síntoma apunta a la contraseña cuando el problema es el proyecto. Mostrarlo en el error llegaría tarde: lo que hay que evitar es tipear la credencial equivocada, no explicarla después. Se muestra la REFERENCIA —lo que el panel usa como nombre y lo que una persona reconoce— con la URL al lado. El dato ya viajaba en el progreso; lo que faltaba era mostrarlo. | Prompt 54 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -5603,7 +5842,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
-| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
+| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
@@ -5725,8 +5964,22 @@ negocio:
     `pos-pruebas-descartable` con `npm run verify:restauracion`, y por la
     ventana —con el proceso matado a mitad y retomado en un arranque limpio—
     con `npm run verify:pantallas:restauracion`.
-  **Con la 4.b no queda ninguna fase del diseño sin construir.** **La
-  aplicación sigue sin haber hecho una llamada de red en la tienda**: sin
+  - **Fase 4.c** (§4.36): **el cierre del módulo.** La **poda** de `sync_cola`
+    (riesgo 8.6): borra lo ya subido hace más de 30 días, en un ciclo del
+    trabajador y como mucho una vez por día, sin tocar lo pendiente ni lo
+    saltado a mano. El **aviso de reloj desfasado** (riesgo 8.5): se mide
+    contra la cabecera `Date` de cada respuesta de los cuatro caminos que
+    hablan con Supabase, con incertidumbre explícita para que una conexión
+    lenta no invente avisos, y se avisa en la bitácora si pasa de un minuto.
+    Más el **rechazo de Auth con su `error_code`** en la bitácora y **el
+    proyecto de Supabase a la vista** en la pantalla de restauración.
+  **EL MÓDULO DE SINCRONIZACIÓN ESTÁ TERMINADO.** No queda ninguna sección del
+  diseño sin construir ni ningún riesgo de su §8 sin respuesta escrita: siete
+  cerrados y tres abiertos a propósito —el robo antes de la revocación, que
+  ningún software cierra; el pausado del proyecto gratuito y el respaldo local,
+  que son decisiones de negocio— más el 8.8, que espera la máquina de la
+  tienda. **La aplicación sigue sin haber hecho una llamada de red en la
+  tienda**: sin
   `POS_NUBE_URL` no se construye la sesión de nube, y las únicas llamadas
   reales las hacen `npm run verify:nube`, `npm run verify:restauracion`,
   `npm run diagnostico:credencial` y `npm run diagnostico:imagen`, guiones de

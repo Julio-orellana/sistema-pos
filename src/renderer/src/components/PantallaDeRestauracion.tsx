@@ -54,6 +54,23 @@ const NOMBRES_DE_TABLA: Readonly<Record<string, string>> = {
 
 const nombreDeTabla = (tabla: string): string => NOMBRES_DE_TABLA[tabla] ?? tabla;
 
+/**
+ * La REFERENCIA del proyecto de Supabase, sacada de su URL: lo que el panel
+ * muestra como nombre del proyecto (`https://abcd….supabase.co` → `abcd…`).
+ *
+ * Si la URL no tiene esa forma se devuelve tal cual: es un dato para que una
+ * persona reconozca el proyecto, y una URL rara se reconoce mejor entera que
+ * recortada a la mitad.
+ */
+function referenciaDelProyecto(url: string): string {
+  try {
+    const anfitrion = new URL(url).hostname;
+    return anfitrion.split('.')[0] ?? url;
+  } catch {
+    return url;
+  }
+}
+
 function fechaLegible(iso: string | null): string {
   if (iso === null) {
     return '—';
@@ -196,6 +213,21 @@ export function PantallaDeRestauracion({ alTerminar, alVolver }: PantallaDeResta
   const encabezado = (
     <header className="encabezado">
       <h1>Restaurar desde la nube</h1>
+      {/*
+        A QUÉ PROYECTO, ANTES DE QUE NADIE ESCRIBA NADA.
+        Esto no es decoración: el 2026-09-14 un intento de restauración contra
+        el proyecto real fue rechazado porque se tecleó la credencial del
+        proyecto de pruebas, y la pantalla no daba ninguna pista de contra cuál
+        estaba por conectarse. Cada proyecto de Supabase tiene su propia tabla
+        de usuarios, así que la credencial de uno nunca sirve en el otro, y el
+        rechazo se lee como «la contraseña está mal».
+      */}
+      {progreso.proyecto !== null && (
+        <p className="subtitulo" data-prueba="restauracion-proyecto">
+          Se va a restaurar desde el proyecto <strong>{referenciaDelProyecto(progreso.proyecto)}</strong> de Supabase.
+          Usá la contraseña del usuario de restauración <strong>de ese proyecto</strong>. <span className="tenue">{progreso.proyecto}</span>
+        </p>
+      )}
       <p className="subtitulo">
         Solo para una terminal nueva o vacía. Se trae todo lo que la nube tiene de la tienda, con los mismos
         identificadores; <strong>ningún usuario conserva su PIN</strong>: cada uno recibe uno nuevo antes de terminar.

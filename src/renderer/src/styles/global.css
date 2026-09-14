@@ -51,6 +51,13 @@ body {
   color: var(--texto-tenue);
 }
 
+/* Un dato secundario dentro de un texto que ya es secundario: la URL entera
+   del proyecto al lado de su referencia, que es lo que de verdad se lee. */
+.tenue {
+  opacity: 0.7;
+  font-size: 0.9em;
+}
+
 .tarjeta {
   background: var(--superficie);
   border: 1px solid var(--borde);

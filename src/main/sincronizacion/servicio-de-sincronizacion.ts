@@ -29,10 +29,11 @@ import type { Database } from 'better-sqlite3';
 import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
 import { ErrorDeNegocio } from '@main/database/errores';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
-import type {
-  LoteBloqueante,
-  PendientesPorTabla,
-  RepositorioDeSyncCola,
+import {
+  PREFIJO_DE_LOTE_SALTADO,
+  type LoteBloqueante,
+  type PendientesPorTabla,
+  type RepositorioDeSyncCola,
 } from '@main/database/repositories/sync-cola';
 import {
   calcularEstadoDeSincronizacion,
@@ -204,7 +205,7 @@ export class ServicioDeSincronizacion {
 
     return conBandejaDeSalida(this.base, () => {
       const nota =
-        `SALTADO A MANO el ${new Date(this.ahora()).toISOString()}: ${tablas.join(', ')}, ` +
+        `${PREFIJO_DE_LOTE_SALTADO} el ${new Date(this.ahora()).toISOString()}: ${tablas.join(', ')}, ` +
         `${String(filas.length)} fila(s). ` +
         (errorOriginal === null
           ? 'Sin error registrado.'

@@ -1,7 +1,41 @@
 # Sincronización con la nube — documento de diseño
 
-> **ESTADO: APROBADO, EN IMPLEMENTACIÓN POR FASES. Aprobado por Julio el
-> 2026-09-11.**
+> # ESTADO: MÓDULO TERMINADO. Todas las secciones están implementadas.
+>
+> **Cerrado el 2026-09-14 con la fase 4.c.** De este documento no queda
+> ninguna sección sin construir, y de su sección 8 no queda ningún riesgo sin
+> una respuesta escrita: los que se cerraron, cómo; los que siguen abiertos,
+> por qué siguen abiertos y qué haría falta para cerrarlos.
+>
+> **Qué sección construyó cada fase**, para poder ir de una a la otra:
+>
+> | Sección de este diseño | Fase | Dónde está contado |
+> |---|---|---|
+> | 2.4 — la bandeja de salida transaccional | 1.a | CLAUDE.md §4.17 |
+> | 2.4 y 3.2 — el trabajador, su presupuesto y sus reintentos | 1.b | §4.18 |
+> | 1.5.1 y 9.5 — el proyecto descartable y `recibido_en` | 2.a | §4.19 |
+> | 1.5.1, 4.3 y 9.2 — las funciones de sincronización y la prueba de deriva | 2.b | §4.20 |
+> | 2.3 y 2.5 — las políticas de RLS y los buckets de Storage | 2.c | §4.21 |
+> | 1.3, 1.4 y 1.6 — la credencial de la terminal y su ciclo de vida | 3.a | §4.23 |
+> | 3.1, 4.1 y 5 — el proveedor real, el enrutador y la detección de conexión | 3.b | §4.24 |
+> | 2.5.1 a 2.5.4 — los archivos: las fotos que suben y los PDF que no | 3.c | §4.33 |
+> | 3.3 y 3.4 — los tres niveles de visibilidad y el salto de un lote | 4.a | §4.34 |
+> | 6 — la restauración desde la nube, entera | 4.b | §4.35 |
+> | 8.5 y 8.6 — el reloj desfasado y la poda de la cola | 4.c | §4.36 |
+>
+> **Lo que sigue abierto no es de software**: son definiciones de negocio
+> (CLAUDE.md §6.2), la verificación en Windows y en el hardware real de la
+> tienda (riesgo 8.8, punto 12 de §6.2), y los tres riesgos que se aceptan a
+> sabiendas y se explican en la sección 8 —el robo antes de la revocación, el
+> pausado del proyecto gratuito y el respaldo local—.
+>
+> **Este documento describe el DISEÑO, no el código.** Donde lo construido se
+> apartó de él, hay una nota «COMO QUEDÓ CONSTRUIDO» al principio de la
+> sección, y la razón está siempre medida.
+
+> **ESTADO ANTERIOR: APROBADO, EN IMPLEMENTACIÓN POR FASES. Aprobado por Julio
+> el 2026-09-11.** Se conserva tal cual porque las dos excepciones de abajo
+> explican por qué dos decisiones no se aplicaron como estaban escritas.
 >
 > Las 17 decisiones de la sección 7 quedan adoptadas con la recomendación del
 > documento, salvo dos:
@@ -1521,10 +1555,40 @@ Cada una se tomó a la vista y está en el registro de decisiones de CLAUDE.md
 
 ## 8. Riesgos identificados y no resueltos
 
-Cada uno es un lugar donde este documento **no tiene** una respuesta sólida.
+Cada uno es un lugar donde este documento **no tenía** una respuesta sólida.
 Están escritos para que se decidan, no para que se olviden.
 
-### 8.1 La ventana entre el robo y la revocación
+> **CERRADOS AL TERMINAR EL MÓDULO (fase 4.c, 2026-09-14).** Ninguno queda sin
+> respuesta escrita. Tres siguen ABIERTOS a propósito, y conviene leer por qué
+> antes de intentar cerrarlos: dos no se pueden cerrar por software y el
+> tercero necesita una máquina que todavía no existe.
+>
+> | Riesgo | Estado | Dónde |
+> |---|---|---|
+> | 8.1 La ventana entre el robo y la revocación | **ABIERTO, y no se puede cerrar.** Ningún software se entera de un robo. Lo que sí se hizo: acotar la ventana DESPUÉS de revocar a la vida del JWT, y hacer visible la sincronización | §4.23 de CLAUDE.md |
+> | 8.2 Los hashes de PIN en la nube | **CERRADO.** La `0021` los quitó de Postgres y `COLUMNAS_EXCLUIDAS` no los manda; toda restauración resetea los PIN, así que allá no tenían función | §4.19, §4.35 |
+> | 8.3 El proyecto gratuito se pausa solo | **ABIERTO a propósito, y es de negocio.** El latido diario lo evita mientras la terminal esté encendida; el resto se cierra pagando el plan Pro, que es una decisión de Julio | §4.24 |
+> | 8.4 `ON CONFLICT DO NOTHING` bajo RLS | **CERRADO midiendo, y cambió el diseño:** todo lote sube por función `SECURITY DEFINER` y la terminal no tiene política directa sobre ninguna tabla | §4.20 |
+> | 8.5 El reloj de la máquina | **CERRADO (fase 4.c).** Se mide contra la cabecera `Date` de cada respuesta, con incertidumbre explícita, y se avisa en la bitácora si pasa de un minuto. No lo corrige: avisar es lo que corresponde | §4.36 |
+> | 8.6 `sync_cola` crece sin límite | **CERRADO (fase 4.c).** Poda diaria de lo ya subido hace más de 30 días; lo pendiente y lo saltado a mano no se tocan nunca | §4.36 |
+> | 8.7 Dependencia nueva en el proceso principal | **CERRADO por la vía que evitaba el riesgo:** no se agregó `@supabase/supabase-js`. Todo el módulo habla con tres endpoints REST por `net.fetch`, y el refresco está escrito y probado acá | §4.23, §4.24 |
+> | 8.8 Lo que el hardware todavía no midió | **ABIERTO, y sigue abierto hasta que exista la máquina.** Es el punto 12 de §6.2 de CLAUDE.md, con la lista de qué medir | §4.36 |
+> | 8.9 Las funciones `SECURITY DEFINER` | **CERRADO en lo que se podía:** las seis están endurecidas punto por punto y medidas contra el proyecto descartable. Lo que queda es operativo —que nadie las «arregle» dentro de un año— y vive escrito acá y en §4.20 | §4.20, §4.29 |
+> | 8.10 Restaurar sobre una terminal que ya tiene datos | **ABIERTO a propósito, y es de negocio:** la respuesta correcta es un respaldo local, que es el punto 11 de §6.2 y que este documento no cubre | §4.35 |
+
+### 8.1 La ventana entre el robo y la revocación — SIGUE ABIERTO, y NINGÚN software lo cierra
+
+> **ESTADO AL CERRAR EL MÓDULO (2026-09-14).** Abierto a propósito y para
+> siempre. Lo que se puede hacer por software está hecho y está medido: la
+> ventana DESPUÉS de revocar queda acotada a la vida del JWT —900 s, con la
+> cota de tolerancia de PostgREST medida aparte (§4.22 de CLAUDE.md)—, la
+> terminal renuncia por su cuenta al access token que todavía le serviría en
+> cuanto detecta la revocación (§4.23), y la sincronización es visible para que
+> una terminal de reemplazo note actividad ajena (§4.34). **Lo que no se puede
+> es enterarse del robo**, y eso no es un problema de software: entre que se
+> llevan la máquina y que alguien revoca la credencial, la credencial robada
+> sirve. El módulo acota el daño —solo escribe por funciones, no lee nada, y no
+> puede tocar el historial de ventas— y no lo elimina.
 
 Nada técnico la acorta. Durante ese tiempo la credencial robada puede
 insertar filas basura y modificar el catálogo (no el historial de ventas).
@@ -1613,7 +1677,21 @@ DEFINER y una nueva `sincronizar_lote_simple` para el resto), **y la terminal no
 tiene política directa sobre ninguna tabla.** Riesgo cerrado; la tabla de 2.3
 quedó reducida a `SELECT` para restauración.
 
-### 8.5 El reloj de la máquina
+### 8.5 El reloj de la máquina — CERRADO en la fase 4.c
+
+> **COMO QUEDÓ CONSTRUIDO.** La propuesta de abajo —«podría compararlo contra
+> la cabecera `Date` … queda propuesto, no diseñado»— se construyó tal cual, y
+> con una precisión que el texto no pedía: la resta ingenua mezcla el desfase
+> real con el viaje de ida y vuelta, así que se mide contra el PUNTO MEDIO
+> entre el envío y la recepción, se calcula una INCERTIDUMBRE explícita (la
+> mitad del viaje más el medio segundo de resolución de la cabecera) y se avisa
+> solo cuando el desfase supera el minuto **descontada esa incertidumbre**. Una
+> conexión lenta no puede inventar un aviso: lo único que hace es agrandar la
+> duda. Lo miden los cuatro caminos que hablan con Supabase —el proveedor,
+> Auth, el detector de conexión y la restauración— con un observador
+> compartido que escribe en la bitácora técnica como mucho una vez por hora.
+> **No corrige el reloj**, y no debe: cambiar la hora del sistema es una acción
+> administrativa que §4.6 de CLAUDE.md prohíbe. Ver CLAUDE.md §4.36.
 
 Todo depende de que Windows tenga la hora bien: `ventas.fecha` y `creado_en`
 se generan con el reloj local, el JWT se valida contra él, y el orden de la
@@ -1623,7 +1701,21 @@ aparezcan en el reporte de ayer (§4.15 ya lo sufre) y que Auth rechace un JWT
 compararlo contra la cabecera `Date` de las respuestas de Supabase y avisar
 si el desfase pasa de un minuto; queda propuesto, no diseñado.
 
-### 8.6 `sync_cola` crece sin límite
+### 8.6 `sync_cola` crece sin límite — CERRADO en la fase 4.c
+
+> **COMO QUEDÓ CONSTRUIDO.** Hay poda, y las dos cosas que este texto dejaba
+> sin decidir quedaron decididas: **N = 30 días** y **en un ciclo del
+> trabajador**, al principio y como mucho una vez cada 24 h —lo que incluye
+> «en el arranque», porque el planificador agenda un ciclo 30 s después de
+> abrir la ventana—. Treinta días cubren el cierre de mes más la revisión que
+> viene después, que es la pregunta más tardía que alguien le hace a esta
+> tabla; con la estimación de acá abajo eso deja la cola en el orden de 12 000
+> filas en vez de crecer sin fin. **Borra SOLO lo ya subido**: lo pendiente, lo
+> bloqueante, los archivos apartados y **lo saltado a mano** no se tocan nunca
+> —un lote saltado es una tarea que alguien decidió NO cumplir, así que la
+> justificación de «lista de tareas ya cumplidas» no lo cubre—. Medido sobre
+> una base real: 49 950 de 50 000 filas borradas en 61 ms en macOS, que no es
+> la máquina de la tienda (8.8). Ver CLAUDE.md §4.36.
 
 Cada fila de negocio deja una fila en la cola, para siempre, con su payload
 completo. Un año de operación son unas 150 000 entradas: decenas de
@@ -1634,7 +1726,17 @@ proyecto que borra de verdad. Se justifica como el guion de datos de ejemplo
 de días y si se hace en arranque o en un ciclo del trabajador quedan sin
 decidir.
 
-### 8.7 Dependencia nueva en el proceso principal
+### 8.7 Dependencia nueva en el proceso principal — CERRADO evitando la dependencia
+
+> **COMO QUEDÓ CONSTRUIDO.** No se agregó `@supabase/supabase-js` ni ninguna
+> otra dependencia nueva: el módulo entero habla con tres endpoints REST por
+> `net.fetch` de Electron —el que respeta el proxy de Windows (5.4)—, y el
+> refresco del token está escrito acá, con su escalera propia y sus pruebas
+> (§4.23 de CLAUDE.md). El riesgo se cierra porque la superficie que se temía
+> nunca entró: no hay un cliente de Auth de terceros que se actualice solo en
+> el proceso principal, y no hubo que averiguar cómo se comporta su refresco
+> automático sin `localStorage`. Lo que costó es lo que este texto anticipaba:
+> ese refresco hubo que escribirlo.
 
 `@supabase/supabase-js` trae su propio cliente de Auth con almacenamiento
 configurable, reintentos de refresco y tipado. También trae peso y una
@@ -1644,7 +1746,17 @@ refresco automático funcione en un proceso sin `localStorage` con un
 `storage` propio sobre `safeStorage`; con `fetch` a mano, hay que escribir
 ese refresco. No hay una respuesta sólida sin probar las dos en el hardware.
 
-### 8.8 Lo que el hardware todavía no midió
+### 8.8 Lo que el hardware todavía no midió — SIGUE ABIERTO, y no se puede cerrar sin la máquina
+
+> **ESTADO AL CERRAR EL MÓDULO (2026-09-14).** Sigue abierto entero, y es el
+> único riesgo que el software no puede cerrar por su cuenta. Lo que cambió es
+> que ahora la lista de qué medir es concreta en vez de general, y está en
+> CLAUDE.md §4.36. Todo número de rendimiento de este documento y de todo lo
+> construido —2 s por página de 1 000 filas, los 61 ms de la poda sobre 50 000
+> filas, los 110 KB por foto reducida, los 2 ms de hueco máximo del bucle de
+> eventos— se midió en un MacBook, no en el i3 de la tienda, y en algunos
+> casos con la conexión de una casa y no con la del mostrador. **Ninguno es
+> falso; todos son de otra máquina.**
 
 Todo número de rendimiento de este documento —2 segundos por página de 1 000
 filas, cientos de milisegundos por hash de 5 MB— es una estimación para un

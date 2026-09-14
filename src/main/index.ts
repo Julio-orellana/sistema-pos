@@ -82,6 +82,8 @@ import { ServicioDeSincronizacion } from '@main/sincronizacion/servicio-de-sincr
 import type { CredencialParaElResumen } from '@main/sincronizacion/resumen-de-sincronizacion';
 import { DetectorDeConexion } from '@main/sincronizacion/deteccion-de-conexion';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
+import { ObservadorDelRelojDeLaNube } from '@main/sincronizacion/reloj-de-la-nube';
+import { PodaDeLaCola } from '@main/sincronizacion/poda-de-la-cola';
 import { ServicioDeRestauracion } from '@main/restauracion/servicio-de-restauracion';
 import { ClienteDeRestauracionHttp } from '@main/restauracion/cliente-de-restauracion';
 import { AlmacenDelPuestoDeControl } from '@main/restauracion/puesto-de-control';
@@ -649,11 +651,39 @@ app.whenReady().then(
       del instalador el día del empaquetado. **La `service_role` no aparece
       por ningún lado, y no debe aparecer nunca.**
     */
+    /*
+      Lo de sincronización va a la bitácora TÉCNICA y además a la consola: en
+      desarrollo se ve en la terminal, y en producción la consola no la lee
+      nadie pero el archivo queda. Nunca a `auditoria_log`.
+    */
+    const anotarSincronizacion = (mensaje: string): void => {
+      logTecnico.registrar('sincronizacion', mensaje);
+      console.info(`[sincronizacion] ${mensaje}`);
+    };
+
+    /*
+      ===================================================================
+      EL RELOJ DE ESTA MÁQUINA, CONTRA EL DE SUPABASE (fase 4.c, riesgo 8.5)
+      ===================================================================
+      UNO SOLO, compartido por los cuatro caminos que hablan con la nube: el
+      proveedor de sincronización, Auth, el detector de conexión y el cliente
+      de restauración. Compartirlo es lo que hace que el aviso salga una vez
+      por hora y no una por camino, y que la última lectura sea la última de
+      verdad y no la de uno de los cuatro.
+
+      No corrige el reloj: avisa. Cambiar la hora del sistema es una acción
+      administrativa que este proyecto tiene prohibida (§4.6).
+    */
+    const relojDeLaNube = new ObservadorDelRelojDeLaNube(anotarSincronizacion);
+
     const urlDeLaNube = process.env.POS_NUBE_URL ?? '';
     const llaveDeLaNube = process.env.POS_NUBE_LLAVE_PUBLICABLE ?? '';
     if (urlDeLaNube !== '' && llaveDeLaNube !== '') {
       sesionDeNube = new SesionDeNube({
-        auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube),
+        auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube, undefined, {
+          registrar: anotarSincronizacion,
+          relojDeLaNube,
+        }),
         credencial: new AlmacenDeCredencial(app.getPath('userData'), safeStorage),
         // Para que el aviso de credencial revocada pueda decir cuántas filas
         // se están acumulando sin poder subir.
@@ -721,8 +751,15 @@ app.whenReady().then(
         ? new ClienteDeRestauracionHttp({
             urlDelProyecto: urlDeLaNube,
             llavePublicable: llaveDeLaNube,
-            auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube),
+            auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube, undefined, {
+              registrar: (mensaje): void => {
+                logTecnico.registrar('sincronizacion', `[restauracion] ${mensaje}`);
+                console.info(`[restauracion] ${mensaje}`);
+              },
+              relojDeLaNube,
+            }),
             buscar: net.fetch.bind(net),
+            relojDeLaNube,
             registrar: (mensaje): void => {
               logTecnico.registrar('sincronizacion', `[restauracion] ${mensaje}`);
               console.info(`[restauracion] ${mensaje}`);
@@ -738,6 +775,7 @@ app.whenReady().then(
             llavePublicable: llaveDeLaNube,
             sistemaDiceQueHayRed: (): boolean => net.isOnline(),
             buscar: net.fetch.bind(net),
+            relojDeLaNube,
           });
     const servicioDeRestauracion = new ServicioDeRestauracion({
       base: baseDeDatos,
@@ -807,16 +845,6 @@ app.whenReady().then(
       competir con el arranque en un i3.
     */
     /*
-      Lo de sincronización va a la bitácora TÉCNICA y además a la consola: en
-      desarrollo se ve en la terminal, y en producción la consola no la lee
-      nadie pero el archivo queda. Nunca a `auditoria_log`.
-    */
-    const anotarSincronizacion = (mensaje: string): void => {
-      logTecnico.registrar('sincronizacion', mensaje);
-      console.info(`[sincronizacion] ${mensaje}`);
-    };
-
-    /*
       ===================================================================
       EL PROVEEDOR REAL (fase 3.b)
       ===================================================================
@@ -838,6 +866,7 @@ app.whenReady().then(
             sistemaDiceQueHayRed: (): boolean => net.isOnline(),
             buscar: net.fetch.bind(net),
             registrar: anotarSincronizacion,
+            relojDeLaNube,
           });
 
     const proveedorDeSincronizacion = crearSyncProvider(
@@ -851,6 +880,7 @@ app.whenReady().then(
             conexion: detectorDeConexion,
             buscar: net.fetch.bind(net),
             registrar: anotarSincronizacion,
+            relojDeLaNube,
             /*
               Fase 3.c: quien sube las FOTOS. Solo el bucket `fotos`; los PDF de
               recibos no se suben y no hay con qué hacerlo (§2.5.3).
@@ -882,6 +912,17 @@ app.whenReady().then(
       cola: repositorios.syncCola,
       proveedor: proveedorDeSincronizacion,
       registrar: anotarSincronizacion,
+      /*
+        LA PODA de la cola (fase 4.c, riesgo 8.6). Corre dentro del ciclo del
+        trabajador, así que la primera de cada arranque ocurre con el primer
+        ciclo —30 s después de abrir la ventana— y después como mucho una vez
+        por día. Borra SOLO lo ya subido hace más de 30 días; lo pendiente y lo
+        saltado a mano no los toca nunca.
+      */
+      poda: new PodaDeLaCola({
+        cola: repositorios.syncCola,
+        registrar: anotarSincronizacion,
+      }),
     });
     planificadorDeSincronizacion = new PlanificadorDeSincronizacion({
       trabajador: trabajadorDeSincronizacion,

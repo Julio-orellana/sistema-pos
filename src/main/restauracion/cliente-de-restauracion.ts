@@ -45,6 +45,7 @@ import { z } from 'zod';
 
 import { ErrorDeNegocio } from '@main/database/errores';
 import type { ClienteDeAuth } from '@main/sincronizacion/auth-de-nube';
+import type { ObservadorDelRelojDeLaNube } from '@main/sincronizacion/reloj-de-la-nube';
 import {
   esperaHastaRenovar,
   leerClaimsSinVerificar,
@@ -134,6 +135,8 @@ export interface DependenciasDelClienteDeRestauracion {
   readonly buscar: BuscarEnLaRed;
   readonly ahora?: () => number;
   readonly registrar?: (mensaje: string) => void;
+  /** Mide el reloj de esta máquina contra el del servidor (riesgo 8.5). */
+  readonly relojDeLaNube?: ObservadorDelRelojDeLaNube;
 }
 
 interface SesionEnMemoria {
@@ -151,6 +154,7 @@ export class ClienteDeRestauracionHttp implements ClienteDeRestauracion {
   private readonly buscar: BuscarEnLaRed;
   private readonly ahora: () => number;
   private readonly registrar: (mensaje: string) => void;
+  private readonly relojDeLaNube: ObservadorDelRelojDeLaNube | null;
 
   private sesion: SesionEnMemoria | null = null;
 
@@ -161,6 +165,7 @@ export class ClienteDeRestauracionHttp implements ClienteDeRestauracion {
     this.buscar = dependencias.buscar;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
     this.registrar = dependencias.registrar ?? ((): void => undefined);
+    this.relojDeLaNube = dependencias.relojDeLaNube ?? null;
   }
 
   // -------------------------------------------------------------------------
@@ -287,12 +292,18 @@ export class ClienteDeRestauracionHttp implements ClienteDeRestauracion {
       headers.Prefer = opciones.prefer;
     }
     const metodo = opciones.metodo ?? 'GET';
+    const enviadoEn = Date.now();
     try {
       const respuesta = await this.buscar(`${this.urlDelProyecto}${ruta}`, {
         method: metodo,
         headers,
         ...(opciones.cuerpo === undefined ? {} : { body: JSON.stringify(opciones.cuerpo) }),
         signal: AbortSignal.timeout(opciones.tiempoMaximoMs ?? TIEMPO_MAXIMO_DE_LECTURA_MS),
+      });
+      this.relojDeLaNube?.observar({
+        cabeceraDate: respuesta.headers.get('date'),
+        enviadoEn,
+        recibidoEn: Date.now(),
       });
       // Cada petición queda en la bitácora técnica con su método, su ruta y su
       // código: es la evidencia cruda de una restauración, la misma que los

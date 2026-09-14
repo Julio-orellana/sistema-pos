@@ -52,6 +52,8 @@
  */
 export type BuscarEnLaRed = (url: string, opciones?: RequestInit) => Promise<Response>;
 
+import type { ObservadorDelRelojDeLaNube } from './reloj-de-la-nube';
+
 /** Cuánto se espera al health antes de darlo por perdido (§5.4). */
 export const TIEMPO_MAXIMO_DE_SALUD_MS = 8_000;
 
@@ -155,6 +157,14 @@ export interface DependenciasDeDeteccion {
   readonly buscar?: BuscarEnLaRed;
   readonly ahora?: () => number;
   readonly registrar?: (mensaje: string) => void;
+  /**
+   * Mide el reloj de esta máquina contra el del servidor (riesgo 8.5).
+   *
+   * Este es el camino que más veces mide: con la cola con pendientes, el
+   * detector pega al health cada pocos minutos, así que un reloj que se
+   * desfase durante el día se nota acá antes que en ningún otro lado.
+   */
+  readonly relojDeLaNube?: ObservadorDelRelojDeLaNube;
 }
 
 export class DetectorDeConexion {
@@ -165,6 +175,7 @@ export class DetectorDeConexion {
   private readonly buscar: BuscarEnLaRed;
   private readonly ahora: () => number;
   private readonly registrar: (mensaje: string) => void;
+  private readonly relojDeLaNube: ObservadorDelRelojDeLaNube | null;
 
   /** Comprobaciones seguidas que dieron «sin nube». Alimenta la escalera. */
   private fallidas = 0;
@@ -181,6 +192,7 @@ export class DetectorDeConexion {
     this.buscar = dependencias.buscar ?? fetch;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
     this.registrar = dependencias.registrar ?? ((): void => undefined);
+    this.relojDeLaNube = dependencias.relojDeLaNube ?? null;
   }
 
   public get veredicto(): Veredicto | null {
@@ -239,11 +251,17 @@ export class DetectorDeConexion {
     const reloj = setTimeout(() => {
       cancelacion.abort();
     }, TIEMPO_MAXIMO_DE_SALUD_MS);
+    const enviadoEn = this.ahora();
     try {
       const respuesta = await this.buscar(`${this.urlDelProyecto}/auth/v1/health`, {
         method: 'GET',
         headers: { apikey: this.llavePublicable },
         signal: cancelacion.signal,
+      });
+      this.relojDeLaNube?.observar({
+        cabeceraDate: respuesta.headers.get('date'),
+        enviadoEn,
+        recibidoEn: this.ahora(),
       });
       return this.anotar(await this.juzgar(respuesta));
     } catch (error) {

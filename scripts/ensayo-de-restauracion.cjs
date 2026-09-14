@@ -405,6 +405,21 @@ async function ensayar(datos, entorno, automatico) {
       comprobar('la pantalla de restauración dijo en qué estado está', 'un botón de iniciar, o el aviso de «sin configurar»', 'ninguno de los dos', false);
       return;
     }
+    /*
+      A QUÉ PROYECTO DICE QUE SE VA A CONECTAR (fase 4.c, punto 6). Se
+      comprueba ANTES de que nadie escriba nada, que es cuando sirve: el
+      2026-09-14 se tecleó la credencial del proyecto de pruebas contra el
+      real, y la pantalla no daba ninguna pista de contra cuál estaba.
+    */
+    const avisoDelProyecto = unaLinea(await prueba('restauracion-proyecto').textContent().catch(() => ''));
+    anotar(`la pantalla dice de qué proyecto restaura: ${avisoDelProyecto}`);
+    comprobar(
+      'la pantalla nombra el proyecto de Supabase ANTES de pedir la contraseña',
+      `menciona ${entorno.POS_NUBE_PROYECTO}`,
+      avisoDelProyecto || '(no dice nada)',
+      avisoDelProyecto.includes(entorno.POS_NUBE_PROYECTO),
+    );
+
     const retomando = (await prueba('restauracion-incompleta').count()) > 0;
     const sinConfigurar = await prueba('restauracion-sin-configurar').count();
     const iniciar = await prueba('restauracion-iniciar').count();
