@@ -42,9 +42,11 @@ import type {
 } from '@shared/adapters';
 import { VERSION_DEL_CONTRATO_DE_SINCRONIZACION } from '@shared/contrato-de-sincronizacion';
 
+import { PREFIJO_DE_ARCHIVO, type ArchivoParaSubir } from '@main/database/bandeja-de-salida';
 import type { DetectorDeConexion } from './deteccion-de-conexion';
 import { elegirFuncionDelLote, LoteNoEnrutable } from './enrutador-de-lotes';
 import type { SesionDeNube } from './sesion-de-nube';
+import type { SubidorDeFotos } from './subida-de-fotos';
 
 /**
  * Lo que este módulo necesita de `fetch`, y nada más.
@@ -134,6 +136,16 @@ export interface DependenciasDelProveedor {
   readonly conexion?: DetectorDeConexion;
   /** `net.fetch` de Electron: respeta el proxy de Windows (§5.4). */
   readonly buscar?: BuscarEnLaRed;
+  /**
+   * Quien sube las FOTOS a Storage (fase 3.c).
+   *
+   * Opcional porque un lote de archivo solo existe si alguien encoló una foto,
+   * y sin este subidor no hay quien la encole: la aplicación construye los dos
+   * juntos o ninguno. Si faltara y llegara un lote de archivo igual, no se
+   * adivina nada —se rechaza diciendo que no hay subidor—, que es preferible a
+   * dar la foto por subida.
+   */
+  readonly subidorDeFotos?: SubidorDeFotos;
   readonly registrar?: (mensaje: string) => void;
 }
 
@@ -147,6 +159,8 @@ export class SupabaseSyncProvider implements SyncProvider {
   private readonly buscar: BuscarEnLaRed;
   private readonly registrar: (mensaje: string) => void;
 
+  private readonly subidorDeFotos: SubidorDeFotos | undefined;
+
   public constructor(dependencias: DependenciasDelProveedor) {
     this.urlDelProyecto = dependencias.urlDelProyecto.replace(/\/+$/, '');
     this.llavePublicable = dependencias.llavePublicable;
@@ -154,6 +168,7 @@ export class SupabaseSyncProvider implements SyncProvider {
     this.conexion = dependencias.conexion ?? null;
     this.buscar = dependencias.buscar ?? fetch;
     this.registrar = dependencias.registrar ?? ((): void => undefined);
+    this.subidorDeFotos = dependencias.subidorDeFotos;
   }
 
   public async empujarCambios(cambios: readonly CambioSincronizable[]): Promise<ResultadoEmpuje> {
@@ -171,6 +186,28 @@ export class SupabaseSyncProvider implements SyncProvider {
         ? 'la nube rechazó la credencial de esta terminal'
         : (estado.ultimoMotivo ?? 'esta terminal todavía no está conectada con la nube');
       return this.fracaso(SIN_CREDENCIAL, `No se intentó subir: ${porque}.`);
+    }
+
+    /*
+      UN LOTE DE ARCHIVO NO VA A NINGUNA FUNCIÓN RPC: va a Storage, que es otra
+      API. Se desvía ACÁ y no en el trabajador a propósito: el trabajador no
+      tiene por qué saber que existen los archivos, sus cuatro reglas valen
+      igual, y el `SyncProvider` es justamente la costura donde vive «cómo se
+      habla con esta nube». Es la misma razón por la que el enrutador de
+      funciones también vive de este lado.
+
+      `encolarFoto` arma lotes de UNA sola fila, así que un lote mezclado no
+      puede existir; si existiera, se rechaza en vez de subir media cosa.
+    */
+    const deArchivo = cambios.filter((cambio) => cambio.tabla.startsWith(PREFIJO_DE_ARCHIVO));
+    if (deArchivo.length > 0) {
+      if (deArchivo.length !== cambios.length) {
+        return this.fracaso(
+          NO_SE_PUDO_ARMAR,
+          'Un lote no puede mezclar archivos con filas de negocio.',
+        );
+      }
+      return this.subirArchivos(deArchivo);
     }
 
     let funcion;
@@ -306,6 +343,38 @@ export class SupabaseSyncProvider implements SyncProvider {
       cambiosRechazados: Math.max(0, filasEnviadas - constancias.length),
       errores: [],
       estadoHttp: 200,
+      simulado: false,
+    };
+  }
+
+  /**
+   * Sube los archivos de un lote. Hoy siempre es UNO: `encolarFoto` arma lotes
+   * de una sola fila, porque cada foto es independiente de las demás y
+   * agruparlas haría que una sola ausente arrastrara a las otras.
+   */
+  private async subirArchivos(cambios: readonly CambioSincronizable[]): Promise<ResultadoEmpuje> {
+    const subidor = this.subidorDeFotos;
+    if (subidor === undefined) {
+      return this.fracaso(
+        NO_SE_PUDO_ARMAR,
+        'Llegó un lote de archivo y esta terminal no tiene subidor de fotos configurado.',
+      );
+    }
+
+    for (const cambio of cambios) {
+      const archivo = cambio.datos as unknown as ArchivoParaSubir;
+      const resultado = await subidor.subir(archivo);
+      if (!resultado.ok) {
+        return resultado;
+      }
+    }
+
+    return {
+      ok: true,
+      adaptador: this.nombre,
+      cambiosAceptados: cambios.length,
+      cambiosRechazados: 0,
+      errores: [],
       simulado: false,
     };
   }

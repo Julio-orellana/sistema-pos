@@ -9,7 +9,7 @@
  *   4. crear ventana — en modo kiosko.
  */
 
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, net, powerMonitor, protocol, safeStorage } from 'electron';
@@ -46,6 +46,9 @@ import {
   sembrarLimitesDeDescuento,
   topesActuales,
 } from '@main/domain/venta/limites-de-ejemplo';
+import { RedimensionadorDeElectron } from '@main/adapters/redimensionador-de-electron';
+import { SubidorDeFotos } from '@main/sincronizacion/subida-de-fotos';
+import { reducirFotosExistentes } from '@main/domain/catalogo/reducir-fotos-existentes';
 import {
   AlmacenDeFotos,
   ESQUEMA_DE_FOTOS,
@@ -66,7 +69,10 @@ import {
   crearSyncProvider,
   leerConfiguracionAdaptadoresDelEntorno,
 } from '@shared/adapters';
-import { observarLotesEncolados } from '@main/database/bandeja-de-salida';
+import {
+  observarLotesEncolados,
+  type ArchivoParaSubir,
+} from '@main/database/bandeja-de-salida';
 import { TrabajadorDeSincronizacion } from '@main/sincronizacion/trabajador';
 import { PlanificadorDeSincronizacion } from '@main/sincronizacion/planificador';
 import { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
@@ -138,8 +144,25 @@ const modoLimitesDeDescuento =
     BANDERA_LIMITES.length,
   ) ?? '';
 
+/**
+ * Modo de REDUCCIÓN DE FOTOS EXISTENTES (`npm run fotos:reducir`).
+ *
+ * Guion de una sola vez de la fase 3.c: reduce a 800 px las fotos que se
+ * guardaron antes de que la reducción existiera, y las encola para subirlas.
+ * Va por la misma vía que los otros modos —un argumento, no una variable de
+ * entorno— por la misma razón: `VARIABLE=valor comando` no funciona en el `cmd`
+ * de Windows, que es la plataforma de producción.
+ *
+ * Arranca dentro de Electron y no como guion de Node suelto porque necesita las
+ * dos cosas que solo Electron da: `nativeImage` para redimensionar y
+ * `app.getPath('userData')` para saber dónde viven las fotos y la base.
+ */
+const BANDERA_REDUCIR_FOTOS = '--reducir-fotos';
+const modoReducirFotos = process.argv.includes(BANDERA_REDUCIR_FOTOS);
+
 /** ¿Se arrancó en alguno de los modos de semilla, sin abrir ventana? */
-const modoSemilla = modoDatosDeEjemplo !== '' || modoLimitesDeDescuento !== '';
+const modoSemilla =
+  modoDatosDeEjemplo !== '' || modoLimitesDeDescuento !== '' || modoReducirFotos;
 
 /** Evita que el cierre ordenado se ejecute dos veces. */
 let cierreEnCurso = false;
@@ -457,8 +480,12 @@ app.whenReady().then(
       productos: repositorios.productos,
       categorias: repositorios.categorias,
       auditoria: repositorios.auditoria,
+      describirFoto: (ruta): ArchivoParaSubir | null => almacenDeFotos.describirParaSubir(ruta),
     });
-    const almacenDeFotos = new AlmacenDeFotos(app.getPath('userData'));
+    const almacenDeFotos = new AlmacenDeFotos(
+      app.getPath('userData'),
+      new RedimensionadorDeElectron(),
+    );
 
     // Gestión de usuarios: cierra el hueco que dejaba el primer arranque, que
     // solo sabía crear al primer administrador y solo con la tabla vacía.
@@ -549,6 +576,26 @@ app.whenReady().then(
       ejecutarModoDatosDeEjemplo(modoDatosDeEjemplo, repositorios);
       return;
     }
+    if (modoReducirFotos) {
+      const informe = reducirFotosExistentes(
+        obtenerBaseDeDatos(),
+        new AlmacenDeFotos(app.getPath('userData'), new RedimensionadorDeElectron()),
+        new RedimensionadorDeElectron(),
+      );
+      for (const linea of informe.detalle) {
+        console.info(`   ${linea}`);
+      }
+      console.info(
+        `\nFotos en el catálogo : ${String(informe.productosConFoto)}\n` +
+          `Reducidas            : ${String(informe.reducidas)}\n` +
+          `Ya cabían en 800 px  : ${String(informe.yaEstabanBien)}\n` +
+          `Ausentes del disco   : ${String(informe.ausentes)}\n` +
+          `Encoladas para subir : ${String(informe.encoladas)}\n` +
+          `Bytes antes          : ${String(informe.bytesAntes)}\n` +
+          `Bytes después        : ${String(informe.bytesDespues)}`,
+      );
+    }
+
     if (modoLimitesDeDescuento !== '') {
       ejecutarModoLimitesDeDescuento(modoLimitesDeDescuento, repositorios);
       return;
@@ -705,6 +752,31 @@ app.whenReady().then(
             conexion: detectorDeConexion,
             buscar: net.fetch.bind(net),
             registrar: anotarSincronizacion,
+            /*
+              Fase 3.c: quien sube las FOTOS. Solo el bucket `fotos`; los PDF de
+              recibos no se suben y no hay con qué hacerlo (§2.5.3).
+
+              `leerArchivo` devuelve `null` cuando el archivo ya no está, y esa
+              es toda la implementación del caso «foto huérfana» de §2.5.4: el
+              trabajador la aparta un día sin detener la cola.
+            */
+            subidorDeFotos: new SubidorDeFotos({
+              urlDelProyecto: urlDeLaNube,
+              llavePublicable: llaveDeLaNube,
+              // El `?.` no es pereza: el estrechamiento del ternario no
+              // sobrevive dentro de esta flecha, y sin sesión el resultado
+              // correcto es exactamente `null` —«no hay credencial usable»—,
+              // que es lo que el subidor ya sabe leer.
+              accessToken: (): string | null => sesionDeNube?.accessTokenVigente() ?? null,
+              buscar: net.fetch.bind(net),
+              leerArchivo: (rutaRelativa): Buffer | null => {
+                try {
+                  return readFileSync(almacenDeFotos.rutaAbsolutaDe(rutaRelativa));
+                } catch {
+                  return null;
+                }
+              },
+            }),
           }),
     );
     const trabajadorDeSincronizacion = new TrabajadorDeSincronizacion({

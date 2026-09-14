@@ -276,6 +276,79 @@ export function entradasDe(
  * más antes de llegar a la cola, con reverificación de caja y comparar-y-cambiar
  * de inventario, y meterla en este molde la haría menos legible, no más.
  */
+/**
+ * El `entidad_tipo` con el que viaja una FOTO, que no es una fila de ninguna
+ * tabla.
+ *
+ * `sync_cola.entidad_tipo` no tiene lista cerrada en el esquema —su CHECK solo
+ * exige texto no vacío— así que **no hizo falta migración** para agregarlo.
+ *
+ * **NO EXISTE `archivo_pdf`, Y NO ES UN OLVIDO.** §2.5.1 del diseño preveía los
+ * dos tipos, y §2.5.3 decidió después que **los PDF de recibos no se suben**:
+ * son dato derivado que la reimpresión regenera desde las filas, y subirlos
+ * llenaría el gigabyte del plan gratuito en unos ocho meses. Declarar un tipo
+ * que nadie produce sería exactamente el «disparador falso que parece
+ * funcionar» que §4.18 rechaza. La nube lo respalda: la terminal **no tiene
+ * ninguna política sobre el bucket `recibos`** (migración 0026), así que aunque
+ * alguien lo intentara, RLS lo rechazaría.
+ */
+export const TIPO_DE_ENTRADA_DE_FOTO = 'archivo_foto';
+
+/** Prefijo que distingue una entrada de archivo de una fila de negocio. */
+export const PREFIJO_DE_ARCHIVO = 'archivo_';
+
+/** Lo que se necesita saber de una foto para poder subirla más tarde. */
+export interface ArchivoParaSubir {
+  /** Ruta RELATIVA tal como la guarda `productos.foto_path`. */
+  readonly rutaLocal: string;
+  /** Nombre del objeto dentro del bucket `fotos`, derivado de la ruta local. */
+  readonly objeto: string;
+  /** Tamaño en bytes al momento de encolar. */
+  readonly tamano: number;
+  /** SHA-256 del contenido al momento de encolar, en hexadecimal. */
+  readonly sha256: string;
+}
+
+/**
+ * Encola una foto para subir, EN SU PROPIO LOTE.
+ *
+ * Va en un lote aparte del de la fila que la referencia, y eso es §2.5.1: la
+ * fila del producto es el negocio y tiene que llegar aunque la foto no pueda;
+ * mezclarlas haría que un archivo ausente arrastrara al producto.
+ *
+ * Se llama DENTRO de la misma transacción que escribió el producto, por la
+ * misma razón de siempre (§4.17): si se encolara después del `COMMIT`, un
+ * cierre forzado entre las dos escrituras dejaría una foto que nunca se sube.
+ */
+export function encolarFoto(base: Database, archivo: ArchivoParaSubir): LoteEncolado {
+  const loteId = nuevoId();
+
+  base
+    .prepare(
+      `INSERT INTO sync_cola (
+         id, entidad_tipo, entidad_id, operacion, payload, creado_en,
+         lote_id, orden_en_lote, intentos, bloqueante
+       ) VALUES (
+         @id, @entidad_tipo, @entidad_id, 'insertar', @payload, @creado_en,
+         @lote_id, 0, 0, 0
+       )`,
+    )
+    .run({
+      id: nuevoId(),
+      entidad_tipo: TIPO_DE_ENTRADA_DE_FOTO,
+      // El id de la entrada es la RUTA LOCAL: es lo que la identifica, y hace
+      // que encolar dos veces la misma foto se vea de inmediato.
+      entidad_id: archivo.rutaLocal,
+      payload: JSON.stringify(archivo),
+      creado_en: ahora(),
+      lote_id: loteId,
+    });
+
+  observadorDeLotes?.();
+
+  return { loteId, filas: 1 };
+}
+
 export function conBandejaDeSalida<T>(
   base: Database,
   operacion: () => { readonly resultado: T; readonly entradas: readonly EntradaDelLote[] },

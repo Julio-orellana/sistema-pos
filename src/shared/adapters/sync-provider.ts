@@ -62,6 +62,17 @@ export interface ResultadoEmpuje {
   /** Descripción de cada rechazo, para que el administrador sepa qué revisar. */
   readonly errores: readonly string[];
   /**
+   * El archivo que este lote iba a subir ya no está en el disco (§2.5.4).
+   *
+   * **Es un campo aparte y no un código HTTP inventado, a propósito.** La
+   * clasificación de fallos de este proyecto va por código HTTP y nunca por el
+   * texto del error, justamente para no adivinar; pero acá **no hubo petición**
+   * —el archivo faltaba antes de salir a la red— así que no hay código que
+   * mirar. Meterle un 404 de mentira haría que se leyera como una respuesta de
+   * la nube, que es lo contrario de lo que pasó.
+   */
+  readonly archivoAusente?: boolean;
+  /**
    * Código HTTP de la respuesta, cuando lo hubo.
    *
    * **ES LO QUE DECIDE SI UN FALLO SE REINTENTA O DETIENE LA COLA.** La

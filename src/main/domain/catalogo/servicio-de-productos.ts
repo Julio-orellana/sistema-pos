@@ -38,7 +38,11 @@ import {
   sumar,
 } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
-import { conBandejaDeSalida } from '@main/database/bandeja-de-salida';
+import {
+  type ArchivoParaSubir,
+  conBandejaDeSalida,
+  encolarFoto,
+} from '@main/database/bandeja-de-salida';
 import type {
   Producto,
   TipoMedida,
@@ -134,6 +138,16 @@ export interface DependenciasDeProductos {
   readonly productos: RepositorioDeProductos;
   readonly categorias: RepositorioDeCategorias;
   readonly auditoria: RepositorioDeAuditoria;
+  /**
+   * Lo que hace falta saber de una foto ya guardada para poder subirla, o
+   * `null` si el archivo no está. Normalmente `AlmacenDeFotos.describirParaSubir`.
+   *
+   * **Es OBLIGATORIA, no opcional.** Opcional, cualquier sitio que se olvidara
+   * de pasarla dejaría de encolar las fotos **en silencio**, y el síntoma sería
+   * un catálogo sin respaldo que nadie nota hasta que hace falta restaurar. Es
+   * la misma razón por la que `base` se hizo obligatoria en la fase 3.b (§4.25).
+   */
+  readonly describirFoto: (rutaRelativa: string) => ArchivoParaSubir | null;
   readonly ahora?: () => number;
 }
 
@@ -142,12 +156,14 @@ export class ServicioDeProductos {
   private readonly productos: RepositorioDeProductos;
   private readonly categorias: RepositorioDeCategorias;
   private readonly auditoria: RepositorioDeAuditoria;
+  private readonly describirFoto: (rutaRelativa: string) => ArchivoParaSubir | null;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeProductos) {
     this.base = dependencias.base;
     this.productos = dependencias.productos;
     this.categorias = dependencias.categorias;
+    this.describirFoto = dependencias.describirFoto;
     this.auditoria = dependencias.auditoria;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
@@ -326,6 +342,28 @@ export class ServicioDeProductos {
   // Operaciones
   // -------------------------------------------------------------------------
 
+  /**
+   * Encola la foto de un producto para subirla a Storage, si hay una nueva.
+   *
+   * Va DENTRO de la transacción de negocio y en SU PROPIO lote (§2.5.1): la
+   * fila del producto tiene que llegar a la nube aunque la foto no pueda, así
+   * que mezclarlas haría que un archivo ausente arrastrara al producto.
+   *
+   * Si el archivo no está —`describirFoto` devuelve `null`— no se encola nada:
+   * no hay bytes que subir. Que una foto desaparezca DESPUÉS de encolarse es
+   * otro caso, y lo resuelve el trabajador apartándola sin detener la cola
+   * (§2.5.4).
+   */
+  private encolarFotoSiCambio(rutaNueva: string | null, rutaAnterior: string | null): void {
+    if (rutaNueva === null || rutaNueva === rutaAnterior) {
+      return;
+    }
+    const archivo = this.describirFoto(rutaNueva);
+    if (archivo !== null) {
+      encolarFoto(this.base, archivo);
+    }
+  }
+
   public crear(usuarioId: string, datos: DatosDeProductoNuevo): Producto {
     const verificados = this.verificar(datos);
     this.exigirNombreLibre(verificados.nombre, null);
@@ -380,6 +418,8 @@ export class ServicioDeProductos {
         },
         fecha: new Date(this.ahora()).toISOString(),
       });
+
+      this.encolarFotoSiCambio(creado.fotoPath, null);
 
       return {
         resultado: creado,
@@ -450,6 +490,8 @@ export class ServicioDeProductos {
         },
         fecha: new Date(this.ahora()).toISOString(),
       });
+
+      this.encolarFotoSiCambio(verificados.fotoPath, anterior.fotoPath);
 
       return {
         resultado: this.exigirProducto(id),

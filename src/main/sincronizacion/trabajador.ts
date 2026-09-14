@@ -55,7 +55,11 @@ import type { SyncProvider, CambioSincronizable } from '@shared/adapters';
 import type { ElementoSyncCola } from '@main/database/repositories/entidades';
 import type { RepositorioDeSyncCola } from '@main/database/repositories/sync-cola';
 import { hayTransaccionDeNegocioEnCurso } from '@main/database/transaccion-en-curso';
-import { clasificarFallo, proximoIntentoTras } from './reintentos';
+import {
+  clasificarFallo,
+  ESPERA_POR_ARCHIVO_AUSENTE_MS,
+  proximoIntentoTras,
+} from './reintentos';
 
 /**
  * El presupuesto de un ciclo, con los valores de §2.4 del diseño.
@@ -233,6 +237,8 @@ export class TrabajadorDeSincronizacion {
 
   private async subirLotes(inicio: number): Promise<ResumenDeCiclo> {
     let lotesSubidos = 0;
+    /** Archivos que no estaban en el disco y se dejaron para mañana (§2.5.4). */
+    let archivosApartados = 0;
     let filasSubidas = 0;
 
     for (;;) {
@@ -276,9 +282,17 @@ export class TrabajadorDeSincronizacion {
         return this.resumen('cedio_ante_transaccion', lotesSubidos, filasSubidas, null, null, inicio);
       }
 
-      const loteId = this.cola.siguienteLotePendiente();
+      const loteId = this.cola.siguienteLotePendiente(new Date(this.ahora()).toISOString());
       if (loteId === null) {
         const motivo: MotivoDeCiclo = lotesSubidos > 0 ? 'cola_vaciada' : 'sin_pendientes';
+        if (archivosApartados > 0) {
+          // Se dice, porque si no el renglón de la bitácora contaría un ciclo
+          // tranquilo donde hubo fotos que no se pudieron respaldar.
+          this.registrar(
+            `${String(archivosApartados)} archivo(s) sin subir: no están en el disco. ` +
+              'Se vuelven a buscar mañana.',
+          );
+        }
         return this.resumen(motivo, lotesSubidos, filasSubidas, null, null, inicio);
       }
 
@@ -329,8 +343,12 @@ export class TrabajadorDeSincronizacion {
         );
       }
 
-      lotesSubidos += 1;
-      filasSubidas += filas.length;
+      if (desenlace.apartado === true) {
+        archivosApartados += 1;
+      } else {
+        lotesSubidos += 1;
+        filasSubidas += filas.length;
+      }
 
       // La pausa va DESPUÉS de un lote exitoso y antes del siguiente: es lo
       // que le devuelve el turno al bucle de eventos para que el IPC de la
@@ -353,18 +371,22 @@ export class TrabajadorDeSincronizacion {
     motivo: MotivoDeCiclo | null;
     error: string | null;
     proximoIntentoEn: string | null;
+    /** El lote no subió pero tampoco falló: se apartó y el ciclo sigue. */
+    apartado?: boolean;
   }> {
     const intentoNumero = (filas[0]?.intentos ?? 0) + 1;
 
     let estadoHttp: number | undefined;
     let errores: readonly string[];
     let ok: boolean;
+    let archivoAusente = false;
 
     try {
       const respuesta = await this.proveedor.empujarCambios(filas.map(aCambio));
       ok = respuesta.ok;
       estadoHttp = respuesta.estadoHttp;
       errores = respuesta.errores;
+      archivoAusente = respuesta.archivoAusente === true;
     } catch (causa) {
       /*
         Una excepción es un fallo de red o del propio adaptador: no hubo
@@ -382,7 +404,10 @@ export class TrabajadorDeSincronizacion {
     }
 
     const detalle = errores.join(' | ') || 'La nube rechazó el lote sin explicar por qué.';
-    const clase = clasificarFallo({ ...(estadoHttp === undefined ? {} : { estadoHttp }) });
+    const clase = clasificarFallo({
+      ...(estadoHttp === undefined ? {} : { estadoHttp }),
+      archivoAusente,
+    });
 
     if (clase === 'credencial') {
       // La cola NO se toca: no se suma intento, no se agenda reintento y no se
@@ -390,6 +415,30 @@ export class TrabajadorDeSincronizacion {
       // resuelve reprovisionando, no reintentando (§1.6).
       this.registrar(`credencial rechazada al subir el lote ${loteId}`);
       return { motivo: 'sin_credencial', error: detalle, proximoIntentoEn: null };
+    }
+
+    if (clase === 'archivo_ausente') {
+      /*
+        NO se bloquea y NO se detiene la cola (§2.5.4): se aparta un día y el
+        ciclo SIGUE con el lote que viene. Devolver un motivo acá pararía toda
+        la sincronización porque a una terminal le falta una foto, que es
+        exactamente lo que el diseño quiere evitar: «la fila de la base sigue
+        subiendo normalmente, con su foto_path tal cual».
+
+        Que el ciclo pueda seguir sin caer en un bucle infinito depende de que
+        `siguienteLotePendiente` SALTEE los lotes de archivo que están
+        esperando: sin eso, el mismo lote volvería a salir elegido para
+        siempre. Las dos mitades van juntas.
+      */
+      const vuelveA = new Date(this.ahora() + ESPERA_POR_ARCHIVO_AUSENTE_MS).toISOString();
+      this.cola.registrarIntentoFallido(loteId, detalle, vuelveA);
+      this.registrar(`lote ${loteId}: ${detalle}; se vuelve a buscar el ${vuelveA}`);
+      /*
+        `apartado` y no un lote más en la cuenta de subidos: la bitácora diría
+        «cola_vaciada; 2 lotes» de dos fotos que NO se subieron, y un renglón
+        que miente sobre lo que pasó es peor que no tenerlo.
+      */
+      return { motivo: null, error: null, proximoIntentoEn: null, apartado: true };
     }
 
     if (clase === 'deterministico') {

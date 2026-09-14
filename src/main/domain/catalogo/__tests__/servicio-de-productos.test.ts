@@ -81,6 +81,8 @@ beforeEach(() => {
     productos: repos.productos,
     categorias: repos.categorias,
     auditoria: repos.auditoria,
+    // Estas pruebas no son sobre archivos: sin foto no hay nada que encolar.
+    describirFoto: (): null => null,
   });
 
   idAdmin = repos.usuarios.crear({

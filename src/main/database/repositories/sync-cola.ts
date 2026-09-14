@@ -145,17 +145,63 @@ export class RepositorioDeSyncCola extends RepositorioBase {
    * ambiguo» del reparto de centavos (CLAUDE.md §5). `rowid` es el orden de
    * inserción, que es exactamente el orden de llegada.
    */
-  public siguienteLotePendiente(): string | null {
-    const fila = this.base
+  public siguienteLotePendiente(ahoraIso: string): string | null {
+    /*
+      DOS CONSULTAS, Y EL ORDEN ENTRE ELLAS ES LA REGLA: primero TODAS las filas
+      de negocio, después los archivos.
+
+      §2.5.1 del diseño lo dice así: «el trabajador los atiende solo cuando no
+      queda ninguna fila pendiente: las filas son el negocio, los archivos son
+      el adorno». Con una foto de varios cientos de KB por delante, una venta
+      cobrada esperaría a que suba el catálogo; al revés, una venta tarda unos
+      pocos KB y la foto espera lo que haga falta.
+
+      No rompe la regla 1 del trabajador —«no saltea ningún lote»—, que existe
+      por las llaves foráneas de Postgres: **un archivo no tiene ninguna**.
+      Storage no referencia nada y nada lo referencia, así que su orden respecto
+      de las filas es libre.
+    */
+    // Se compara con `substr` y no con `LIKE 'archivo\_%'`: en LIKE el guion
+    // bajo es un comodín y hay que escaparlo con ESCAPE, y ese escape tiene que
+    // sobrevivir además al literal de plantilla de TypeScript. Son dos capas de
+    // escapado para distinguir un prefijo fijo; `substr` no tiene ninguna.
+    const negocio = this.base
       .prepare(
         `SELECT lote_id FROM sync_cola
-          WHERE sincronizado_en IS NULL
+          WHERE sincronizado_en IS NULL AND substr(entidad_tipo, 1, 8) <> 'archivo_'
           GROUP BY lote_id
           ORDER BY MIN(creado_en), MIN(rowid)
           LIMIT 1`,
       )
       .get() as { readonly lote_id: string } | undefined;
-    return fila === undefined ? null : fila.lote_id;
+
+    if (negocio !== undefined) {
+      return negocio.lote_id;
+    }
+
+    /*
+      ENTRE ARCHIVOS SÍ SE SALTEA AL QUE ESTÁ ESPERANDO, y esa es la otra mitad
+      del §2.5.4: una foto que no está en el disco se aparta un día, y las otras
+      199 del catálogo tienen que poder subir mientras tanto. Con las filas de
+      negocio no se saltea nunca, porque ahí el orden ES la integridad
+      referencial; entre archivos no hay orden que preservar, cada uno es
+      independiente de todos los demás.
+
+      Y es lo que impide que un archivo ausente deje al trabajador en un bucle:
+      sin este filtro, el mismo lote volvería a salir elegido en cada vuelta.
+    */
+    const archivo = this.base
+      .prepare(
+        `SELECT lote_id FROM sync_cola
+          WHERE sincronizado_en IS NULL AND substr(entidad_tipo, 1, 8) = 'archivo_'
+          GROUP BY lote_id
+          HAVING MAX(coalesce(proximo_intento_en, '')) <= @ahora
+          ORDER BY MIN(creado_en), MIN(rowid)
+          LIMIT 1`,
+      )
+      .get({ ahora: ahoraIso }) as { readonly lote_id: string } | undefined;
+
+    return archivo === undefined ? null : archivo.lote_id;
   }
 
   /** Las filas pendientes de un lote, en el orden en que hay que subirlas. */

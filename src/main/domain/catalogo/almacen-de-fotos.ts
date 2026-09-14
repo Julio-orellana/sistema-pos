@@ -14,20 +14,33 @@
  * entre sistemas operativos; guardarla haría que la base de un respaldo
  * restaurado en otra computadora apuntara a carpetas inexistentes.
  *
- * SUBIR LA IMAGEN A SUPABASE STORAGE NO ES DE ESTE MÓDULO: es trabajo del
- * futuro módulo de sincronización. Por ahora la foto vive únicamente en el
- * disco de la tienda.
+ * SUBIR LA IMAGEN A SUPABASE STORAGE NO ES DE ESTE MÓDULO, y sigue sin serlo:
+ * desde la fase 3.c la subida existe, pero la hace el trabajador de
+ * sincronización leyendo `sync_cola`, igual que con cualquier otra fila. Lo que
+ * este módulo sí hace desde esa fase es **reducir la foto a 800 px al
+ * guardarla** (ver `redimensionar.ts`), que es lo que hace que subirlas quepa
+ * en el plan gratuito.
+ *
+ * LA RUTA LOCAL NO CAMBIA DE SIGNIFICADO: `foto_path` sigue siendo la ruta
+ * relativa EN ESTE DISCO, y no se agregó ninguna columna «ruta en la nube». El
+ * objeto de Storage se deriva del nombre del archivo (§2.5.1 del diseño), y una
+ * columna nueva sería un segundo lugar donde la misma información puede
+ * discrepar.
  *
  * Este módulo NO importa Electron a propósito: recibe la carpeta base por
  * parámetro. Así las pruebas lo ejercitan de verdad, contra archivos reales en
  * una carpeta temporal, sin arrancar la aplicación.
  */
 
-import { randomUUID } from 'node:crypto';
-import { copyFileSync, mkdirSync, openSync, readSync, closeSync, statSync } from 'node:fs';
-import { extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  copyFileSync, mkdirSync, openSync, readSync, readFileSync, closeSync, statSync, writeFileSync,
+} from 'node:fs';
+import { basename, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
+import type { ArchivoParaSubir } from '@main/database/bandeja-de-salida';
 import { ErrorDeNegocio } from '@main/database/errores';
+import type { FormatoDeImagen, RedimensionadorDeImagen } from './redimensionar';
 
 /** Subcarpeta de `userData` donde se copian las fotos. */
 export const SUBCARPETA_DE_FOTOS = 'fotos-de-productos';
@@ -36,10 +49,14 @@ export const SUBCARPETA_DE_FOTOS = 'fotos-de-productos';
 const BYTES_POR_MEGABYTE = 1048576;
 
 /**
- * Tamaño máximo aceptado, en megabytes.
+ * Tamaño máximo aceptado, en megabytes, DEL ARCHIVO QUE SE ELIGE.
  *
- * No se redimensiona ni se comprime la imagen: eso es una mejora futura si
- * hace falta. Se rechaza y se le dice a quien la cargó, que puede elegir otra.
+ * Es el tope de ENTRADA, no el de lo que queda guardado: desde la fase 3.c la
+ * foto se reduce a 800 px de lado mayor al guardarse (`redimensionar.ts`), así
+ * que lo que termina en el disco pesa bastante menos. El tope sigue existiendo
+ * porque leer y decodificar un archivo enorme cuesta memoria y tiempo antes de
+ * poder reducirlo, y porque el bucket `fotos` de la nube lo rechazaría igual:
+ * la migración 0026 le puso `file_size_limit` de 5 MB del lado del servidor.
  */
 export const MAXIMO_MEGABYTES = 5;
 
@@ -69,6 +86,7 @@ const FORMATOS_ACEPTADOS = [
     /** Marcador SOI (`FFD8`) seguido del inicio de otro marcador (`FF`). */
     firmaHex: 'ffd8ff',
     extensionCanonica: '.jpg',
+    formato: 'jpeg' as FormatoDeImagen,
   },
   {
     nombre: 'PNG',
@@ -76,6 +94,7 @@ const FORMATOS_ACEPTADOS = [
     /** Firma fija de 8 bytes definida por la especificación del PNG. */
     firmaHex: '89504e470d0a1a0a',
     extensionCanonica: '.png',
+    formato: 'png' as FormatoDeImagen,
   },
 ] as const;
 
@@ -143,9 +162,23 @@ export function resolverRutaDeFoto(carpetaBase: string, rutaRelativa: string): s
 export class AlmacenDeFotos {
   private readonly carpetaBase: string;
 
-  /** @param carpetaBase Normalmente `app.getPath('userData')`. */
-  public constructor(carpetaBase: string) {
+  private readonly redimensionador: RedimensionadorDeImagen;
+
+  /**
+   * @param carpetaBase Normalmente `app.getPath('userData')`.
+   * @param redimensionador Quien reduce la imagen a 800 px de lado mayor.
+   *
+   * **El redimensionador es OBLIGATORIO, no opcional, y es deliberado.** Uno
+   * opcional dejaría que cualquier sitio de construcción que se olvidara de
+   * pasarlo guardara las fotos enteras **en silencio**, y el síntoma —el
+   * gigabyte de Storage lleno— aparecería meses después y lejos de la causa.
+   * Es la misma razón por la que `DependenciasDeAutenticacion.base` se hizo
+   * obligatoria en la fase 3.b (§4.25): que el compilador obligue a contestar
+   * la pregunta.
+   */
+  public constructor(carpetaBase: string, redimensionador: RedimensionadorDeImagen) {
     this.carpetaBase = carpetaBase;
+    this.redimensionador = redimensionador;
   }
 
   /** Carpeta absoluta donde se copian las fotos. */
@@ -204,8 +237,21 @@ export class AlmacenDeFotos {
     }
 
     const nombreDestino = `${randomUUID()}${formato.extensionCanonica}`;
+    const rutaDestino = join(this.carpetaDeFotos(), nombreDestino);
     mkdirSync(this.carpetaDeFotos(), { recursive: true });
-    copyFileSync(rutaOrigen, join(this.carpetaDeFotos(), nombreDestino));
+
+    /*
+      SE REDUCE AL GUARDAR, no solo al subir (§2.5.3 del diseño, decisión 7).
+      `reducir` devuelve `null` cuando la imagen ya cabía en 800 px, y ahí se
+      copia el archivo original tal cual: re-encodar una foto que ya estaba
+      bien la degrada sin ahorrar nada.
+    */
+    const reducida = this.redimensionador.reducir(rutaOrigen, formato.formato);
+    if (reducida === null) {
+      copyFileSync(rutaOrigen, rutaDestino);
+    } else {
+      writeFileSync(rutaDestino, reducida);
+    }
 
     // Se guarda con separador '/' siempre, también en Windows: la ruta viaja a
     // la base y de ahí a la nube, y un '\' la volvería ilegible en otro sistema.
@@ -215,6 +261,40 @@ export class AlmacenDeFotos {
   /** Ruta absoluta de una foto ya guardada, con la barrera de recorrido. */
   public rutaAbsolutaDe(rutaRelativa: string): string {
     return resolverRutaDeFoto(this.carpetaBase, rutaRelativa);
+  }
+
+  /**
+   * Lo que hay que saber de una foto ya guardada para poder subirla después, o
+   * `null` si el archivo no está.
+   *
+   * EL HASH SE CALCULA AQUÍ Y NO EN UN `worker_thread`, y conviene decir por
+   * qué se separa del diseño. §2.5.2 pedía un hilo aparte «porque leer 5 MB y
+   * hacer SHA-256 en un i3 son unos cientos de milisegundos que no tienen por
+   * qué congelar la ventana». **Esa premisa dejó de valer en esta misma fase**:
+   * la foto ya se guardó reducida a 800 px, así que lo que se lee acá son unas
+   * decenas o cientos de KB, no 5 MB. Un hilo aparte para eso sería
+   * infraestructura para un problema que la reducción ya eliminó.
+   *
+   * El nombre del objeto en Storage se DERIVA del nombre del archivo, sin
+   * columna nueva (§2.5.1): `fotos-de-productos/<uuid>.jpg` sube al bucket
+   * `fotos` como `<uuid>.jpg`.
+   */
+  public describirParaSubir(rutaRelativa: string): ArchivoParaSubir | null {
+    const absoluta = this.rutaAbsolutaDe(rutaRelativa);
+
+    let contenido: Buffer;
+    try {
+      contenido = readFileSync(absoluta);
+    } catch {
+      return null;
+    }
+
+    return {
+      rutaLocal: rutaRelativa,
+      objeto: basename(rutaRelativa),
+      tamano: contenido.byteLength,
+      sha256: createHash('sha256').update(contenido).digest('hex'),
+    };
   }
 }
 

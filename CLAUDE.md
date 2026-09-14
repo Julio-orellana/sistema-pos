@@ -1279,13 +1279,22 @@ las llamadas al repositorio.
 - Se aceptan JPG y PNG, hasta 5 MB. **Se comprueba la firma binaria del
   archivo, no solo la extensión**: renombrar un archivo es gratis, y un
   ejecutable llamado `foto.png` pasaría cualquier comprobación de extensión.
-- No se redimensiona ni se comprime. Si hace falta, es una mejora futura.
+- **SE REDIMENSIONA AL GUARDAR, desde la fase 3.c**: 800 px de lado mayor,
+  calidad 80, conservando el formato. Este renglón decía «no se redimensiona ni
+  se comprime; si hace falta, es una mejora futura» — **hizo falta**, y el
+  número está en §2.5.3 del diseño: 200 fotos de teléfono sin comprimir son
+  unos 600 MB, el 60 % del plan gratuito de una sola vez. Ver §4.33. El tope de
+  5 MB sigue siendo el de ENTRADA, del archivo que se elige.
 - La ventana ve las fotos por el esquema propio `pos-foto:`, servido por el
   proceso principal, y **no** por `file:`, que le daría acceso a cualquier ruta
   del disco. Antes de abrir el archivo se comprueba que la ruta caiga dentro de
   la carpeta de fotos.
-- **Subirlas a Supabase Storage es trabajo del módulo de sincronización.** Hoy
-  la imagen vive solo en el disco de la tienda.
+- **Subirlas a Supabase Storage es trabajo del módulo de sincronización, y
+  desde la fase 3.c ese módulo existe** (§4.33): la foto se encola en
+  `sync_cola` con `entidad_tipo = 'archivo_foto'`, en su propio lote, dentro de
+  la misma transacción que escribió el producto. `foto_path` **no cambia de
+  significado**: sigue siendo la ruta en ESTE disco, y el objeto de Storage se
+  deriva de ella sin ninguna columna nueva.
 
 #### Un producto sin foto tiene su propio estado visual
 
@@ -4373,6 +4382,179 @@ los UUID de la nube en vez de generarlos; `recibos.numero_recibo` es un
 correlativo POR terminal y se resuelve en el diseño del multi-sucursal. Siguen en
 el punto 19 de §6.2.
 
+
+### 4.33 Los archivos: fotos que se reducen y se suben (Fase 3.c)
+
+Cierra lo último que quedaba de la sincronización continua. Hasta acá la foto de
+un producto vivía **solo** en el disco de la tienda; ahora se reduce al
+guardarla y sube a Storage por la misma cola que todo lo demás.
+
+#### 1. Se reduce AL GUARDAR, con los códecs que Electron ya trae
+
+800 px de lado mayor, calidad 80, **conservando el formato**. Lo hace
+`nativeImage`, con el mismo criterio por el que el PDF sale de Chromium y no de
+`pdfkit` (§5): agregar `sharp` sumaría un módulo NATIVO que habría que
+recompilar para Electron y para Windows, y `jimp` sumaría megabytes de
+JavaScript para lo que el proceso principal ya sabe hacer.
+
+**Medido con `npm run diagnostico:imagen`**, que corre dentro de Electron:
+
+```
+Leído de la fuente    : lado mayor 800 px, calidad JPEG 80
+Origen                : 3000 x 2000 px, 8409437 bytes (8.02 MB)
+Resultado             : 800 x 533 px, 110917 bytes (0.11 MB)
+Lado mayor <= 800 px  : sí     Conserva la proporción: sí
+Reducción             : 98.7 %
+```
+
+Los 110 KB confirman la estimación de §2.5.3, que había supuesto 150 KB por
+foto. **Falsificada**: con el redimensionado apagado la sonda imprime
+«NO — GRAVE» y sale con **código 1**; con él puesto, código 0.
+
+> **LA SONDA LEE LAS CONSTANTES DE LA FUENTE, no las copia.** Un 800 copiado
+> acá sería un segundo lugar que puede derivar, y el día que alguien cambiara
+> el de la aplicación **la sonda seguiría midiendo contra el viejo y seguiría
+> dando verde**, que es la peor forma de fallar que tiene una comprobación.
+
+**Nunca agranda**: una foto de 300 px se copia tal cual. Estirarla no agrega
+información, pesa más y se ve peor.
+
+**El formato no se cambia**, y es deliberado: convertir los PNG a JPEG bajaría
+más el peso y **pierde la transparencia y cambia la extensión** que la fila ya
+guardó. Cuál de las dos cosas le conviene a la tienda es una definición que
+Jimmy no dio, y este proyecto no las inventa.
+
+Las fotos que ya existían las arregla `npm run fotos:reducir`, un guion de una
+sola vez. **No es una migración** —no toca el esquema, y reducir 200 imágenes
+con Chromium dentro de una transacción abierta es lo que §4.14 ya rechaza para
+el PDF—. Además **encola**, y eso no es un agregado gratuito: sin él, un
+catálogo cargado antes de esta fase **no se subiría nunca**, porque solo se
+encola una foto al crearla o al cambiarla. Correrlo dos veces no duplica nada.
+
+#### 2. La foto viaja por `sync_cola`, como cualquier fila
+
+`entidad_tipo = 'archivo_foto'`, en **su propio lote**, dentro de la misma
+transacción que escribió el producto. El `entidad_tipo` no tiene lista cerrada
+en el esquema, así que **no hizo falta migración**.
+
+**NO EXISTE `archivo_pdf`, y no es un olvido**: §2.5.1 preveía los dos tipos y
+§2.5.3 decidió después que los PDF no se suben. Declarar un tipo que nadie
+produce sería el «disparador falso que parece funcionar» que §4.18 rechaza. Hay
+una prueba que comprueba que no existe.
+
+**El objeto de Storage se DERIVA de la ruta local** y no hay columna nueva
+(§2.5.1): `fotos-de-productos/<uuid>.jpg` sube al bucket `fotos` como
+`<uuid>.jpg`. Una columna «ruta en la nube» sería un segundo lugar donde la
+misma información puede discrepar.
+
+#### 3. LAS FILAS PRIMERO, LOS ARCHIVOS DESPUÉS
+
+`siguienteLotePendiente` devuelve **todos** los lotes de negocio antes que
+cualquier archivo. §2.5.1: «las filas son el negocio, los archivos son el
+adorno». Con una foto por delante, una venta cobrada esperaría a que suba el
+catálogo.
+
+**No rompe la regla 1 del trabajador** —«no saltea ningún lote»—, que existe por
+las llaves foráneas de Postgres: **un archivo no tiene ninguna**. Storage no
+referencia nada y nada lo referencia.
+
+**Entre archivos SÍ se saltea al que está esperando**, y con las filas de
+negocio nunca. Ahí el orden ES la integridad referencial; entre fotos no hay
+orden que preservar, cada una es independiente. Es además lo que impide que una
+foto ausente deje al trabajador en un bucle.
+
+#### 4. Una subida cortada: se retoma entera, y no duplica
+
+No hay TUS ni trozos (§2.5.2): un archivo más chico que un trozo se sube entero
+o no se sube, y desde que la foto pesa 110 KB eso vale todavía más que cuando
+se escribió el diseño. Lo que garantiza que no se duplique **no es el cliente
+sino Storage**: sin `x-upsert`, contesta «ya existe», y como el contenido de esa
+ruta es inmutable, eso se lee como ÉXITO.
+
+**Medido subiendo la misma foto dos veces contra `pos-pruebas-descartable`:**
+
+```
+1.ª  STORAGE fotos/31e5c420-….png   HTTP 200  {"Key":"fotos/31e5c420-….png","Id":"493fad0c-…"}
+2.ª  STORAGE fotos/31e5c420-….png   HTTP 400  {"statusCode":"409","error":"Duplicate",
+                                               "message":"The resource already exists",
+                                               "code":"KeyAlreadyExists"}
+     ciclo: cola_vaciada; pendientes: 0
+```
+
+> **EL DETALLE QUE HABÍA QUE ATENDER: el estado es 400 y el 409 viene ADENTRO
+> del cuerpo, como texto.** Clasificar por el código a secas mandaría un ÉXITO
+> —los bytes ya están allá— directo a detener la cola. Por eso se mira el
+> cuerpo. **Falsificado**: quitando esa lectura caen 2 comprobaciones.
+
+Y la foto está de verdad: la restauración la baja con **HTTP 200, 70 bytes,
+sha256 idéntico al subido**.
+
+#### 5. Los PDF de recibos NO se suben, en tres capas
+
+Decisión de §2.5.3, tomada: un PDF es dato derivado que la reimpresión regenera,
+y subirlos llenaría el gigabyte del plan gratuito en unos **ocho meses**.
+
+| Capa | Qué impide |
+|---|---|
+| El módulo | `BUCKET_DE_FOTOS` es una constante y **no hay parámetro de bucket**: no se puede pedirle que suba a otro lado |
+| Una prueba estructural | Ningún archivo del proceso principal arma una ruta `storage/v1/object/…recibos`, y hay un control del propio detector |
+| La nube | La terminal **no tiene ninguna política** sobre ese bucket (migración 0026) |
+
+**Medido con la credencial de terminal contra el proyecto de pruebas:**
+
+```
+POST /storage/v1/object/recibos/<uuid>.pdf
+  -> HTTP 400 {"statusCode":"403","error":"Unauthorized",
+               "message":"new row violates row-level security policy",
+               "code":"AccessDenied"}
+```
+
+#### 6. Un `foto_path` huérfano no detiene nada (§2.5.4)
+
+La fila dice que hay foto y el archivo se borró. El subidor **no sale a la red**
+—no hay nada que mandar— y devuelve la señal `archivoAusente`. El trabajador la
+aparta **un día**, la deja **no bloqueante**, y **sigue con el lote siguiente**.
+
+> **`archivoAusente` es un campo aparte y NO un código HTTP inventado.** La
+> clasificación de este proyecto va por código y nunca por el texto del error,
+> justamente para no adivinar; pero acá **no hubo petición**, así que no hay
+> código que mirar. Meterle un 404 de mentira haría que se leyera como una
+> respuesta de la nube, que es lo contrario de lo que pasó.
+
+La espera es de un día y no la escalera de reintentos: aquella existe para una
+nube que ahora no puede y en un rato sí, y acá lo que falta es un archivo en el
+disco. Nada de lo que pase en el próximo minuto lo va a traer.
+
+##### UN DEFECTO DE MI PRIMERA VERSIÓN, QUE ENCONTRÓ UNA PRUEBA
+
+La primera versión devolvía el lote apartado como si hubiera subido, así que el
+resumen decía **«cola_vaciada; 2 lotes»** de dos fotos que nunca salieron a la
+red. La bitácora habría reportado como respaldado algo que no lo estaba. Se
+corrigió con un contador aparte, y ahora un ciclo con fotos apartadas lo dice:
+«N archivo(s) sin subir: no están en el disco». Tiene prueba propia.
+
+#### Dos separaciones del diseño, con su razón
+
+| §2.5.2 pedía | Qué se hizo | Por qué |
+|---|---|---|
+| El SHA-256 en un `worker_thread` | Se calcula en línea | La premisa era «leer 5 MB en un i3 son cientos de milisegundos», y **esta misma fase la eliminó**: la foto ya se guardó reducida, así que se leen unas decenas de KB. Un hilo aparte sería infraestructura para un problema que la reducción borró |
+| La URL directa `<ref>.storage.supabase.co` | `<url del proyecto>/storage/v1/…` | Es la forma que la batería de la fase 2.c **ya tenía medida y funcionando**. La otra no se probó nunca, y cambiar a un host no verificado para ganar nada medible es la clase de decisión que este proyecto no toma |
+
+#### Lo que NO se verificó
+
+- **La reducción se midió en macOS.** `nativeImage` usa los códecs de Chromium,
+  que Electron empaqueta iguales en los dos sistemas, pero **Windows es la
+  plataforma de producción** y eso es razonamiento, no medición. Se suma al
+  punto 12 de §6.2, junto a `diagnostico:credencial`.
+- **La subida real se hizo con un PNG de 70 bytes**, no con una foto reducida de
+  110 KB: lo que se comprobó es que la política acepta la petición y que los
+  bytes llegan idénticos, no el comportamiento con un archivo grande.
+- **No se ejercitó un corte de red REAL a mitad de subida.** Lo que se midió es
+  el reintento contra un objeto que ya existía, que es el desenlace de ese
+  corte; el corte en sí está probado con un `fetch` que lanza.
+- **`npm run fotos:reducir` no se corrió contra un catálogo real con fotos**:
+  la base de desarrollo no tiene ninguna. Su camino está probado con Vitest.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -4568,6 +4750,13 @@ el punto 19 de §6.2.
 | **CORREGIDO: el `0027b` del proyecto de pruebas había reescrito `contrato_de_sincronizacion` a mano y derivó del archivo.** El descartable se realineó con el repositorio. | Dejarlo, porque la salida del contrato era idéntica igual; realinear el real en vez del descartable | Lo detectó la comprobación de §4.4 al cotejar `md5(pg_get_functiondef)` entre los dos proyectos: **no coincidían**, que es exactamente para lo que existe. La causa fue mía: el `0027b` del día anterior reescribió la función en vez de copiar el cuerpo de la `0023`, cambiando `pg_get_function_arguments` por `identity_arguments` y `p.proconfig` por `coalesce(p.proconfig, ARRAY[]::text[])`. **El real tenía la versión correcta** —el registro de su `0023` es byte a byte el archivo del repositorio— así que se corrigió el descartable. La divergencia resultó ser de TEXTO y no de comportamiento (ver la fila siguiente), pero se corrige igual: el `coalesce` sí cambiaría la salida el día que una función perdiera su `search_path`, y dos proyectos que corren código distinto invalidan la premisa de probar en uno para aplicar en el otro. | Prompt 47 — 2026-09-14 |
 | **MEDIDO, contra una suposición mía: `pg_get_function_arguments` e `identity_arguments` devuelven LO MISMO para las funciones de este esquema.** | Dar por buena mi lectura de que una trae nombres de parámetro y la otra solo tipos, y concluir que los dos proyectos declaraban contratos distintos | Iba a reportar que la foto y el real declaraban argumentos distintos. **Se midió antes de afirmarlo y era falso**: `iguales = true` en las tres funciones probadas. Las dos formas se separan solo con parámetros `OUT`/`INOUT`/`VARIADIC` o con valores por omisión, y ninguna función de este esquema tiene eso. La confirmación definitiva fue comparar la SALIDA del contrato en los dos proyectos con los claims de `restauracion`: `92d5b3e7374cdcf36aaa9f185acadf67` en los dos. Es el mismo tipo de error que §4.22 ya dejó anotado —reportar como medido lo que era razonamiento— y esta vez se atrapó antes de escribirlo. | Prompt 47 — 2026-09-14 |
 | **NO se arregla el `23505` de las restricciones únicas que no son la llave primaria: se documenta y lo decide Julio.** | Cambiar `escribir_fila` para que conozca la clave natural de cada tabla; derivar los UUID de la clave natural; clasificar el `23505` como transitorio | El arnés exhaustivo lo destapó midiendo: `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, o sea que el upsert solo absorbe choques contra la **llave primaria**, y hay **nueve restricciones únicas que no lo son** en tablas que la terminal escribe (`usuarios.nombre`, `categorias.nombre`, `productos.nombre`, `limites_descuento.rol`, `recibos.numero_recibo`, `recibos.venta_id`, `venta_detalle(venta_id,orden_linea)`, el desglose de caja y la caja única). Un choque contra cualquiera sale como `23505` crudo, se clasifica como determinístico —correctamente— y **detiene la cola**. Hoy la tienda no lo puede provocar, porque nada se borra y una clave natural queda atada a su UUID para siempre dentro de una misma base; lo disparan una reinstalación, una restauración o una segunda terminal. **No se arregla por cuenta propia** porque las tres salidas posibles tocan el contrato con la nube y ninguna es obviamente la correcta: es definición de diseño y va como el punto 19 de §6.2. | Prompt 47 — 2026-09-14 |
+| **Las fotos se reducen a 800 px AL GUARDAR, con `nativeImage` de Electron.** | `sharp`, que es lo estándar; `jimp`, que es JavaScript puro; reducir solo al subir y dejar el disco con la foto entera; convertir los PNG a JPEG para bajar más el peso | El número lo puso §2.5.3 midiendo: 200 fotos de teléfono sin comprimir son **unos 600 MB**, el 60 % del plan gratuito de una sola vez; a 800 px son unos 30 MB. `sharp` es un módulo NATIVO que habría que recompilar para Electron y para Windows —exactamente lo que §4.14 rechazó para la impresora— y `jimp` suma megabytes para lo que Electron ya sabe hacer: es el mismo criterio por el que el PDF sale de Chromium y no de `pdfkit`. Se reduce **al guardar y no solo al subir** para que el disco de la terminal también se cuide y la cuadrícula dibuje la foto chica. **El formato no se cambia**: convertir los PNG a JPEG pierde la transparencia y cambia la extensión que la fila ya guardó, y cuál de las dos cosas conviene es una definición que Jimmy no dio. Medido: 8.02 MB / 3000×2000 → **110 KB / 800×533**, 98.7 % menos. | Prompt 49 — 2026-09-14 |
+| **El redimensionador se INYECTA y es obligatorio; quien pone los píxeles vive en `adapters/`.** | Importar `nativeImage` directamente en `almacen-de-fotos.ts`; hacerlo opcional para no tocar los sitios de construcción | El dominio no importa Electron, por la misma razón que `AlmacenDeFotos` ya recibía la carpeta base por parámetro: así se prueba contra archivos reales sin arrancar la aplicación. **Obligatorio y no opcional** porque uno opcional dejaría que un sitio que se olvide de pasarlo guarde las fotos enteras **en silencio**, con el síntoma —el gigabyte lleno— apareciendo meses después; es el mismo criterio con que `base` se hizo obligatoria en la fase 3.b. La contrapartida se asume y se cubre: en Vitest lo que se prueba es el doble, así que **que los píxeles se reduzcan de verdad lo mide `npm run diagnostico:imagen` dentro de Electron**, igual que `diagnostico:credencial` hace con `safeStorage`. Y esa sonda **lee las constantes de la fuente en vez de copiarlas**, para que no puedan derivar. | Prompt 49 — 2026-09-14 |
+| **Las FILAS de negocio suben antes que cualquier ARCHIVO, y entre archivos sí se saltea al que espera.** | Un solo orden de llegada para todo, como hasta ahora; una cola aparte para los archivos | §2.5.1: «las filas son el negocio, los archivos son el adorno». Con una foto de cientos de KB por delante, una venta cobrada esperaría a que suba el catálogo. **No rompe la regla de «no saltear ningún lote»**, que existe por las llaves foráneas de Postgres: un archivo no tiene ninguna, Storage no referencia nada y nada lo referencia, así que su orden respecto de las filas es libre. Entre archivos sí se saltea al que está en espera, y con las filas nunca: ahí el orden ES la integridad referencial, acá cada foto es independiente. Una cola aparte habría duplicado el trabajador, sus reintentos y su persistencia para no ganar nada. | Prompt 49 — 2026-09-14 |
+| **Un archivo ausente es una clase de fallo PROPIA (`archivo_ausente`), señalada con un campo explícito y no con un código HTTP inventado.** | Devolver un 404 de mentira; clasificarlo por el texto del error; tratarlo como determinístico y detener la cola | La clasificación de este proyecto va por código HTTP y **nunca** por el texto, para no adivinar. Pero acá **no hubo petición**: el archivo faltaba antes de salir a la red, así que no hay código que mirar, y meterle un 404 haría que se leyera como una respuesta de la nube, que es lo contrario de lo que pasó. Tratarlo como determinístico detendría toda la sincronización de la tienda porque a una terminal le falta una foto, y §2.5.4 pide lo opuesto: no bloqueante, apartado un día, «la fila de la base sigue subiendo normalmente». La espera es de un día y no la escalera de reintentos porque aquella existe para una nube que ahora no puede y en un rato sí; acá lo que falta es un archivo, y nada de lo que pase en el próximo minuto lo trae. | Prompt 49 — 2026-09-14 |
+| **CORREGIDO antes de cerrar: un lote apartado NO se cuenta como subido.** | Dejarlo como estaba, que funcionaba | Mi primera versión devolvía el lote apartado con `motivo: null` para que el ciclo siguiera, y el bucle lo sumaba a los subidos: el resumen decía **«cola_vaciada; 2 lotes»** de dos fotos que nunca salieron a la red. **La bitácora habría reportado como respaldado algo que no lo estaba**, que es justo lo que este proyecto trata como el peor de los errores. Lo encontró una prueba que esperaba `sin_pendientes` y recibió `cola_vaciada`. Ahora hay un contador aparte y el ciclo lo dice: «N archivo(s) sin subir: no están en el disco». | Prompt 49 — 2026-09-14 |
+| **Los PDF NO se suben, y se hace cumplir en TRES capas.** | Dejar la decisión escrita en la documentación y confiar; implementar la subida detrás de una bandera apagada | §2.5.3: un PDF es dato derivado que la reimpresión regenera desde las filas, y subirlos llena el gigabyte del plan gratuito en unos ocho meses para respaldar algo que la restauración reconstruye en segundos. Una bandera apagada sería código muerto que un día alguien enciende sin releer el motivo. Las tres capas: el módulo **no tiene parámetro de bucket** —no se le puede pedir—, una prueba estructural comprueba que ningún archivo del proceso principal arma una ruta a `recibos` (con un control del propio detector), y la nube no le da a la terminal **ninguna política** sobre ese bucket. Medido: `POST /storage/v1/object/recibos/… -> HTTP 400 new row violates row-level security policy`. | Prompt 49 — 2026-09-14 |
+| **DOS SEPARACIONES DEL DISEÑO, las dos con su razón medida: el SHA-256 va en línea y la subida usa la URL del proyecto.** | Seguir §2.5.2 al pie de la letra: `worker_thread` para el hash y `<ref>.storage.supabase.co` para subir | El `worker_thread` se pedía «porque leer 5 MB y hacer SHA-256 en un i3 son cientos de milisegundos que no tienen por qué congelar la ventana», y **esta misma fase eliminó la premisa**: la foto ya se guardó reducida, así que lo que se lee son decenas de KB. Un hilo aparte sería infraestructura para un problema que la reducción borró. La URL directa de Storage nunca se probó en este proyecto; la del proyecto **sí está medida y funcionando** desde la batería de la fase 2.c. Cambiar a un host no verificado para ganar nada medible es la clase de decisión que este proyecto no toma. Las dos separaciones quedan escritas en §4.33 para que se puedan revisar. | Prompt 49 — 2026-09-14 |
 | **El id de `limites_descuento` pasa a ser FIJO por rol, con UUID en la migración (028 / 0028).** | `id = rol`, que sería más legible; derivar el UUID de la clave natural con un hash; dejarlo sorteado y enseñarle a `escribir_fila` la clave natural de cada tabla | Cierra la PRIMERA de las nueve restricciones únicas de §4.31, y es la única donde la clave natural **es** la identidad: `limites_descuento` tiene como mucho dos filas y siempre las mismas dos, una por rol. `id = 'venta'` no se puede sin reconstruir la tabla —SQLite exige `length(id) = 36` y Postgres es `UUID`—, y el rebuild de doce pasos ya se descartó en las migraciones 008 y 015. Derivar el UUID de un hash escondería en código una correspondencia que así queda **escrita en el esquema y comprobable a simple vista**. Y no se tocó `escribir_fila`, porque las otras ocho restricciones no son el mismo problema y una regla genérica les aplicaría una respuesta que no les corresponde. Rompe a propósito la regla de «UUID en el cliente», que existe para EVITAR colisiones entre instalaciones: acá la colisión es lo que se busca, igual que en `denominaciones` (Prompt 13) y en el `id = 'unica'` de `configuracion_negocio`. | Prompt 48 — 2026-09-14 |
 | **La migración mueve también lo que estaba esperando en `sync_cola`, no solo la fila de negocio.** | Mover solo `limites_descuento` y dejar la cola como estaba | Una migración que cambia una llave primaria tiene que mover con ella todo lo que la nombra. Si un lote quedara pendiente apuntando al id viejo —y con el id viejo adentro del payload—, al subirlo la nube recibiría la fila con una llave primaria que en esa base ya no existe y chocaría contra `UNIQUE (rol)`: **la propia migración provocando el `23505` que vino a cerrar**. Se mueven `entidad_id` y el `id` de adentro del payload JUNTOS, con `json_set`, porque §4.17 sostiene que el payload es byte a byte lo que quedó guardado. Tiene prueba propia, sobre una base a la que se le aplican todas las migraciones MENOS esta, se le siembra la fila con id sorteado y recién entonces se corre. | Prompt 48 — 2026-09-14 |
 | **El guion de la batería usa el id del ESQUEMA, no uno inventado por él.** | Dejarle su propio id fijo, que funcionaba | `verificacion-de-nube.cjs` ya tenía un id fijo propio con este comentario: «`limites_descuento.rol` es UNIQUE y esa tabla no se vacía entre corridas, así que un id nuevo por corrida chocaría contra la fila de la corrida anterior». **El diagnóstico era exacto y el arreglo estaba en el lugar equivocado**: nadie conectó que la aplicación sorteaba ese mismo id, así que el choque le esperaba igual a cualquier reinstalación o segunda terminal. Es una lección más general que este caso: **un arnés de prueba que esquiva un problema en vez de exhibirlo lo esconde**, y acá lo escondió durante dos fases. Ahora usa el id del esquema, y uno inventado sería rechazado por el CHECK. | Prompt 48 — 2026-09-14 |
@@ -4612,7 +4801,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
-| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`**, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
+| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
@@ -4709,11 +4898,18 @@ negocio:
     lote a una de las cinco funciones de la `0023` y usa por primera vez la
     credencial de la 3.a; la **detección de conexión** de tres capas y el
     latido diario que evita que el proyecto gratuito se pause.
-  **Lo que sigue sin existir:** la sincronización de
-  archivos, la pantalla de sincronización y la restauración. **La aplicación
-  sigue sin haber hecho una llamada de red en la tienda**: sin `POS_NUBE_URL` no se construye la sesión de nube, y las
-  únicas llamadas reales las hacen `npm run verify:nube` y
-  `npm run diagnostico:credencial`, dos guiones de desarrollo.
+  - **Fase 3.c** (§4.33): los **archivos**. La foto se reduce a 800 px al
+    guardarse, se encola en `sync_cola` como `archivo_foto` y sube al bucket
+    `fotos` sin `x-upsert`; los archivos van DESPUÉS de todas las filas de
+    negocio, y una foto que ya no está en el disco se aparta un día sin
+    detener la cola. **Los PDF de recibos NO se suben**, por decisión de
+    §2.5.3, y hay tres capas que lo impiden.
+  **Lo que sigue sin existir:** la pantalla de sincronización y la
+  restauración. **La aplicación sigue sin haber hecho una llamada de red en la
+  tienda**: sin `POS_NUBE_URL` no se construye la sesión de nube, y las únicas
+  llamadas reales las hacen `npm run verify:nube`,
+  `npm run diagnostico:credencial` y `npm run diagnostico:imagen`, guiones de
+  desarrollo.
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
   canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.
@@ -4741,6 +4937,13 @@ npm run verify:nube      # compara lo que la nube declara con supabase/esquema-n
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
                                        # se niega ante cualquier otro (código 3)
+npm run fotos:reducir    # UNA SOLA VEZ: reduce a 800 px las fotos guardadas antes
+                         # de la fase 3.c y las encola para subir. No es una
+                         # migración. Correrlo dos veces no duplica nada (§4.33).
+npm run diagnostico:imagen       # ¿el nativeImage REAL de este sistema reduce la foto?
+                                 # Corre dentro de Electron. Código 0 se redujo,
+                                 # 1 NO se redujo (GRAVE), 2 no se pudo medir.
+                                 # HAY QUE CORRERLO EN WINDOWS (§4.33).
 npm run diagnostico:credencial   # ¿el safeStorage REAL de este sistema cifra la credencial?
                                  # Corre dentro de Electron. Código 0 cifrada, 1 legible (GRAVE),
                                  # 2 sin cifrado disponible. HAY QUE CORRERLO EN WINDOWS (§4.23).

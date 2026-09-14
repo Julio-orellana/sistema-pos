@@ -23,7 +23,30 @@ export type ClaseDeFallo =
   /** 400, 403, 409, 422. DETIENE la cola: reintentar no lo va a arreglar. */
   | 'deterministico'
   /** 401. La cola no se toca hasta reprovisionar la credencial. */
-  | 'credencial';
+  | 'credencial'
+  /**
+   * El archivo que había que subir ya no está en este disco (§2.5.4).
+   *
+   * NO es bloqueante y NO detiene la cola: el disco perdió una foto, no la
+   * tienda. Se aparta un día y se vuelve a mirar, por si el archivo reaparece
+   * —una carpeta restaurada a medias, un respaldo que terminó de copiarse—.
+   * La fila de `productos` con su `foto_path` sube igual: la nube sabe que ese
+   * producto TENÍA foto aunque no la tenga.
+   */
+  | 'archivo_ausente';
+
+/**
+ * Cuánto se espera antes de volver a buscar un archivo que no estaba.
+ *
+ * Un día, de §2.5.4. No usa la escalera de reintentos porque no es el mismo
+ * problema: la escalera existe para una nube que ahora no puede y en un rato
+ * sí, y acá lo que falta es un archivo en el disco. Nada de lo que pase en el
+ * próximo minuto lo va a traer de vuelta, y preguntarlo cada minuto solo
+ * llenaría la bitácora.
+ */
+const UN_DIA = { horas: 24, minutosPorHora: 60, segundosPorMinuto: 60, msPorSegundo: 1000 } as const;
+export const ESPERA_POR_ARCHIVO_AUSENTE_MS =
+  UN_DIA.horas * UN_DIA.minutosPorHora * UN_DIA.segundosPorMinuto * UN_DIA.msPorSegundo;
 
 /**
  * Códigos que son transitorios aunque sean 4xx.
@@ -61,8 +84,20 @@ const CUATROCIENTOS_QUE_SE_REINTENTAN: readonly number[] = [
  * programación, no un problema de red. Reintentarlo en bucle lo escondería;
  * detener la cola lo pone a la vista, que es el criterio de §3.2.
  */
-export function clasificarFallo(resultado: Pick<ResultadoEmpuje, 'estadoHttp'>): ClaseDeFallo {
+export function clasificarFallo(
+  resultado: Pick<ResultadoEmpuje, 'estadoHttp' | 'archivoAusente'>,
+): ClaseDeFallo {
   const estado = resultado.estadoHttp;
+
+  /*
+    VA PRIMERO, ANTES DE MIRAR NINGÚN CÓDIGO. Un archivo ausente no es una
+    respuesta de la nube: la petición ni se hizo. §2.5.4 pide que NO sea
+    bloqueante —el disco perdió una foto, la tienda no— y que se reintente una
+    vez al día por si el archivo vuelve.
+  */
+  if (resultado.archivoAusente === true) {
+    return 'archivo_ausente';
+  }
 
   if (estado === undefined) {
     return 'transitorio';
