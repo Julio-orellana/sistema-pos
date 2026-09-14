@@ -695,6 +695,15 @@ sincronización», que es este.
 relativa en este disco.** El funcionamiento sin internet no depende de que la
 nube exista, hoy ni nunca, y eso se garantiza no tocando esas columnas.
 
+> **CORRECCIÓN del 2026-09-14: para `pdf_path` esto fue FALSO hasta la
+> migración local 030.** `ServicioDeRecibos` guardaba la ruta ABSOLUTA de la
+> carpeta de recibos de la máquina que emitió, y así viajó a la nube cada
+> recibo hasta ese día. Lo destapó la restauración (6.3, paso 12) y lo señaló
+> Julio al revisarla. Desde la 030 la fila guarda `recibos/<nombre>.pdf`,
+> exactamente lo que dice la tabla de abajo; las filas ya subidas con ruta
+> absoluta siguen así en la nube, y la restauración las convierte al bajarlas,
+> como compatibilidad hacia atrás y nada más (6.8, punto 5).
+
 Tampoco se agrega una columna «ruta en la nube», y la razón es que **no hace
 falta: la ruta en Storage se deriva de la ruta local**, con una convención
 fija:
@@ -1162,7 +1171,7 @@ catálogo**: cada tabla después de las que referencia.
 | 9 | `caja_sesion_denominaciones` | `caja_sesiones`, `denominaciones` | Insertar |
 | 10 | `ventas` | `caja_sesiones`, `usuarios` | Insertar. `estado_sincronizacion = 'sincronizado'` localmente, porque ya está en la nube. |
 | 11 | `venta_detalle` | `ventas`, `productos` | Insertar |
-| 12 | `recibos` | `ventas` | Insertar. `impreso = 0`. **`pdf_path` NO queda tal como estaba** (ver 6.8): en la nube es la ruta ABSOLUTA del disco de la terminal vieja, y acá se re-enraíza en la carpeta de recibos de esta máquina conservando el nombre del archivo. `siguienteNumero()` es `MAX + 1` sobre la tabla (verificado en el repositorio), así que la numeración continúa sola. |
+| 12 | `recibos` | `ventas` | Insertar. `impreso = 0`. `pdf_path` se escribe tal cual: desde la migración local 030 es RELATIVA (`recibos/<nombre>.pdf`, 2.5.1) y no depende de la máquina. Una fila subida ANTES de la 030 trae la ruta absoluta de la terminal vieja y se convierte a esa forma al bajarla: compatibilidad hacia atrás con lo que ya está en la nube, no el comportamiento esperado (ver 6.8). `siguienteNumero()` es `MAX + 1` sobre la tabla (verificado en el repositorio), así que la numeración continúa sola. |
 | 13 | `auditoria_log` | `usuarios` | Insertar, en orden de fecha. |
 | 14 | Archivos: fotos | — | Bajar de Storage a `fotos-de-productos/`, derivando el objeto de `foto_path` (2.5.1). Las que falten en la nube se anotan; el producto sigue existiendo sin foto, que es su estado normal (§4.11). |
 | 15 | Archivos: PDF | — | **Decidido: no se suben (2.5.3, fase 3.c), así que no hay nada que bajar.** La reimpresión los regenera desde las filas, y está probado que tolera el archivo ausente: escribe el PDF nuevo en la ruta re-enraizada del paso 12. |
@@ -1308,8 +1317,13 @@ Cada una se tomó a la vista y está en el registro de decisiones de CLAUDE.md
    columna rellena— y `conversion-de-tipos.ts` la normaliza a `4.165`, que es
    byte a byte lo que SQLite había guardado. **Nunca redondea:** un valor con
    más decimales de los que su columna admite se rechaza. Las fechas se
-   normalizan de `+00:00` a `Z` con `toISOString`, y una con más de tres
-   decimales de segundo también se rechaza, porque truncar es perder.
+   normalizan de `+00:00` a `Z` con `toISOString`; una con más de tres
+   decimales de segundo —solo puede venir de SQL en la nube, como el `now()`
+   con que la 0016 sembró `configuracion_negocio.actualizado_en`— se conserva
+   entera, porque el CHECK local la admite y truncar sería perder. (Corregido
+   el 2026-09-14: la primera versión la rechazaba, y eso dejaba la restauración
+   sin poder correr contra una fila que ninguna terminal hubiera guardado, que
+   es la del proyecto real hoy.)
 
 4. **La suma por mes se hace EN POSTGRES con una función nueva**,
    `restauracion_ventas_por_mes()` (migración 0029, `SECURITY INVOKER`, solo
@@ -1317,14 +1331,22 @@ Cada una se tomó a la vista y está en el registro de decisiones de CLAUDE.md
    sin una función. Devuelve la suma como texto. El mes se corta en UTC de los
    dos lados: es una suma de control, no un reporte.
 
-5. **`pdf_path` se re-enraíza.** El diseño (2.5.1) supone rutas relativas,
-   pero `ServicioDeRecibos` guarda la ruta ABSOLUTA de la carpeta de recibos
-   de la terminal que emitió (`join(carpeta, nombre)`), y en la nube está así.
-   La columna local es `NOT NULL`, así que «dejarla en NULL» no era posible.
-   Se conserva el nombre del archivo y se cambia la carpeta por la de esta
-   máquina; la reimpresión regenera el PDF ahí, probado con el archivo
-   ausente. El nombre se corta por cualquiera de las dos barras, porque la
-   terminal vieja pudo ser Windows y `path.basename` de macOS no parte `\`.
+5. **`pdf_path` YA NO se re-enraíza: se corrigió el origen.** La primera
+   versión de esta fase descubrió que `ServicioDeRecibos` guardaba la ruta
+   ABSOLUTA de la carpeta de recibos de la terminal que emitió
+   (`join(carpeta, nombre)`) y no la relativa que 2.5.1 supone, y lo
+   compensaba al restaurar re-enraizándola en la carpeta de esta máquina.
+   Julio señaló que eso era un parche sobre datos viejos que iba a haber que
+   repetir para siempre, porque cada recibo nuevo seguía subiendo igual. Desde
+   la migración local 030 la fila guarda `recibos/<nombre>.pdf` y la
+   restauración la escribe tal cual —el arnés real la compara byte a byte—.
+   La conversión de una ruta absoluta a la relativa queda SOLO como
+   compatibilidad hacia atrás para las filas que ya subieron con la
+   convención vieja (macOS o Windows: se corta por cualquiera de las dos
+   barras, porque `path.basename` de macOS no parte `\`). La columna local
+   sigue siendo `NOT NULL`, así que «dejarla en NULL» sigue sin ser posible, y
+   la reimpresión regenera el PDF en la carpeta de esta máquina, probado con
+   el archivo ausente.
 
 6. **«Sin restaurar» solo para las tablas que la nube SOLO INSERTA.**
    Aplicado a todas las tablas, 6.5 rompería las llaves foráneas de lo
@@ -1373,6 +1395,36 @@ Cada una se tomó a la vista y está en el registro de decisiones de CLAUDE.md
     exige volver a iniciar sesión, y se niega contra otro proyecto. Mientras
     exista, la aplicación arranca en la pantalla de restauración y no en la de
     ingreso: la base está a medias y sus usuarios no tienen PIN.
+
+11. **Retomar tras MATAR el proceso está verificado por la ventana**
+    (`npm run verify:pantallas:restauracion`, 2026-09-14): `SIGKILL` al
+    proceso principal de Electron con dos tablas listas y diez por bajar, la
+    base quedó exactamente como decía el puesto de control (las dos tablas
+    completas, las demás en cero), y un arranque NUEVO sobre la misma carpeta
+    abrió directo en «Retomar», llegó a la revisión, se negó a terminar hasta
+    que cada usuario activo tuvo PIN, y terminó con los mismos ids que la
+    terminal de origen. Ver CLAUDE.md §4.35.
+
+12. **Un `timestamptz` con más de tres decimales se conserva entero.** Lo
+    escribe solo SQL en la nube —el `now()` con que la 0016 sembró
+    `configuracion_negocio.actualizado_en`, que es como está el proyecto real
+    mientras Jimmy no cargue sus datos— y la primera versión lo rechazaba, lo
+    que dejaba la restauración sin poder correr contra esa fila. El CHECK
+    local admite cualquier cantidad de decimales y truncar sería perder.
+
+13. **Un fallo transitorio de la nube a mitad de la transferencia deja la
+    restauración «detenida» con el motivo, y se retoma a mano.** No hay
+    escalera de reintentos en el cliente de restauración; la subida sí la
+    tiene porque corre sin nadie delante. Es una decisión que este diseño no
+    tomó y que queda para Julio (CLAUDE.md §5, Prompt 52).
+
+14. **Una restauración más larga que el token se renueva sola, medido**
+    (`npm run verify:restauracion:renovacion`, 2026-09-14): restauración real
+    de 1010 s con un retraso del arnés de 75 s por página; una renovación
+    (`refresh_token -> 200`) a los 675 s, con siete tablas listas y cinco por
+    bajar; las 24 lecturas posteriores con el token nuevo; y el token viejo,
+    presentado a mano 110 s después de su `exp`, rechazado con `401 PGRST303`.
+    Ver CLAUDE.md §4.35.
 
 ---
 

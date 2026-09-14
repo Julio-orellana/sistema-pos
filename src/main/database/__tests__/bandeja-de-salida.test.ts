@@ -210,10 +210,7 @@ beforeEach(() => {
     configuracion: repos.configuracionNegocio,
     impresora: new NullPrinterProvider(),
     log: new LogTecnicoSilencioso(),
-    ubicacion: {
-      carpeta: '/pdf',
-      unir: (carpeta: string, nombre: string): string => `${carpeta}/${nombre}`,
-    },
+    carpetaDeDatos: '/datos',
     generarPdf: (): Promise<void> => Promise.resolve(),
   });
 
@@ -587,12 +584,14 @@ describe('El recibo se encola UNA vez, al emitirse, y nunca más', () => {
     const ventaId = cobrar();
     await recibos.emitir(ventaId);
 
-    // Los archivos son la fase 3.c. Hoy solo viaja la RUTA, como dato de la
-    // fila, y nadie va a poder resolverla desde la nube: es de este disco.
+    // Los PDF no se suben (§2.5.3). Lo que viaja es la RUTA, como dato de la
+    // fila, y desde la migración 030 es RELATIVA a la carpeta de datos: la
+    // absoluta de este disco no significaría nada en la máquina que restaure.
     expect(tablasEncoladas()).not.toContain('archivo_pdf');
     expect(tablasEncoladas()).not.toContain('archivo_foto');
     const pdfPath = payloadDe(cola()[0]!).pdf_path;
-    expect(pdfPath).toMatch(/^\/pdf\/recibo-000001-.*\.pdf$/);
+    expect(pdfPath).toMatch(/^recibos\/recibo-000001-.*\.pdf$/);
+    expect(pdfPath).not.toContain('/datos');
   });
 });
 

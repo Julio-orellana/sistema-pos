@@ -139,7 +139,7 @@ export function sembrarTerminalDeOrigen(base: Database, carpetaDeDatos: string):
       rutasDePdf.push(destino);
       return Promise.resolve();
     },
-    ubicacion: { carpeta: carpetaDeRecibos, unir: join },
+    carpetaDeDatos,
     log: new LogTecnicoSilencioso(),
   });
 

@@ -36,7 +36,8 @@ import { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-de-lim
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { generarPdfDesdeHtml } from '@main/recibo/generador-de-pdf';
 import { LogTecnicoEnArchivo } from '@main/log-tecnico';
-import { CARPETA_DE_RECIBOS, crearImpresoraConfigurada } from '@main/adapters/impresora-configurada';
+import { crearImpresoraConfigurada } from '@main/adapters/impresora-configurada';
+import { SUBCARPETA_DE_RECIBOS } from '@main/domain/recibo/ruta-de-pdf';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
@@ -542,7 +543,7 @@ app.whenReady().then(
       `configuracion_negocio`: dos cajas podrían tener la impresora en puertos
       distintos, y esa tabla se espeja en la nube. Ver §4.14.
     */
-    const carpetaDePdf = join(app.getPath('userData'), CARPETA_DE_RECIBOS);
+    const carpetaDePdf = join(app.getPath('userData'), SUBCARPETA_DE_RECIBOS);
     mkdirSync(carpetaDePdf, { recursive: true });
     const logTecnico = new LogTecnicoEnArchivo(app.getPath('userData'));
     const impresora = crearImpresoraConfigurada(app.getPath('userData'), logTecnico);
@@ -556,7 +557,7 @@ app.whenReady().then(
       configuracion: repositorios.configuracionNegocio,
       impresora,
       generarPdf: generarPdfDesdeHtml,
-      ubicacion: { carpeta: carpetaDePdf, unir: join },
+      carpetaDeDatos: app.getPath('userData'),
       log: logTecnico,
     });
 
@@ -746,7 +747,6 @@ app.whenReady().then(
       urlDelProyecto: clienteDeRestauracion === null ? null : urlDeLaNube,
       puestoDeControl: new AlmacenDelPuestoDeControl(app.getPath('userData')),
       carpetaDeDatos: app.getPath('userData'),
-      carpetaDeRecibos: carpetaDePdf,
       ...(detectorParaRestaurar === null
         ? {}
         : { comprobarNube: (): Promise<{ hayNube: boolean; motivo: string }> => detectorParaRestaurar.comprobar() }),

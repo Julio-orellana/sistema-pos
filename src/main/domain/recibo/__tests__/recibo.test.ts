@@ -11,6 +11,7 @@
  * transacción nunca habría producido.
  */
 
+import { isAbsolute } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
 
@@ -86,10 +87,7 @@ beforeEach(() => {
     configuracion: repos.configuracionNegocio,
     impresora: new NullPrinterProvider(),
     log: new LogTecnicoSilencioso(),
-    ubicacion: {
-      carpeta: '/pdf',
-      unir: (carpeta: string, nombre: string): string => `${carpeta}/${nombre}`,
-    },
+    carpetaDeDatos: '/datos',
     generarPdf: (html: string, ruta: string): Promise<void> => {
       if (elPdfFalla) {
         return Promise.reject(new Error('disco lleno'));
@@ -559,10 +557,7 @@ describe('La venta sobrevive a cualquier problema de impresión', () => {
       configuracion: repos.configuracionNegocio,
       impresora,
       log: new LogTecnicoSilencioso(),
-      ubicacion: {
-        carpeta: '/pdf',
-        unir: (carpeta: string, nombre: string): string => `${carpeta}/${nombre}`,
-      },
+      carpetaDeDatos: '/datos',
       generarPdf: (html: string, ruta: string): Promise<void> => {
         pdfEscritos.push({ ruta, html });
         return Promise.resolve();
@@ -714,5 +709,31 @@ describe('Reimprimir reproduce los mismos datos que el original', () => {
     );
 
     expect(otro.recibo.numeroRecibo).toBe(uno.recibo.numeroRecibo + 1);
+  });
+});
+
+// ===========================================================================
+// La ruta del PDF: RELATIVA en la fila, ABSOLUTA en el disco (migración 030)
+// ===========================================================================
+describe('La ruta del PDF: relativa en la fila, absoluta en el disco', () => {
+  it('LA FILA GUARDA recibos/<nombre>.pdf, nunca la ruta absoluta de esta máquina', async () => {
+    const resultado = await recibos.emitir(ventaSimple());
+    expect(resultado.recibo.pdfPath).toMatch(/^recibos\/recibo-000001-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.pdf$/);
+    expect(isAbsolute(resultado.recibo.pdfPath)).toBe(false);
+    expect(resultado.recibo.pdfPath).not.toContain('/datos');
+  });
+
+  it('el PDF se escribe en la ABSOLUTA resuelta desde la relativa, y esa es la que se informa', async () => {
+    const resultado = await recibos.emitir(ventaSimple());
+    expect(resultado.rutaPdf).toBe(`/datos/${resultado.recibo.pdfPath}`);
+    expect(pdfEscritos[0]?.ruta).toBe(resultado.rutaPdf);
+    expect(recibos.rutaAbsolutaDelPdf(resultado.recibo)).toBe(resultado.rutaPdf);
+  });
+
+  it('una reimpresión escribe en la MISMA ruta absoluta, encima del mismo archivo', async () => {
+    const emitido = await recibos.emitir(ventaSimple());
+    const reimpreso = await recibos.reimprimir(emitido.recibo.id);
+    expect(reimpreso.rutaPdf).toBe(emitido.rutaPdf);
+    expect(pdfEscritos.map((p) => p.ruta)).toEqual([emitido.rutaPdf, emitido.rutaPdf]);
   });
 });

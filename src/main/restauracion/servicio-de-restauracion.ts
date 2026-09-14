@@ -76,7 +76,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import type { Database } from 'better-sqlite3';
 
 import { generarHashDePin, HASH_SIN_PIN, tienePin } from '@shared/auth';
@@ -89,6 +89,7 @@ import type { Rol } from '@main/database/repositories/entidades';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import { enTransaccionDeNegocio } from '@main/database/transaccion-en-curso';
 import { resolverRutaDeFoto } from '@main/domain/catalogo/almacen-de-fotos';
+import { rutaRelativaDePdfDesde } from '@main/domain/recibo/ruta-de-pdf';
 import { exigirPinNoUsado } from '@main/domain/usuarios/colision-de-pin';
 import type { ClienteDeRestauracion } from './cliente-de-restauracion';
 import {
@@ -227,8 +228,6 @@ export interface DependenciasDeRestauracion {
   readonly puestoDeControl: AlmacenDelPuestoDeControl;
   /** `app.getPath('userData')`: de acá cuelgan `fotos-de-productos/` y `recibos/`. */
   readonly carpetaDeDatos: string;
-  /** Carpeta ABSOLUTA de los PDF, la misma que usa `ServicioDeRecibos`. */
-  readonly carpetaDeRecibos: string;
   /** La capa 2 de §5: ¿se llega a la nube? Sin esto no se comprueba (las pruebas). */
   readonly comprobarNube?: () => Promise<{ readonly hayNube: boolean; readonly motivo: string }>;
   readonly filasPorPagina?: number;
@@ -252,7 +251,6 @@ export class ServicioDeRestauracion {
   private readonly urlDelProyecto: string | null;
   private readonly almacenDelPuesto: AlmacenDelPuestoDeControl;
   private readonly carpetaDeDatos: string;
-  private readonly carpetaDeRecibos: string;
   private readonly comprobarNube: (() => Promise<{ readonly hayNube: boolean; readonly motivo: string }>) | null;
   private readonly filasPorPagina: number;
   private readonly ahora: () => number;
@@ -277,7 +275,6 @@ export class ServicioDeRestauracion {
     this.urlDelProyecto = dependencias.urlDelProyecto;
     this.almacenDelPuesto = dependencias.puestoDeControl;
     this.carpetaDeDatos = dependencias.carpetaDeDatos;
-    this.carpetaDeRecibos = dependencias.carpetaDeRecibos;
     this.comprobarNube = dependencias.comprobarNube ?? null;
     this.filasPorPagina = dependencias.filasPorPagina ?? FILAS_POR_PAGINA_POR_DEFECTO;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
@@ -769,8 +766,12 @@ export class ServicioDeRestauracion {
    * Lo que se escribe distinto de como viene, por tabla (§6.3):
    *   · usuarios: SIN PIN, sin PIN remoto, sin intentos ni bloqueo;
    *   · ventas: ya sincronizada, porque de la nube viene;
-   *   · recibos: `pdf_path` re-enraizado en la carpeta de ESTA máquina y sin
-   *     imprimir. El PDF no se baja (nunca se subió, §2.5.3): la reimpresión lo
+   *   · recibos: sin imprimir, y `pdf_path` en su forma canónica RELATIVA
+   *     (`recibos/<nombre>.pdf`). Una fila subida desde la migración 030 ya
+   *     viene así y pasa sin cambiar; una subida ANTES trae la ruta ABSOLUTA
+   *     de la terminal vieja y se convierte —COMPATIBILIDAD HACIA ATRÁS con lo
+   *     que ya está en la nube, no el comportamiento esperado de una fila
+   *     nueva—. El PDF no se baja (nunca se subió, §2.5.3): la reimpresión lo
    *     regenera desde las filas cuando alguien lo pida.
    */
   private sobrescriturasDe(tabla: TablaRestaurable, fila: FilaParaSqlite): FilaParaSqlite {
@@ -780,11 +781,7 @@ export class ServicioDeRestauracion {
       case 'ventas':
         return { ...fila, estado_sincronizacion: 'sincronizado' };
       case 'recibos':
-        return {
-          ...fila,
-          pdf_path: join(this.carpetaDeRecibos, nombreDeArchivoDe(String(fila.pdf_path ?? ''))),
-          impreso: 0,
-        };
+        return { ...fila, pdf_path: rutaRelativaDePdfDesde(String(fila.pdf_path ?? '')), impreso: 0 };
       default:
         return fila;
     }

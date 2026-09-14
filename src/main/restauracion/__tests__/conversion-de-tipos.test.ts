@@ -159,8 +159,22 @@ describe('timestamptz de PostgREST a ISO con Z, sin perder precisión', () => {
     expect(normalizarFecha('ventas', 'fecha', '2026-09-13T23:33:59.986Z')).toBe('2026-09-13T23:33:59.986Z');
   });
 
-  it('MÁS de tres decimales de segundo se RECHAZAN: el formato local truncaría, y truncar es perder', () => {
-    expect(() => normalizarFecha('ventas', 'fecha', '2026-09-13T23:33:59.986686+00:00')).toThrow(/normalizar sería truncar/);
+  it('MÁS de tres decimales de segundo se CONSERVAN enteros: los escribe now() de Postgres por SQL (la fila de configuracion_negocio que siembra la 0016), y truncar sería perder', () => {
+    // El valor con que la 0016 dejó la fila del proyecto REAL, leído el 2026-09-14: cinco decimales.
+    expect(normalizarFecha('configuracion_negocio', 'actualizado_en', '2026-09-11T14:58:55.89473+00:00')).toBe('2026-09-11T14:58:55.89473Z');
+    // Y el de seis con que la restauración por la ventana se detuvo ese día, antes de esta corrección.
+    expect(normalizarFecha('configuracion_negocio', 'actualizado_en', '2026-09-14T12:05:15.313623+00:00')).toBe('2026-09-14T12:05:15.313623Z');
+    // Con otra zona, la hora pasa a UTC y los decimales se conservan igual.
+    expect(normalizarFecha('configuracion_negocio', 'actualizado_en', '2026-09-14T06:05:15.313623-06:00')).toBe('2026-09-14T12:05:15.313623Z');
+  });
+
+  it('y esos microsegundos PASAN el CHECK de fecha de la base: la fila única de configuracion_negocio los guarda tal cual', () => {
+    const prueba = crearBaseMigrada();
+    limpiar = prueba.limpiar;
+    const fecha = normalizarFecha('configuracion_negocio', 'actualizado_en', '2026-09-14T12:05:15.313623+00:00');
+    expect(() => prueba.base.prepare(`UPDATE configuracion_negocio SET actualizado_en = ? WHERE id = 'unica'`).run(fecha)).not.toThrow();
+    const guardada = prueba.base.prepare(`SELECT actualizado_en FROM configuracion_negocio WHERE id = 'unica'`).get() as { actualizado_en: string };
+    expect(guardada.actualizado_en).toBe('2026-09-14T12:05:15.313623Z');
   });
 
   it('lo que no es una fecha ISO con zona se rechaza', () => {

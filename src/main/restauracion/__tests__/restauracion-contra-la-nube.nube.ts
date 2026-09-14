@@ -32,200 +32,49 @@
  * y se niega a seguir si no es así.
  */
 
-import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { Database } from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { HASH_SIN_PIN } from '@shared/auth';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { observarLotesEncolados } from '@main/database/bandeja-de-salida';
-import { crearRepositorios, type Repositorios } from '@main/database/repositories';
+import type { Repositorios } from '@main/database/repositories';
 import { reiniciarSenalDeTransaccion } from '@main/database/transaccion-en-curso';
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
-import { AlmacenDeCredencial, type CifradoSeguro } from '@main/sincronizacion/credencial';
-import { DetectorDeConexion } from '@main/sincronizacion/deteccion-de-conexion';
+import { AlmacenDeCredencial } from '@main/sincronizacion/credencial';
 import { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
-import { SubidorDeFotos } from '@main/sincronizacion/subida-de-fotos';
-import { SupabaseSyncProvider } from '@main/sincronizacion/supabase-sync-provider';
-import { TrabajadorDeSincronizacion } from '@main/sincronizacion/trabajador';
 
-import { ClienteDeRestauracionHttp, type ClienteDeRestauracion } from '../cliente-de-restauracion';
+import type { ClienteDeRestauracionHttp, ClienteDeRestauracion } from '../cliente-de-restauracion';
 import type { FilaDeLaNube } from '../conversion-de-tipos';
 import type { ContratoDeLaNube } from '../deriva-de-esquema';
 import { ORDEN_DE_RESTAURACION } from '../orden-de-restauracion';
-import { AlmacenDelPuestoDeControl, ARCHIVO_DEL_PUESTO_DE_CONTROL } from '../puesto-de-control';
-import { ServicioDeRestauracion } from '../servicio-de-restauracion';
+import { ARCHIVO_DEL_PUESTO_DE_CONTROL } from '../puesto-de-control';
+import type { ServicioDeRestauracion } from '../servicio-de-restauracion';
+import {
+  anotar,
+  CifradoParaLaPrueba,
+  clienteReal,
+  contar,
+  entorno,
+  exigirNubeVacia,
+  fetchAnotado,
+  filaPorId,
+  ids,
+  idsEnLaNube,
+  LLAVE_PUBLICABLE,
+  peticiones,
+  servicioSobre,
+  sha256,
+  subirTodo,
+  URL_DEL_PROYECTO,
+} from './ayuda-nube';
 import { sembrarTerminalDeOrigen, type TerminalDeOrigen } from './terminal-de-origen';
-
-// ---------------------------------------------------------------------------
-// Entorno y seguro
-// ---------------------------------------------------------------------------
-
-const RAIZ = fileURLToPath(new URL('../../../../', import.meta.url));
-
-function leerEntorno(): Record<string, string> {
-  const ruta = join(RAIZ, '.env.nube-pruebas');
-  if (!existsSync(ruta)) {
-    throw new Error(`Falta ${ruta}: sin las credenciales del proyecto de PRUEBAS no se puede verificar (ver .env.nube-pruebas.ejemplo).`);
-  }
-  const valores: Record<string, string> = {};
-  for (const linea of readFileSync(ruta, 'utf8').split('\n')) {
-    const limpia = linea.trim();
-    if (limpia === '' || limpia.startsWith('#')) continue;
-    const separador = limpia.indexOf('=');
-    if (separador <= 0) continue;
-    valores[limpia.slice(0, separador).trim()] = limpia.slice(separador + 1).trim();
-  }
-  for (const clave of [
-    'POS_NUBE_PROYECTO',
-    'POS_NUBE_URL',
-    'POS_NUBE_LLAVE_PUBLICABLE',
-    'POS_NUBE_TERMINAL_CORREO',
-    'POS_NUBE_TERMINAL_CLAVE',
-    'POS_NUBE_RESTAURACION_CORREO',
-    'POS_NUBE_RESTAURACION_CLAVE',
-  ]) {
-    if (valores[clave] === undefined || valores[clave] === '') {
-      throw new Error(`Falta ${clave} en .env.nube-pruebas.`);
-    }
-  }
-  return valores;
-}
-
-const entorno = leerEntorno();
-const URL_DEL_PROYECTO = entorno.POS_NUBE_URL ?? '';
-const LLAVE_PUBLICABLE = entorno.POS_NUBE_LLAVE_PUBLICABLE ?? '';
-
-// EL SEGURO, antes de cualquier petición: la misma función que usa verify:nube.
-const cargar = createRequire(import.meta.url);
-const { exigirProyectoDePrueba } = cargar(join(RAIZ, 'scripts', 'proyectos-de-prueba.cjs')) as {
-  exigirProyectoDePrueba: (referencia: string, url: string) => string;
-};
-exigirProyectoDePrueba(entorno.POS_NUBE_PROYECTO ?? '', URL_DEL_PROYECTO);
-
-// ---------------------------------------------------------------------------
-// La salida cruda: cada petición con su hora y su código
-// ---------------------------------------------------------------------------
-
-const peticiones: string[] = [];
-
-/** Un `fetch` que anota hora, método, ruta y código de cada petición. Sirve como `typeof fetch` y como `BuscarEnLaRed`. */
-function fetchAnotado(etiqueta: string): typeof fetch {
-  return async (entrada: string | URL | Request, opciones?: RequestInit): Promise<Response> => {
-    const url = typeof entrada === 'string' ? entrada : entrada instanceof URL ? entrada.toString() : entrada.url;
-    const inicio = new Date().toISOString();
-    const metodo = opciones?.method ?? 'GET';
-    const ruta = url.replace(URL_DEL_PROYECTO, '');
-    try {
-      const respuesta = await fetch(url, opciones);
-      const linea = `${inicio} [${etiqueta}] ${metodo} ${ruta} -> HTTP ${String(respuesta.status)}`;
-      peticiones.push(linea);
-      console.info(linea);
-      return respuesta;
-    } catch (error) {
-      const linea = `${inicio} [${etiqueta}] ${metodo} ${ruta} -> SIN RESPUESTA (${error instanceof Error ? error.message : String(error)})`;
-      peticiones.push(linea);
-      console.info(linea);
-      throw error;
-    }
-  };
-}
-
-const anotar = (mensaje: string): void => {
-  console.info(`${new Date().toISOString()} ${mensaje}`);
-};
-
-/** Un cifrado trivial para la credencial de la terminal de origen: vive en una carpeta temporal. */
-class CifradoParaLaPrueba implements CifradoSeguro {
-  public isEncryptionAvailable(): boolean {
-    return true;
-  }
-  public encryptString(texto: string): Buffer {
-    return Buffer.from(texto, 'utf8').reverse();
-  }
-  public decryptString(cifrado: Buffer): string {
-    return Buffer.from(cifrado).reverse().toString('utf8');
-  }
-}
-
-function sha256(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
-
-function contar(base: Database, tabla: string): number {
-  return (base.prepare(`SELECT count(*) AS n FROM ${tabla}`).get() as { n: number }).n;
-}
-
-function ids(base: Database, tabla: string): string[] {
-  return (base.prepare(`SELECT id FROM ${tabla} ORDER BY id`).all() as { id: string }[]).map((f) => f.id);
-}
-
-function filaPorId(base: Database, tabla: string, id: string): Record<string, unknown> | undefined {
-  return base.prepare(`SELECT * FROM ${tabla} WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Subir la terminal de origen con las piezas reales
-// ---------------------------------------------------------------------------
-
-const SIN_PAUSA = 0;
-
-async function subirTodo(repos: Repositorios, carpeta: string, sesion: SesionDeNube): Promise<void> {
-  const trabajador = new TrabajadorDeSincronizacion({
-    cola: repos.syncCola,
-    proveedor: new SupabaseSyncProvider({
-      urlDelProyecto: URL_DEL_PROYECTO,
-      llavePublicable: LLAVE_PUBLICABLE,
-      sesion,
-      buscar: fetchAnotado('terminal'),
-      registrar: (m): void => {
-        anotar(`  proveedor: ${m}`);
-      },
-      subidorDeFotos: new SubidorDeFotos({
-        urlDelProyecto: URL_DEL_PROYECTO,
-        llavePublicable: LLAVE_PUBLICABLE,
-        accessToken: (): string | null => sesion.accessTokenVigente(),
-        buscar: fetchAnotado('terminal'),
-        leerArchivo: (rutaRelativa): Buffer | null => {
-          try {
-            return readFileSync(join(carpeta, rutaRelativa));
-          } catch {
-            return null;
-          }
-        },
-      }),
-    }),
-    presupuesto: { pausaEntreLotesMs: SIN_PAUSA },
-    registrar: (m): void => {
-      anotar(`  trabajador: ${m}`);
-    },
-  });
-
-  const CICLOS_MAXIMOS = 20;
-  for (let ciclo = 1; ciclo <= CICLOS_MAXIMOS; ciclo += 1) {
-    const resumen = await trabajador.ejecutarCiclo();
-    anotar(
-      `ciclo ${String(ciclo)}: ${resumen.motivo}; ${String(resumen.lotesSubidos)} lotes, ${String(resumen.filasSubidas)} filas; pendientes en la cola: ${String(repos.syncCola.contarPendientes())}`,
-    );
-    if (resumen.motivo === 'cola_detenida') {
-      const bloqueante = repos.syncCola.obtenerLoteBloqueante();
-      throw new Error(`la cola se detuvo al subir la terminal de origen: ${bloqueante?.error ?? 'sin error registrado'}`);
-    }
-    // Lo único que puede quedar es la foto APARTADA (la que se borró del disco a propósito).
-    if (repos.syncCola.contarLotesPendientes() === repos.syncCola.contarArchivosApartados()) {
-      return;
-    }
-  }
-  throw new Error('la cola no se vació en 20 ciclos');
-}
 
 // ---------------------------------------------------------------------------
 // Un cliente de restauración envuelto: cuenta páginas y sesiones, y puede
@@ -273,62 +122,6 @@ class ClienteEnvuelto implements ClienteDeRestauracion {
   }
 }
 
-function clienteReal(): ClienteDeRestauracionHttp {
-  return new ClienteDeRestauracionHttp({
-    urlDelProyecto: URL_DEL_PROYECTO,
-    llavePublicable: LLAVE_PUBLICABLE,
-    auth: new ClienteDeAuthHttp(URL_DEL_PROYECTO, LLAVE_PUBLICABLE, fetchAnotado('auth')),
-    buscar: fetchAnotado('restauracion'),
-    registrar: (m): void => {
-      anotar(`  cliente: ${m}`);
-    },
-  });
-}
-
-function servicioSobre(base: Database, carpeta: string, cliente: ClienteDeRestauracion, filasPorPagina?: number): ServicioDeRestauracion {
-  const repos = crearRepositorios(base);
-  return new ServicioDeRestauracion({
-    base,
-    usuarios: repos.usuarios,
-    auditoria: repos.auditoria,
-    cliente,
-    urlDelProyecto: URL_DEL_PROYECTO,
-    puestoDeControl: new AlmacenDelPuestoDeControl(carpeta),
-    carpetaDeDatos: carpeta,
-    carpetaDeRecibos: join(carpeta, 'recibos'),
-    comprobarNube: async (): Promise<{ hayNube: boolean; motivo: string }> => {
-      const detector = new DetectorDeConexion({
-        urlDelProyecto: URL_DEL_PROYECTO,
-        referenciaDelProyecto: entorno.POS_NUBE_PROYECTO ?? '',
-        llavePublicable: LLAVE_PUBLICABLE,
-        buscar: fetchAnotado('salud'),
-      });
-      const veredicto = await detector.comprobar();
-      anotar(`  salud: ${veredicto.hayNube ? 'hay nube' : 'SIN NUBE'} (${veredicto.motivo})`);
-      return veredicto;
-    },
-    registrar: (m): void => {
-      anotar(`  restauracion: ${m}`);
-    },
-    ...(filasPorPagina === undefined ? {} : { filasPorPagina }),
-  });
-}
-
-/** Todos los ids de una tabla en la nube, leídos por páginas con la credencial de restauración. */
-async function idsEnLaNube(cliente: ClienteDeRestauracion, tabla: string): Promise<string[]> {
-  const todos: string[] = [];
-  let desde: string | null = null;
-  const PAGINA = 1000;
-  for (;;) {
-    const pagina = await cliente.leerPagina(tabla, desde, PAGINA);
-    if (pagina.length === 0) break;
-    for (const fila of pagina) todos.push(String(fila.id));
-    desde = String(pagina[pagina.length - 1]?.id);
-    if (pagina.length < PAGINA) break;
-  }
-  return todos.sort();
-}
-
 // ---------------------------------------------------------------------------
 // El recorrido
 // ---------------------------------------------------------------------------
@@ -355,21 +148,7 @@ beforeAll(async () => {
   destino = crearBaseMigrada();
 
   // 0. La nube tiene que estar vacía, y lo comprueba la credencial de restauración.
-  const lector = clienteReal();
-  await lector.iniciarSesion(entorno.POS_NUBE_RESTAURACION_CORREO ?? '', entorno.POS_NUBE_RESTAURACION_CLAVE ?? '');
-  const conFilas: string[] = [];
-  for (const tabla of ORDEN_DE_RESTAURACION) {
-    if (tabla === 'configuracion_negocio') continue;
-    const n = await lector.contar(tabla);
-    if (n > 0) conFilas.push(`${tabla}=${String(n)}`);
-  }
-  await lector.cerrarSesion();
-  if (conFilas.length > 0) {
-    throw new Error(
-      `El proyecto de pruebas NO está vacío (${conFilas.join(', ')}). Vaciá las once tablas por SQL y volvé a correr: con filas viejas los UNIQUE detendrían la cola (punto 19 de §6.2), que es otro problema.`,
-    );
-  }
-  anotar('la nube está vacía: se puede sembrar');
+  await exigirNubeVacia();
 
   // 1. Sembrar la terminal de origen y subirla entera.
   terminal = sembrarTerminalDeOrigen(origen.base, carpetaA);
@@ -487,7 +266,9 @@ describe('La restauración contra pos-pruebas-descartable', () => {
       ese precio especial viaja igual: es el `precio_unitario_snap` de
       `venta_detalle`, que acá sí se compara byte a byte.
     */
-    const tablasComparables = ['venta_detalle', 'productos', 'caja_sesion_denominaciones', 'limites_descuento', 'categorias', 'configuracion_negocio'];
+    // `recibos` entra en la comparación desde la migración 030: `pdf_path` es
+    // relativa y tiene que llegar IDÉNTICA, sin re-enraizar nada.
+    const tablasComparables = ['venta_detalle', 'productos', 'caja_sesion_denominaciones', 'limites_descuento', 'categorias', 'configuracion_negocio', 'recibos'];
     expect(contar(destino.base, 'precios_especiales')).toBe(0);
     expect(contar(origen.base, 'precios_especiales')).toBe(1);
     for (const tabla of tablasComparables) {
@@ -500,6 +281,9 @@ describe('La restauración contra pos-pruebas-descartable', () => {
         }
         expect(restaurada, `${tabla}/${id}`).toEqual(original);
       }
+    }
+    for (const id of ids(origen.base, 'recibos')) {
+      anotar(`  recibos/${id}: pdf_path origen ${String(filaPorId(origen.base, 'recibos', id)?.pdf_path)} = restaurada ${String(filaPorId(destino.base, 'recibos', id)?.pdf_path)}`);
     }
     const linea = origen.base.prepare('SELECT id, subtotal_exacto FROM venta_detalle WHERE venta_id = ?').get(terminal.ids.ventaCombinada) as { id: string; subtotal_exacto: string };
     expect(linea.subtotal_exacto).toBe('4.165');

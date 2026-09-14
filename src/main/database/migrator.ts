@@ -40,6 +40,7 @@ import sqlSyncColaLotes from './migrations/018_sync_cola_lotes.sql?raw';
 */
 import sqlLimitesIdDeterminista from './migrations/028_limites_descuento_id_determinista.sql?raw';
 import sqlSaltarLoteDeSincronizacion from './migrations/029_saltar_lote_de_sincronizacion.sql?raw';
+import sqlRecibosPdfPathRelativo from './migrations/030_recibos_pdf_path_relativo.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -102,6 +103,13 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 29,
     nombre: '029_saltar_lote_de_sincronizacion',
     sql: sqlSaltarLoteDeSincronizacion,
+  },
+  // Sin espejo en la nube: cambia el VALOR de `recibos.pdf_path` (de absoluta
+  // a relativa), no el esquema. El 0030 queda reservado del otro lado.
+  {
+    orden: 30,
+    nombre: '030_recibos_pdf_path_relativo',
+    sql: sqlRecibosPdfPathRelativo,
   },
 ];
 

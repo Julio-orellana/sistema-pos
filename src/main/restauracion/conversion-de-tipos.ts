@@ -37,8 +37,15 @@
  * sufijo `Z`. Se normaliza con `Date.toISOString()`, que da exactamente el
  * formato con el que la terminal escribió el valor original —milisegundos y
  * `Z`—, así que el resultado es byte a byte el mismo texto que salió de acá.
- * Una fecha con MÁS de tres decimales no puede haberla escrito esta terminal
- * y no cabe en el formato local sin truncar: se rechaza, no se trunca.
+ * Una fecha con MÁS de tres decimales no la escribió ninguna terminal: la
+ * escribió Postgres por SQL —`now()` tiene microsegundos, y es lo que siembra
+ * la migración 0016 en `configuracion_negocio.actualizado_en`—. Se conserva
+ * ENTERA, con `Z`: el CHECK local admite cualquier cantidad de decimales
+ * (`LIKE '____-__-__T__:__:__%Z'`), `Date.parse` la lee, y truncarla sería
+ * perder. Lo encontró `verify:pantallas:restauracion` el 2026-09-14: el
+ * proyecto real tiene esa fila exactamente así (`2026-09-11 14:58:55.89473+00`,
+ * nunca guardada por una terminal), y la primera versión de este módulo la
+ * rechazaba y dejaba la restauración sin poder correr.
  */
 
 import { z } from 'zod';
@@ -320,13 +327,19 @@ export function normalizarNumerico(
 /** Fecha ISO-8601 como la devuelve PostgREST: con `T`, decimales opcionales y zona `Z` o `±hh:mm`. */
 const FORMATO_DE_FECHA = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(\d+))?(?:Z|[+-]\d{2}:\d{2})$/;
 
-/** Los decimales de segundo que caben en el formato local (`toISOString` da tres). */
-const DECIMALES_DE_SEGUNDO_LOCALES = 3;
+/** Los decimales de segundo que escribe la terminal (`toISOString` da tres). */
+const DECIMALES_DE_SEGUNDO_DE_LA_TERMINAL = 3;
 
 /**
  * Normaliza una fecha de PostgREST a la forma ISO con `Z` que exige el CHECK
- * local, sin perder precisión: si trae más decimales de los que el formato
- * local puede guardar, se rechaza en vez de truncarse.
+ * local, sin perder precisión.
+ *
+ * Hasta tres decimales, `toISOString` devuelve byte a byte lo que la terminal
+ * escribió (Postgres recorta los ceros finales; acá se restituyen). Con MÁS
+ * de tres —solo pueden venir de SQL en la nube, como el `now()` de la 0016—
+ * se conservan TODOS los dígitos, detrás de la fecha que `toISOString` ya
+ * pasó a UTC: los decimales de segundo no cambian con la zona horaria, así
+ * que el instante es exactamente el de la nube, y el CHECK local lo admite.
  */
 export function normalizarFecha(tabla: string, columna: string, valor: unknown): string {
   if (typeof valor !== 'string') {
@@ -336,20 +349,16 @@ export function normalizarFecha(tabla: string, columna: string, valor: unknown):
   if (partes === null) {
     throw new ErrorDeConversion(tabla, columna, `«${valor}» no es una fecha ISO-8601 con zona`, valor);
   }
-  const decimales = partes[1] ?? '';
-  if (decimales.length > DECIMALES_DE_SEGUNDO_LOCALES) {
-    throw new ErrorDeConversion(
-      tabla,
-      columna,
-      `«${valor}» tiene ${String(decimales.length)} decimales de segundo y el formato local guarda ${String(DECIMALES_DE_SEGUNDO_LOCALES)}: normalizar sería truncar`,
-      valor,
-    );
-  }
   const instante = new Date(valor);
   if (Number.isNaN(instante.getTime())) {
     throw new ErrorDeConversion(tabla, columna, `«${valor}» no se pudo interpretar como instante`, valor);
   }
-  return instante.toISOString();
+  const enUtc = instante.toISOString();
+  const decimales = partes[1] ?? '';
+  if (decimales.length <= DECIMALES_DE_SEGUNDO_DE_LA_TERMINAL) {
+    return enUtc;
+  }
+  return enUtc.replace(/\.\d{3}Z$/, `.${decimales}Z`);
 }
 
 /** Un valor cualquiera, escrito para un mensaje de error. */
@@ -448,11 +457,12 @@ export function convertirFila(tabla: string, fila: FilaDeLaNube): FilaParaSqlite
 /**
  * El nombre de archivo de una ruta, venga con barras de Windows o de Unix.
  *
- * `pdf_path` en la nube es la ruta ABSOLUTA del disco de la terminal que
- * emitió el recibo —`C:\\Users\\…\\recibos\\recibo-000001-….pdf` en Windows—, y
- * en esta máquina esa carpeta no existe. Lo único que sirve de ella es el
- * nombre del archivo. `path.basename` no parte una ruta de Windows en macOS,
- * así que se corta a mano por cualquiera de las dos barras.
+ * Lo usa la descarga de fotos: el objeto de Storage es el nombre del archivo
+ * de `foto_path` (§2.5.1). `path.basename` no parte una ruta de Windows en
+ * macOS, así que se corta a mano por cualquiera de las dos barras. Para
+ * `pdf_path` la conversión —incluida la compatibilidad con las filas que se
+ * subieron con ruta absoluta antes de la migración 030— vive en
+ * `domain/recibo/ruta-de-pdf.ts`.
  */
 export function nombreDeArchivoDe(ruta: string): string {
   const partes = ruta.split(/[\\/]/);

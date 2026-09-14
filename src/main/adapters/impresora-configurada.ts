@@ -26,9 +26,6 @@ import { NullPrinterProvider, type ReceiptPrinterProvider } from '@shared/adapte
 import type { LogTecnico } from '@main/log-tecnico';
 import { EscPosPrinterProvider } from './escpos-printer';
 
-/** Carpeta donde se guardan los PDF de los recibos, dentro de `userData`. */
-export const CARPETA_DE_RECIBOS = 'recibos';
-
 /** Archivo que dice dónde está la impresora, dentro de `userData`. */
 export const ARCHIVO_DE_IMPRESORA = 'impresora.json';
 

@@ -64,8 +64,8 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
-| **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018 |
-| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027, 0029 |
+| **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018, 0029 (la local; ver la nota sobre el 29), 0030 |
+| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027, 0029 (la de la nube; ver la nota sobre el 29) |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
 2026-09-11. Antes todos los huecos eran de la primera clase, y por eso este
@@ -74,6 +74,19 @@ archivo decía que un hueco significaba «esa migración local no tiene espejo»
 
 **No renumerar nunca** para «tapar» los que faltan, en ninguna de las dos
 carpetas: el hueco es información, y renumerar la destruye.
+
+> **EL NÚMERO 29 ESTÁ USADO EN LAS DOS DIRECCIONES, con contenidos distintos,
+> y es un error de numeración de las fases 4.a y 4.b (2026-09-14):**
+> `029_saltar_lote_de_sincronizacion` es local (amplía
+> `bloqueos_de_autorizacion`, que no se espeja) y
+> `0029_restauracion_ventas_por_mes` es de la nube (una función de Postgres).
+> La regla de este archivo dice que el espacio es uno solo y que un número
+> usado de un lado queda reservado del otro; la `0029` no la respetó. **No se
+> renumera**: la `029` ya está aplicada en bases con su checksum y su nombre,
+> y la `0029` ya está registrada por nombre en `pos-pruebas-descartable`;
+> renombrar cualquiera de las dos dejaría un registro diciendo una cosa y el
+> repositorio otra. Queda anotado, y la numeración sigue desde la `030` local,
+> que reserva el `0030` de este lado.
 
 ### Dirección 1 — el cambio es solo local, y aquí no hay archivo
 
@@ -98,16 +111,20 @@ carpetas: el hueco es información, y renumerar la destruye.
 | `017_descuento_autorizado_via` | `0017_descuento_autorizado_via.sql` | Columna de `ventas`: dato de negocio |
 | `018_sync_cola_lotes` | **(ninguno, a propósito)** | Amplía `sync_cola`, que no se espeja |
 | `028_limites_descuento_id_determinista` | `0028_limites_descuento_id_determinista.sql` | El id de un tope pasa a ser FIJO por rol. Tiene que ser el MISMO valor de los dos lados, o la fila llega a la nube con una llave primaria distinta de la que allá ya existe |
+| `029_saltar_lote_de_sincronizacion` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja. **Ojo: el `0029` de este lado existe y es OTRA migración**; ver la nota sobre el 29 |
+| `030_recibos_pdf_path_relativo` | **(ninguno, a propósito)** | Cambia el VALOR de `recibos.pdf_path` en las filas locales (de absoluta a relativa), no el esquema: la columna de Postgres sigue igual y las filas ya subidas no se reescriben (la restauración las convierte al bajarlas). El `0030` queda reservado |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
 
-Son **seis números** omitidos pero **tres casos**: el 0003, el 0006, el 0011 y
-el 0013 son la misma tabla, `bloqueos_de_autorizacion` —la 006, la 011 y la 013
-solo le amplían el CHECK de superficies—, así que si la tabla no se espeja,
-ninguna migración que la toque se espeja tampoco. Ese es todo el motivo de esos
-cuatro huecos: no hay ninguna razón adicional, ni nada pendiente de decidir
-sobre ellos. El 0002 es el suyo propio. **Y el 0018 es el tercer caso**: le
+Son **ocho números** omitidos pero **cuatro casos**: el 0003, el 0006, el 0011,
+el 0013 y el 0029 son la misma tabla, `bloqueos_de_autorizacion` —la 006, la
+011, la 013 y la 029 solo le amplían el CHECK de superficies—, así que si la
+tabla no se espeja, ninguna migración que la toque se espeja tampoco. Ese es
+todo el motivo de esos cinco huecos: no hay ninguna razón adicional, ni nada
+pendiente de decidir sobre ellos. **El 0030 es el cuarto caso**: cambia el
+VALOR de `recibos.pdf_path` en las filas locales —de absoluta a relativa— sin
+tocar el esquema de la nube, así que no hay nada que espejar. El 0002 es el suyo propio. **Y el 0018 es el tercer caso**: le
 agrega a `sync_cola` las cinco columnas de la bandeja de salida (`lote_id`,
 `orden_en_lote`, `intentos`, `proximo_intento_en`, `bloqueante`), y `sync_cola`
 es la lista local de qué falta subir, así que tampoco se espeja ninguna
@@ -125,7 +142,7 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 
 ### Dirección 2 — el cambio es solo de la nube, y allá no hay archivo
 
-**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023, 024, 025, 026, 027 ni 029.**
+**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023, 024, 025, 026 ni 027.** (La `029` local SÍ existe y es otra migración, ajena a la `0029`: ver la nota sobre el 29, más arriba.)
 Las tres primeras de esta dirección llegaron juntas, con la fase 2.a de la
 sincronización, y nacen de la misma pregunta: qué tiene que haber en la nube que
 no tiene por qué estar en la terminal, y qué hay hoy en la nube que nunca debió

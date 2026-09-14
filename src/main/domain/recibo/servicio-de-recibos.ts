@@ -43,23 +43,16 @@ import {
   type ModeloDeRecibo,
 } from './modelo-de-recibo';
 import { reciboComoHtml, reciboComoTexto } from './plantilla-de-recibo';
+import { resolverRutaDePdf, rutaRelativaDePdf } from './ruta-de-pdf';
 
-/** Convierte el HTML del recibo en un PDF guardado en `destino`. */
+/** Convierte el HTML del recibo en un PDF guardado en `destino` (ruta absoluta). */
 export type GeneradorDePdf = (html: string, destino: string) => Promise<void>;
-
-/** Dónde se guardan los PDF y cómo se nombran. */
-export interface UbicacionDePdf {
-  /** Carpeta donde viven los PDF, ya creada. */
-  readonly carpeta: string;
-  /** Une carpeta y nombre. Se inyecta para poder probar sin tocar el disco. */
-  readonly unir: (carpeta: string, nombre: string) => string;
-}
 
 /** Qué pasó al emitir o reimprimir un recibo. */
 export interface ResultadoDeRecibo {
   readonly recibo: Recibo;
   readonly modelo: ModeloDeRecibo;
-  /** Ruta absoluta del PDF recién escrito. */
+  /** Ruta ABSOLUTA del PDF en esta máquina, resuelta desde la relativa que guarda la fila. */
   readonly rutaPdf: string;
   /** `true` si el PDF quedó generado. Es la garantía del proyecto. */
   readonly pdfGenerado: boolean;
@@ -84,7 +77,12 @@ export interface DependenciasDeRecibos extends DependenciasDelModelo {
   readonly base: Database;
   readonly impresora: ReceiptPrinterProvider;
   readonly generarPdf: GeneradorDePdf;
-  readonly ubicacion: UbicacionDePdf;
+  /**
+   * `app.getPath('userData')`. Los PDF viven en `<carpetaDeDatos>/recibos/` y
+   * la fila guarda SOLO `recibos/<nombre>.pdf`, relativa, igual que
+   * `productos.foto_path` (ver `ruta-de-pdf.ts`).
+   */
+  readonly carpetaDeDatos: string;
   readonly log: LogTecnico;
   readonly ahora?: () => number;
 }
@@ -137,9 +135,14 @@ export class ServicioDeRecibos {
     const recibo = conBandejaDeSalida(this.dependencias.base, () => {
       const numero = this.recibos.siguienteNumero();
       const nombre = this.nombreDeArchivo(numero);
-      const rutaPdf = this.dependencias.ubicacion.unir(this.dependencias.ubicacion.carpeta, nombre);
-
-      const creado = this.recibos.crear({ ventaId, numeroRecibo: numero, pdfPath: rutaPdf });
+      /*
+        RELATIVA A LA CARPETA DE DATOS, NUNCA ABSOLUTA. La fila viaja a la nube
+        tal cual, y una ruta absoluta es la de ESTA máquina: no significa nada
+        en la computadora que restaure la tienda. Es la misma regla de
+        `foto_path` (§4.11), y corrige lo que este servicio hizo hasta la
+        migración 030 (ver `ruta-de-pdf.ts`).
+      */
+      const creado = this.recibos.crear({ ventaId, numeroRecibo: numero, pdfPath: rutaRelativaDePdf(nombre) });
 
       return {
         resultado: creado,
@@ -183,6 +186,16 @@ export class ServicioDeRecibos {
     return armarModeloDeRecibo(this.dependencias, recibo);
   }
 
+  /**
+   * La ruta ABSOLUTA del PDF de un recibo en ESTA máquina. La fila guarda solo
+   * la relativa; quien necesite el archivo —el generador, la impresora, la
+   * pantalla del historial— pasa por acá, que además comprueba que la ruta
+   * caiga dentro de la carpeta de recibos.
+   */
+  public rutaAbsolutaDelPdf(recibo: Recibo): string {
+    return resolverRutaDePdf(this.dependencias.carpetaDeDatos, recibo.pdfPath);
+  }
+
   // -------------------------------------------------------------------------
 
   /** Arma el modelo, escribe el PDF e intenta imprimir. En ese orden. */
@@ -191,10 +204,11 @@ export class ServicioDeRecibos {
     opciones: { readonly reimpresion: boolean },
   ): Promise<ResultadoDeRecibo> {
     const modelo = armarModeloDeRecibo(this.dependencias, recibo, opciones);
+    const rutaPdf = this.rutaAbsolutaDelPdf(recibo);
 
     let pdfGenerado = false;
     try {
-      await this.dependencias.generarPdf(reciboComoHtml(modelo), recibo.pdfPath);
+      await this.dependencias.generarPdf(reciboComoHtml(modelo), rutaPdf);
       pdfGenerado = true;
     } catch (error) {
       /*
@@ -206,16 +220,16 @@ export class ServicioDeRecibos {
       const detalle = error instanceof Error ? error.message : String(error);
       this.dependencias.log.registrar(
         'recibo',
-        `FALLÓ el PDF del recibo ${String(recibo.numeroRecibo)} en ${recibo.pdfPath}: ${detalle}`,
+        `FALLÓ el PDF del recibo ${String(recibo.numeroRecibo)} en ${rutaPdf}: ${detalle}`,
       );
     }
 
-    const impresion = await this.intentarImprimir(recibo, modelo, pdfGenerado);
+    const impresion = await this.intentarImprimir(recibo, modelo, rutaPdf, pdfGenerado);
 
     return {
       recibo: this.recibos.obtenerPorId(recibo.id) ?? recibo,
       modelo,
-      rutaPdf: recibo.pdfPath,
+      rutaPdf,
       pdfGenerado,
       impreso: impresion.impreso,
       mensajeDeImpresion: impresion.mensaje,
@@ -232,12 +246,13 @@ export class ServicioDeRecibos {
   private async intentarImprimir(
     recibo: Recibo,
     modelo: ModeloDeRecibo,
+    rutaPdf: string,
     pdfGenerado: boolean,
   ): Promise<{ readonly impreso: boolean; readonly mensaje: string }> {
     const comprobante: ComprobanteImprimible = {
       idComprobante: recibo.id,
       tipo: 'recibo',
-      rutaPdf: recibo.pdfPath,
+      rutaPdf,
       contenidoTexto: reciboComoTexto(modelo),
       copias: 1,
     };

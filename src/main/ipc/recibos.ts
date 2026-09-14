@@ -136,7 +136,7 @@ export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibo
             // El MISMO texto que iría a la impresora: lo que se ve en pantalla
             // es exactamente lo que saldría en el papel.
             texto: reciboComoTexto(modelo),
-            rutaPdf: recibo?.pdfPath ?? '',
+            rutaPdf: recibo === null ? '' : recibos.rutaAbsolutaDelPdf(recibo),
             pdfGenerado: true,
             impreso: recibo?.impreso ?? false,
             mensajeDeImpresion: '',

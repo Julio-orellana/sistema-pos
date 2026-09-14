@@ -67,7 +67,6 @@ function crearServicio(nube: NubeDeMentira | null, extra: { filasPorPagina?: num
     urlDelProyecto: nube === null ? null : URL_DEL_PROYECTO,
     puestoDeControl: new AlmacenDelPuestoDeControl(carpetaB),
     carpetaDeDatos: carpetaB,
-    carpetaDeRecibos: join(carpetaB, 'recibos'),
     filasPorPagina: extra.filasPorPagina ?? 2,
   });
 }
@@ -250,15 +249,33 @@ describe('Una restauración completa, por falla, contra la nube de mentira', () 
     expect(reposB.productos.obtenerPorId(terminal.ids.huevos)?.fotoPath).toBe(terminal.fotoDeLosHuevos.rutaRelativa);
   });
 
-  it('pdf_path se re-enraíza en la carpeta de recibos de ESTA máquina, conservando el nombre; impreso queda en 0', async () => {
+  it('pdf_path llega IDÉNTICA a la del origen: es relativa (recibos/<nombre>.pdf) y no depende de la máquina; impreso queda en 0', async () => {
     await restaurarEntera(crearNube());
-    for (const fila of filas(destino.base, 'recibos')) {
+    const restauradas = filas(destino.base, 'recibos');
+    expect(restauradas).toHaveLength(2);
+    for (const fila of restauradas) {
       const original = filas(origen.base, 'recibos').find((f) => f.id === fila.id);
-      const nombre = String(original?.pdf_path).split('/').pop();
-      expect(fila.pdf_path).toBe(join(carpetaB, 'recibos', nombre ?? ''));
+      expect(fila.pdf_path).toBe(original?.pdf_path);
+      expect(String(fila.pdf_path)).toMatch(/^recibos\/recibo-\d{6}-.*\.pdf$/);
+      expect(String(fila.pdf_path)).not.toContain(carpetaA);
       expect(fila.impreso).toBe(0);
-      expect(String(original?.pdf_path).startsWith(carpetaA)).toBe(true);
     }
+  });
+
+  it('COMPATIBILIDAD HACIA ATRÁS: una fila subida ANTES de la migración 030 trae la ruta ABSOLUTA de la terminal vieja (macOS o Windows) y se convierte a la relativa canónica', async () => {
+    // La nube de mentira sirve lo que tiene la base de origen: se le ponen a
+    // mano las rutas con la convención vieja, tal como quedaron en la nube
+    // real las filas subidas antes del 2026-09-14. Una fila nueva nunca viene así.
+    const [primero, segundo] = filas(origen.base, 'recibos');
+    origen.base
+      .prepare('UPDATE recibos SET pdf_path = ? WHERE id = ?')
+      .run('/Users/jimmy/Library/Application Support/pos-agricola/recibos/recibo-000001-2026-09-11T19-09-34-701Z.pdf', primero?.id);
+    origen.base
+      .prepare('UPDATE recibos SET pdf_path = ? WHERE id = ?')
+      .run('C:\\Users\\Jimmy\\AppData\\Roaming\\pos-agricola\\recibos\\recibo-000002-2026-09-11T19-10-02-118Z.pdf', segundo?.id);
+    await restaurarEntera(crearNube());
+    expect(reposB.recibos.obtenerPorId(String(primero?.id))?.pdfPath).toBe('recibos/recibo-000001-2026-09-11T19-09-34-701Z.pdf');
+    expect(reposB.recibos.obtenerPorId(String(segundo?.id))?.pdfPath).toBe('recibos/recibo-000002-2026-09-11T19-10-02-118Z.pdf');
   });
 
   it('LA REIMPRESIÓN TOLERA EL PDF AUSENTE: regenera desde las filas y escribe en la carpeta local', async () => {
@@ -276,11 +293,11 @@ describe('Una restauración completa, por falla, contra la nube de mentira', () 
         destinos.push(ruta);
         return Promise.resolve();
       },
-      ubicacion: { carpeta: join(carpetaB, 'recibos'), unir: join },
+      carpetaDeDatos: carpetaB,
       log: new LogTecnicoSilencioso(),
     });
-    // El archivo de la terminal vieja no existe acá.
-    expect(existsSync(String(reposB.recibos.obtenerPorId(terminal.ids.reciboCombinado)?.pdfPath))).toBe(false);
+    // El archivo de la terminal vieja no existe acá: la ruta relativa apunta a un PDF que esta máquina nunca escribió.
+    expect(existsSync(join(carpetaB, String(reposB.recibos.obtenerPorId(terminal.ids.reciboCombinado)?.pdfPath)))).toBe(false);
     const resultado = await recibos.reimprimir(terminal.ids.reciboCombinado);
     expect(resultado.pdfGenerado).toBe(true);
     expect(destinos[0]?.startsWith(join(carpetaB, 'recibos'))).toBe(true);
@@ -405,7 +422,6 @@ describe('Cancelar y retomar: ni se duplica ni se pierde', () => {
       urlDelProyecto: 'https://otroproyecto.supabase.co',
       puestoDeControl: new AlmacenDelPuestoDeControl(carpetaB),
       carpetaDeDatos: carpetaB,
-      carpetaDeRecibos: join(carpetaB, 'recibos'),
     });
     await expect(otro.retomar({ correo: CORREO, contrasena: CONTRASENA })).rejects.toThrow(/otro proyecto/);
   });
