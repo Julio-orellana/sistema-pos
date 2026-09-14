@@ -5183,6 +5183,84 @@ decimales) y el convertidor los conserva; no hay usuarios, así que el ensayo
 va a terminar exactamente como el del descartable: revisión cuadrada y
 «Terminar» negado por falta de administrador.
 
+##### `--carpeta`: retomar un ensayo interrumpido, y tres defectos que apareció al construirlo
+
+La primera corrida contra el real se interrumpió —Julio cerró la ventana antes
+de teclear la contraseña— y pidió relanzarla **sobre la misma carpeta**, para
+que la pantalla ofreciera «Retomar» en vez de empezar de cero. El guion solo
+sabía crear carpetas nuevas, así que ahora acepta `--carpeta=<ruta>`. Y al
+mirar esa carpeta, la premisa resultó ser otra: **no tenía `restauracion.json`**
+—la bitácora no tiene una sola línea `[restauracion]`, o sea que la
+restauración nunca llegó a arrancar— así que no había progreso que retomar.
+
+**Y esa carpeta, además, ya no servía para restaurar**, por una razón que vale
+más que el caso: la bitácora muestra dos asientos
+`salida_controlada_rechazada` con `detalle: SIN_ADMINISTRADORES`, del botón de
+la barra de estado, a las 16:42:28 y 16:42:33. Es el kiosko funcionando como
+manda §4.1 —la salida controlada exige el PIN de un administrador— y en una
+instalación recién creada **no hay ninguno**, así que la aplicación no se puede
+cerrar desde adentro. Cada intento deja su asiento, y `auditoria_log` es una de
+las once tablas que la restauración exige vacías (§6.2 del diseño), así que:
+
+> **UNA INSTALACIÓN NUEVA EN LA QUE ALGUIEN PULSÓ EL BOTÓN DE SALIR YA NO PUEDE
+> RESTAURAR.** La pantalla dice «Esta instalación ya tiene datos» y deshabilita
+> el botón, sin que nadie haya cargado nada: el único dato es el asiento del
+> intento de salida rechazado. Se sale borrando la carpeta de datos. **Es una
+> consecuencia no prevista de dos reglas correctas** —todo hecho se audita, y
+> se restaura solo sobre una base vacía— y **la decisión es de Julio**: dejarlo
+> así, o que `baseVacia()` no cuente los asientos anteriores al primer usuario.
+> Queda como el punto 20 de §6.2.
+
+Por eso `--carpeta` no se limita a apuntar: **comprueba y se niega**. Con
+puesto de control dice cuántas tablas están listas y que la pantalla va a
+ofrecer «Retomar»; sin puesto de control y con la base ya escrita, sale con
+código 2 antes de abrir ninguna ventana. Falsificado contra la carpeta real de
+esa corrida:
+
+```
+carpeta de datos REUSADA (--carpeta): …/pos-ensayo-restauracion-g0OGvd
+NO tiene puesto de control (restauracion.json): en esa carpeta la restauración nunca llegó a arrancar
+filas en su base: usuarios=0 categorias=0 configuracion_negocio=1 … auditoria_log=2
+Esa carpeta no sirve para restaurar: su base ya tiene filas (auditoria_log) y no hay puesto de control.
+exit=2
+```
+
+Y el camino contrario, sobre la carpeta del ensayo que SÍ había restaurado
+—`--carpeta` contra el descartable, **9 de 9**—, que es lo que va a pasar el día
+que una corrida se corte a mitad de la transferencia:
+
+```
+tiene puesto de control: 12 tabla(s) ya listas, proyecto https://ztidrshifrblhfraiowg.supabase.co, la empezó restauracion-pruebas@…
+  OK  la aplicación abrió DIRECTO en la restauración incompleta, y el botón ofrece RETOMAR
+  OK  la transferencia llegó a la revisión …
+  OK  la verificación CUADRA en pantalla …
+    log-tecnico: 16:58:13.891Z [restauracion] sesión de restauración iniciada como restauracion-pruebas@pos-pruebas.invalid
+    log-tecnico: 16:58:19.729Z [restauracion] sesión de restauración cerrada (HTTP 204)
+```
+
+**Los tres defectos eran del guion, no del producto**, y los tres los encontró
+correrlo:
+
+1. **Esperaba SIEMPRE la configuración inicial.** Con puesto de control la
+   aplicación arranca DIRECTO en la restauración (§8: «si existe
+   `restauracion.json`, la aplicación arranca en la pantalla de restauración»),
+   así que la primera corrida con `--carpeta` se quedó 25 s mirando una
+   pantalla que no iba a llegar. Ahora admite las dos entradas y comprueba, en
+   la retoma, que la entrada haya sido directa y que el botón diga «Retomar».
+2. **Contaba los botones antes de que la pantalla supiera su estado.** Mientras
+   la consulta IPC viaja, la pantalla dibuja «Consultando…» con el mismo
+   `pantalla-de-restauracion` y sin ningún botón: la corrida siguiente falló
+   con «0 avisos, 0 botones» sobre una instalación perfectamente sana. Se
+   espera la consecuencia visible —el botón, o el aviso de «sin configurar»—,
+   que es la misma lección del `waitForTimeout` fijo de §4.34.
+3. **Al cerrarse la ventana informaba un error interno ilegible**
+   («Cannot read properties of undefined (reading '_object')», de Playwright) y
+   además marcaba como FALLA que no se hubiera cerrado una sesión de nube que
+   nunca se abrió. Ahora el cierre se detecta y se dice con esas palabras, y la
+   comprobación del `logout` solo corre si hubo sesión. El aviso en pantalla
+   explica además cómo cortar el ensayo: Ctrl+C, porque desde la aplicación no
+   se puede.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -5457,6 +5535,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
+| 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -5649,6 +5728,12 @@ npm run ensayo:restauracion -- --entorno=.env.nube-real   # ENSAYO DE RESTAURACI
                               # sigue la restauración, exige que «Terminar» se niegue y vuelca la
                               # base y la bitácora (cada petición con su código). Sin --entorno va
                               # contra el descartable y llena el formulario solo. La carpeta queda.
+                              # --carpeta=<ruta> RETOMA sobre una carpeta de ensayo ya existente
+                              # (la corrida se interrumpió después de arrancar la restauración):
+                              # se niega con código 2 si esa carpeta no tiene puesto de control y
+                              # su base ya tiene filas, porque entonces no podría restaurar.
+                              # Para CORTARLO: Ctrl+C. La aplicación no se cierra desde adentro
+                              # mientras no haya un administrador (§4.35).
 npm run verify:nube -- --esperar-vencimiento   # comprueba que un token VENCIDO sea rechazado.
                                        # TARDA la vida del token + 90 s de margen: con el JWT
                                        # en 900 s son ~16 minutos. El margen NO se baja de 60 s

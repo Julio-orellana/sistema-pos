@@ -38,6 +38,22 @@
  * Uso:
  *   npm run ensayo:restauracion -- --entorno=.env.nube-real
  *   (sin `--entorno`, usa `.env.nube-pruebas`)
+ *   --carpeta=<ruta>   RETOMA sobre una carpeta de ensayo que ya existe, en vez
+ *                      de crear una nueva. Es para una corrida que se
+ *                      interrumpió DESPUÉS de que la restauración arrancara:
+ *                      esa carpeta tiene `restauracion.json` con el progreso, y
+ *                      la pantalla ofrece «Retomar». Si la carpeta NO tiene
+ *                      puesto de control y su base ya tiene filas, el guion se
+ *                      niega a arrancar y dice por qué: la restauración exige
+ *                      una base vacía, así que esa ventana no podría restaurar.
+ *
+ * CÓMO TERMINAR UN ENSAYO A MANO: la aplicación NO se puede cerrar desde
+ * adentro en una instalación vacía. La salida controlada pide el PIN de un
+ * administrador (§4.1) y en una terminal recién restaurada todavía no hay
+ * ninguno, así que el botón de la barra de estado contesta «No hay ningún
+ * administrador configurado» y deja un asiento `salida_controlada_rechazada`.
+ * Para cortar el ensayo, Ctrl+C en esta terminal: el guion mata el proceso de
+ * Electron y vuelca igual la evidencia.
  *
  * Códigos de salida: 0 la restauración llegó a la revisión con la
  * verificación cuadrando y todo lo demás en su sitio; 1 llegó pero algo no
@@ -51,7 +67,7 @@
 
 const { existsSync, mkdtempSync, readFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
-const { join } = require('node:path');
+const { join, resolve } = require('node:path');
 
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
@@ -93,8 +109,19 @@ const TABLAS = [
   'auditoria_log',
 ];
 
+/** Las que la restauración exige VACÍAS para dejarse empezar: las doce menos la de fila fija (§6.2). */
+const TABLAS_QUE_DEBEN_ESTAR_VACIAS = TABLAS.filter((tabla) => tabla !== 'configuracion_negocio');
+
 /** Un instante ISO con `Z` y cualquier cantidad de decimales, que es lo que el CHECK local admite. */
 const FORMA_DE_FECHA_LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/** La ventana se cerró antes de tiempo. No es un fallo del producto: es que no hay a quién preguntarle nada más. */
+class VentanaCerrada extends Error {
+  constructor() {
+    super('la ventana de la aplicación se cerró antes de que el ensayo terminara');
+    this.name = 'VentanaCerrada';
+  }
+}
 
 const comprobaciones = [];
 function comprobar(nombre, esperado, real, paso) {
@@ -202,17 +229,29 @@ async function lanzarAplicacion(datos, entorno) {
       ventana.setSize(1100, 800);
     }
   });
+  // Si la persona cierra la ventana, todo lo que se le pregunte a Playwright
+  // falla con un error interno ilegible («Cannot read properties of undefined»).
+  // Se anota el cierre y se lo trata como lo que es: no hay a quién preguntar.
+  let cerrada = false;
+  app.on('close', () => {
+    cerrada = true;
+  });
   const ventana = await app.firstWindow();
   await ventana.waitForLoadState('domcontentloaded');
   const prueba = (nombre) => ventana.locator(`[data-prueba="${nombre}"]`);
-  return { app, ventana, prueba };
+  return { app, ventana, prueba, estaCerrada: () => cerrada };
 }
 
 /** NO se usa app.close(): llama a app.quit(), que el kiosko intercepta para pedir el PIN. */
 function matar(app) {
-  const proceso = app.process();
-  proceso.kill('SIGKILL');
-  return proceso.pid;
+  try {
+    const proceso = app.process();
+    proceso.kill('SIGKILL');
+    return proceso.pid;
+  } catch {
+    // Ya estaba muerto: la persona cerró la ventana.
+    return null;
+  }
 }
 
 /** Las líneas de sincronización y restauración de la bitácora técnica, tal cual. */
@@ -240,13 +279,25 @@ async function esperarAlguno(prueba, nombres, plazoMs, mensajeDeLatido, alSondea
   const inicio = Date.now();
   let ultimoLatido = inicio;
   for (;;) {
-    for (const nombre of nombres) {
-      if ((await prueba(nombre).count()) > 0) {
-        return nombre;
-      }
+    if (verificarCierre()) {
+      throw new VentanaCerrada();
     }
-    if (alSondear !== undefined) {
-      await alSondear();
+    try {
+      for (const nombre of nombres) {
+        if ((await prueba(nombre).count()) > 0) {
+          return nombre;
+        }
+      }
+      if (alSondear !== undefined) {
+        await alSondear();
+      }
+    } catch (error) {
+      // Con la ventana cerrada, Playwright falla con un error interno que no
+      // dice nada. Lo que pasó es que no hay ventana.
+      if (verificarCierre()) {
+        throw new VentanaCerrada();
+      }
+      throw error;
     }
     const ahora = Date.now();
     if (ahora - inicio > plazoMs) {
@@ -259,6 +310,9 @@ async function esperarAlguno(prueba, nombres, plazoMs, mensajeDeLatido, alSondea
     await dormir(SONDEO_MS);
   }
 }
+
+/** Si la ventana ya se cerró. Lo fija `ensayar` con lo que devuelve `lanzarAplicacion`. */
+let verificarCierre = () => false;
 
 /** Anota el avance tabla por tabla cada vez que cambia lo que la pantalla muestra. */
 function observadorDeAvance(prueba) {
@@ -305,20 +359,65 @@ function leerBaseRestaurada(datos) {
 // ---------------------------------------------------------------------------
 
 async function ensayar(datos, entorno, automatico) {
-  const { app, ventana, prueba } = await lanzarAplicacion(datos, entorno);
+  const { app, ventana, prueba, estaCerrada } = await lanzarAplicacion(datos, entorno);
+  verificarCierre = estaCerrada;
   const observarAvance = observadorDeAvance(prueba);
   try {
     // --- Hasta la pantalla de restauración ---------------------------------
-    await prueba('pantalla-de-configuracion-inicial').waitFor({ timeout: ESPERA_LARGA });
-    await prueba('ir-a-restauracion').click();
-    await prueba('pantalla-de-restauracion').waitFor({ timeout: ESPERA_CORTA });
+    /*
+      DOS ENTRADAS, y hay que admitir las dos. Con un puesto de control en la
+      carpeta —una restauración a medias— la aplicación arranca DIRECTO en la
+      pantalla de restauración: ni configuración inicial ni ingreso (§4.35, y
+      §8: «si existe restauracion.json, la aplicación arranca en la pantalla de
+      restauración»). Sin él, se entra desde la configuración inicial. La
+      primera versión de este guion esperaba SIEMPRE la configuración inicial y
+      se quedó 25 s mirando una pantalla que no iba a llegar; lo encontró la
+      primera corrida con --carpeta sobre una carpeta con progreso.
+    */
+    const entrada = await esperarAlguno(
+      prueba,
+      ['pantalla-de-restauracion', 'pantalla-de-configuracion-inicial'],
+      ESPERA_LARGA,
+      'esperando a que la aplicación abra',
+    );
+    if (entrada === null) {
+      comprobar('la aplicación abrió en la restauración o en la configuración inicial', 'una de las dos', 'ninguna', false);
+      return;
+    }
+    if (entrada === 'pantalla-de-configuracion-inicial') {
+      await prueba('ir-a-restauracion').click();
+      await prueba('pantalla-de-restauracion').waitFor({ timeout: ESPERA_CORTA });
+    }
+    /*
+      Y hay que esperar la CONSECUENCIA visible, no el contenedor. La pantalla
+      se dibuja antes de saber en qué estado está: mientras la consulta IPC
+      viaja muestra «Consultando…» con el mismo `pantalla-de-restauracion` y sin
+      ningún botón, así que contar ahí da 0 botones y 0 avisos. Es la misma
+      lección que el `waitForTimeout` fijo de §4.34: medir la consecuencia.
+    */
+    const estadoALaVista = await esperarAlguno(
+      prueba,
+      ['restauracion-iniciar', 'restauracion-sin-configurar'],
+      ESPERA_CORTA,
+      'esperando a que la pantalla de restauración diga en qué estado está',
+    );
+    if (estadoALaVista === null) {
+      comprobar('la pantalla de restauración dijo en qué estado está', 'un botón de iniciar, o el aviso de «sin configurar»', 'ninguno de los dos', false);
+      return;
+    }
+    const retomando = (await prueba('restauracion-incompleta').count()) > 0;
     const sinConfigurar = await prueba('restauracion-sin-configurar').count();
     const iniciar = await prueba('restauracion-iniciar').count();
+    const textoDelBoton = iniciar === 1 ? unaLinea(await prueba('restauracion-iniciar').textContent()) : '(no hay botón)';
     comprobar(
-      'la pantalla ofrece iniciar: proyecto configurado, instalación vacía',
-      '0 avisos de «sin configurar», 1 botón de iniciar',
-      `${String(sinConfigurar)} avisos, ${String(iniciar)} botones`,
-      sinConfigurar === 0 && iniciar === 1,
+      retomando
+        ? 'la aplicación abrió DIRECTO en la restauración incompleta, y el botón ofrece RETOMAR'
+        : 'la pantalla ofrece iniciar: proyecto configurado, instalación vacía',
+      retomando ? 'entrada directa, aviso de restauración incompleta y botón «Retomar la restauración»' : '0 avisos de «sin configurar», 1 botón de iniciar',
+      retomando ? `entrada=${entrada}, botón «${textoDelBoton}»` : `${String(sinConfigurar)} avisos, ${String(iniciar)} botones`,
+      retomando
+        ? entrada === 'pantalla-de-restauracion' && /Retomar/.test(textoDelBoton)
+        : sinConfigurar === 0 && iniciar === 1,
     );
     if (sinConfigurar !== 0 || iniciar !== 1) {
       return;
@@ -332,7 +431,13 @@ async function ensayar(datos, entorno, automatico) {
       anotar('formulario llenado por el guion (proyecto de PRUEBAS) y «Iniciar» pulsado');
     } else {
       anotar('ESPERANDO A UNA PERSONA: en la ventana, escribí el correo y la contraseña del usuario de restauración,');
-      anotar(`  dejá el motivo en «Falla o reemplazo del equipo» y pulsá «Iniciar la restauración». Plazo: ${String(ESPERA_A_LA_PERSONA / 60_000)} min.`);
+      anotar(
+        retomando
+          ? `  y pulsá «Retomar la restauración» (sigue por donde quedó; no hay motivo que elegir). Plazo: ${String(ESPERA_A_LA_PERSONA / 60_000)} min.`
+          : `  dejá el motivo en «Falla o reemplazo del equipo» y pulsá «Iniciar la restauración». Plazo: ${String(ESPERA_A_LA_PERSONA / 60_000)} min.`,
+      );
+      anotar('  Para CORTAR el ensayo: Ctrl+C acá. La aplicación no se puede cerrar desde adentro mientras no haya');
+      anotar('  ningún administrador: la salida controlada pide su PIN, y en una instalación vacía no existe.');
     }
 
     // Un rechazo del ingreso (contraseña equivocada) deja la pantalla en el
@@ -461,11 +566,66 @@ async function ensayar(datos, entorno, automatico) {
     await dormir(2_000);
   } finally {
     const pid = matar(app);
-    anotar(`proceso ${String(pid)} de Electron terminado con SIGKILL (la base ya estaba consolidada: no había ninguna página a medias)`);
+    anotar(
+      pid === null
+        ? 'el proceso de Electron ya no estaba: la ventana se había cerrado'
+        : `proceso ${String(pid)} de Electron terminado con SIGKILL (la base queda consolidada en su WAL: retomar la lee igual)`,
+    );
   }
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * La carpeta del ensayo: una nueva, o la que se pidió con `--carpeta`.
+ *
+ * Al reusar una hay que decir en qué estado está, porque «retomar» solo existe
+ * si esa carpeta tiene `restauracion.json`: eso lo escribe el servicio cuando
+ * la restauración YA arrancó, no cuando la ventana se abrió. Y si no lo tiene
+ * y su base ya quedó escrita —basta un asiento de auditoría—, la restauración
+ * se niega a empezar, porque exige una base vacía: abrir esa ventana sería
+ * hacerle perder el tiempo a quien la mire.
+ */
+function prepararCarpeta(rutaPedida) {
+  if (rutaPedida === null) {
+    const nueva = mkdtempSync(join(tmpdir(), 'pos-ensayo-restauracion-'));
+    anotar(`carpeta de datos NUEVA y descartable: ${nueva}`);
+    return nueva;
+  }
+  const datos = resolve(rutaPedida);
+  if (!existsSync(datos)) {
+    console.error(`La carpeta ${datos} no existe. Sin --carpeta el guion crea una nueva.`);
+    process.exit(2);
+  }
+  anotar(`carpeta de datos REUSADA (--carpeta): ${datos}`);
+  if (existsSync(join(datos, ARCHIVO_DEL_PUESTO_DE_CONTROL))) {
+    const puesto = JSON.parse(readFileSync(join(datos, ARCHIVO_DEL_PUESTO_DE_CONTROL), 'utf8'));
+    const listas = Object.entries(puesto.tablas ?? {}).filter(([, t]) => t.lista).length;
+    anotar(`tiene puesto de control: ${String(listas)} tabla(s) ya listas, proyecto ${String(puesto.proyecto)}, la empezó ${String(puesto.correo)}`);
+    anotar('la pantalla va a ofrecer RETOMAR: sigue por la tabla y la página donde quedó');
+    return datos;
+  }
+  anotar('NO tiene puesto de control (restauracion.json): en esa carpeta la restauración nunca llegó a arrancar');
+  let conFilas = [];
+  try {
+    const base = leerBaseRestaurada(datos);
+    conFilas = TABLAS_QUE_DEBEN_ESTAR_VACIAS.filter((tabla) => base.filas[tabla] > 0);
+    anotar(`filas en su base: ${TABLAS.map((t) => `${t}=${String(base.filas[t])}`).join(' ')}`);
+  } catch (error) {
+    anotar(`no se pudo leer su base (${error.message}); se abre igual y decide la aplicación`);
+    return datos;
+  }
+  if (conFilas.length > 0) {
+    console.error(
+      `Esa carpeta no sirve para restaurar: su base ya tiene filas (${conFilas.map((t) => `${t}`).join(', ')}) y no hay puesto de control.\n` +
+        'La restauración solo corre sobre una base VACÍA, así que la pantalla iba a mostrar «Esta instalación ya tiene datos»\n' +
+        'con el botón de iniciar deshabilitado. Corré el ensayo sin --carpeta para que cree una nueva.',
+    );
+    process.exit(2);
+  }
+  anotar('su base está vacía: la pantalla va a ofrecer INICIAR (no hay progreso que retomar)');
+  return datos;
+}
 
 async function main() {
   const rutaDelEntorno = argumento('entorno', '.env.nube-pruebas');
@@ -476,16 +636,20 @@ async function main() {
     console.error(`Falta la aplicación compilada (${compilado}). Corré «npm run build» primero, o usá «npm run ensayo:restauracion».`);
     process.exit(2);
   }
-  const datos = mkdtempSync(join(tmpdir(), 'pos-ensayo-restauracion-'));
   anotar(`ENSAYO DE RESTAURACIÓN contra el proyecto ${entorno.POS_NUBE_PROYECTO} (${entorno.POS_NUBE_URL}), entorno ${rutaDelEntorno}`);
-  anotar(`carpeta de datos NUEVA y descartable: ${datos}`);
+  const datos = prepararCarpeta(argumento('carpeta', null));
   anotar(automatico ? 'proyecto de PRUEBAS con credenciales en el entorno: el guion llena el formulario solo' : 'la contraseña la teclea una persona en la ventana; este guion no la conoce');
   anotar('este ensayo NO escribe nada en la nube: solo lee, y abre y cierra una sesión de Auth');
 
   try {
     await ensayar(datos, entorno, automatico);
   } catch (error) {
-    comprobar('el ensayo llegó hasta el final', 'sin errores', error.message, false);
+    if (error instanceof VentanaCerrada) {
+      comprobar('la ventana siguió abierta hasta que el ensayo terminó', 'abierta', 'se cerró antes: el ensayo no pudo seguir', false);
+      process.exitCode = 2;
+    } else {
+      comprobar('el ensayo llegó hasta el final', 'sin errores', error.message, false);
+    }
   }
 
   // --- Lo que quedó en el disco --------------------------------------------
@@ -522,12 +686,16 @@ async function main() {
       base.usuarios.length === 0 ? 'sin usuarios' : base.usuarios.map((u) => `${u.nombre}: sin_pin=${String(u.sin_pin)} sin_remoto=${String(u.sin_pin_remoto)}`).join('; '),
       base.usuarios.every((u) => u.sin_pin === 1 && u.sin_pin_remoto === 1),
     );
-    comprobar(
-      'la sesión de la nube se cerró al dejar la restauración (logout con scope=local, en la bitácora)',
-      'una línea «sesión de restauración cerrada (HTTP 204)»',
-      bitacora.filter((l) => l.includes('sesión de restauración cerrada')).join(' | ') || 'no hay línea de cierre',
-      bitacora.some((l) => l.includes('sesión de restauración cerrada (HTTP 204)')),
-    );
+    if (bitacora.some((l) => l.includes('sesión de restauración iniciada'))) {
+      comprobar(
+        'la sesión de la nube se cerró al dejar la restauración (logout con scope=local, en la bitácora)',
+        'una línea «sesión de restauración cerrada (HTTP 204)»',
+        bitacora.filter((l) => l.includes('sesión de restauración cerrada')).join(' | ') || 'no hay línea de cierre',
+        bitacora.some((l) => l.includes('sesión de restauración cerrada (HTTP 204)')),
+      );
+    } else {
+      anotar('no se abrió ninguna sesión de restauración en esta corrida: no hay cierre que comprobar');
+    }
   }
 
   const fallidas = comprobaciones.filter((c) => !c.paso);
