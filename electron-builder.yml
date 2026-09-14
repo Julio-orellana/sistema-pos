@@ -84,6 +84,12 @@ files:
   - '!electron-builder.yml'
   - '!.vscode/**'
   - '!.github/**'
+  # Las pruebas que las propias dependencias publican en npm. `zod` manda 189
+  # archivos `.test.ts` y sus carpetas `tests/`: 381 entradas que no se
+  # ejecutan nunca en la tienda. Lo encontró `verify:paquete` la primera vez
+  # que corrió.
+  - '!**/node_modules/**/{__tests__,__mocks__,test,tests,spec}/**'
+  - '!**/node_modules/**/*.{test,spec}.{ts,tsx,js,mjs,cjs}'
 
 # ---------------------------------------------------------------------------
 # `app.getName()` DENTRO DE LA APLICACIÓN EMPAQUETADA
@@ -130,6 +136,22 @@ asarUnpack:
 # empaquetado para Windows pasa a necesitar una máquina Windows.
 npmRebuild: false
 
+# ---------------------------------------------------------------------------
+# LA REVISIÓN DEL PAQUETE, ANTES DE QUE EXISTA EL INSTALADOR
+# ---------------------------------------------------------------------------
+# `afterPack` corre cuando la aplicación ya está empaquetada pero ANTES de que
+# el destino NSIS arme el `.exe`. El guion revisa el asar y, si encuentra algo
+# que no debería viajar —un `.env`, `src/`, `docs/`, pruebas, una dependencia
+# que no es de producción—, lanza: el empaquetado se aborta y **el instalador
+# nunca llega a crearse**.
+#
+# Va acá y no como un `npm run` aparte a propósito: una revisión que hay que
+# acordarse de correr es una revisión que un día no se corre, y lo que estaba
+# en juego la primera vez fueron contraseñas de Supabase dentro del `.exe`
+# (§4.37 de CLAUDE.md). Igual existe `npm run verify:paquete` para auditar un
+# paquete ya armado.
+afterPack: scripts/verificacion-de-paquete.cjs
+
 win:
   # ---------------------------------------------------------------------------
   # LOS BINARIOS DE LAS OTRAS PLATAFORMAS NO VIAJAN AL INSTALADOR DE WINDOWS
@@ -167,6 +189,12 @@ win:
     - '!electron-builder.yml'
     - '!.vscode/**'
     - '!.github/**'
+    # Las pruebas que las propias dependencias publican en npm. `zod` manda 189
+    # archivos `.test.ts` y sus carpetas `tests/`: 381 entradas que no se
+    # ejecutan nunca en la tienda. Lo encontró `verify:paquete` la primera vez
+    # que corrió.
+    - '!**/node_modules/**/{__tests__,__mocks__,test,tests,spec}/**'
+    - '!**/node_modules/**/*.{test,spec}.{ts,tsx,js,mjs,cjs}'
     - '!**/node_modules/better-sqlite3/prebuilds/darwin-*.node'
     - '!**/node_modules/better-sqlite3/prebuilds/linux*.node'
     - '!**/node_modules/better-sqlite3/prebuilds/win32-arm64.node'

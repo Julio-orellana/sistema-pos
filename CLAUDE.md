@@ -5650,15 +5650,30 @@ Windows, que es distinto de que sea el archivo correcto.
 > `supabase/` y los `tsconfig`.
 
 La causa son dos comportamientos de electron-builder que hay que medir y no
-deducir, y los dos se midieron listando el asar:
+deducir. **La primera versión de esta sección los explicó mal, y se corrige
+acá con lo que las mediciones sostienen:**
 
-1. **`files` no es una lista blanca.** electron-builder parte de `**/*` y le
-   SUMA los patrones positivos. Para que algo no viaje hay que excluirlo por
-   nombre.
-2. **`win.files` REEMPLAZA a `files`, no lo completa.** Con las exclusiones
+1. **`win.files` REEMPLAZA a `files`, no lo completa.** Con las exclusiones
    solo arriba y un `win.files` que sacaba unos prebuilds, el paquete de
    Windows seguía llevando los `.env`. Por eso la lista vive completa bajo
    `win:`, duplicada.
+2. **Lo que restringe de verdad son los patrones POSITIVOS, pero solo dentro
+   de la lista que está en efecto.** Medido en cuatro empaquetados:
+
+   | `files` (raíz) | `win.files` | Entradas en el asar | `.env` |
+   |---|---|---|---|
+   | 3 positivos, sin exclusiones | (ninguno) | 1262 | 4 |
+   | 3 positivos + 15 exclusiones | solo 3 exclusiones de prebuilds | 1259 | 4 |
+   | 3 positivos + 15 exclusiones | **3 positivos** + las exclusiones | 925 | 0 |
+   | 3 positivos + 15 exclusiones | **3 positivos** + 3 de prebuilds | **729** | **0** |
+
+   La última fila es la que corrige lo que esta sección decía antes: con los
+   tres positivos dentro de `win.files` y **ninguna** exclusión de `.env`, de
+   `src/` ni de pruebas, el paquete sale igual de limpio. O sea que **el
+   arreglo no fueron las exclusiones: fue mover los positivos a `win.files`.**
+   Las exclusiones quedan igual, como segunda capa y porque dejan la intención
+   escrita, pero decir que eran ellas las que protegían habría sido atribuirle
+   el mérito a lo que no lo hizo.
 
 Antes y después, contando el asar:
 
@@ -5667,11 +5682,63 @@ Antes y después, contando el asar:
 | Primer paquete | 1262 | **4** | `dist`, `dist-electron`, `package.json`, `node_modules`, `.env*`, `CLAUDE.md`, `docs`, `scripts`, `src`, `supabase`, `tsconfig*`, … |
 | Paquete final | **925** | **0** | `dist`, `dist-electron`, `package.json`, `node_modules` |
 
-**Falta una salvaguarda permanente.** Hoy esto se comprobó a mano listando el
-asar; nada impide que un archivo nuevo vuelva a colarse mañana. Lo que
-corresponde es un guion que liste el paquete y falle si aparece algo que no
-debería —un `verify:paquete`, con el mismo criterio de §4.11—, y **no se hizo
-en esta fase**: queda como lo primero de la próxima.
+#### `verify:paquete`: la salvaguarda, y corre sola
+
+Comprobar esto a mano no escala: el día que alguien agregue una carpeta o
+toque un patrón, nada avisa. `scripts/verificacion-de-paquete.cjs` lista el
+asar y falla si encuentra algo que no debería viajar, con **el nombre exacto
+de cada archivo**, que es lo que hace falta para corregir el patrón sin
+adivinar.
+
+**No es un `npm run` que alguien tenga que acordarse de correr: es el
+`afterPack` de electron-builder.** Ese enganche ocurre cuando la aplicación ya
+está empaquetada pero ANTES de que el destino NSIS arme el instalador, así que
+lanzar ahí hace dos cosas a la vez: aborta el empaquetado y **el `.exe` nunca
+llega a existir**. Y si en `release/` hubiera quedado un instalador de una
+corrida anterior, se borra: lo peor sería que alguien tomara por bueno el
+`.exe` viejo de una carpeta donde la corrida nueva acaba de fallar. Igual
+existe `npm run verify:paquete` para auditar un paquete ya armado.
+
+Las seis reglas, cada una con el motivo escrito en el propio guion: `.env` en
+cualquier lado; `src/` del proyecto; `docs/`, `scripts/` y `supabase/`;
+carpetas de prueba; archivos `.test` y `.spec`; y cualquier paquete de
+`node_modules` que no esté en el **cierre transitivo** de `dependencies` —no
+alcanza con la lista directa: `better-sqlite3` necesita `node-addon-api` y
+`react-dom` necesita `scheduler`, y los dos tienen que poder viajar—.
+
+**Se vio fallar, que es lo que le da valor.** Reintroduciendo un patrón que
+deja entrar lo prohibido, el empaquetado se detuvo con código 1:
+
+```
+EL PAQUETE TIENE 4 ARCHIVO(S) QUE NO DEBERÍAN VIAJAR:
+  FALLA credenciales (.env) — 1 archivo(s)
+        por qué: un archivo .env puede traer contraseñas de verdad …
+        · /.env.nube-pruebas
+  FALLA código fuente sin compilar (src/) — 3 archivo(s)
+        · /src
+        · /src/main
+        · /src/main/index.ts
+Se borraron los instaladores viejos de …/release/1.0.0: POS-Jimmy-Cano-Setup-1.0.0.exe, …blockmap
+=== ¿quedó el .exe? ===  NO HAY NINGÚN .exe
+```
+
+**Dos de las seis reglas no se pudieron falsificar así**, y conviene decir por
+qué: la de los archivos de prueba y la de las dependencias no son alcanzables
+desde `electron-builder.yml`, porque electron-builder decide por su cuenta qué
+entra de `node_modules` y un patrón no basta para meter ahí lo que uno quiera.
+La falsificación de esas dos vive en
+`src/main/__tests__/verificacion-de-paquete.test.ts`, **21 pruebas** que cargan
+el guion de verdad —no una copia, igual que la del seguro de §4.20— y le pasan
+rutas a mano: que marque `playwright-core`, `vitest`, `electron-builder` y un
+paquete con ámbito; que NO marque `node_modules/zod/src`, que no es el `src/`
+del proyecto; y un control de que un paquete sano no dispara nada, sin el cual
+una regla rota que marcara todo también «pasaría».
+
+> **Y la prueba encontró dos errores míos** al escribirla: un caso de control
+> usaba un paquete inventado —que la regla de dependencias marcaba con razón, y
+> medía otra cosa— y otro esperaba un solo hallazgo donde había dos ciertos,
+> porque `@playwright/test` cae por dos reglas a la vez. Los dos eran de la
+> prueba, no de las reglas.
 
 #### El modo kiosko no depende de estar en desarrollo
 
@@ -5985,7 +6052,8 @@ sin texto: un ícono de 16 px con letras es una mancha.
 | **`sync_cola` SE PODA: se borra de verdad lo ya subido hace más de 30 días, en un ciclo del trabajador y como mucho una vez por día. Lo pendiente, lo bloqueante, los archivos apartados y LO SALTADO A MANO no se tocan nunca.** | No podar y aceptar que la cola crezca; podar por cantidad de filas en vez de por antigüedad; borrar también los lotes saltados; un índice sobre `sincronizado_en` para acelerarlo | Riesgo 8.6: unas 150 000 filas al año, con su payload, en un disco que además guarda PDF. **Borrar rompe la regla del proyecto —nada se borra (§4.11)— y por eso la justificación tiene que ser exacta:** `sync_cola` no es historial del negocio, es una lista de TAREAS; el hecho vive en su tabla, la nube ya tiene su copia confirmada por `sincronizado_en`, y lo que se borra es la anotación de que faltaba subirlo. Si la tabla se borrara entera no se perdería un dato del negocio. Treinta días porque la pregunta más tardía que se le hace es la del cierre de mes («esta venta de fin de mes, ¿subió?»), y no tiene que cubrir ni una tienda sin internet —lo pendiente no se borra— ni la escalera de reintentos, que topa en una hora. **Lo saltado a mano se excluye porque la justificación no lo alcanza**: es una tarea que alguien decidió NO cumplir, y esa nota es su única marca en el disco. Por antigüedad y no por cantidad, porque la pregunta que protege es «¿cuándo?» y no «¿cuántas?». Sin índice: es un recorrido una vez por día de una tabla que la propia poda mantiene chica, y el índice encarecería cada inserción. Medido: 49 950 de 50 000 filas en 61 ms, en macOS. | Prompt 54 — 2026-09-14 |
 | **El desfase del reloj se mide con el PUNTO MEDIO entre envío y recepción contra el CENTRO del segundo del servidor, con una incertidumbre explícita, y se avisa solo si pasa el minuto DESCONTADA esa incertidumbre.** | La resta directa `Date.now() - Date.parse(cabecera)`; medir solo en el ingreso, como ya hace `vida-del-token.ts`; corregir el reloj | Riesgo 8.5, que estaba «propuesto, no diseñado». La resta directa mide el desfase Y el viaje de ida y vuelta mezclados, y la cabecera `Date` tiene resolución de un segundo: con una conexión de tienda eso alcanza para inventar avisos que no existen, y un aviso falso repetido enseña a ignorarlo. Midiendo contra el punto medio y descontando la incertidumbre, **una conexión lenta no puede disparar el aviso: solo agranda la duda**, y hay prueba de que el mismo desfase avisa con una conexión normal y no con una lenta. Se mide en CADA respuesta de los cuatro caminos (proveedor, Auth, detector y restauración) con un observador compartido, que es lo que hace que el aviso salga una vez por hora y no una por camino. **No corrige la hora**: cambiarla es una acción administrativa que §4.6 prohíbe. Su umbral (60 s, del texto de §8.5) NO es el de §4.22 (30 s, cota medida de PostgREST): son dos diagnósticos por dos fuentes, y mezclarlos afirmaría como medido lo que no lo está. | Prompt 54 — 2026-09-14 |
 | **Un rechazo de Auth queda en la bitácora técnica con su código HTTP y su `error_code`; un ingreso correcto no escribe nada.** | Dejarlo como estaba; registrar solo el mensaje legible; registrar también el cuerpo entero de la respuesta | Lo pidió un problema real del 2026-09-14: un ingreso de restauración rechazado mostraba «Supabase rechazó ese correo y esa contraseña» y el `invalid_credentials` no quedaba en ningún lado —Auth no recibía registrador y la causa técnica va al renderer sin pasar por `log-tecnico.log`—, así que hubo que reproducirlo con `curl`. Se registra el `error_code` y no solo el mensaje porque el código es estable y el mensaje es texto que puede cambiar de redacción. «No contestó» se distingue de «contestó que no», que se diagnostican distinto. El cuerpo entero no, porque un servidor puede devolver en él lo que se le mandó. Con pruebas de que la contraseña no aparece por ningún camino, incluido ese, y su control del buscador. | Prompt 54 — 2026-09-14 |
-| **EL PAQUETE SE ARMA CON LISTA NEGRA, NO CON LISTA BLANCA, y `win.files` reemplaza a `files`. Las dos cosas se midieron listando el asar, y la primera evitó mandarle a Jimmy un instalador con las contraseñas de Supabase adentro.** | Confiar en que `files` sea una lista blanca, que es lo que el nombre sugiere; revisar el paquete a ojo | electron-builder parte de `**/*` y le SUMA los patrones positivos: con `files: [dist/**, dist-electron/**, package.json]`, el primer instalador de esta fase llevó `src/` entero con 93 archivos de prueba, `docs/`, `scripts/`, `supabase/`, los `tsconfig` y **`.env.nube-pruebas` y `.env.nube-real`**, o sea contraseñas de verdad dentro del `.exe`. Y con las exclusiones puestas seguía llevándolas, porque `win.files` REEMPLAZA la lista de arriba en vez de completarla, así que hay que repetirla entera bajo `win:`. Ninguna de las dos cosas se dedujo: se vio listando el asar antes y después (1262 archivos con 4 `.env`, contra 925 con ninguno). **Falta la salvaguarda permanente**: un `verify:paquete` que falle si algo se cuela, que queda como lo primero de la próxima fase. | Prompt 55 — 2026-09-14 |
+| **`win.files` REEMPLAZA a `files`, y lo que restringe el paquete son los patrones POSITIVOS de la lista que está en efecto. Medido en cuatro empaquetados, y evitó mandarle a Jimmy un instalador con las contraseñas de Supabase adentro.** | Confiar en que `files` sea una lista blanca, que es lo que el nombre sugiere; revisar el paquete a ojo | Con `files: [dist/**, dist-electron/**, package.json]` en la raíz y nada más, el primer instalador llevó `src/` entero con 93 archivos de prueba, `docs/`, `scripts/`, `supabase/`, los `tsconfig` y **`.env.nube-pruebas` y `.env.nube-real`**: contraseñas de verdad dentro del `.exe`. Agregar exclusiones ARRIBA no cambió nada (1262 → 1259 entradas), porque `win.files` ya existía y reemplaza esa lista. Lo que lo arregló fue mover los tres positivos DENTRO de `win.files` (→ 925, y 729 con las pruebas de las dependencias fuera). **Y se comprobó cuál de las dos cosas protege**: con los positivos en `win.files` y CERO exclusiones de `.env`, `src/` o pruebas, el paquete sale igualmente limpio. Las exclusiones se conservan como segunda capa y porque dejan la intención escrita, pero atribuirles el mérito habría sido afirmar lo que la medición no sostiene. | Prompt 55 — 2026-09-14; mecanismo corregido en el Prompt 56 |
+| **La revisión del paquete es el `afterPack` de electron-builder, no un `npm run` aparte: si algo no debería viajar, el `.exe` no llega a existir.** | Un guion suelto que haya que acordarse de correr; un paso más en `npm run dist`; revisar a ojo el `release/` | Lo que estaba en juego la primera vez fueron contraseñas de Supabase dentro del instalador, y una revisión que hay que acordarse de correr es una revisión que un día no se corre —es el mismo argumento por el que la señal de transacción vive dentro del único envoltorio que abre transacciones (§4.18) y no en cada servicio—. `afterPack` ocurre con la aplicación ya empaquetada y ANTES de que NSIS arme el instalador, así que lanzar ahí aborta el empaquetado y el `.exe` nunca se crea; además borra el instalador que hubiera quedado de una corrida anterior, para que nadie tome por bueno un `.exe` viejo de una carpeta donde la corrida nueva falló. Un paso más en `npm run dist` no serviría: `npx electron-builder` a secas se lo saltearía. **Falsificado**: con un patrón que deja entrar `.env.nube-pruebas` y `src/`, el empaquetado sale con código 1 nombrando los cuatro archivos y `release/` queda sin ningún `.exe`. Las dos reglas que no se pueden falsificar desde la configuración —las pruebas y las dependencias— tienen sus 21 pruebas de Vitest cargando el guion de verdad. | Prompt 56 — 2026-09-14 |
 | **El nombre del producto es `POS Jimmy Cano`, y el `appId` NO cambia.** | Dejar «POS Agricola»; «POS Agrícola» con tilde; renombrar también el appId por coherencia | De `productName` salen la carpeta de datos (`%APPDATA%\POS Jimmy Cano\`, donde vive la base con todas las ventas), la llave con que DPAPI cifra la credencial de la nube (§4.23, medido) y el nombre del ejecutable: **cambiarlo en una versión futura deja huérfana la base y deja ilegible toda credencial guardada**, sin recuperación automática. «POS Agricola» sin tilde se lee como un error de tecleo y con tilde mete un carácter no ASCII en una ruta de Windows sin ganar nada; el nombre del dueño hace inconfundible el ícono en su escritorio. El `appId` es un identificador y no un nombre visible: de él salen la clave de desinstalación del registro y la agrupación en la barra de tareas, así que cambiarlo instalaría la versión nueva AL LADO de la vieja en vez de actualizarla. El nombre se inyecta al paquete con `extraMetadata` y NO al `package.json` del repositorio, así que la aplicación de desarrollo sigue siendo `pos-agricola` y no comparte datos ni credencial con la instalada. | Prompt 55 — 2026-09-14 |
 | **Empaquetar para Windows desde macOS NO necesita cross-compilar, porque no hay nada que compilar: `npmRebuild: false`.** | Dejar `npmRebuild: true` y confiar; montar una máquina Windows para el build; agregar un paso de CI en Windows | `better-sqlite3` 13 —la única dependencia nativa— trae los binarios de todas las plataformas dentro del paquete de npm (`prebuilds/`), elegidos en tiempo de ejecución por `process.platform` y hechos con N-API, así que el mismo archivo sirve para cualquier versión de Electron. Medido: en esta máquina no existe ningún `.node` compilado localmente, y el `prebuilds/win32-x64.node` es un `PE32+ DLL x86-64`. Con `npmRebuild: true` el empaquetado intentaría compilar C++ para Windows desde macOS, que es lo único que sí necesitaría una máquina Windows. **Lo que sigue sin medirse es que ese binario CARGUE en Windows**, que es distinto de que sea el archivo correcto. Si algún día entra una segunda dependencia nativa sin prebuilds, esta línea deja de alcanzar. | Prompt 55 — 2026-09-14 |
 | **La pantalla de restauración nombra el proyecto de Supabase ANTES de que el usuario escriba nada.** | Dejarlo como estaba; mostrarlo solo en el error; mostrar solo la URL | El 2026-09-14 se tecleó la credencial del proyecto de PRUEBAS contra el REAL: cada proyecto tiene su propia tabla de usuarios, así que la credencial de uno nunca sirve en el otro, y GoTrue contesta `invalid_credentials`, que la pantalla traduce a «revisá que sean los de tu usuario de restauración». O sea que el síntoma apunta a la contraseña cuando el problema es el proyecto. Mostrarlo en el error llegaría tarde: lo que hay que evitar es tipear la credencial equivocada, no explicarla después. Se muestra la REFERENCIA —lo que el panel usa como nombre y lo que una persona reconoce— con la URL al lado. El dato ya viajaba en el progreso; lo que faltaba era mostrarlo. | Prompt 54 — 2026-09-14 |
