@@ -329,7 +329,7 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos` |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos`<br>`0027_sincronizar_asiento` |
 | Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) **2026-09-12 (la `0023` y la `0024`)** y **2026-09-13 (la `0025` y la `0026`, con lo que la fase 2.c queda aplicada entera)** |
 | Plan | gratuito |
 
@@ -359,10 +359,11 @@ SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`.** La
-`0023` y la `0024` se aplicaron el **2026-09-12**, y la `0025` y la `0026` el
-**2026-09-13**, todas con la aprobación explícita de Julio y después de haberse
-probado contra `pos-pruebas-descartable`. **Los dos proyectos tienen hoy las 21
-migraciones.**
+`0023` y la `0024` se aplicaron el **2026-09-12**, la `0025` y la `0026` el
+**2026-09-13**, y la **`0027` el 2026-09-14**, todas con la aprobación explícita
+de Julio y después de haberse probado contra `pos-pruebas-descartable`. **Los
+dos proyectos tienen hoy las 22 migraciones**, y la huella de las 14 funciones
+del contrato es `1b0bcbf6c033cb163c4bc396dbe52e37` en los dos. Ver §4.29.
 
 De los dos pasos manuales que la fase 2.c necesitaba, **uno está hecho y
 verificado, y el otro está hecho pero NO verificado desde acá**:
@@ -4084,16 +4085,65 @@ Postgres:
 **Es la primera vez en la vida del proyecto que un `usuario_bloqueado` llega a
 la nube**, y §4.8 lo prometía desde que se escribió.
 
-#### Estado de la 0027, y lo que falta
+#### Estado de la 0027: APLICADA EN LOS DOS PROYECTOS el 2026-09-14
 
-- **Aplicada SOLO en `pos-pruebas-descartable`.** En `pos-jimmy-cano` está
-  **pendiente de la revisión y aprobación de Julio**, como manda el protocolo:
-  el SQL a la vista primero.
-- **El código de la terminal YA la necesita.** El enrutador manda los lotes de
-  asiento suelto a `sincronizar_asiento`; contra una nube que no la tenga, esos
-  lotes detendrían la cola. Hoy no hay riesgo —el real no tiene usuario de
-  terminal ni sincronización corriendo— pero **la 0027 tiene que aplicarse
-  antes de conectar la terminal al real.**
+Julio la aprobó y pidió aplicarla **de inmediato**, sin esperar a que hiciera
+falta, con un criterio que vale como regla general: *es exactamente el tipo de
+migración que no cuesta nada aplicar temprano y sí cuesta olvidar antes de
+conectar la terminal real*. Es puramente aditiva —agrega una puerta, no cambia
+ninguna, la versión de contrato no sube— así que aplicarla contra un proyecto
+que todavía no la usa no tiene efecto observable, y no aplicarla convertiría el
+primer ingreso fallido de la tienda en una cola detenida.
+
+Evidencia leída del catálogo del real, no del archivo:
+
+| Qué se comprobó | Antes | Después |
+|---|---|---|
+| Funciones en `public` | 14 | **15** |
+| Existe `sincronizar_asiento` | no | **sí**, `SECURITY DEFINER`, `search_path=""` |
+| ACL de la función | — | `postgres`, `authenticated`, `service_role`; **sin `anon`** |
+| `contrato_de_sincronizacion` la enumera | `false` | **`true`** |
+| Funciones que declara el contrato | 13 | **14** |
+| Versión del contrato | 1 | **1** (no sube, a propósito) |
+| Filas de negocio en las 8 tablas | 0 | **0** |
+
+**La comprobación fuerte no es el texto de la migración sino la huella de los
+OBJETOS**, igual que con la `0023` (§4.4): la huella de las 14 funciones del
+contrato da **`1b0bcbf6c033cb163c4bc396dbe52e37` en los DOS proyectos**, y la
+salida de `contrato_de_sincronizacion()`, invocada con los claims de
+`restauracion` en cada uno, da **`92d5b3e7374cdcf36aaa9f185acadf67` en los dos**.
+
+El linter del real sumó **un** aviso `authenticated_security_definer_function_executable`
+—`sincronizar_asiento`, esperado y no se corrige— y sigue en **0 INFO
+`rls_enabled_no_policy`**.
+
+##### CORREGIDO AL APLICARLA: el `0027b` del proyecto de pruebas había derivado
+
+Al cotejar los md5 entre los dos proyectos **no coincidían**, que es exactamente
+para lo que esa comprobación existe. La causa: el `0027b_contrato_conoce_el_asiento`
+que se aplicó al descartable el día anterior **reescribió
+`contrato_de_sincronizacion` a mano en vez de copiar el cuerpo de la `0023`**, y
+en el camino cambió dos cosas: `pg_get_function_arguments` por
+`pg_get_function_identity_arguments`, y `p.proconfig` por
+`coalesce(p.proconfig, ARRAY[]::text[])`.
+
+**El real recibió la versión correcta** —el registro de su `0023` es byte a byte
+el archivo del repositorio (`a77ae68229c1fdc8245e139916e5b943`) y usa
+`identity_arguments`, igual que la `0027` que se le aplicó—, así que lo que se
+corrigió fue el **descartable**, reemplazando sus dos funciones por las del
+archivo. Ahora los md5 coinciden.
+
+> **Y UNA SUPOSICIÓN MÍA QUE LA MEDICIÓN DESMINTIÓ.** Di por sentado que
+> `pg_get_function_arguments` e `identity_arguments` devuelven cosas distintas
+> —una con nombres de parámetro y la otra solo con tipos— y por lo tanto que el
+> contrato declaraba cosas distintas en cada proyecto. **Medido sobre las
+> funciones de este esquema, devuelven exactamente lo mismo**: `iguales = true`
+> en las tres que se probaron. Se separan solo con parámetros `OUT`/`VARIADIC` o
+> con valores por omisión, y acá no hay ninguno. La divergencia era de TEXTO y
+> no de comportamiento, y por eso la foto seguía cuadrando; corregirla igual es
+> lo correcto, porque un `coalesce` de más sí cambiaría la salida el día que una
+> función perdiera su `search_path`.
+
 - Batería completa tras todo esto, sobre el proyecto vaciado: **136 de 136**.
 
 ### 4.30 Pendiente explícito: `resume` y `on-ac` sin ejercitar
@@ -4115,6 +4165,120 @@ de Julio: no forzarlo ahora y anotarlo.
 Y sigue valiendo lo de siempre: esto se midió en macOS, y **Windows es la
 plataforma de producción**. `powerMonitor` es justamente donde las dos difieren
 más.
+
+### 4.31 Las 23 puertas de encolado, subidas todas — y el `23505` que apareció
+
+Julio pidió subir **al menos uno** de los cuatro asientos que quedaban
+pendientes, preferentemente `autorizacion_bloqueada`, y que se confirmara que no
+había «una sexta variante del mismo problema» de la `0027`. En vez de subir uno
+solo se ejercitaron **los veintitrés sitios de `src/main/domain` que encolan**,
+con base SQLite real, servicios reales, trabajador real y proveedor real contra
+`pos-pruebas-descartable`. Subir uno habría contestado la primera mitad de la
+pregunta y no la segunda.
+
+#### Las 29 formas de lote que la aplicación puede producir, y adónde van
+
+| Forma del lote | Función | Cuántos |
+|---|---|---|
+| `usuarios` + `auditoria_log` | `sincronizar_usuario` | 7 |
+| `auditoria_log` **suelto** | `sincronizar_asiento` | 7 |
+| `categorias`/`productos`/`limites_descuento`/`configuracion_negocio` + asiento, y `recibos` solo | `sincronizar_lote_simple` | 12 |
+| `caja_sesiones`(abierta) + desglose + asiento | `sincronizar_apertura_de_caja` | 1 |
+| `productos` + `ventas` + `venta_detalle` + asiento | `sincronizar_venta` | 1 |
+| `caja_sesiones`(cerrada) + asiento | `sincronizar_cierre_de_caja` | 1 |
+
+**Las 29 enrutan, ninguna quedó sin puerta.** Los cuatro asientos que faltaban
+llegaron a la nube y se leyeron en Postgres:
+
+| accion | usuario_id | entidad_tipo |
+|---|---|---|
+| `ingreso_correcto` | el de Ana | `usuarios` |
+| `pin_remoto_configurado` | el de Jimmy | `usuarios` |
+| **`autorizacion_bloqueada`** | **NULL** | **`autorizacion`** |
+| `salida_controlada_autorizada` | el de Jimmy | `aplicacion` |
+| `salida_controlada_rechazada` | **NULL** | `aplicacion` |
+
+`autorizacion_bloqueada` es el caso interesante y por eso era el que Julio
+quería ver: es **el único asiento del sistema que viaja sin `usuario_id`**
+—cuando aparece el diálogo de autorización nadie eligió todavía un usuario, así
+que no hay a quién imputarle el intento (§4.8)— y su `entidad_tipo` es
+`autorizacion`, que ninguna otra operación usa. Pasa porque
+`auditoria_log.usuario_id` es nulable y `entidad_tipo` solo exige texto no
+vacío; **eso se leyó del esquema antes de subir, no se supuso**.
+
+#### NO hay sexta variante del problema de la 0027 — pero apareció OTRO defecto
+
+Hay que separar las dos cosas, porque tienen la misma consecuencia y causas
+distintas:
+
+- **Del problema de la `0027` —un lote cuya FORMA ninguna función acepta— no
+  quedó ninguno.** Las 29 formas enrutan y las 29 fueron aceptadas.
+- **Apareció un defecto distinto, con la misma consecuencia: la cola se
+  detiene.** Medido:
+
+```
+sincronizar_lote_simple  HTTP 409
+{"code":"23505","details":"Key (rol)=(venta) already exists.",
+ "message":"duplicate key value violates unique constraint
+            \"limites_descuento_rol_key\""}
+ciclo: cola_detenida; pendientes: 16; bloqueantes: 2
+```
+
+**La causa.** `escribir_fila` escribe con
+`INSERT … ON CONFLICT (id) DO UPDATE`: el destino del conflicto es **la llave
+primaria**. Un choque contra cualquier OTRA restricción única no lo absorbe el
+upsert, sale como `23505` crudo, `reintentos.ts` lo clasifica —correctamente—
+como determinístico, y la cola se detiene.
+
+**No es un caso aislado: son nueve restricciones.** Leídas del catálogo de la
+nube, las únicas que NO son la llave primaria, sobre tablas que la terminal
+escribe:
+
+| Tabla | Restricción única |
+|---|---|
+| `usuarios` | `(nombre)` |
+| `categorias` | `(nombre)` |
+| `productos` | `(nombre)` |
+| `limites_descuento` | `(rol)` ← la que mordió |
+| `recibos` | `(numero_recibo)` |
+| `recibos` | `(venta_id)` |
+| `venta_detalle` | `(venta_id, orden_linea)` |
+| `caja_sesion_denominaciones` | `(caja_sesion_id, denominacion_id, momento)` |
+| `caja_sesiones` | índice parcial `(estado) WHERE estado='abierta'` ← esta ya mordió en §4.25 |
+
+**Qué acota el riesgo hoy, dicho con precisión.** Las nueve existen también en
+SQLite, y en este proyecto **nada se borra**, así que dentro de UNA terminal con
+UNA base que nunca se recrea, una clave natural queda atada a un UUID para
+siempre: toda resubida choca contra `(id)` y el upsert la absorbe. Por eso la
+tienda de Jimmy, hoy, con una sola caja, no lo puede provocar.
+
+**Cuándo SÍ ocurre.** El arnés lo provocó al correr dos veces contra la misma
+nube, o sea con una base local nueva subiendo a una nube que ya tenía los datos.
+Eso no es artificial: **es exactamente la forma de una reinstalación**, y
+también la de una restauración (fase 4.b) y la de una segunda terminal —donde
+`recibos.numero_recibo`, que es un correlativo por terminal, choca garantizado—.
+Que esos tres escenarios lo disparen es **inferencia a partir del mecanismo
+medido**, no una medición de cada uno.
+
+> **NO SE ARREGLÓ, y es deliberado.** Las salidas posibles son varias y ninguna
+> es obvia —hacer que `escribir_fila` conozca la clave natural de cada tabla,
+> derivar los UUID de la clave natural, o clasificar el `23505` de otro modo—, y
+> todas tocan el contrato con la nube. **Es una decisión de diseño y le
+> corresponde a Julio**: queda como el punto 19 de §6.2.
+
+#### El arnés no quedó en el repositorio
+
+Ejercita los 23 sitios, junta las formas, enruta cada una y las sube de verdad;
+para eso necesita credenciales y red, y `npm test` no puede depender de la nube.
+Se corrió, se leyó y se borró. Lo que sí queda fijado en el repositorio es la
+prueba estructural de §4.26 —que ningún asiento se escriba fuera del
+envoltorio— y las 25 del enrutador.
+
+> **Y UN ERROR MÍO, DEL MISMO TIPO QUE YA COSTÓ UNA VUELTA.** La primera corrida
+> del arnés subió las 29 formas con HTTP 200 y falló en la ÚLTIMA línea, la de
+> diagnóstico, porque escribí `ultimo_error` donde la columna se llama `error`.
+> El fondo estaba bien y lo roto era mi guion, igual que el
+> `--config /dev/null` de una vuelta anterior. Se corrigió y se repitió entera.
 
 ## 5. Registro de decisiones técnicas
 
@@ -4305,8 +4469,12 @@ más.
 | **`olvidarLaEspera()` se conecta a tres disparadores reales, y el sondeo de `net.isOnline()` es un intervalo porque Electron NO emite evento.** | Dejarlo para una fase futura, como estaba; confiar solo en `powerMonitor`; sondear más seguido | Sin disparadores, la escalera de recomprobación manda siempre: tras una hora sin internet la terminal esperaría hasta 5 minutos para enterarse de que la red volvió, **aunque el sistema operativo ya lo supiera**. Los tres son `resume` y `on-ac` de `powerMonitor`, más la transición `false → true` de `net.isOnline()`. Ese último **no puede ser un evento**: el módulo `net` de Electron no es un EventEmitter, así que se sondea cada 30 s —una lectura en memoria del Network List Manager, sin red y sin costo— y **solo se actúa en la transición hacia arriba**, porque al sistema operativo se le cree únicamente el «no» (§5.2). Los 15 s de gracia tras despertar no se pusieron acá: los pone `alDespertar()` del planificador, que existía desde la fase 1.b con ese número escrito esperando este día. | Prompt 44 — 2026-09-13 |
 | **PRUEBA ESTRUCTURAL NUEVA: cada `auditoria.registrar(` del dominio tiene que estar dentro de `conBandejaDeSalida` o de `enTransaccionDeNegocio`.** Encontró CINCO hechos de negocio que no llegaban a la nube. | Confiar en que la próxima vez alguien lo revise a mano; exigir solo `conBandejaDeSalida`, que es el molde común | La prueba que ya había —«solo tres archivos nombran `.transaction(`»— protege de que alguien **abra** una transacción por su cuenta, y no de lo contrario, **que es peor: no abrir ninguna**. `crearPrimerAdministrador` no nombraba `.transaction(` precisamente porque no abría transacción, así que pasaba limpio; el defecto vivió desde el Prompt 3. El asiento de auditoría es el marcador exacto de «acá pasó un hecho del negocio» —§4.17 lo dice al revés— y `auditoria_log` se sincroniza, así que un asiento fuera del envoltorio es por definición un hecho que no llega. **Se aceptan DOS envoltorios y no uno**: §4.17 ya había decidido que la venta y los dos métodos de caja usan `enTransaccionDeNegocio` + `encolarLote` directo, y la primera versión de la prueba los marcó como falsos positivos hasta que se comprobó que sí encolan. La lista de excepciones está vacía y una entrada sin motivo escrito hace fallar otra comprobación; hay además un control del propio detector, porque uno roto que dijera siempre «está dentro» dejaría la prueba pasando en falso. **Falsificada**: quitando un envoltorio, falla nombrando archivo y línea. | Prompt 45 — 2026-09-13 |
 | **CORREGIDO: cinco asientos de auditoría de `autenticacion.ts` no se encolaban, y DOS de ellos contradecían lo que §4.8 afirma.** | Excusarlos en la lista de excepciones; dejarlos y anotarlos como pendiente | Los cinco son `autorizacion_bloqueada`, `pin_remoto_configurado`, la salida controlada, el ingreso correcto y el ingreso fallido / `usuario_bloqueado`. **§4.8 decía con todas las letras** que el candado no viaja pero «el hecho auditable sí: `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada»: **no estaba espejada**, y esa afirmación de la documentación era falsa desde que se escribió. Excusarlos habría sido documentar como aceptado un comportamiento que el propio diseño declara incorrecto. En cada uno se distingue lo que viaja de lo que no: el contador de intentos y el candado por superficie se quedan acá —estado operativo de la terminal (§4.4), que ni existe en Postgres— y lo que se encola es el asiento; en `configurarPinRemoto` se encola además la fila de `usuarios`, cuyo hash de PIN remoto no viaja porque `COLUMNAS_EXCLUIDAS` lo saca (decisión 17). | Prompt 45 — 2026-09-13 |
-| **Migración `0027`: una función NUEVA, `sincronizar_asiento`, para el lote que no tiene fila principal de negocio. NO se amplió `sincronizar_lote_simple`.** | Agregar `auditoria_log` al `CASE` de la fila principal del lote simple, que era una línea; revertir los cinco arreglos de §4.26 | **El arreglo de §4.26 estaba incompleto y era peor que el defecto**: esos cinco producen lotes de un solo asiento, y las cinco funciones de la `0023` exigen una fila principal. Medido contra la nube: `HTTP 400 FORMA: la tabla auditoria_log no se sincroniza como lote simple`, `cola_detenida`. O sea que **el primer ingreso fallido de un cajero habría detenido toda la sincronización de la tienda** — un defecto silencioso convertido en uno que para la caja. No se amplió el lote simple porque su `CASE` de la fila principal es lo que obliga a que la fila de negocio vaya primera y el asiento detrás: admitiendo `auditoria_log` ahí, un lote de catálogo con el asiento delante pasaría en vez de rechazarse y se perdería la comprobación de orden de §2.4. Una función aparte dice en su nombre lo que acepta y su lista cerrada tiene un solo elemento. **La versión de contrato no sube**: agrega una puerta, no cambia ninguna, así que una terminal vieja sigue funcionando. Aplicada solo en el proyecto de pruebas; en el real está pendiente de aprobación. | Prompt 46 — 2026-09-14 |
+| **Migración `0027`: una función NUEVA, `sincronizar_asiento`, para el lote que no tiene fila principal de negocio. NO se amplió `sincronizar_lote_simple`.** | Agregar `auditoria_log` al `CASE` de la fila principal del lote simple, que era una línea; revertir los cinco arreglos de §4.26 | **El arreglo de §4.26 estaba incompleto y era peor que el defecto**: esos cinco producen lotes de un solo asiento, y las cinco funciones de la `0023` exigen una fila principal. Medido contra la nube: `HTTP 400 FORMA: la tabla auditoria_log no se sincroniza como lote simple`, `cola_detenida`. O sea que **el primer ingreso fallido de un cajero habría detenido toda la sincronización de la tienda** — un defecto silencioso convertido en uno que para la caja. No se amplió el lote simple porque su `CASE` de la fila principal es lo que obliga a que la fila de negocio vaya primera y el asiento detrás: admitiendo `auditoria_log` ahí, un lote de catálogo con el asiento delante pasaría en vez de rechazarse y se perdería la comprobación de orden de §2.4. Una función aparte dice en su nombre lo que acepta y su lista cerrada tiene un solo elemento. **La versión de contrato no sube**: agrega una puerta, no cambia ninguna, así que una terminal vieja sigue funcionando. **Aplicada en los DOS proyectos el 2026-09-14** (§4.29). | Prompt 46 — 2026-09-14 |
 | **La `0027` reemplaza TAMBIÉN `contrato_de_sincronizacion`, porque una función nueva es invisible para la prueba de deriva si no se agrega a su lista fija.** | Dejar el contrato como estaba: la función nueva funcionaba igual | **Medido, y es el hallazgo incómodo**: tras crear `sincronizar_asiento`, `npm run verify:nube` seguía en verde y la foto seguía diciendo «13 funciones». `contrato_de_sincronizacion()` enumera por nombre con un `proname IN (...)` literal —lo cual es correcto, porque declara el contrato y no cualquier función que aparezca en `public`— pero significa que **había una función `SECURITY DEFINER` nueva en la nube que nada vigilaba**. La prueba de deriva no puede detectar lo que el contrato no declara. Queda como regla para la próxima función: agregarla a esa lista **es parte de crearla**, no un paso opcional. Con el reemplazo, la foto declara 14 funciones y la mitad A exige que la nueva exista, sea DEFINER y tenga `search_path` vacío. | Prompt 46 — 2026-09-14 |
+| **La `0027` se aplica al real TEMPRANO, sin esperar a que haga falta.** | Dejarla anotada como pendiente y aplicarla recién antes de conectar la terminal, que era el plan | Decisión de Julio, con un criterio que vale como regla general para toda migración **puramente aditiva** de la que el código ya dependa: *no cuesta nada aplicarla temprano y sí cuesta olvidarla*. La `0027` agrega una puerta, no cambia ninguna y no sube la versión de contrato, así que contra un proyecto que todavía no la usa **no tiene ningún efecto observable**; y no aplicarla convertiría el primer ingreso fallido de la tienda en una cola detenida. Una nota en un documento no es una salvaguarda: el objeto aplicado sí. **Esto NO afloja el protocolo de infraestructura real** —SQL a la vista, aprobación explícita, evidencia leída del catálogo—: cambia cuándo se propone, no cómo se aplica. Evidencia en §4.29. | Prompt 47 — 2026-09-14 |
+| **CORREGIDO: el `0027b` del proyecto de pruebas había reescrito `contrato_de_sincronizacion` a mano y derivó del archivo.** El descartable se realineó con el repositorio. | Dejarlo, porque la salida del contrato era idéntica igual; realinear el real en vez del descartable | Lo detectó la comprobación de §4.4 al cotejar `md5(pg_get_functiondef)` entre los dos proyectos: **no coincidían**, que es exactamente para lo que existe. La causa fue mía: el `0027b` del día anterior reescribió la función en vez de copiar el cuerpo de la `0023`, cambiando `pg_get_function_arguments` por `identity_arguments` y `p.proconfig` por `coalesce(p.proconfig, ARRAY[]::text[])`. **El real tenía la versión correcta** —el registro de su `0023` es byte a byte el archivo del repositorio— así que se corrigió el descartable. La divergencia resultó ser de TEXTO y no de comportamiento (ver la fila siguiente), pero se corrige igual: el `coalesce` sí cambiaría la salida el día que una función perdiera su `search_path`, y dos proyectos que corren código distinto invalidan la premisa de probar en uno para aplicar en el otro. | Prompt 47 — 2026-09-14 |
+| **MEDIDO, contra una suposición mía: `pg_get_function_arguments` e `identity_arguments` devuelven LO MISMO para las funciones de este esquema.** | Dar por buena mi lectura de que una trae nombres de parámetro y la otra solo tipos, y concluir que los dos proyectos declaraban contratos distintos | Iba a reportar que la foto y el real declaraban argumentos distintos. **Se midió antes de afirmarlo y era falso**: `iguales = true` en las tres funciones probadas. Las dos formas se separan solo con parámetros `OUT`/`INOUT`/`VARIADIC` o con valores por omisión, y ninguna función de este esquema tiene eso. La confirmación definitiva fue comparar la SALIDA del contrato en los dos proyectos con los claims de `restauracion`: `92d5b3e7374cdcf36aaa9f185acadf67` en los dos. Es el mismo tipo de error que §4.22 ya dejó anotado —reportar como medido lo que era razonamiento— y esta vez se atrapó antes de escribirlo. | Prompt 47 — 2026-09-14 |
+| **NO se arregla el `23505` de las restricciones únicas que no son la llave primaria: se documenta y lo decide Julio.** | Cambiar `escribir_fila` para que conozca la clave natural de cada tabla; derivar los UUID de la clave natural; clasificar el `23505` como transitorio | El arnés exhaustivo lo destapó midiendo: `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, o sea que el upsert solo absorbe choques contra la **llave primaria**, y hay **nueve restricciones únicas que no lo son** en tablas que la terminal escribe (`usuarios.nombre`, `categorias.nombre`, `productos.nombre`, `limites_descuento.rol`, `recibos.numero_recibo`, `recibos.venta_id`, `venta_detalle(venta_id,orden_linea)`, el desglose de caja y la caja única). Un choque contra cualquiera sale como `23505` crudo, se clasifica como determinístico —correctamente— y **detiene la cola**. Hoy la tienda no lo puede provocar, porque nada se borra y una clave natural queda atada a su UUID para siempre dentro de una misma base; lo disparan una reinstalación, una restauración o una segunda terminal. **No se arregla por cuenta propia** porque las tres salidas posibles tocan el contrato con la nube y ninguna es obviamente la correcta: es definición de diseño y va como el punto 19 de §6.2. | Prompt 47 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -4346,6 +4514,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 18 | **¿Qué umbral de «stock bajo» tiene cada producto, y quién lo define?** | El reporte de inventario muestra la fotografía de hoy y **no tiene umbral ni alertas, a propósito** (§4.15): cuál es el mínimo de cada producto es una definición de negocio, y un umbral inventado convertiría una suposición nuestra en un aviso que parece una regla de la tienda. Hace falta saber si el mínimo es por producto, por categoría o uno solo para todo, y si depende de la temporada. Es un módulo futuro con su propio prompt. | Abierto — bloquea las alertas de stock, no el reporte |
 | 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
+| 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria. Hay **nueve** restricciones únicas que no lo son (§4.31), y un choque contra cualquiera sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`**, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 

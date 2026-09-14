@@ -186,19 +186,27 @@ número que use queda reservado también del lado local.
 | `0023_funciones_de_sincronizacion.sql` | Sí — aplicada el 2026-09-12, después de probarse en `pos-pruebas-descartable` desde el 2026-09-11. Las 13 definiciones de función del real son idénticas a las del de pruebas (`md5(pg_get_functiondef)`), y el registro guarda el archivo byte a byte. |
 | `0024_privilegios_de_tabla.sql` | Sí — aplicada el 2026-09-12, justo después de la `0023`. `anon` quedó sin ningún privilegio de tabla y `authenticated` solo con `SELECT`; `has_table_privilege(…, 'MAINTAIN')` da `false` en las trece. |
 
-> **LA `0027` SÍ ESTÁ PENDIENTE EN `pos-jimmy-cano`, y no es opcional.** Crea
-> `sincronizar_asiento`, la puerta para los lotes que son solo un asiento de
-> auditoría —un ingreso fallido, un candado, una salida controlada—. **El código
-> de la terminal ya la necesita**: sin ella, esos lotes detienen la cola entera
-> (medido: `HTTP 400 FORMA: la tabla auditoria_log no se sincroniza como lote
-> simple`). Hoy no hay riesgo porque el real no tiene usuario de terminal ni
-> sincronización corriendo, pero **hay que aplicarla antes de conectar la
-> terminal al real**. Aplicada en `pos-pruebas-descartable` el 2026-09-14; en el
-> real, pendiente de la revisión de Julio. Ver CLAUDE.md §4.29.
+| `0027_sincronizar_asiento.sql` | Sí — aplicada el 2026-09-14, el mismo día que en `pos-pruebas-descartable`. Crea `sincronizar_asiento` y reemplaza `contrato_de_sincronizacion` para que la conozca. La huella de las 14 funciones del contrato es `1b0bcbf6c033cb163c4bc396dbe52e37` **en los dos proyectos**. |
 
-**Fuera de la `0027`, no queda ninguna migración pendiente de aplicar en
-`pos-jimmy-cano`: los dos proyectos tienen las 21 anteriores.** Las dos últimas fueron la `0025` y la `0026`, el
-2026-09-13; antes, la `0023` y la `0024`, el 2026-09-12.
+**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`: los dos
+proyectos tienen las 22.** La última fue la `0027`, el 2026-09-14; antes la
+`0025` y la `0026`, el 2026-09-13, y la `0023` y la `0024`, el 2026-09-12.
+
+> **POR QUÉ LA `0027` SE APLICÓ TEMPRANO, ANTES DE QUE HICIERA FALTA.** Es
+> puramente aditiva —agrega una función, no cambia ninguna, y la versión de
+> contrato no sube—, así que ninguna terminal vieja se rompe con ella, y **el
+> código de la terminal ya la necesitaba**: sin ella, un lote de asiento suelto
+> detiene la cola entera (medido: `HTTP 400 FORMA: la tabla auditoria_log no se
+> sincroniza como lote simple`). Decisión de Julio: una migración así no cuesta
+> nada aplicar temprano y sí cuesta olvidar. Ver CLAUDE.md §4.29.
+
+> **EL HISTORIAL DE LOS DOS PROYECTOS NO ES SIMÉTRICO PARA LA `0027`, y conviene
+> saberlo.** En el real quedó registrada como UNA migración,
+> `0027_sincronizar_asiento`, con el archivo completo. En el descartable quedó
+> partida en dos, `0027_sincronizar_asiento` y `0027b_contrato_conoce_el_asiento`,
+> porque allá se aplicó en dos pasos mientras se construía. **Los OBJETOS sí son
+> idénticos**, que es lo que se verifica; la asimetría es solo del registro, y no
+> se corrige porque el descartable se reconstruye desde estos archivos.
 
 **Los dos pasos del panel que la fase 2.c necesitaba también están HECHOS y
 MEDIDOS, los dos el 2026-09-13**, así que no queda nada de la fase 2:
