@@ -65,6 +65,10 @@ import { describe, expect, it } from 'vitest';
 const CARPETAS_A_REVISAR = [
   join(__dirname, '..', '..', 'domain'),
   join(__dirname, '..', '..', 'sincronizacion'),
+  // Fase 4.b: la restauración escribe asientos (PIN asignado, usuario
+  // revisado, fila restaurada a mano, restauración completada) que tienen
+  // que llegar a la nube cuando la terminal se conecte. Mismo criterio.
+  join(__dirname, '..', '..', 'restauracion'),
 ];
 
 /**

@@ -81,6 +81,9 @@ import { ServicioDeSincronizacion } from '@main/sincronizacion/servicio-de-sincr
 import type { CredencialParaElResumen } from '@main/sincronizacion/resumen-de-sincronizacion';
 import { DetectorDeConexion } from '@main/sincronizacion/deteccion-de-conexion';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
+import { ServicioDeRestauracion } from '@main/restauracion/servicio-de-restauracion';
+import { ClienteDeRestauracionHttp } from '@main/restauracion/cliente-de-restauracion';
+import { AlmacenDelPuestoDeControl } from '@main/restauracion/puesto-de-control';
 import { AlmacenDeCredencial } from '@main/sincronizacion/credencial';
 import { ATAJO_SALIDA_CONTROLADA, describirAtajo } from '@shared/kiosk-input';
 
@@ -696,11 +699,69 @@ app.whenReady().then(
         planificadorDeSincronizacion?.ejecutarAhora() ?? Promise.resolve(null),
     });
 
+    /*
+      ===================================================================
+      RESTAURACIÓN DESDE LA NUBE (Fase 4.b)
+      ===================================================================
+      El servicio existe siempre y sus canales también: sin `POS_NUBE_URL` el
+      cliente es `null` y el propio servicio contesta «esta copia no tiene
+      proyecto de nube», para que la pantalla lo diga en vez de ofrecer un
+      botón que no puede funcionar (§4.23). Con proyecto configurado, el
+      cliente habla con Auth, PostgREST y Storage por `net.fetch` —el que
+      respeta el proxy de Windows— y NUNCA guarda la sesión: vive en memoria
+      mientras dura la restauración y se revoca al terminar (§6.2).
+
+      `comprobarNube` es la capa 2 de §5, reutilizada como precondición
+      («el proyecto no está pausado», §6.2): un detector propio, porque el de
+      la sincronización se construye más tarde, después de la ventana.
+    */
+    const clienteDeRestauracion =
+      urlDeLaNube !== '' && llaveDeLaNube !== ''
+        ? new ClienteDeRestauracionHttp({
+            urlDelProyecto: urlDeLaNube,
+            llavePublicable: llaveDeLaNube,
+            auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube),
+            buscar: net.fetch.bind(net),
+            registrar: (mensaje): void => {
+              logTecnico.registrar('sincronizacion', `[restauracion] ${mensaje}`);
+              console.info(`[restauracion] ${mensaje}`);
+            },
+          })
+        : null;
+    const detectorParaRestaurar =
+      clienteDeRestauracion === null
+        ? null
+        : new DetectorDeConexion({
+            urlDelProyecto: urlDeLaNube,
+            referenciaDelProyecto: new URL(urlDeLaNube).hostname.split('.')[0] ?? '',
+            llavePublicable: llaveDeLaNube,
+            sistemaDiceQueHayRed: (): boolean => net.isOnline(),
+            buscar: net.fetch.bind(net),
+          });
+    const servicioDeRestauracion = new ServicioDeRestauracion({
+      base: baseDeDatos,
+      usuarios: repositorios.usuarios,
+      auditoria: repositorios.auditoria,
+      cliente: clienteDeRestauracion,
+      urlDelProyecto: clienteDeRestauracion === null ? null : urlDeLaNube,
+      puestoDeControl: new AlmacenDelPuestoDeControl(app.getPath('userData')),
+      carpetaDeDatos: app.getPath('userData'),
+      carpetaDeRecibos: carpetaDePdf,
+      ...(detectorParaRestaurar === null
+        ? {}
+        : { comprobarNube: (): Promise<{ hayNube: boolean; motivo: string }> => detectorParaRestaurar.comprobar() }),
+      registrar: (mensaje): void => {
+        logTecnico.registrar('sincronizacion', `[restauracion] ${mensaje}`);
+        console.info(`[restauracion] ${mensaje}`);
+      },
+    });
+
     registrarManejadoresIpc({
       controladorDeSalida,
       autenticacion,
       sesion,
       sincronizacion: servicioDeSincronizacion,
+      restauracion: servicioDeRestauracion,
       usuarios: repositorios.usuarios,
       caja,
       venta: servicioDeVenta,

@@ -55,7 +55,8 @@ import type { RepositorioDePreciosEspeciales } from '@main/database/repositories
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import type { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
 import type { ServicioDeSincronizacion } from '@main/sincronizacion/servicio-de-sincronizacion';
-import { generarHashDePin } from '@shared/auth';
+import type { ServicioDeRestauracion } from '@main/restauracion/servicio-de-restauracion';
+import { generarHashDePin, tienePin } from '@shared/auth';
 import { montoACadena } from '@shared/money';
 import { ejecutarConRespuesta } from './respuesta';
 import {
@@ -66,6 +67,7 @@ import { registrarManejadoresDeVenta } from './venta';
 import { registrarManejadoresDeUsuarios } from './usuarios';
 import { registrarManejadoresDeNube } from './nube';
 import { registrarManejadoresDeSincronizacion } from './sincronizacion';
+import { registrarManejadoresDeRestauracion } from './restauracion';
 import { registrarManejadoresDeRecibos } from './recibos';
 import { registrarManejadoresDeReportes } from './reportes';
 
@@ -117,6 +119,15 @@ export interface DependenciasDeIpc {
    * pantalla tienen sentido incluso en desarrollo sin `POS_NUBE_URL`.
    */
   readonly sincronizacion: ServicioDeSincronizacion;
+  /**
+   * La restauración desde la nube (Fase 4.b).
+   *
+   * Tampoco es opcional: sus canales existen siempre, y es el propio servicio
+   * el que contesta «esta copia no tiene proyecto de nube» cuando falta
+   * `POS_NUBE_URL`, para que la pantalla lo diga en vez de ofrecer un botón
+   * que no puede funcionar (la lección de la fase 3.a, §4.23).
+   */
+  readonly restauracion: ServicioDeRestauracion;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -175,6 +186,9 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     servicio: dependencias.sincronizacion,
     autenticacion: dependencias.autenticacion,
   });
+  // Restauración desde la nube: sin guard de sesión, porque corre sobre una
+  // instalación vacía. Quien autoriza es la nube (ver restauracion.ts).
+  registrarManejadoresDeRestauracion({ servicio: dependencias.restauracion });
 
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,
@@ -247,6 +261,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
         const estado: EstadoDeSesion = {
           requiereConfiguracionInicial: dependencias.autenticacion.requiereConfiguracionInicial(),
           sesion: dependencias.sesion.obtener(),
+          restauracionIncompleta: dependencias.restauracion.hayRestauracionIncompleta(),
         };
         return estado;
       }),
@@ -270,6 +285,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             segundosParaReintentar: bloqueado
               ? Math.ceil(restanteMs / MILISEGUNDOS_POR_SEGUNDO)
               : null,
+            sinPin: !tienePin(usuario.pinHash),
           };
         });
       }),

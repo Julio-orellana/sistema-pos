@@ -4,7 +4,8 @@
     "src/main/**/*.ts",
     "src/shared/**/*.ts",
     "electron.vite.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vitest.nube.config.ts"
   ],
   "exclude": ["src/main/preload/**/*.ts"],
   "compilerOptions": {

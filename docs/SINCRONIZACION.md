@@ -35,12 +35,15 @@
 >   ninguna tabla (ver 8.4 y CLAUDE.md §4.20). `pos-jimmy-cano` no tiene la
 >   `0023` todavía.
 >
-> **Lo que sigue sin existir:** las políticas de RLS de la 2.3 (fase 2.c), el
-> `SyncProvider` real contra Supabase y las credenciales de la sección 1 en la
-> terminal (fase 3), la detección de conexión de la sección 5, los archivos de
-> la 2.5, la pantalla de sincronización de la 3.3 y la restauración de la 6.
-> **Este documento describe el diseño; donde lo construido se apartó de él,
-> hay una nota «COMO QUEDÓ CONSTRUIDO» al principio de la sección.**
+> **Actualizado el 2026-09-14 (fase 4.b):** ya no queda ninguna parte de este
+> diseño sin construir. Las políticas de la 2.3 y los buckets de la 2.5 (fase
+> 2.c), la credencial y el `SyncProvider` real (fase 3.a y 3.b), la detección
+> de conexión de la 5, los archivos de la 2.5 (fase 3.c), la pantalla de la 3.3
+> (fase 4.a) y la restauración de la 6 (fase 4.b) existen y están verificados
+> contra `pos-pruebas-descartable`. Lo que sigue abierto es de negocio y está
+> en CLAUDE.md §6.2. **Este documento describe el diseño; donde lo construido
+> se apartó de él, hay una nota «COMO QUEDÓ CONSTRUIDO» al principio de la
+> sección.**
 
 ## 0. Qué se leyó para escribir esto, y qué se encontró de entrada
 
@@ -1071,6 +1074,15 @@ La comprobación no corre en un intervalo fijo. Corre **cuando tiene sentido**:
 
 ## 6. Restauración desde la nube
 
+> **COMO QUEDÓ CONSTRUIDO (fase 4.b, 2026-09-14).** Vive en
+> `src/main/restauracion/`, con su pantalla `PantallaDeRestauracion`, y se
+> verificó de punta a punta contra `pos-pruebas-descartable` con
+> `npm run verify:restauracion` (13 comprobaciones, 200 peticiones HTTP
+> anotadas con hora y código). Lo que se construyó tal cual está en cada
+> subsección; lo que se apartó del texto, o lo que el texto no cerraba, está en
+> **6.7** (usuarios sin PIN) y **6.8** (las decisiones tomadas). Detalle y
+> evidencia en CLAUDE.md §4.35.
+
 ### 6.1 Cuándo, y cuándo no
 
 **Cuándo:** una terminal nueva, o una reemplazada porque la anterior falló,
@@ -1150,10 +1162,10 @@ catálogo**: cada tabla después de las que referencia.
 | 9 | `caja_sesion_denominaciones` | `caja_sesiones`, `denominaciones` | Insertar |
 | 10 | `ventas` | `caja_sesiones`, `usuarios` | Insertar. `estado_sincronizacion = 'sincronizado'` localmente, porque ya está en la nube. |
 | 11 | `venta_detalle` | `ventas`, `productos` | Insertar |
-| 12 | `recibos` | `ventas` | Insertar. `impreso = 0`; `pdf_path` tal como estaba. `siguienteNumero()` es `MAX + 1` sobre la tabla (verificado en el repositorio), así que la numeración continúa sola. |
+| 12 | `recibos` | `ventas` | Insertar. `impreso = 0`. **`pdf_path` NO queda tal como estaba** (ver 6.8): en la nube es la ruta ABSOLUTA del disco de la terminal vieja, y acá se re-enraíza en la carpeta de recibos de esta máquina conservando el nombre del archivo. `siguienteNumero()` es `MAX + 1` sobre la tabla (verificado en el repositorio), así que la numeración continúa sola. |
 | 13 | `auditoria_log` | `usuarios` | Insertar, en orden de fecha. |
 | 14 | Archivos: fotos | — | Bajar de Storage a `fotos-de-productos/`, derivando el objeto de `foto_path` (2.5.1). Las que falten en la nube se anotan; el producto sigue existiendo sin foto, que es su estado normal (§4.11). |
-| 15 | Archivos: PDF | — | Solo si se decidió subirlos (2.5.3). Si no, **no se bajan y no hace falta**: la reimpresión los regenera desde las filas. |
+| 15 | Archivos: PDF | — | **Decidido: no se suben (2.5.3, fase 3.c), así que no hay nada que bajar.** La reimpresión los regenera desde las filas, y está probado que tolera el archivo ausente: escribe el PDF nuevo en la ruta re-enraizada del paso 12. |
 
 Después: `sync_cola` vacía, y la sincronización continua arranca desde cero
 con la credencial de la terminal, que se aprovisiona **después** de restaurar,
@@ -1180,6 +1192,15 @@ localmente con `sumarLista` de Decimal, tiene que coincidir al centavo. Si no
 coincide, la restauración no se da por buena.
 
 ### 6.5 Anomalías que la restauración busca antes de declararse completa
+
+> **COMO QUEDÓ CONSTRUIDO.** Se filtra por `recibido_en` en las DOCE tablas
+> que la tienen —`denominaciones` no la tiene, por la corrección de Julio de la
+> fase 2.a—, contra la fecha que el administrador indica con motivo «robo».
+> **«Se muestra aparte, sin restaurar» se aplicó solo a las tablas que la
+> nube SOLO INSERTA**, y no a todas; la razón y la regla están en 6.8. Las dos
+> primeras filas de esta tabla —una venta sin líneas, una caja cerrada sin
+> desglose— no se buscan: con la opción B de 4.3 no pueden ocurrir, porque el
+> lote entra entero o no entra.
 
 Son las que la sección 4 admite como posibles o el robo puede haber dejado:
 
@@ -1223,6 +1244,135 @@ Por eso la pantalla, que es nueva y solo de rol administrativo:
 - Todo corre en el proceso principal, página por página, cediendo el bucle
   de eventos entre páginas. La ventana sigue respondiendo; no se puede vender,
   porque no hay nada que vender todavía.
+
+### 6.7 Los usuarios sin PIN: la incompatibilidad con el esquema local, y cómo se resolvió
+
+**El problema, con precisión.** Desde la decisión 17, `usuarios.pin_hash` y
+`pin_remoto_hash` **no existen en Postgres**. Un usuario que baja de la nube no
+trae ningún hash: no es que se descarte uno, es que nunca viajó. Pero el
+esquema local exige `pin_hash NOT NULL CHECK (length(pin_hash) > 0)`, y la
+migración 001 está aplicada en toda base: no se edita.
+
+**La solución: un centinela, y `verificarPin` que lo conoce.** `@shared/auth`
+exporta `HASH_SIN_PIN` (`'sin-pin'`), que es lo que la restauración escribe en
+`pin_hash` de todo usuario, con `pin_remoto_hash` en `NULL`, `intentos_fallidos`
+en 0 y `bloqueado_hasta` en `NULL`. Tiene tres propiedades, y las tres tienen
+prueba (`pin-sin-asignar.test.ts`):
+
+| Propiedad | Cómo se garantiza |
+|---|---|
+| Satisface el CHECK de la columna | Es texto y no está vacío. |
+| `verificarPin` lo rechaza **siempre y sin lanzar** | Se comprueba ANTES de deserializar el hash. Un hash corrupto sigue lanzando `HASH_ILEGIBLE`, igual que antes; el centinela no es corrupción, es el estado esperado. Los 10 000 PIN posibles se probaron: cero aciertos. |
+| `generarHashDePin` no puede producirlo | Todo hash real empieza por `scrypt$`. |
+
+**El efecto es exactamente el de la decisión 15, por construcción.** No hay
+ninguna regla aparte «al restaurar, resetear los PIN» que alguien pudiera
+olvidar: no hay ningún hash real que un usuario restaurado pueda recordar, ni
+siquiera el que tenía antes de que el equipo se perdiera. Nadie entra hasta
+recibir un PIN nuevo.
+
+**Dónde se asigna el PIN nuevo, y por qué ahí.** En la propia pantalla de
+restauración, con la sesión de la nube como autorización: no puede ser en la
+pantalla de usuarios, porque para llegar a ella hace falta iniciar sesión, y
+nadie puede. La restauración **no se da por terminada** mientras un usuario
+ACTIVO siga con el centinela; un usuario de baja puede quedar con él, y si
+algún día se reactiva, la pantalla de usuarios lo marca «Sin PIN» y se le
+asigna uno con «cambiar PIN». La pantalla de ingreso también lo distingue: un
+usuario sin PIN no ofrece el teclado, en vez de dejar que consuma intentos
+contra una marca.
+
+**Vale la misma regla de colisión de §4.7 de CLAUDE.md**: el PIN nuevo no
+puede ser el de otro usuario activo, y el rechazo no dice de quién es.
+
+### 6.8 Cómo quedó construido, y las decisiones que este texto no cerraba
+
+Cada una se tomó a la vista y está en el registro de decisiones de CLAUDE.md
+(§5, Prompt 51). Acá va el porqué, junto al texto que la motivó.
+
+1. **Ningún id se regenera.** Cada fila local tiene el id que tiene en la
+   nube: `INSERT … ON CONFLICT(id) DO NOTHING`, página por página. Es lo que
+   hace que repetir una página no duplique, y lo que evita que la terminal
+   restaurada choque contra las ocho restricciones únicas del punto 19 de
+   §6.2 de CLAUDE.md la primera vez que vuelva a subir algo.
+
+2. **La precondición de deriva compara el contrato VIVO con el esquema
+   LOCAL**, con las mismas reglas y exclusiones que la mitad A de 9.2
+   (`COLUMNAS_EXCLUIDAS` y `recibido_en`), y exige además las seis funciones
+   de escritura como DEFINER, el contrato como INVOKER y la función nueva de
+   la 0029. Se falsificó con los casos de 9.3: quitar `ventas.total` detiene
+   la restauración nombrándola, con la base vacía y sin puesto de control.
+
+3. **Los numéricos se piden con `::text`.** PostgREST serializa `NUMERIC`
+   como número JSON, que es un `double`. Pidiendo `subtotal_exacto::text` llega
+   `"4.165000"` —medido, es la representación de Postgres con la escala de la
+   columna rellena— y `conversion-de-tipos.ts` la normaliza a `4.165`, que es
+   byte a byte lo que SQLite había guardado. **Nunca redondea:** un valor con
+   más decimales de los que su columna admite se rechaza. Las fechas se
+   normalizan de `+00:00` a `Z` con `toISOString`, y una con más de tres
+   decimales de segundo también se rechaza, porque truncar es perder.
+
+4. **La suma por mes se hace EN POSTGRES con una función nueva**,
+   `restauracion_ventas_por_mes()` (migración 0029, `SECURITY INVOKER`, solo
+   rol `restauracion`), porque PostgREST no agrupa por una expresión de mes
+   sin una función. Devuelve la suma como texto. El mes se corta en UTC de los
+   dos lados: es una suma de control, no un reporte.
+
+5. **`pdf_path` se re-enraíza.** El diseño (2.5.1) supone rutas relativas,
+   pero `ServicioDeRecibos` guarda la ruta ABSOLUTA de la carpeta de recibos
+   de la terminal que emitió (`join(carpeta, nombre)`), y en la nube está así.
+   La columna local es `NOT NULL`, así que «dejarla en NULL» no era posible.
+   Se conserva el nombre del archivo y se cambia la carpeta por la de esta
+   máquina; la reimpresión regenera el PDF ahí, probado con el archivo
+   ausente. El nombre se corta por cualquiera de las dos barras, porque la
+   terminal vieja pudo ser Windows y `path.basename` de macOS no parte `\`.
+
+6. **«Sin restaurar» solo para las tablas que la nube SOLO INSERTA.**
+   Aplicado a todas las tablas, 6.5 rompería las llaves foráneas de lo
+   legítimo: una fila anterior al robo y MODIFICADA después (el inventario de
+   un producto que una venta falsa bajó, una caja abierta antes y cerrada por
+   el ladrón) tiene `recibido_en` posterior, y excluirla dejaría sin padre a
+   las ventas legítimas que la referencian. La regla que se aplica:
+   - `ventas`, `venta_detalle`, `recibos`, `caja_sesion_denominaciones` y
+     `auditoria_log` no tienen ninguna función que las actualice (2.1), así
+     que «recibida después del robo» ES «insertada después del robo», y
+     ninguna fila anterior las referencia (probado contra el grafo de llaves
+     foráneas del catálogo). **Se excluyen**, se listan, y cada una se puede
+     restaurar igual desde la pantalla; una venta se restaura con sus líneas y
+     su recibo, y una línea sola sin su venta se rechaza explicando el orden.
+   - Las que la nube también actualiza (`usuarios`, `caja_sesiones`,
+     `productos`, `categorias`, `precios_especiales`, `limites_descuento`,
+     `configuracion_negocio`) **se restauran y se listan**. Para `usuarios` la
+     revisión es obligatoria uno por uno, como pide 6.5: se decide rol y
+     estado, con el invariante de «queda un administrador activo».
+   - La verificación cuenta las excluidas: `nube = local + excluidas` en
+     filas y en quetzales por mes.
+
+7. **Lo que se decide durante la restauración SÍ se encola; lo restaurado
+   no.** «Después: `sync_cola` vacía» se lee como «lo que bajó de la nube no
+   se vuelve a subir». Un PIN asignado, un usuario revisado, una fila excluida
+   restaurada a mano y la restauración completada son hechos del negocio,
+   quedan en `auditoria_log` con `conBandejaDeSalida`, y llegan a la nube
+   cuando la terminal se conecte con su propia credencial. La prueba
+   estructural de §4.26 de CLAUDE.md vigila también `src/main/restauracion`.
+
+8. **La sesión es efímera y cierra SOLO la suya.** Vive en memoria, se renueva
+   sola al 75 % de su vida (`exp - iat`) para restauraciones más largas que
+   un token, y `cerrarSesion()` llama a `/auth/v1/logout?scope=local`. Sin
+   `scope=local`, GoTrue revoca todas las sesiones del usuario —el del dueño—
+   y se midió: un cierre global desde otra sesión dejó a la de la restauración
+   contestando `403` al cerrarse.
+
+9. **PostgREST contesta `206 Partial Content` a un conteo con `limit`**, no
+   `200`. Lo encontró el arnés real: la primera versión del cliente tomaba el
+   206 por rechazo y la restauración se detenía en la primera tabla. Un doble
+   contesta lo que uno cree que contesta la nube; por eso el arnés existe.
+
+10. **El puesto de control** (`<userData>/restauracion.json`) guarda proyecto,
+    motivo, fecha del robo, avance por tabla (último id insertado), anomalías,
+    usuarios revisados y fotos faltantes; **nunca una credencial**. Retomar
+    exige volver a iniciar sesión, y se niega contra otro proyecto. Mientras
+    exista, la aplicación arranca en la pantalla de restauración y no en la de
+    ingreso: la base está a medias y sus usuarios no tienen PIN.
 
 ---
 

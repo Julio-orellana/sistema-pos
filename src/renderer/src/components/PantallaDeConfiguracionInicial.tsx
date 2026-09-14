@@ -18,10 +18,17 @@ import { TecladoNumerico } from './TecladoNumerico';
 
 export interface PantallaDeConfiguracionInicialProps {
   readonly alCrear: (sesion: SesionIniciada) => void;
+  /**
+   * La otra forma de empezar: RESTAURAR desde la nube una terminal que se
+   * perdió (fase 4.b). Solo tiene sentido con la base vacía, que es
+   * exactamente el único momento en que se ve esta pantalla.
+   */
+  readonly alRestaurar: () => void;
 }
 
 export function PantallaDeConfiguracionInicial({
   alCrear,
+  alRestaurar,
 }: PantallaDeConfiguracionInicialProps): React.JSX.Element {
   const [nombre, setNombre] = useState('');
   const [pin, setPin] = useState('');
@@ -63,6 +70,15 @@ export function PantallaDeConfiguracionInicial({
       </p>
 
       {mensaje !== null && <p className="alerta">{mensaje}</p>}
+
+      {paso === 'nombre' && (
+        <p className="nota">
+          ¿Esta computadora reemplaza a una que ya tenía la tienda cargada?{' '}
+          <button type="button" className="boton--secundario" data-prueba="ir-a-restauracion" onClick={alRestaurar}>
+            Restaurar desde la nube
+          </button>
+        </p>
+      )}
 
       {paso === 'nombre' && (
         <div className="configuracion__paso">

@@ -54,6 +54,17 @@ export type FuncionDeEscritura = (typeof FUNCIONES_DE_ESCRITURA)[number];
 export const FUNCION_DEL_CONTRATO = 'contrato_de_sincronizacion';
 
 /**
+ * Las funciones que usa la RESTAURACIÓN (fase 4.b) además del contrato. Todas
+ * `SECURITY INVOKER` —leen bajo las políticas de la 0025, no por encima de
+ * ellas— y solo para el rol `restauracion`.
+ *
+ * `restauracion_ventas_por_mes` (migración 0029) suma `ventas.total` por mes
+ * EN POSTGRES, donde `NUMERIC` es exacto, para que la terminal pueda comparar
+ * al centavo contra su propia suma con Decimal (§6.4 del diseño).
+ */
+export const FUNCIONES_DE_RESTAURACION = ['restauracion_ventas_por_mes'] as const;
+
+/**
  * Los ayudantes internos de la migración 0023. Nadie los llama desde afuera:
  * ni `anon`, ni `authenticated`. Están acá para que la prueba de deriva exija
  * que sigan existiendo con `search_path` vacío y sin ser DEFINER.

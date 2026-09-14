@@ -27,6 +27,7 @@ import {
   type RespuestaIpc,
   type UsuarioIpc,
 } from '@shared/types/ipc';
+import { tienePin } from '@shared/auth';
 import { ErrorDeNegocio } from '@main/database/errores';
 import type { Usuario } from '@main/database/repositories/entidades';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
@@ -74,6 +75,7 @@ export function registrarManejadoresDeUsuarios(
       rol: usuario.rol,
       activo: usuario.activo,
       tienePinRemoto: usuario.pinRemotoHash !== null,
+      sinPin: !tienePin(usuario.pinHash),
       bloqueado,
       esUnoMismo: usuario.id === actorId,
       // Se calcula acá y no en la pantalla porque depende de contar filas de la

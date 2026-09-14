@@ -86,7 +86,7 @@ export function PantallaDeIngreso({ alIngresar }: PantallaDeIngresoProps): React
               type="button"
               className="ingreso__usuario"
               data-prueba="usuario-para-ingreso"
-              disabled={usuario.bloqueado}
+              disabled={usuario.bloqueado || usuario.sinPin}
               onClick={() => {
                 setElegido(usuario);
                 setPin('');
@@ -99,6 +99,14 @@ export function PantallaDeIngreso({ alIngresar }: PantallaDeIngresoProps): React
                 <span className="ingreso__bloqueado">
                   {/* Se informa el tiempo, nunca cuántos intentos le quedaban. */}
                   Bloqueado · {String(usuario.segundosParaReintentar ?? 0)} s
+                </span>
+              )}
+              {usuario.sinPin && (
+                // Restaurado desde la nube y sin PIN todavía: un administrador
+                // se lo asigna desde la pantalla de usuarios. No se ofrece el
+                // teclado, porque ningún PIN podría entrar.
+                <span className="ingreso__bloqueado" data-prueba="usuario-sin-pin">
+                  Sin PIN asignado
                 </span>
               )}
             </button>

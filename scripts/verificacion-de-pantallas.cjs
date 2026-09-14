@@ -142,6 +142,37 @@ async function main() {
   try {
     // ---- Preparación: administrador y una categoría ------------------------
     await prueba('pantalla-de-configuracion-inicial').waitFor({ timeout: ESPERA_LARGA });
+
+    // =======================================================================
+    // Fase 4.b: desde la configuración inicial se puede elegir RESTAURAR
+    // desde la nube. Esta corrida no tiene POS_NUBE_URL, así que la pantalla
+    // tiene que decir «sin configurar» en vez de ofrecer un botón de iniciar
+    // que no podría funcionar (la lección de la fase 3.a, §4.23).
+    // =======================================================================
+    await prueba('ir-a-restauracion').click();
+    await prueba('pantalla-de-restauracion').waitFor({ timeout: ESPERA_CORTA });
+    let avisoDeRestauracionSinConfigurar = true;
+    try {
+      await prueba('restauracion-sin-configurar').waitFor({ timeout: ESPERA_CORTA });
+    } catch {
+      avisoDeRestauracionSinConfigurar = false;
+    }
+    comprobar(
+      'sin proyecto configurado, la pantalla de restauración lo explica en vez de ofrecer iniciar',
+      'se ve el aviso de «sin configurar»',
+      avisoDeRestauracionSinConfigurar ? 'se ve' : 'NO se ve: la pantalla ofrece iniciar una restauración imposible',
+      avisoDeRestauracionSinConfigurar,
+    );
+    const botonesDeIniciarRestauracion = await prueba('restauracion-iniciar').count();
+    comprobar(
+      'sin proyecto configurado NO se dibuja el botón de iniciar la restauración',
+      '0 botones',
+      `${String(botonesDeIniciarRestauracion)} botones`,
+      botonesDeIniciarRestauracion === 0,
+    );
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-configuracion-inicial').waitFor({ timeout: ESPERA_CORTA });
+
     await prueba('campo-nombre').fill('Administrador de verificación');
     await prueba('continuar-al-pin').click();
     await teclearPin(PIN);

@@ -32,6 +32,7 @@ import {
   AYUDANTES_INTERNOS,
   COLUMNA_DEL_SERVIDOR,
   FUNCIONES_DE_ESCRITURA,
+  FUNCIONES_DE_RESTAURACION,
   FUNCION_DEL_CONTRATO,
   TABLAS_ADMITIDAS_POR_FUNCION,
   VERSION_DEL_CONTRATO_DE_SINCRONIZACION,
@@ -222,6 +223,20 @@ describe('Las funciones de sincronización de la nube, según la foto', () => {
       devuelve: 'jsonb',
     });
   });
+
+  for (const funcion of FUNCIONES_DE_RESTAURACION) {
+    it(`${funcion}: la función de la restauración existe, NO es DEFINER, con search_path vacío, sin argumentos y devuelve jsonb`, () => {
+      // Fase 4.b, migración 0029: lee bajo las políticas de la 0025, no por
+      // encima de ellas, igual que el contrato. Y está en la lista fija del
+      // contrato, o esta prueba no la vería (la lección de la 0027, §4.29).
+      expect(foto.funciones[funcion]).toEqual({
+        security_definer: false,
+        search_path: [SEARCH_PATH_VACIO],
+        argumentos: '',
+        devuelve: 'jsonb',
+      });
+    });
+  }
 
   for (const ayudante of AYUDANTES_INTERNOS) {
     it(`${ayudante}: el ayudante existe, no es DEFINER y tiene search_path vacío`, () => {

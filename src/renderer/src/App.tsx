@@ -5,7 +5,10 @@
  * lugar donde se toma esa decisión:
  *
  *   1. Instalación sin usuarios  -> configuración inicial, y NADA más es
- *      accesible hasta que exista el primer administrador.
+ *      accesible hasta que exista el primer administrador. Desde ahí se
+ *      puede elegir, en cambio, RESTAURAR desde la nube (fase 4.b).
+ *   1b. Restauración a medias    -> solo la pantalla de restauración, para
+ *      retomarla: la base está parcial y sus usuarios no tienen PIN.
  *   2. Sin sesión                -> pantalla de ingreso.
  *   3. Con sesión                -> pantalla base tras el ingreso.
  *
@@ -21,6 +24,7 @@ import { BarraDeEstado } from './components/BarraDeEstado';
 import { ModalDeSalida } from './components/ModalDeSalida';
 import { PantallaDeConfiguracionInicial } from './components/PantallaDeConfiguracionInicial';
 import { PantallaDeIngreso } from './components/PantallaDeIngreso';
+import { PantallaDeRestauracion } from './components/PantallaDeRestauracion';
 import { PantallaDeSesion } from './components/PantallaDeSesion';
 
 export function App(): React.JSX.Element {
@@ -28,6 +32,8 @@ export function App(): React.JSX.Element {
   const [sesion, setSesion] = useState<SesionIniciada | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recarga, setRecarga] = useState(0);
+  /** `true` mientras se eligió restaurar desde la nube en vez de crear el primer administrador. */
+  const [restaurando, setRestaurando] = useState(false);
 
   useEffect(() => {
     const control = new AbortController();
@@ -66,8 +72,43 @@ export function App(): React.JSX.Element {
     if (sesion !== null) {
       return <PantallaDeSesion sesion={sesion} alCerrarSesion={cerrarSesion} />;
     }
+    /*
+      Una restauración a medias manda: la base está parcialmente llena y sus
+      usuarios no tienen PIN, así que ni el ingreso ni la configuración inicial
+      tienen sentido. Solo se puede retomar (§6.6 del diseño).
+    */
+    if (estado.restauracionIncompleta) {
+      return (
+        <PantallaDeRestauracion
+          alVolver={null}
+          alTerminar={() => {
+            setRecarga((anterior) => anterior + 1);
+          }}
+        />
+      );
+    }
+    if (estado.requiereConfiguracionInicial && restaurando) {
+      return (
+        <PantallaDeRestauracion
+          alVolver={() => {
+            setRestaurando(false);
+          }}
+          alTerminar={() => {
+            setRestaurando(false);
+            setRecarga((anterior) => anterior + 1);
+          }}
+        />
+      );
+    }
     if (estado.requiereConfiguracionInicial) {
-      return <PantallaDeConfiguracionInicial alCrear={setSesion} />;
+      return (
+        <PantallaDeConfiguracionInicial
+          alCrear={setSesion}
+          alRestaurar={() => {
+            setRestaurando(true);
+          }}
+        />
+      );
     }
     return <PantallaDeIngreso alIngresar={setSesion} />;
   })();

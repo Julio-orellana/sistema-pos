@@ -56,6 +56,14 @@
       ],
       "security_definer": false
     },
+    "restauracion_ventas_por_mes": {
+      "argumentos": "",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
     "sincronizar_apertura_de_caja": {
       "argumentos": "lote jsonb, version_de_contrato integer",
       "devuelve": "jsonb",

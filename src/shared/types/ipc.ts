@@ -192,6 +192,34 @@ export const CANALES_IPC = {
    * deliberado en el respaldo de la nube.
    */
   sincronizacionSaltarLote: 'sincronizacion:saltar-lote',
+
+  // --- Restauración desde la nube (fase 4.b) ---------------------------------
+  /**
+   * NINGUNO de estos canales lleva guard de sesión ni de rol, y no es un
+   * descuido: la restauración corre sobre una instalación VACÍA, antes de que
+   * exista ningún usuario local, así que no hay sesión que exigir. Quien
+   * autoriza es la nube: hace falta iniciar sesión con el usuario de rol
+   * `restauracion` (el del dueño), y el servicio se niega en cuanto la base
+   * tiene una sola fila de negocio. Ver `src/main/ipc/restauracion.ts`.
+   */
+  /** ¿Está configurada la nube, está vacía la base, hay una restauración a medias? */
+  restauracionEstado: 'restauracion:estado',
+  /** Inicia sesión en la nube, comprueba las precondiciones y arranca la transferencia. */
+  restauracionIniciar: 'restauracion:iniciar',
+  /** Sigue una restauración interrumpida por la tabla y la página donde quedó. */
+  restauracionRetomar: 'restauracion:retomar',
+  /** El avance, tabla por tabla, para la pantalla de progreso. */
+  restauracionProgreso: 'restauracion:progreso',
+  /** Para al terminar la página en curso. Lo bajado queda; se puede retomar. */
+  restauracionCancelar: 'restauracion:cancelar',
+  /** Restaura igual una fila que quedó excluida por ser posterior al robo. */
+  restauracionAceptarExcluida: 'restauracion:aceptar-excluida',
+  /** La revisión obligatoria de un usuario con cambios posteriores al robo. */
+  restauracionRevisarUsuario: 'restauracion:revisar-usuario',
+  /** Le asigna un PIN nuevo a un usuario restaurado, que llega sin ninguno. */
+  restauracionAsignarPin: 'restauracion:asignar-pin',
+  /** Cierra la restauración: asiento, cierre de sesión en la nube, fin del puesto de control. */
+  restauracionTerminar: 'restauracion:terminar',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -376,6 +404,12 @@ export interface UsuarioParaIngreso {
   readonly bloqueado: boolean;
   /** Segundos que faltan para poder intentar, o `null`. */
   readonly segundosParaReintentar: number | null;
+  /**
+   * `true` si el usuario no tiene ningún PIN: fue restaurado desde la nube y
+   * todavía nadie le asignó uno. No puede entrar con ningún PIN, y la pantalla
+   * lo dice en vez de dejar que consuma intentos contra una marca.
+   */
+  readonly sinPin: boolean;
 }
 
 /** Quién está en sesión. */
@@ -395,6 +429,13 @@ export interface EstadoDeSesion {
   readonly requiereConfiguracionInicial: boolean;
   /** Usuario en sesión, o `null` si nadie ingresó. */
   readonly sesion: SesionIniciada | null;
+  /**
+   * `true` si hay una restauración desde la nube que empezó y no terminó
+   * (existe su puesto de control). Mientras sea `true`, la única pantalla
+   * accesible es la de restauración: la base está a medias y sus usuarios no
+   * tienen PIN todavía.
+   */
+  readonly restauracionIncompleta: boolean;
 }
 
 /** Resultado de un intento de ingreso. */
@@ -940,6 +981,12 @@ export interface UsuarioIpc {
   readonly activo: boolean;
   /** `true` si tiene configurado el PIN de autorización remota. */
   readonly tienePinRemoto: boolean;
+  /**
+   * `true` si no tiene ningún PIN: fue restaurado desde la nube y nadie le
+   * asignó uno (por ejemplo, un usuario de baja que se reactiva después de una
+   * restauración). Se le asigna con «cambiar PIN».
+   */
+  readonly sinPin: boolean;
   /** `true` si ahora mismo está bloqueado por intentos fallidos. */
   readonly bloqueado: boolean;
   /** `true` si es el usuario que está usando la aplicación en este momento. */
@@ -1135,6 +1182,145 @@ export interface ResultadoDeSaltoDeLoteIpc {
   readonly segundosParaReintentar: number | null;
   /** Presente solo cuando `saltado` es `true`. */
   readonly lote: LoteSaltadoIpc | null;
+}
+
+// ---------------------------------------------------------------------------
+// DTO: restauración desde la nube (fase 4.b)
+// ---------------------------------------------------------------------------
+
+/** Por qué se restaura. Solo fecha la revisión de anomalías; el reset de PIN es siempre. */
+export const MOTIVOS_DE_RESTAURACION_IPC = ['falla', 'robo'] as const;
+export type MotivoDeRestauracionIpc = (typeof MOTIVOS_DE_RESTAURACION_IPC)[number];
+
+/**
+ * Lo que la pantalla manda para iniciar. La contraseña cruza el puente UNA
+ * vez y no se guarda de ningún lado (§6.2 del diseño): la sesión de
+ * restauración es efímera y nunca toca `safeStorage`.
+ */
+export const esquemaInicioDeRestauracion = z.object({
+  correo: z.string().min(LARGOS_DEL_CORREO.minimo).max(LARGOS_DEL_CORREO.maximo),
+  contrasena: z.string().min(1),
+  motivo: z.enum(MOTIVOS_DE_RESTAURACION_IPC),
+  /** ISO-8601. Obligatoria si el motivo es `robo`; el servicio lo exige. */
+  fechaDelRobo: z.string().nullable(),
+});
+export type InicioDeRestauracionIpc = z.infer<typeof esquemaInicioDeRestauracion>;
+
+/** Para retomar hay que volver a iniciar sesión: la sesión anterior se descartó. */
+export const esquemaRetomaDeRestauracion = z.object({
+  correo: z.string().min(LARGOS_DEL_CORREO.minimo).max(LARGOS_DEL_CORREO.maximo),
+  contrasena: z.string().min(1),
+});
+export type RetomaDeRestauracionIpc = z.infer<typeof esquemaRetomaDeRestauracion>;
+
+/** Una fila excluida que el administrador pide restaurar igual. */
+export const esquemaFilaExcluida = z.object({ tabla: z.string().min(1), id: z.string().min(1) });
+export type FilaExcluidaIpc = z.infer<typeof esquemaFilaExcluida>;
+
+/** La decisión sobre un usuario con cambios posteriores al robo. */
+export const esquemaRevisionDeUsuario = z.object({
+  id: z.string().min(1),
+  rol: z.enum(ROLES),
+  activo: z.boolean(),
+});
+export type RevisionDeUsuarioIpc = z.infer<typeof esquemaRevisionDeUsuario>;
+
+/** El PIN nuevo de un usuario restaurado. */
+export const esquemaPinDeRestauracion = z.object({
+  id: z.string().min(1),
+  pin: z.string().length(LARGO_DEL_PIN_IPC),
+});
+export type PinDeRestauracionIpc = z.infer<typeof esquemaPinDeRestauracion>;
+
+export type FaseDeRestauracionIpc =
+  | 'inactiva'
+  | 'iniciando'
+  | 'tablas'
+  | 'archivos'
+  | 'verificacion'
+  | 'revision'
+  | 'terminada'
+  | 'cancelada'
+  | 'fallida';
+
+export interface ProgresoDeTablaIpc {
+  readonly tabla: string;
+  readonly estado: 'esperando' | 'bajando' | 'lista';
+  readonly filas: number;
+  /** Cuántas tiene la nube, cuando ya se preguntó. */
+  readonly total: number | null;
+}
+
+export interface ConteoVerificadoIpc {
+  readonly tabla: string;
+  readonly nube: number;
+  readonly local: number;
+  /** Filas posteriores al robo que se dejaron afuera a propósito. */
+  readonly excluidas: number;
+  readonly coincide: boolean;
+}
+
+export interface MesVerificadoIpc {
+  readonly mes: string;
+  readonly nube: string;
+  readonly local: string;
+  readonly excluidas: string;
+  readonly coincide: boolean;
+}
+
+export interface VerificacionDeRestauracionIpc {
+  readonly conteos: readonly ConteoVerificadoIpc[];
+  readonly ventasPorMes: readonly MesVerificadoIpc[];
+  readonly ok: boolean;
+  readonly detalle: readonly string[];
+}
+
+/** Una fila con `recibido_en` posterior a la fecha del robo (§6.5). */
+export interface AnomaliaDeRestauracionIpc {
+  readonly tabla: string;
+  readonly id: string;
+  readonly recibidoEn: string;
+  readonly resumen: string;
+  /** `true` si NO se restauró: es de una tabla que la nube solo inserta. */
+  readonly excluida: boolean;
+  /** `true` si el administrador pidió restaurarla igual. */
+  readonly aceptada: boolean;
+  /** Solo usuarios: `true` cuando ya se revisó. */
+  readonly revisada: boolean;
+  readonly total: string | null;
+  readonly fecha: string | null;
+}
+
+export interface UsuarioRestauradoIpc {
+  readonly id: string;
+  readonly nombre: string;
+  readonly rol: RolIpc;
+  readonly activo: boolean;
+  readonly sinPin: boolean;
+  /** `true` si tiene cambios posteriores al robo y hay que revisarlo. */
+  readonly anomalo: boolean;
+  readonly revisado: boolean;
+}
+
+/** El avance completo, para la pantalla. Nunca lleva ningún secreto. */
+export interface ProgresoDeRestauracionIpc {
+  readonly configurada: boolean;
+  readonly fase: FaseDeRestauracionIpc;
+  readonly mensaje: string | null;
+  readonly proyecto: string | null;
+  readonly correo: string | null;
+  readonly motivo: MotivoDeRestauracionIpc | null;
+  readonly fechaDelRobo: string | null;
+  readonly tablas: readonly ProgresoDeTablaIpc[];
+  readonly fotos: { readonly hechas: number; readonly total: number; readonly faltantes: readonly string[] } | null;
+  readonly verificacion: VerificacionDeRestauracionIpc | null;
+  readonly anomalias: readonly AnomaliaDeRestauracionIpc[];
+  readonly usuarios: readonly UsuarioRestauradoIpc[];
+  /** Ritmo de los últimos 30 s. NO es una estimación de tiempo total (§6.6). */
+  readonly filasPorSegundo: number | null;
+  readonly filasRestantes: number | null;
+  readonly baseVacia: boolean;
+  readonly hayRestauracionIncompleta: boolean;
 }
 
 /** Lo que devuelve conectar cuando sale bien. */
@@ -1496,6 +1682,24 @@ export interface ApiPos {
     reintentarLote(datos: LoteIdIpc): Promise<RespuestaIpc<boolean>>;
     /** Salta un lote a mano. Exige PIN y queda en `auditoria_log` (decisión 9). */
     saltarLote(datos: SaltoDeLoteIpc): Promise<RespuestaIpc<ResultadoDeSaltoDeLoteIpc>>;
+  };
+
+  /**
+   * Restauración desde la nube (fase 4.b). Sin guard de sesión: corre sobre
+   * una instalación vacía, antes de que exista ningún usuario local. Quien
+   * autoriza es la nube, con el usuario de rol `restauracion`.
+   */
+  readonly restauracion: {
+    estado(): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    /** Inicia sesión, comprueba precondiciones y arranca. La contraseña no se guarda. */
+    iniciar(datos: InicioDeRestauracionIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    retomar(datos: RetomaDeRestauracionIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    progreso(): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    cancelar(): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    aceptarExcluida(datos: FilaExcluidaIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    revisarUsuario(datos: RevisionDeUsuarioIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    asignarPin(datos: PinDeRestauracionIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+    terminar(): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
   };
 
   /**

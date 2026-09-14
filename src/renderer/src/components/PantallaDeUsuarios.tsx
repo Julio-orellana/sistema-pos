@@ -294,6 +294,11 @@ export function PantallaDeUsuarios({
                   </span>
                 )}
                 {usuario.esUnoMismo && <span className="etiqueta">Vos</span>}
+                {usuario.sinPin && (
+                  <span className="etiqueta" data-prueba="usuario-sin-pin">
+                    Sin PIN: asignarle uno con «cambiar PIN»
+                  </span>
+                )}
                 <span className="lista__detalle">
                   {nombreDelRol(usuario.rol)}
                   {usuario.tienePinRemoto && ' · con PIN remoto'}

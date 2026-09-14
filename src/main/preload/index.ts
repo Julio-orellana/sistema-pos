@@ -38,6 +38,12 @@ import {
   type ResumenDeSincronizacionIpc,
   type SaltoDeLoteIpc,
   type CambioDeLimiteIpc,
+  type FilaExcluidaIpc,
+  type InicioDeRestauracionIpc,
+  type PinDeRestauracionIpc,
+  type ProgresoDeRestauracionIpc,
+  type RetomaDeRestauracionIpc,
+  type RevisionDeUsuarioIpc,
   type UsuarioEditadoIpc,
   type UsuarioIpc,
   type UsuarioNuevoIpc,
@@ -295,6 +301,50 @@ const apiPos: ApiPos = {
     saltarLote: (datos: SaltoDeLoteIpc): Promise<RespuestaIpc<ResultadoDeSaltoDeLoteIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.sincronizacionSaltarLote, datos) as Promise<
         RespuestaIpc<ResultadoDeSaltoDeLoteIpc>
+      >,
+  },
+
+  /*
+    Restauración desde la nube (fase 4.b). Sin sesión local: corre sobre una
+    instalación vacía. La contraseña del usuario de restauración cruza este
+    puente UNA vez en `iniciar` o `retomar`, y de este lado no se guarda.
+  */
+  restauracion: {
+    estado: (): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionEstado) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    iniciar: (datos: InicioDeRestauracionIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionIniciar, datos) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    retomar: (datos: RetomaDeRestauracionIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionRetomar, datos) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    progreso: (): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionProgreso) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    cancelar: (): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionCancelar) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    aceptarExcluida: (datos: FilaExcluidaIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionAceptarExcluida, datos) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    revisarUsuario: (datos: RevisionDeUsuarioIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionRevisarUsuario, datos) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    asignarPin: (datos: PinDeRestauracionIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionAsignarPin, datos) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
+      >,
+    terminar: (): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.restauracionTerminar) as Promise<
+        RespuestaIpc<ProgresoDeRestauracionIpc>
       >,
   },
 

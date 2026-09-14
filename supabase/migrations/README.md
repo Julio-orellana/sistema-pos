@@ -65,7 +65,7 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
 | **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018 |
-| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027 |
+| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027, 0029 |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
 2026-09-11. Antes todos los huecos eran de la primera clase, y por eso este
@@ -125,7 +125,7 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 
 ### Dirección 2 — el cambio es solo de la nube, y allá no hay archivo
 
-**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023, 024, 025 ni 026.**
+**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023, 024, 025, 026, 027 ni 029.**
 Las tres primeras de esta dirección llegaron juntas, con la fase 2.a de la
 sincronización, y nacen de la misma pregunta: qué tiene que haber en la nube que
 no tiene por qué estar en la terminal, y qué hay hoy en la nube que nunca debió
@@ -190,9 +190,14 @@ número que use queda reservado también del lado local.
 | `0027_sincronizar_asiento.sql` | Sí — aplicada el 2026-09-14, el mismo día que en `pos-pruebas-descartable`. Crea `sincronizar_asiento` y reemplaza `contrato_de_sincronizacion` para que la conozca. La huella de las 14 funciones del contrato es `1b0bcbf6c033cb163c4bc396dbe52e37` **en los dos proyectos**. |
 
 | `0028_limites_descuento_id_determinista.sql` | Sí — aplicada el 2026-09-14, después de probarse en `pos-pruebas-descartable` el mismo día. El CHECK `limites_descuento_id_fijo_por_rol` quedó `convalidated = true`, y los CUATRO CHECK de la tabla tienen `md5(pg_get_constraintdef)` idéntico en los dos proyectos. Falsificado en el real: un id sorteado y un id cruzado se rechazan los dos, sin dejar ninguna fila. |
+| `0029_restauracion_ventas_por_mes.sql` | **NO — pendiente de aprobación.** Aplicada en `pos-pruebas-descartable` el 2026-09-14 (fase 4.b) y verificada allí con `npm run verify:restauracion`. Crea `restauracion_ventas_por_mes()` —`SECURITY INVOKER`, solo rol `restauracion`, suma `ventas.total` por mes UTC con `NUMERIC` y la devuelve como texto— y reemplaza `contrato_de_sincronizacion` para que la enumere. Es puramente aditiva y la versión de contrato no sube. **Hasta que se aplique en el real, restaurar contra `pos-jimmy-cano` se detiene en la precondición de deriva** diciendo exactamente eso («la función restauracion_ventas_por_mes no existe en la nube: falta aplicar la migración que la crea»), sin bajar una fila. |
 
-**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`: los dos
-proyectos tienen las 23.** Las dos últimas fueron la `0027` y la `0028`, el
+**QUEDA UNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`: la `0029`**,
+que el descartable ya tiene desde el 2026-09-14 (24 migraciones contra 23).
+Es aditiva, no sube la versión de contrato, y sin ella la restauración contra
+el real se niega en la precondición en vez de restaurar mal. Antes de ella
+no quedaba ninguna pendiente: **los dos proyectos tenían las 23.** Las dos
+últimas parejas fueron la `0027` y la `0028`, el
 2026-09-14; antes la `0025` y la `0026`, el 2026-09-13, y la `0023` y la `0024`,
 el 2026-09-12.
 

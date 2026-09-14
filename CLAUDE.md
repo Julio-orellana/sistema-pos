@@ -358,14 +358,23 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`.** La
-`0023` y la `0024` se aplicaron el **2026-09-12**, la `0025` y la `0026` el
-**2026-09-13**, y la **`0027` y la `0028` el 2026-09-14**, todas con la aprobación
-explícita de Julio y después de haberse probado contra `pos-pruebas-descartable`.
-**Los dos proyectos tienen hoy las 23 migraciones**, la huella de las 14
-funciones del contrato es `1b0bcbf6c033cb163c4bc396dbe52e37` en los dos, y los
-cuatro CHECK de `limites_descuento` tienen el mismo `md5(pg_get_constraintdef)`
-en los dos. Ver §4.29 y §4.32.
+**QUEDA UNA MIGRACIÓN PENDIENTE DE APLICAR EN `pos-jimmy-cano`: la `0029`**
+(`restauracion_ventas_por_mes`, fase 4.b, §4.35). Está aplicada y verificada en
+`pos-pruebas-descartable` desde el 2026-09-14, es puramente aditiva —una
+función `SECURITY INVOKER` de solo lectura y el contrato que la enumera— y no
+sube la versión de contrato. **Sin ella, restaurar contra el real se detiene en
+la precondición de deriva nombrando la función que falta, sin bajar una fila.**
+Se aplica al real cuando Julio la apruebe, por la vía de siempre. Antes de ella
+no quedaba ninguna pendiente: la `0023` y la `0024` se aplicaron el
+**2026-09-12**, la `0025` y la `0026` el **2026-09-13**, y la **`0027` y la
+`0028` el 2026-09-14**, todas con la aprobación explícita de Julio y después de
+haberse probado contra `pos-pruebas-descartable`. **Los dos proyectos tienen
+hoy las 23 primeras**, la huella de las 14 funciones del contrato de la 0027 es
+`1b0bcbf6c033cb163c4bc396dbe52e37` en los dos, y los cuatro CHECK de
+`limites_descuento` tienen el mismo `md5(pg_get_constraintdef)` en los dos.
+Ver §4.29 y §4.32. La foto `supabase/esquema-nube.json` ya declara las 15
+funciones del descartable; `npm run verify:nube` contra el real va a decir que
+falta `restauracion_ventas_por_mes` hasta que se aplique, y eso es correcto.
 
 De los dos pasos manuales que la fase 2.c necesitaba, **uno está hecho y
 verificado, y el otro está hecho pero NO verificado desde acá**:
@@ -4727,6 +4736,140 @@ seguidas sin inestabilidad.
   probar ahí más allá de que el candado exista (que sí está en la prueba de
   `autenticacion.test.ts`).
 
+### 4.35 La restauración desde la nube (Fase 4.b)
+
+Cierra la sección 6 del diseño: la operación inversa de todo el módulo, y la
+segunda de las dos superficies que el diseño marca como las más delicadas. El
+costo de un error acá no es un fallo ruidoso: es una base reconstruida que se
+ve completa y está sutilmente mal. Por eso cada regla de abajo tiene prueba
+local, y las que solo la nube puede probar se probaron contra
+`pos-pruebas-descartable` con `npm run verify:restauracion`.
+
+Vive en `src/main/restauracion/` —cliente, conversión de tipos, orden,
+puesto de control y servicio— con nueve canales IPC en `ipc/restauracion.ts`
+y la pantalla `PantallaDeRestauracion`, que se ofrece desde la configuración
+inicial («Restaurar desde la nube») y que manda sola cuando hay una
+restauración a medias. El detalle de cada decisión, junto al texto del diseño
+que la motivó, está en `docs/SINCRONIZACION.md` §6.7 y §6.8.
+
+#### Las reglas, y dónde está cada prueba
+
+| Regla | Cómo se cumple | Prueba |
+|---|---|---|
+| **Ningún id se regenera, nunca** | `INSERT … ON CONFLICT(id) DO NOTHING` con el id de la nube. Es lo que evita que la terminal restaurada choque contra las ocho restricciones únicas del punto 19 de §6.2 al volver a subir. | Ids comparados tabla por tabla contra la terminal de origen (local) y contra la nube (real) |
+| **Solo sobre una base vacía** | Las once tablas de negocio en cero y sin puesto de control; se niega nombrando las tablas con filas, **antes de iniciar sesión**. No hay «fusionar» ni «sobrescribir». | local y real |
+| **Nada antes de las precondiciones** | Sesión con rol `restauracion` (otro rol se rechaza sin guardar nada), nube alcanzable (capa 2 de §5), **contrato vivo igual al esquema local** con las reglas de la mitad A, las 11 denominaciones idénticas, y el orden compatible con las llaves foráneas de ESTA base. | Deriva falsificada con los casos de §9.3, local y real: se detiene nombrando `ventas.total`, con la base vacía y sin puesto de control |
+| **Solo lectura, solo SELECT** | Nunca por las funciones `sincronizar_*`; una prueba estructural comprueba que el cliente no las nombra ni usa PATCH/PUT/DELETE. | `restauracion-guard.test.ts` |
+| **Orden = grafo de llaves foráneas del catálogo** | Las quince llaves se leyeron de `pg_constraint` de Postgres el 2026-09-14 y están copiadas en la prueba; el esquema local declara exactamente las mismas, y el servicio comprueba el orden contra `PRAGMA foreign_key_list` antes de escribir. `auditoria_log` al final, y sin asumir que cada asiento venga acompañado. | `orden-de-restauracion.test.ts` |
+| **Los numéricos se piden con `::text` y se NORMALIZAN, nunca se redondean** | PostgREST devolvería `NUMERIC` como `double`. Con `::text` llega `"4.165000"` para `subtotal_exacto` (`numeric(18,6)`), y la conversión lo deja en `4.165`, que es byte a byte lo que SQLite guardó. Más decimales de los que la columna admite → se rechaza. | `conversion-de-tipos.test.ts`, incluida la inserción real en un SQLite migrado; y el texto crudo `"4.165000"` leído de la nube |
+| **Las fechas pasan de `+00:00` a `Z` sin perder precisión** | `toISOString`, que es lo que escribió la terminal; más de tres decimales de segundo → se rechaza en vez de truncarse. | `conversion-de-tipos.test.ts` |
+| **La tabla de clases de columna es explícita y coincide con la nube** | `CLASES_DE_COLUMNA` se coteja columna por columna contra la foto `esquema-nube.json`: cada tipo de Postgres tiene su clase y no hay columnas de más ni de menos. | `conversion-de-tipos.test.ts` |
+| **Todo usuario queda SIN PIN** | `HASH_SIN_PIN` en `pin_hash`, `NULL` en el remoto, sin intentos ni bloqueo. `verificarPin` lo rechaza siempre sin lanzar; ningún hash real puede coincidir con él. Ver §6.7 del diseño. | `pin-sin-asignar.test.ts` (los 10 000 PIN), y el servicio |
+| **No termina sin PIN nuevo para cada activo, sin revisar cada usuario anómalo, ni sin un administrador activo** | `impedimentosParaTerminar()` los nombra; `terminar()` se niega con ellos. | `servicio-de-restauracion.test.ts` |
+| **`pdf_path` se re-enraíza** | En la nube es la ruta ABSOLUTA de la terminal vieja; la columna local es `NOT NULL`. Se conserva el nombre y se cambia la carpeta por la de esta máquina. La reimpresión regenera el PDF ahí: probado con el archivo ausente. | `servicio-de-restauracion.test.ts` |
+| **Las fotos bajan de Storage a su ruta local; las que faltan se listan** | Objeto derivado de `foto_path` (§2.5.1), escrito solo dentro de la carpeta de fotos (`resolverRutaDeFoto`). | sha256 idéntico al subido, local y real |
+| **Verificación: conteos y suma por mes al centavo** | `nube = local + excluidas`, tabla por tabla; y `SUM(total)` por mes en Postgres (`restauracion_ventas_por_mes`, migración 0029) contra `sumarLista` de Decimal. Si no cuadra, no se termina. | local y real |
+| **Anomalías por `recibido_en`** | En las doce tablas que la tienen, contra la fecha del robo; nunca por `creado_en` ni `actualizado_en`. Regla de exclusión en §6.8 del diseño. | local (seis filas en cinco tablas) y real (diez filas en cinco tablas) |
+| **Retomable y cancelable** | Puesto de control por página; cancelar deja la base en la última página completa; retomar exige iniciar sesión otra vez y se niega contra otro proyecto. | Cancelada tras la página 4 (local) y 5 (real) y retomada: mismos ids que la nube, sin duplicados |
+| **Lo decidido se encola, lo restaurado no** | Los asientos de PIN asignado, usuario revisado, fila restaurada a mano y restauración completada van por `conBandejaDeSalida`; la prueba estructural de §4.26 escanea también `src/main/restauracion`. | `servicio-de-restauracion.test.ts`: tres asientos y dos `usuarios` en la cola, ninguna fila restaurada |
+| **La sesión es efímera** | Vive en memoria, se renueva sola al 75 % de `exp - iat`, y `cerrarSesion()` revoca **solo la suya** (`scope=local`). Nunca toca `safeStorage`. | `restauracion-guard.test.ts` y los `204` del `logout` |
+
+#### Verificado contra la nube REAL: `npm run verify:restauracion`
+
+Tres corridas el 2026-09-14 contra `pos-pruebas-descartable`, con las once
+tablas vaciadas por SQL antes de cada una. La tercera dio **13 de 13**, con
+**200 peticiones HTTP** anotadas con hora, método, ruta y código. Lo que hace
+el arnés: llena una terminal de origen con los SERVICIOS reales (el catálogo
+de `terminal-de-origen.ts`: una cajera bloqueada por intentos con sus asientos
+sueltos, un producto con foto, uno cuya foto se borró del disco antes de subir
+y uno sin foto, la venta combinada de §4.13, una con tarjeta, el tope con id
+fijo, una caja cerrada con diferencia autorizada y arqueo por denominaciones),
+la sube con `SesionDeNube`, `SupabaseSyncProvider` y `TrabajadorDeSincronizacion`,
+anota la hora, sube una segunda tanda «posterior al robo», y restaura en una
+base nueva con `ClienteDeRestauracionHttp`.
+
+Salida cruda de la corrida 3 (05:44Z), la que pasó entera:
+
+```
+--- SUBIDA 1 --- ciclo 1: cola_vaciada; 19 lotes, 41 filas; pendientes en la cola: 1
+                 (la pendiente es la foto APARTADA: archivo_ausente, se vuelve a buscar mañana)
+--- SUBIDA 2 --- ciclo 1: cola_vaciada; 4 lotes, 10 filas
+GET /rest/v1/usuarios?select=id&limit=1                       -> HTTP 206   (count=exact)
+POST /rest/v1/rpc/contrato_de_sincronizacion                  -> HTTP 200
+GET /rest/v1/venta_detalle?select=…,subtotal_exacto::text,…   -> HTTP 200
+PostgREST devolvió subtotal_exacto = "4.165000" (tipo string), cantidad = "3.500",
+  creado_en = "2026-09-14T05:44:04.278+00:00", recibido_en = "2026-09-14T05:44:06.676452+00:00"
+usuarios 2 · categorias 1 · configuracion_negocio 1 · productos 3 · limites_descuento 1
+caja_sesiones 3 · caja_sesion_denominaciones 2 · ventas 2 · venta_detalle 3 · recibos 2
+auditoria_log 17 filas restauradas; fotos: 2 productos con foto, 1 sin archivo en la nube
+ventas 2026-09: nube Q47.93 = local Q39.68 + excluidas Q8.25 -> coincide
+auditoria_log: nube 21 = local 17 + excluidas 4 -> coincide
+foto del maíz: sha256 subido 497790…e1581 = bajado 497790…e1581
+GET /storage/v1/object/fotos/<la que se borró>.png            -> HTTP 400 (not_found) -> listada
+POST /auth/v1/logout?scope=local                              -> HTTP 204
+cancelada tras 5 páginas; filas locales: usuarios=2, categorias=1, configuracion_negocio=1, productos=0, …
+```
+
+Las diez anomalías de la corrida real, por `recibido_en` posterior a la
+fecha del robo: `usuarios` (Ana editada), `productos` (el frijol, cuyo
+inventario bajó la venta posterior), dos `caja_sesiones` (la cerrada después y
+la abierta después) —las cuatro **restauradas y listadas**—, y `ventas`,
+`venta_detalle` y cuatro `auditoria_log` **excluidas**. Aceptar la venta la
+restauró con su línea y su recibo, y la verificación siguió cuadrando.
+
+#### Tres cosas que SOLO la nube real mostró
+
+Ninguna la podía ver una prueba con dobles, porque un doble contesta lo que
+uno cree que contesta la nube:
+
+1. **PostgREST contesta `206 Partial Content`, no `200`, a un conteo con
+   `Prefer: count=exact` y `limit=1`.** La primera corrida se detuvo en la
+   primera tabla: mi cliente tomaba el 206 por rechazo. Corregido y escrito
+   en el cliente con la medición.
+2. **El `logout` de GoTrue es GLOBAL por omisión**: revoca todas las
+   sesiones del usuario. En la segunda corrida, otro cierre del arnés con el
+   mismo usuario dejó a la sesión de la restauración contestando `403` al
+   cerrarse, aunque su access token seguía sirviendo. Corregido con
+   `?scope=local`, que es además lo correcto: el usuario de restauración es el
+   del dueño, y cerrar la restauración no debe cerrarle nada más.
+3. **`precios_especiales` no llegó a la nube**, y no es un defecto de la
+   restauración: en producción nada la escribe (punto 18 de §6.2), y la
+   terminal de origen la siembra por el repositorio, que no encola. La venta
+   sí usó el precio especial, y eso viaja en `precio_unitario_snap`. El arnés
+   la excluye de la comparación contra el origen y lo dice; la comparación de
+   ids contra la nube, que es la que manda, pasa.
+
+#### Lo que el diseño no cerraba, y se decidió a la vista
+
+Está en §6.8 del diseño, punto por punto. Lo más importante: **«sin
+restaurar» solo para las tablas que la nube SOLO INSERTA**. Aplicado a todas,
+§6.5 rompería las llaves foráneas de lo legítimo, porque una fila anterior al
+robo y MODIFICADA después tiene `recibido_en` posterior y otras filas la
+referencian. Las cinco de solo inserción se excluyen y se listan, con
+«restaurar igual» por fila; las siete que también se actualizan se restauran
+y se listan, y `usuarios` exige revisión uno por uno. **Es una interpretación,
+no lo que §6.5 dice literalmente, y se señala para que Julio la confirme o la
+cambie.**
+
+#### Lo que NO se verificó
+
+- **Nada de esto se corrió contra `pos-jimmy-cano`**, y no puede: la `0029`
+  no está aplicada ahí (§4.4) y el seguro rechaza el real por nombre. Contra
+  el real, hoy, la restauración se detendría en la precondición nombrando la
+  función que falta.
+- **La pantalla no se manejó con `verify:pantallas` más allá del caso «sin
+  configurar»**: esa corrida no tiene `POS_NUBE_URL`. El flujo entero —
+  formulario, progreso, revisión, PIN, terminar— está ejercitado por el
+  servicio (local y real), no clicando la ventana.
+- **Una restauración más larga que la vida de un token (900 s) no se
+  ejercitó**: la renovación al 75 % está construida y probada con dobles en
+  la sesión de la terminal, y acá se reusa la misma regla, pero no se vio
+  renovar durante una restauración real.
+- **Retomar después de MATAR el proceso no se ejercitó**: se ejercitó
+  cancelar y retomar con un servicio nuevo que lee el puesto de control del
+  disco, que es el mismo camino, pero no se cortó la aplicación a la fuerza.
+- **Windows**, como siempre: todo se midió en macOS.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -4939,6 +5082,19 @@ seguidas sin inestabilidad.
 | **El id de `limites_descuento` pasa a ser FIJO por rol, con UUID en la migración (028 / 0028).** | `id = rol`, que sería más legible; derivar el UUID de la clave natural con un hash; dejarlo sorteado y enseñarle a `escribir_fila` la clave natural de cada tabla | Cierra la PRIMERA de las nueve restricciones únicas de §4.31, y es la única donde la clave natural **es** la identidad: `limites_descuento` tiene como mucho dos filas y siempre las mismas dos, una por rol. `id = 'venta'` no se puede sin reconstruir la tabla —SQLite exige `length(id) = 36` y Postgres es `UUID`—, y el rebuild de doce pasos ya se descartó en las migraciones 008 y 015. Derivar el UUID de un hash escondería en código una correspondencia que así queda **escrita en el esquema y comprobable a simple vista**. Y no se tocó `escribir_fila`, porque las otras ocho restricciones no son el mismo problema y una regla genérica les aplicaría una respuesta que no les corresponde. Rompe a propósito la regla de «UUID en el cliente», que existe para EVITAR colisiones entre instalaciones: acá la colisión es lo que se busca, igual que en `denominaciones` (Prompt 13) y en el `id = 'unica'` de `configuracion_negocio`. | Prompt 48 — 2026-09-14 |
 | **La migración mueve también lo que estaba esperando en `sync_cola`, no solo la fila de negocio.** | Mover solo `limites_descuento` y dejar la cola como estaba | Una migración que cambia una llave primaria tiene que mover con ella todo lo que la nombra. Si un lote quedara pendiente apuntando al id viejo —y con el id viejo adentro del payload—, al subirlo la nube recibiría la fila con una llave primaria que en esa base ya no existe y chocaría contra `UNIQUE (rol)`: **la propia migración provocando el `23505` que vino a cerrar**. Se mueven `entidad_id` y el `id` de adentro del payload JUNTOS, con `json_set`, porque §4.17 sostiene que el payload es byte a byte lo que quedó guardado. Tiene prueba propia, sobre una base a la que se le aplican todas las migraciones MENOS esta, se le siembra la fila con id sorteado y recién entonces se corre. | Prompt 48 — 2026-09-14 |
 | **El guion de la batería usa el id del ESQUEMA, no uno inventado por él.** | Dejarle su propio id fijo, que funcionaba | `verificacion-de-nube.cjs` ya tenía un id fijo propio con este comentario: «`limites_descuento.rol` es UNIQUE y esa tabla no se vacía entre corridas, así que un id nuevo por corrida chocaría contra la fila de la corrida anterior». **El diagnóstico era exacto y el arreglo estaba en el lugar equivocado**: nadie conectó que la aplicación sorteaba ese mismo id, así que el choque le esperaba igual a cualquier reinstalación o segunda terminal. Es una lección más general que este caso: **un arnés de prueba que esquiva un problema en vez de exhibirlo lo esconde**, y acá lo escondió durante dos fases. Ahora usa el id del esquema, y uno inventado sería rechazado por el CHECK. | Prompt 48 — 2026-09-14 |
+| **RESTAURACIÓN (fase 4.b): NINGÚN id se regenera; cada fila local lleva el id de la nube, con `ON CONFLICT(id) DO NOTHING`.** | Sortear ids nuevos y mapearlos; regenerar solo los de las tablas «libres» | Es la regla no negociable de la fase, y no es de estilo: con ids nuevos, la primera vez que la terminal restaurada volviera a subir chocaría contra las ocho restricciones únicas abiertas del punto 19 de §6.2 (`usuarios.nombre`, `productos.nombre`…), porque el upsert de la nube solo absorbe choques por `(id)`. Con el mismo id, el choque es por `(id)` y se absorbe. Y es lo que hace idempotente cada página: repetirla no duplica. Comprobado id por id contra la terminal de origen y contra la nube real. | Prompt 51 — 2026-09-14 |
+| **Un usuario restaurado queda con el centinela `HASH_SIN_PIN` en `pin_hash`, y `verificarPin` lo rechaza siempre sin lanzar.** | Hacer nulable `pin_hash` con una migración que recree `usuarios`; escribir un hash aleatorio que nadie conoce; una cadena vacía | Los hashes no existen en Postgres (decisión 17) y la columna local exige texto no vacío; recrear `usuarios` es el rebuild de doce pasos que el proyecto ya descartó tres veces, y `ventas` y `auditoria_log` la referencian. Un hash aleatorio «funcionaría» pero sería un PIN real que nadie conoce: indistinguible en la base de un PIN asignado, y `describirHash` lo tomaría por bueno. El centinela se distingue a simple vista y por código (`tienePin`), y hace la decisión 15 por construcción: no hay ningún hash real que recordar. La cadena vacía la rechaza el CHECK. Los 10 000 PIN posibles dan cero aciertos contra él. Ver §6.7 del diseño. | Prompt 51 — 2026-09-14 |
+| **El PIN nuevo se asigna DENTRO de la pantalla de restauración, con la sesión de la nube como autorización, y la restauración no termina mientras un usuario activo siga sin PIN.** | Terminar y que el administrador los asigne desde la pantalla de usuarios | Nadie puede iniciar sesión: todos están sin PIN, y la pantalla de usuarios exige sesión administrativa. Sería un candado sin llave. Quien restaura ya se identificó con la cuenta del dueño en la nube, que es más fuerte que una sesión local. Un usuario de baja puede quedar sin PIN; si se reactiva, la pantalla de usuarios lo marca «Sin PIN» y la de ingreso no le ofrece el teclado. | Prompt 51 — 2026-09-14 |
+| **`pdf_path` se re-enraíza en la carpeta de recibos de ESTA máquina, conservando el nombre del archivo.** | Dejarla en `NULL`; dejar la ruta absoluta vieja; bajar los PDF | El pedido proponía `NULL` «si la columna lo permite», y no lo permite: `recibos.pdf_path` es `NOT NULL` con CHECK de no vacío. La ruta vieja es ABSOLUTA —`ServicioDeRecibos` guarda `join(carpeta, nombre)`, no la relativa que §2.5.1 supone— y en esta máquina esa carpeta no existe: la reimpresión fallaría al escribir y quedaría un recibo sin PDF, contra la regla del Prompt 1. Los PDF no se bajan porque nunca se subieron (decisión 6). Con la ruta re-enraizada, la reimpresión regenera el PDF desde las filas, probado con el archivo ausente. El nombre se corta por `/` o `\`, porque la terminal vieja pudo ser Windows y `path.basename` de macOS no parte `\`. | Prompt 51 — 2026-09-14 |
+| **Anomalías por `recibido_en`: se EXCLUYEN solo las filas de las tablas que la nube SOLO INSERTA; las demás se restauran y se listan, y `usuarios` se revisa uno por uno.** | Excluir toda fila posterior al robo, como dice §6.5 literalmente; restaurar todo y solo listar | §6.5 dice «sin restaurar, para que decidas fila por fila», pero aplicado a todas las tablas rompe las llaves foráneas de lo legítimo: una fila anterior al robo y MODIFICADA después (un producto que una venta falsa descontó, una caja abierta antes y cerrada por el ladrón) tiene `recibido_en` posterior, y excluirla dejaría sin padre a las ventas legítimas. En las cinco tablas sin función de actualización (`ventas`, `venta_detalle`, `recibos`, `caja_sesion_denominaciones`, `auditoria_log`), «recibida después» ES «insertada después», y ninguna fila anterior las referencia —probado contra el grafo de llaves—: ahí la exclusión es segura, y cada fila se puede restaurar igual (una venta con sus hijas; una hija sola sin su venta se rechaza explicando el orden). Restaurar todo y solo listar dejaría ventas falsas en la base sin forma de quitarlas, porque nada se borra y la anulación no existe. **Es una interpretación del diseño y queda señalada para que Julio la confirme.** | Prompt 51 — 2026-09-14 |
+| **Lo decidido durante la restauración se encola; lo restaurado NO.** | `sync_cola` vacía al terminar, como dice §6.3; encolar también lo restaurado | Lo restaurado ya está en la nube: subirlo otra vez sería churn puro. Pero un PIN asignado, un usuario revisado, una fila excluida restaurada a mano y la restauración completada son HECHOS del negocio, y la nube tiene que enterarse cuando la terminal se conecte con su propia credencial: si el ladrón promovió a un cajero y la revisión lo degradó, la nube tiene que reflejarlo. Van por `conBandejaDeSalida`, y la prueba estructural de §4.26 escanea también `src/main/restauracion`. «`sync_cola` vacía» se lee como «lo que bajó no se vuelve a subir». | Prompt 51 — 2026-09-14 |
+| **La suma de ventas por mes se calcula EN POSTGRES con una función nueva, `restauracion_ventas_por_mes()` (migración 0029, INVOKER, solo rol restauración), aplicada en el descartable y PENDIENTE en el real.** | Los agregados de PostgREST (`total.sum()`); traer las filas y sumar en la terminal; una columna de mes | §6.4 pide la suma del lado de la nube, con `NUMERIC` exacto, para compararla contra Decimal: sumar en la terminal probaría la terminal contra sí misma. Los agregados de PostgREST no agrupan por una expresión de mes sin una columna o una función, y una columna sería esquema para una comprobación. Devuelve la suma como TEXTO, para que no pase por un `double`. Es INVOKER, no DEFINER: lee bajo las políticas de la 0025, y una función DEFINER menos es un aviso menos del linter. Y reemplaza el contrato para enumerarla, por la regla de §4.29. **No se aplicó al real**: es infraestructura y espera la aprobación de Julio; mientras tanto la restauración contra el real se detiene en la precondición nombrando la función que falta. | Prompt 51 — 2026-09-14 |
+| **Los numéricos se piden a PostgREST con `::text` y se NORMALIZAN a la forma canónica local; nunca se redondean.** | Dejar que lleguen como número JSON; pedir CSV; copiar el texto de Postgres tal cual | Un número JSON es un `double`: exactamente lo que `money.ts` existe para evitar. Con `::text` llega la representación exacta de Postgres, que rellena a la escala de la columna —`"4.165000"` para `numeric(18,6)`, medido en la nube real— y no pasa el CHECK canónico de `subtotal_exacto` copiada tal cual… salvo que sí pasa (admite hasta diez decimales), lo que la haría distinta byte a byte de lo que la terminal escribió: se normaliza a `4.165`. Un valor con más decimales de los que su clase admite se rechaza, porque redondear en silencio es la corrupción que este módulo existe para impedir. CSV obligaría a parsear comillas y comas para lo mismo. | Prompt 51 — 2026-09-14 |
+| **CORREGIDO al medir: PostgREST contesta `206 Partial Content` a un conteo con `Prefer: count=exact` y `limit=1`, y eso es ÉXITO.** | Exigir `200`, que era lo que el cliente hacía | La primera corrida real se detuvo en `usuarios` con «La nube rechazó el conteo (HTTP 206)». El 206 es el código de una respuesta con rango parcial, que es exactamente lo que se pidió. Ninguna prueba con dobles lo podía ver: el doble contestaba 200 porque yo creía que la nube contestaba 200. Quedó escrito en el cliente con la medición. | Prompt 51 — 2026-09-14 |
+| **CORREGIDO al medir: el `logout` de GoTrue lleva `scope=local`, porque el alcance por omisión es GLOBAL y revoca todas las sesiones del usuario.** | Dejar el `logout` sin parámetro | En la segunda corrida, un cierre global desde otra sesión del mismo usuario dejó a la sesión de la restauración contestando `403` al cerrarse, aunque su access token seguía sirviendo. Y es lo correcto más allá del arnés: el usuario de restauración es el del dueño, y cerrar la restauración no tiene por qué cerrarle ninguna otra sesión. Con `scope=local`, los `logout` dieron `204` en la tercera corrida. | Prompt 51 — 2026-09-14 |
+| **Los nueve canales de la restauración NO llevan guard de sesión ni de rol, y una prueba lo fija por nombre.** | Exigir `requiereRol`, como en todos los demás módulos administrativos | La restauración corre sobre una instalación VACÍA, antes de que exista ningún usuario: no puede haber sesión que exigir. La autorización es más fuerte, no más débil: la nube verifica la contraseña del usuario con rol `restauracion`, y el servicio se niega en cuanto la base tiene una fila de negocio o el puesto de control es de otro proyecto. Lo máximo que un renderer comprometido conseguiría es lo mismo que la pantalla de configuración inicial, que tampoco pide sesión. | Prompt 51 — 2026-09-14 |
+| **La verificación real vive en un Vitest APARTE (`vitest.nube.config.ts`, archivos `*.nube.ts`, `npm run verify:restauracion`), no en `npm test` ni en un `.cjs`.** | Un guion `.cjs` como `verify:nube`; un modo de Electron como `verify:arranque`; incluirlo en `npm test` | Tiene que usar los servicios y el proveedor REALES, que son TypeScript con alias de ruta: un `.cjs` los tendría que reimplementar o cargar compilados. `npm test` no puede depender de la nube (§4, punto 4), así que los archivos terminan en `.nube.ts` y el patrón `*.test.ts` no los ve. El seguro de `proyectos-de-prueba.cjs` se comprueba antes de la primera petición, y la salida es cruda: cada petición con hora, método, ruta y código. | Prompt 51 — 2026-09-14 |
+| **El arnés NO compara `precios_especiales` contra la terminal de origen, y dice por qué.** | Sembrarla por un servicio que no existe; hacer que el repositorio encole | En producción nada la escribe (punto 18 de §6.2); la terminal de origen la siembra por el repositorio directo, que no encola, así que nunca llega a la nube y la restauración no puede traerla. Se comprueba que la nube tiene cero y el origen una, y que la venta que usó el precio especial viaja igual en `precio_unitario_snap`. Es un recordatorio de que el punto 18 sigue abierto, no un defecto de esta fase. | Prompt 51 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -4978,7 +5134,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 18 | **¿Qué umbral de «stock bajo» tiene cada producto, y quién lo define?** | El reporte de inventario muestra la fotografía de hoy y **no tiene umbral ni alertas, a propósito** (§4.15): cuál es el mínimo de cada producto es una definición de negocio, y un umbral inventado convertiría una suposición nuestra en un aviso que parece una regla de la tienda. Hace falta saber si el mínimo es por producto, por categoría o uno solo para todo, y si depende de la temporada. Es un módulo futuro con su propio prompt. | Abierto — bloquea las alertas de stock, no el reporte |
 | 16 | ~~¿Qué número de venta quiere ver el cajero en la confirmación?~~ | — | **RESUELTO (Prompt 23): el correlativo de `recibos.numero_recibo`.** La confirmación del cobro muestra «Recibo No. N», que es el mismo número que sale impreso en el papel y el que ordena el historial. El id de la venta sigue a la vista como referencia fina para rastrear en la base. |
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
-| 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
+| 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -5091,11 +5247,21 @@ negocio:
     acciones —reintentar ahora, y **saltar el lote**, que exige PIN de
     administrador (superficie propia, sin PIN remoto) y queda en
     `auditoria_log` (decisión 9).
-  **Lo que sigue sin existir:** la restauración. **La aplicación sigue sin
-  haber hecho una llamada de red en la tienda**: sin `POS_NUBE_URL` no se
-  construye la sesión de nube, y las únicas llamadas reales las hacen
-  `npm run verify:nube`, `npm run diagnostico:credencial` y
-  `npm run diagnostico:imagen`, guiones de desarrollo.
+  - **Fase 4.b** (§4.35): la **restauración desde la nube**, desde la
+    pantalla de configuración inicial y solo sobre una base vacía. Sesión
+    efímera con el rol `restauracion`, precondición de deriva contra el
+    contrato vivo, las doce tablas en el orden del grafo de llaves foráneas
+    con los MISMOS ids que la nube, conversión de tipos sin redondear, fotos
+    desde Storage, verificación por conteos y suma por mes al centavo,
+    anomalías por `recibido_en`, todo usuario sin PIN hasta recibir uno nuevo,
+    y un puesto de control retomable. Verificada contra
+    `pos-pruebas-descartable` con `npm run verify:restauracion`.
+  **Con la 4.b no queda ninguna fase del diseño sin construir.** **La
+  aplicación sigue sin haber hecho una llamada de red en la tienda**: sin
+  `POS_NUBE_URL` no se construye la sesión de nube, y las únicas llamadas
+  reales las hacen `npm run verify:nube`, `npm run verify:restauracion`,
+  `npm run diagnostico:credencial` y `npm run diagnostico:imagen`, guiones de
+  desarrollo. Y la `0029` sigue pendiente en el real (§4.4).
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
   canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.
@@ -5133,6 +5299,14 @@ npm run diagnostico:imagen       # ¿el nativeImage REAL de este sistema reduce 
 npm run diagnostico:credencial   # ¿el safeStorage REAL de este sistema cifra la credencial?
                                  # Corre dentro de Electron. Código 0 cifrada, 1 legible (GRAVE),
                                  # 2 sin cifrado disponible. HAY QUE CORRERLO EN WINDOWS (§4.23).
+npm run verify:restauracion   # RESTAURACIÓN DE VERDAD contra pos-pruebas-descartable (fase 4.b):
+                              # siembra una terminal de origen con los servicios reales, la sube,
+                              # sube una segunda tanda «después del robo», restaura en una base
+                              # nueva y compara ids, decimales byte a byte, sha256 de la foto,
+                              # conteos y suma por mes. Imprime cada petición HTTP con su hora y
+                              # su código. Exige las ONCE tablas de negocio del proyecto de
+                              # pruebas VACÍAS (por SQL) y las credenciales de .env.nube-pruebas.
+                              # NO corre en `npm test` (vitest.nube.config.ts).
 npm run verify:nube -- --esperar-vencimiento   # comprueba que un token VENCIDO sea rechazado.
                                        # TARDA la vida del token + 90 s de margen: con el JWT
                                        # en 900 s son ~16 minutos. El margen NO se baja de 60 s
@@ -5148,6 +5322,7 @@ Archivos que la aplicación usa en `<userData>` y que conviene conocer:
 | `fotos-de-productos/` | Las fotos del catálogo. |
 | `impresora.json` | Dónde está la térmica. **Si no existe, no hay impresión** y el recibo queda solo en PDF, que es el estado normal hoy. |
 | `log-tecnico.log` | Bitácora TÉCNICA: fallos de impresión y de PDF. No es `auditoria_log`. |
+| `restauracion.json` | El puesto de control de una restauración a medias (§4.35). **Si existe, la aplicación arranca en la pantalla de restauración** y no en la de ingreso. Se borra solo al terminar; nunca guarda una credencial. |
 
 Los cuatro `seed:` arrancan el proceso principal sin abrir ventana, trabajan
 contra la MISMA base que usa la aplicación e imprimen qué hicieron. Se activan
@@ -5180,6 +5355,9 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     negocio/    los datos de la tienda que encabezan el recibo
     recibo/     modelo, plantilla, ESC/POS y emisión del comprobante
   sincronizacion/  el trabajador que lee sync_cola, sus reintentos y su cadencia
+  restauracion/    la operación inversa (fase 4.b): cliente de solo lectura con sesión
+                   efímera, conversión de tipos, orden por llaves foráneas, puesto de
+                   control y el servicio. Sus asientos pasan por la bandeja de salida
   adapters/     implementaciones reales: impresión térmica por ESC/POS
   recibo/       HTML a PDF con el Chromium que Electron ya trae
   log-tecnico.ts  bitácora de eventos técnicos; NO es la de auditoría
@@ -5197,6 +5375,8 @@ src/shared/     código compartido main <-> renderer
   __tests__/    pruebas automatizadas
 scripts/        guiones de desarrollo: verify:pantallas, verify:nube y su seguro
                 (proyectos-de-prueba.cjs: la lista FIJA de proyectos descartables)
+vitest.nube.config.ts  la configuración APARTE de las verificaciones con red
+                (`*.nube.ts`): verify:restauracion. `npm test` no las ve
 supabase/       espejo del esquema en Postgres (migraciones para la nube)
   migrations/0023_…  las funciones de sincronización; aplicada SOLO en el proyecto de pruebas
   esquema-nube.json  la FOTO del catálogo de la nube que coteja la prueba de deriva

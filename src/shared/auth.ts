@@ -86,6 +86,43 @@ const CAMPOS_DEL_FORMATO = 7;
 /** Separador entre campos. No aparece en base64, así que no hay ambigüedad. */
 const SEPARADOR = '$';
 
+/**
+ * ===========================================================================
+ * EL CENTINELA «SIN PIN»: un usuario restaurado desde la nube no tiene PIN
+ * ===========================================================================
+ *
+ * Desde la decisión 17 del diseño de sincronización, `pin_hash` y
+ * `pin_remoto_hash` **no existen en Postgres**: un usuario que baja de la nube
+ * en una restauración (fase 4.b) llega sin ningún hash, no porque se descarte
+ * uno sino porque nunca viajó. El esquema local, en cambio, exige
+ * `pin_hash NOT NULL CHECK (length(pin_hash) > 0)`.
+ *
+ * Este valor es lo que se escribe en esa columna para un usuario restaurado.
+ * Tiene tres propiedades, y las tres están probadas:
+ *
+ *   1. **Satisface el CHECK** de la columna: es texto no vacío.
+ *   2. **`verificarPin` lo rechaza SIEMPRE, sin lanzar.** No hay ningún PIN de
+ *      cuatro dígitos que coincida con él, porque no es un hash: es una marca.
+ *      Y no lanza `HASH_ILEGIBLE` como haría con un hash corrupto, porque no
+ *      es corrupción: es el estado esperado de todo usuario restaurado.
+ *   3. **`generarHashDePin` no puede producirlo**: todo hash real empieza por
+ *      `scrypt$`, y este no.
+ *
+ * El efecto es el de la decisión 15 del diseño —toda restauración resetea
+ * todos los PIN, sin excepción— **por construcción y no por una regla aparte**:
+ * no hay ningún hash real que un usuario restaurado pueda «recordar», ni
+ * siquiera el que tenía antes de que el equipo se perdiera. Nadie entra hasta
+ * que un administrador le asigna un PIN nuevo, y eso ocurre dentro de la
+ * propia pantalla de restauración, que no se da por terminada mientras un
+ * usuario activo siga con esta marca.
+ */
+export const HASH_SIN_PIN = 'sin-pin';
+
+/** `true` si el hash guardado es un hash de verdad y no el centinela «sin PIN». */
+export function tienePin(hashGuardado: string): boolean {
+  return hashGuardado !== HASH_SIN_PIN;
+}
+
 /** Códigos de error de este módulo. */
 export type CodigoErrorDeAuth = 'FORMATO_DE_PIN_INVALIDO' | 'HASH_ILEGIBLE';
 
@@ -186,6 +223,13 @@ function deserializarHash(hashGuardado: string): HashDeserializado {
  */
 export function verificarPin(pin: string, hashGuardado: string): boolean {
   if (!tieneFormatoDePinValido(pin)) {
+    return false;
+  }
+
+  // Un usuario restaurado no tiene PIN: ningún PIN coincide, y no es un error.
+  // Ver `HASH_SIN_PIN`. Va ANTES de deserializar, porque el centinela no tiene
+  // la forma de un hash y `deserializarHash` lo tomaría por una fila corrupta.
+  if (!tienePin(hashGuardado)) {
     return false;
   }
 
