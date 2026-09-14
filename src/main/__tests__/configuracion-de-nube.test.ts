@@ -137,4 +137,48 @@ describe('Lo que queda escrito en la bitácora', () => {
     const linea = describirConfiguracionDeNube(leerConfiguracionDeNube({}, DESCARTABLE));
     expect(linea).not.toContain(DESCARTABLE.llavePublicable);
   });
+
+  it('distingue las dos procedencias: «por variables de entorno» e «incrustado al compilar»', () => {
+    // No es cosmético: es lo que permite mirar una bitácora y saber si esa
+    // copia quedó apuntada por un arnés o por la compilación.
+    const porEntorno = describirConfiguracionDeNube(
+      leerConfiguracionDeNube({ POS_NUBE_URL: REAL.url, POS_SYNC_PROVIDER: 'supabase' }, DESCARTABLE),
+    );
+    expect(porEntorno).toContain('por variables de entorno');
+    expect(porEntorno).toContain('zgsdaelmbxufgcsideep');
+    expect(describirConfiguracionDeNube(leerConfiguracionDeNube({}, DESCARTABLE))).toContain('incrustado al compilar');
+  });
+});
+
+describe('El proveedor, que es la diferencia entre subir y decir que se subió', () => {
+  it('si el entorno trae la URL pero NO el proveedor, queda sin definir y la bitácora avisa que es el SIMULADO', () => {
+    // El caso que más engaña: la pantalla de nube diría «conectada» y la de
+    // sincronización «al día», con el proveedor simulado y sin que nada
+    // hubiera viajado. Es la trampa medida en §4.35.
+    const configuracion = leerConfiguracionDeNube({ POS_NUBE_URL: DESCARTABLE.url }, DESCARTABLE);
+    expect(configuracion.proveedor).toBeUndefined();
+    expect(describirConfiguracionDeNube(configuracion)).toContain('SIMULADO');
+  });
+
+  it('lo incrustado puede pedir el simulado, y se respeta', () => {
+    const configuracion = leerConfiguracionDeNube({}, { ...DESCARTABLE, proveedor: 'simulado' });
+    expect(configuracion.proveedor).toBe('simulado');
+  });
+
+  it('sin nube por ningún lado, el proveedor sigue saliendo del entorno', () => {
+    // Es el caso de `npm run dev` con POS_SYNC_PROVIDER puesto y sin URL: no
+    // hay a qué conectarse, pero la elección del adaptador no se pierde.
+    expect(leerConfiguracionDeNube({ POS_SYNC_PROVIDER: 'supabase' }, null).proveedor).toBe('supabase');
+  });
+});
+
+describe('Sin argumentos lee el process.env de verdad', () => {
+  it('no lanza y devuelve una configuración coherente', () => {
+    // En Vitest no hay POS_NUBE_URL ni identificador incrustado, así que el
+    // resultado esperado es «ninguna». Lo que se comprueba es que el valor por
+    // omisión del parámetro sea `process.env` y no un objeto vacío inventado.
+    const configuracion = leerConfiguracionDeNube();
+    expect(configuracion.origen).toBe('ninguna');
+    expect(configuracion.url).toBe('');
+  });
 });

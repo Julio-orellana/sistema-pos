@@ -55,6 +55,10 @@ node_modules/better-sqlite3/prebuilds/
 .env.*
 !.env.example
 !.env.nube-pruebas.ejemplo
+# La plantilla que dice a qué proyecto de Supabase apunta el instalador (§4.38).
+# Solo campos vacíos y la explicación; el `.env.empaquetado` real, con la URL y
+# la llave, sigue ignorado por la línea `.env.*` de arriba.
+!.env.empaquetado.ejemplo
 *.pem
 *.key
 *.p12

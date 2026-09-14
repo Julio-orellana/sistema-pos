@@ -5908,6 +5908,52 @@ y quedó bien: `terminal-1@pos-jimmy-cano.invalid`, confirmado, con
 tilde—. Cuando se pase a producción, es cambiar la URL y la llave de
 `.env.empaquetado` por las del real y volver a compilar; el usuario ya espera.
 
+#### La plantilla no estaba versionada, y el `.gitignore` la tapaba
+
+Encontrado al revisar el trabajo: `.env.empaquetado.ejemplo` existía en el
+disco pero **git no la estaba versionando**. La línea `.env.*` del
+`.gitignore` la alcanzaba, y las dos excepciones que había —`!.env.example` y
+`!.env.nube-pruebas.ejemplo`— estaban escritas una por una, así que la
+plantilla nueva no entraba. Quedaba lo peor de los dos mundos: un archivo que
+el proyecto necesita para explicar cómo apuntar el instalador, invisible para
+cualquiera que clonara el repositorio.
+
+Se agregó la tercera excepción, `!.env.empaquetado.ejemplo`. El
+`.env.empaquetado` REAL —el que tiene la URL y la llave— sigue ignorado, y la
+plantilla va con los dos campos vacíos:
+
+```
+POS_NUBE_URL=
+POS_NUBE_LLAVE_PUBLICABLE=
+POS_SYNC_PROVIDER=supabase
+```
+
+#### Vuelto a verificar de punta a punta, y no dado por bueno
+
+Las cinco comprobaciones sobre el paquete que se entrega, con su salida cruda:
+
+```
+[empaquetado] se INCRUSTA el proyecto de nube ztidrshifrblhfraiowg
+              (https://ztidrshifrblhfraiowg.supabase.co); proveedor: SupabaseSyncProvider
+
+dentro del asar (dist-electron/main/index.js):
+  var define_NUBE_INCRUSTADA_default = { url: "https://ztidrshifrblhfraiowg.supabase.co", …
+  referencias de Supabase en el bundle: ztidrshifrblhfraiowg   (una sola: no quedó ninguna del real)
+
+la aplicación compilada, carpeta de datos NUEVA, 0 variables POS_* en el entorno:
+  [sincronizacion] proyecto de nube ztidrshifrblhfraiowg (incrustado al compilar); …
+  [sincronizacion] trabajador en marcha con SupabaseSyncProvider; primer ciclo en 30 s
+  SimulatedSyncProvider: no
+
+verify:paquete -> 0
+  APUNTA A: ztidrshifrblhfraiowg (proyecto de pruebas)
+  729 entradas, 0 hallazgos
+```
+
+Que solo aparezca **una** referencia en el bundle importa tanto como que
+aparezca la correcta: si hubiera quedado también la del real, el instalador
+tendría dos y nadie sabría a cuál se conecta.
+
 #### Lo que sigue sin verificarse
 
 - **Que el `.exe` instalado en Windows se conecte de verdad.** Lo medido es la
