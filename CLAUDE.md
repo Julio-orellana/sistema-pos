@@ -980,6 +980,13 @@ el contador de ingreso del usuario.
 operativo de una terminal, válido durante 30 segundos, no datos de negocio. Lo
 que sí viaja es el hecho auditable: `usuario_bloqueado` y
 `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada.
+
+> **ESTA AFIRMACIÓN FUE FALSA HASTA EL 2026-09-13, y conviene que quede
+> escrito.** Los dos asientos se escribían fuera de la bandeja de salida, así
+> que **nunca se encolaban y nunca llegaban a la nube**. Lo encontró la prueba
+> estructural de §4.26, que nació justamente de preguntar si algo vigilaba esto.
+> Ya está corregido: el candado sigue sin viajar y el asiento ahora sí viaja,
+> que es lo que este párrafo decía desde el principio.
 Sincronizar el candado sería dañino con más de una terminal: el bloqueo de una
 caja dejaría bloqueada la otra, que es la negación de servicio que esta
 separación vino a eliminar.
@@ -3891,6 +3898,118 @@ volvió, aunque el sistema operativo ya lo supiera.
 
 Los tres se desconectan en el cierre ordenado, junto con el latido.
 
+### 4.26 La prueba que impide que un hecho de negocio se escape (y los cinco que ya se habían escapado)
+
+**Nace de una pregunta de Julio del 2026-09-13**, después de que
+`crearPrimerAdministrador` se escapara igual que los seis servicios de la fase
+1.a: *¿hay alguna prueba estructural que verifique que TODO camino de escritura
+pase por el envoltorio?* **No la había.**
+
+`trabajador.test.ts` ya exigía que **solo tres archivos** nombren
+`.transaction(`. Esa prueba protege de que alguien abra una transacción por su
+cuenta y se saltee la señal que hace ceder al trabajador. **No protege de lo
+contrario, que es peor: no abrir ninguna.** El primer administrador no nombraba
+`.transaction(` justamente porque no abría transacción, así que pasaba limpio.
+
+#### La regla que ahora se comprueba
+
+> **Cada `auditoria.registrar(` de `src/main/domain` tiene que estar dentro de
+> un `conBandejaDeSalida(` o de un `enTransaccionDeNegocio(`.**
+
+El asiento de auditoría es el marcador exacto de «acá pasó un hecho del
+negocio»: §4.17 lo dice al revés —toda operación de negocio deja su asiento— y
+`auditoria_log` es una de las doce tablas que se sincronizan. **Un asiento
+fuera del envoltorio es, por definición, un hecho de negocio que nunca va a
+llegar a la nube.**
+
+Se aceptan **dos** envoltorios y no uno, porque §4.17 ya había decidido que
+`ServicioDeVenta` y los dos métodos de `ServicioDeCaja` usan
+`enTransaccionDeNegocio` + `encolarLote` directo: su transacción hace siete
+pasos y meterla en el molde común la haría menos legible. **La primera versión
+de la prueba solo aceptaba `conBandejaDeSalida` y marcó esos cuatro como
+falsos positivos**; se corrigió después de comprobar que sí encolan.
+
+La lista de excepciones está **vacía**, y una entrada sin motivo escrito hace
+fallar otra comprobación. Hay además un control del propio detector —le da un
+caso con envoltorio y otro sin— porque un detector roto que dijera siempre
+«está dentro» dejaría la prueba pasando en falso.
+
+**Falsificada**: quitándole el envoltorio a uno de los cinco, falla nombrando
+`usuarios/autenticacion.ts:567`.
+
+#### LOS CINCO QUE ENCONTRÓ, Y POR QUÉ IMPORTAN
+
+Todos en `autenticacion.ts`, el mismo archivo del primer administrador:
+
+| Operación | Qué no llegaba a la nube |
+|---|---|
+| `registrarFalloDeAutorizacion` | el asiento `autorizacion_bloqueada` |
+| `configurarPinRemoto` | el asiento `pin_remoto_configurado` y la fila de `usuarios` |
+| `registrarSalida` | `salida_controlada_autorizada` / `_rechazada` |
+| `registrarIngresoCorrecto` | `ingreso_correcto` |
+| `registrarIngresoFallido` | `ingreso_fallido` / `usuario_bloqueado` |
+
+> **DOS DE ESTOS CONTRADECÍAN LO QUE §4.8 AFIRMA.** Esa sección dice, con todas
+> las letras, que el candado no viaja pero «el hecho auditable sí: 
+> `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que
+> sí está espejada». **No estaba espejada.** Era una afirmación falsa en la
+> documentación, sostenida desde que se escribió.
+
+**Los cinco quedaron arreglados**, y en cada uno se distingue lo que viaja de
+lo que no: el contador de intentos y el candado por superficie **se quedan
+acá** —son estado operativo de esta terminal (§4.4, §4.8) y ni siquiera existen
+en Postgres—, y lo que se encola es el asiento. En `configurarPinRemoto` se
+encola además la fila de `usuarios`, cuyo hash de PIN remoto **no viaja** porque
+`COLUMNAS_EXCLUIDAS` lo saca del payload (decisión 17).
+
+### 4.27 Los disparadores de red, ejercitados de verdad
+
+**El 2026-09-13, apagando y prendiendo el WiFi de la máquina de desarrollo.**
+No era suficiente que compilara: hasta esta corrida los tres disparadores eran
+«construidos y no vistos correr», que es la clase de afirmación que este
+proyecto no acepta.
+
+La aplicación REAL corriendo, con su carpeta de datos temporal y el proyecto de
+pruebas configurado:
+
+```
+23:57:26Z  WiFi -> off
+23:58:07Z  WiFi -> on
+23:58:36Z  APP: [sincronizacion] el sistema operativo volvió a ver una red:
+                se recomprueba la conexión sin esperar la escalera.
+23:58:51Z  APP: [sincronizacion] ciclo: sin_pendientes; 0 lotes, 0 filas, 0 ms
+```
+
+**Los dos números del diseño se leen en los timestamps**, y eso es lo que hace
+que la evidencia valga:
+
+- **29 segundos** entre prender el WiFi y el aviso: es el sondeo de 30 s, que
+  existe porque **Electron no emite ningún evento** para `net.isOnline()`.
+- **15 segundos** entre el aviso y el ciclo: son los de §5.4 que pone
+  `alDespertar()`, el tiempo que Windows tarda en levantar el adaptador. Los
+  escribió la fase 1.b esperando este día.
+
+El WiFi se devolvió a su estado en un `finally` y en un manejador de señales, y
+se comprobó después: `Wi-Fi Power (en0): On`, y un `200` del health.
+
+> **SE EJERCITÓ UNO DE LOS TRES.** `resume` y `on-ac` de `powerMonitor` siguen
+> sin provocarse: exigen suspender la máquina de verdad o desenchufarla, y no
+> se hizo. Comparten el mismo `olvidarYReintentar` que el sondeo, así que lo
+> que quedó sin ver es el cableado del evento, no lo que hace.
+
+### 4.28 Estado del proyecto de pruebas, al 2026-09-13
+
+- **Reiniciado**: las once tablas de negocio en **0**, `denominaciones` con sus
+  **11**. Se truncó por SQL, que es la única vía para `auditoria_log` (su
+  trigger de inmutabilidad aborta cualquier DELETE).
+- **El JWT ya está en 900 s**, medido acuñando un token: `expires_in = 900`,
+  `exp - iat = 900`. Estuvo en 300 desde el experimento de la tolerancia.
+- **La batería completa da 136 de 136**, corrida con `--reinicio-hecho` sobre
+  el proyecto recién vaciado. Eso confirma de paso lo que hasta ahora era una
+  inferencia: con el JWT en 300 daba 135/136, y la que fallaba era esa.
+- Queda en el bucket **una foto de prueba de 70 bytes** por corrida: con estas
+  credenciales Storage no deja borrarla, y es un proyecto descartable.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -4078,6 +4197,8 @@ Los tres se desconectan en el cierre ordenado, junto con el latido.
 | **Sin credencial usable el proveedor NI ARMA el payload, y lo reporta como clase «credencial» (401), no como fallo de red.** | Devolverlo sin código, que se leería como transitorio; devolver un 4xx cualquiera, que detendría la cola | Los tres casos —nunca se conectó, no se pudo descifrar, la nube la rechazó— los cubre un solo chequeo, porque `accessTokenVigente()` ya devuelve `null` en los tres desde la fase 3.a. Reportarlo **sin** código HTTP lo haría leer como transitorio y gastaría la escalera de reintentos esperando algo que el tiempo no arregla; reportarlo como determinístico **bloquearía un lote que es perfectamente válido**. La clase «credencial» ya existía en `reintentos.ts` desde la fase 1.b con la semántica exacta de §3.2: la cola **no se toca** —no suma intento, no agenda, no bloquea— porque lo que falta se resuelve reconectando la terminal. Probado de punta a punta contra la cola SQLite real: el lote queda pendiente con `intentos = 0` y sube entero cuando vuelve la credencial. | Prompt 43 — 2026-09-13 |
 | **CORREGIDO: `crearPrimerAdministrador` ahora ENCOLA. Sin eso, la cola de toda instalación nueva quedaba detenida para siempre en el primer lote.** | Dejarlo como estaba, que «solo» no subía un usuario; hacer opcional la dependencia `base` para no tocar los seis sitios de construcción | **Lo destapó una venta real contra Postgres, y no podía verlo ninguna prueba con dobles**: la restricción vive en la nube. `auditoria_log.usuario_id` tiene llave foránea hacia `usuarios`, y **todo** asiento de la tienda lleva el id de quien hizo la operación; con el primer administrador sin subir, el primer lote moría con `23503 auditoria_log_usuario_id_fkey` y la cola quedaba **detenida para siempre**. No era un caso raro: era *todas* las instalaciones. Era además el único camino de escritura del proyecto fuera de `conBandejaDeSalida` —se le escapó a la fase 1.a, que agregó la transacción a los otros seis servicios—, así que arreglarlo cierra de paso un hueco de atomicidad. `base` se hizo **obligatoria y no opcional**: opcional habría dejado el hueco abierto, en silencio, en cualquier sitio que se olvidara de pasarla, y el compilador no habría dicho nada. Tiene prueba propia que exige las dos filas, en un solo lote y en orden. | Prompt 44 — 2026-09-13 |
 | **`olvidarLaEspera()` se conecta a tres disparadores reales, y el sondeo de `net.isOnline()` es un intervalo porque Electron NO emite evento.** | Dejarlo para una fase futura, como estaba; confiar solo en `powerMonitor`; sondear más seguido | Sin disparadores, la escalera de recomprobación manda siempre: tras una hora sin internet la terminal esperaría hasta 5 minutos para enterarse de que la red volvió, **aunque el sistema operativo ya lo supiera**. Los tres son `resume` y `on-ac` de `powerMonitor`, más la transición `false → true` de `net.isOnline()`. Ese último **no puede ser un evento**: el módulo `net` de Electron no es un EventEmitter, así que se sondea cada 30 s —una lectura en memoria del Network List Manager, sin red y sin costo— y **solo se actúa en la transición hacia arriba**, porque al sistema operativo se le cree únicamente el «no» (§5.2). Los 15 s de gracia tras despertar no se pusieron acá: los pone `alDespertar()` del planificador, que existía desde la fase 1.b con ese número escrito esperando este día. | Prompt 44 — 2026-09-13 |
+| **PRUEBA ESTRUCTURAL NUEVA: cada `auditoria.registrar(` del dominio tiene que estar dentro de `conBandejaDeSalida` o de `enTransaccionDeNegocio`.** Encontró CINCO hechos de negocio que no llegaban a la nube. | Confiar en que la próxima vez alguien lo revise a mano; exigir solo `conBandejaDeSalida`, que es el molde común | La prueba que ya había —«solo tres archivos nombran `.transaction(`»— protege de que alguien **abra** una transacción por su cuenta, y no de lo contrario, **que es peor: no abrir ninguna**. `crearPrimerAdministrador` no nombraba `.transaction(` precisamente porque no abría transacción, así que pasaba limpio; el defecto vivió desde el Prompt 3. El asiento de auditoría es el marcador exacto de «acá pasó un hecho del negocio» —§4.17 lo dice al revés— y `auditoria_log` se sincroniza, así que un asiento fuera del envoltorio es por definición un hecho que no llega. **Se aceptan DOS envoltorios y no uno**: §4.17 ya había decidido que la venta y los dos métodos de caja usan `enTransaccionDeNegocio` + `encolarLote` directo, y la primera versión de la prueba los marcó como falsos positivos hasta que se comprobó que sí encolan. La lista de excepciones está vacía y una entrada sin motivo escrito hace fallar otra comprobación; hay además un control del propio detector, porque uno roto que dijera siempre «está dentro» dejaría la prueba pasando en falso. **Falsificada**: quitando un envoltorio, falla nombrando archivo y línea. | Prompt 45 — 2026-09-13 |
+| **CORREGIDO: cinco asientos de auditoría de `autenticacion.ts` no se encolaban, y DOS de ellos contradecían lo que §4.8 afirma.** | Excusarlos en la lista de excepciones; dejarlos y anotarlos como pendiente | Los cinco son `autorizacion_bloqueada`, `pin_remoto_configurado`, la salida controlada, el ingreso correcto y el ingreso fallido / `usuario_bloqueado`. **§4.8 decía con todas las letras** que el candado no viaja pero «el hecho auditable sí: `usuario_bloqueado` y `autorizacion_bloqueada` quedan en `auditoria_log`, que sí está espejada»: **no estaba espejada**, y esa afirmación de la documentación era falsa desde que se escribió. Excusarlos habría sido documentar como aceptado un comportamiento que el propio diseño declara incorrecto. En cada uno se distingue lo que viaja de lo que no: el contador de intentos y el candado por superficie se quedan acá —estado operativo de la terminal (§4.4), que ni existe en Postgres— y lo que se encola es el asiento; en `configurarPinRemoto` se encola además la fila de `usuarios`, cuyo hash de PIN remoto no viaja porque `COLUMNAS_EXCLUIDAS` lo saca (decisión 17). | Prompt 45 — 2026-09-13 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

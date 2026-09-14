@@ -390,12 +390,25 @@ export class ServicioDeAutenticacion {
     this.bloqueos.fijar(superficie, seBloquea ? 0 : intentos, bloqueadoHasta);
 
     if (seBloquea) {
-      this.auditoria.registrar({
-        accion: ACCIONES_DE_AUDITORIA.autorizacionBloqueada,
-        entidadTipo: 'autorizacion',
-        entidadId: null,
-        valorNuevo: { superficie, bloqueadoHasta },
-        fecha: new Date(this.ahora()).toISOString(),
+      /*
+        EL CANDADO NO VIAJA, PERO EL HECHO SÍ. §4.8 lo dice con todas las
+        letras: `bloqueos_de_autorizacion` es estado operativo de esta
+        terminal y se queda acá, pero «el hecho auditable sí viaja:
+        `autorizacion_bloqueada` queda en `auditoria_log`, que sí está
+        espejada». Hasta la fase 3.b no viajaba, y esa afirmación era falsa.
+      */
+      conBandejaDeSalida(this.base, () => {
+        const asiento = this.auditoria.registrar({
+          accion: ACCIONES_DE_AUDITORIA.autorizacionBloqueada,
+          entidadTipo: 'autorizacion',
+          entidadId: null,
+          valorNuevo: { superficie, bloqueadoHasta },
+          fecha: new Date(this.ahora()).toISOString(),
+        });
+        return {
+          resultado: undefined,
+          entradas: [{ tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const }],
+        };
       });
       return this.resultado(
         false,
@@ -514,15 +527,31 @@ export class ServicioDeAutenticacion {
     */
     exigirPinNoUsado(this.usuarios, pin, usuarioId);
 
-    this.usuarios.actualizarPinRemotoHash(usuarioId, generarHashDePin(pin));
-    this.auditoria.registrar({
-      usuarioId,
-      accion: ACCIONES_DE_AUDITORIA.pinRemotoConfigurado,
-      entidadTipo: 'usuarios',
-      entidadId: usuarioId,
-      // Nunca se registra el PIN ni su hash, solo que se configuró.
-      valorNuevo: { configurado: true },
-      fecha: new Date(this.ahora()).toISOString(),
+    /*
+      Encola la fila de `usuarios` y su asiento. **El hash del PIN remoto NO
+      viaja**: `COLUMNAS_EXCLUIDAS` de la bandeja de salida lo saca del
+      payload (decisión 17), así que lo que sube es el resto de la fila. Se
+      encola igual porque `actualizado_en` cambió y el asiento tiene que
+      llegar.
+    */
+    conBandejaDeSalida(this.base, () => {
+      this.usuarios.actualizarPinRemotoHash(usuarioId, generarHashDePin(pin));
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_AUDITORIA.pinRemotoConfigurado,
+        entidadTipo: 'usuarios',
+        entidadId: usuarioId,
+        // Nunca se registra el PIN ni su hash, solo que se configuró.
+        valorNuevo: { configurado: true },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+      return {
+        resultado: undefined,
+        entradas: [
+          { tabla: 'usuarios' as const, id: usuarioId, operacion: 'actualizar' as const },
+          { tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const },
+        ],
+      };
     });
   }
 
@@ -533,16 +562,22 @@ export class ServicioDeAutenticacion {
     usuarioId: string | null,
     detalle: string,
   ): void {
-    this.auditoria.registrar({
-      usuarioId,
-      accion: autorizada
-        ? ACCIONES_DE_AUDITORIA.salidaAutorizada
-        : ACCIONES_DE_AUDITORIA.salidaRechazada,
-      entidadTipo: 'aplicacion',
-      // El origen es un DATO del asiento, no una acción distinta: por las tres
-      // rutas ocurre el mismo hecho de negocio.
-      valorNuevo: { origen, detalle },
-      fecha: new Date(this.ahora()).toISOString(),
+    conBandejaDeSalida(this.base, () => {
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: autorizada
+          ? ACCIONES_DE_AUDITORIA.salidaAutorizada
+          : ACCIONES_DE_AUDITORIA.salidaRechazada,
+        entidadTipo: 'aplicacion',
+        // El origen es un DATO del asiento, no una acción distinta: por las tres
+        // rutas ocurre el mismo hecho de negocio.
+        valorNuevo: { origen, detalle },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+      return {
+        resultado: undefined,
+        entradas: [{ tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const }],
+      };
     });
   }
 
@@ -565,14 +600,27 @@ export class ServicioDeAutenticacion {
 
   /** Ingreso correcto: limpia el contador y deja asiento. */
   private registrarIngresoCorrecto(usuario: Usuario): ResultadoDeAutenticacion {
-    this.usuarios.fijarEstadoDeBloqueo(usuario.id, 0, null);
-    this.auditoria.registrar({
-      usuarioId: usuario.id,
-      accion: ACCIONES_DE_AUDITORIA.ingresoCorrecto,
-      entidadTipo: 'usuarios',
-      entidadId: usuario.id,
-      valorNuevo: { rol: usuario.rol },
-      fecha: new Date(this.ahora()).toISOString(),
+    /*
+      **El contador de intentos NO viaja y el asiento SÍ.** `intentos_fallidos`
+      y `bloqueado_hasta` son estado operativo de esta terminal (§4.4) y ni
+      siquiera existen en Postgres; el hecho de que alguien entró es un hecho
+      del negocio y va a `auditoria_log`, que está espejada. Por eso lo único
+      que se encola es el asiento.
+    */
+    conBandejaDeSalida(this.base, () => {
+      this.usuarios.fijarEstadoDeBloqueo(usuario.id, 0, null);
+      const asiento = this.auditoria.registrar({
+        usuarioId: usuario.id,
+        accion: ACCIONES_DE_AUDITORIA.ingresoCorrecto,
+        entidadTipo: 'usuarios',
+        entidadId: usuario.id,
+        valorNuevo: { rol: usuario.rol },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+      return {
+        resultado: undefined,
+        entradas: [{ tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const }],
+      };
     });
 
     const actualizado = this.usuarios.obtenerPorId(usuario.id);
@@ -587,17 +635,27 @@ export class ServicioDeAutenticacion {
       ? new Date(this.ahora() + SEGUNDOS_DE_BLOQUEO * MILISEGUNDOS_POR_SEGUNDO).toISOString()
       : null;
 
-    this.usuarios.fijarEstadoDeBloqueo(usuario.id, seBloquea ? 0 : intentos, bloqueadoHasta);
-
-    this.auditoria.registrar({
-      usuarioId: usuario.id,
-      accion: seBloquea
-        ? ACCIONES_DE_AUDITORIA.usuarioBloqueado
-        : ACCIONES_DE_AUDITORIA.ingresoFallido,
-      entidadTipo: 'usuarios',
-      entidadId: usuario.id,
-      valorNuevo: { intentosFallidos: intentos, bloqueadoHasta },
-      fecha: new Date(this.ahora()).toISOString(),
+    /*
+      Igual que el ingreso correcto: el contador se queda acá y el asiento
+      viaja. §4.8 lo dice para este caso concreto: «`usuario_bloqueado` […]
+      queda en `auditoria_log`, que sí está espejada».
+    */
+    conBandejaDeSalida(this.base, () => {
+      this.usuarios.fijarEstadoDeBloqueo(usuario.id, seBloquea ? 0 : intentos, bloqueadoHasta);
+      const asiento = this.auditoria.registrar({
+        usuarioId: usuario.id,
+        accion: seBloquea
+          ? ACCIONES_DE_AUDITORIA.usuarioBloqueado
+          : ACCIONES_DE_AUDITORIA.ingresoFallido,
+        entidadTipo: 'usuarios',
+        entidadId: usuario.id,
+        valorNuevo: { intentosFallidos: intentos, bloqueadoHasta },
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+      return {
+        resultado: undefined,
+        entradas: [{ tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const }],
+      };
     });
 
     if (seBloquea) {
