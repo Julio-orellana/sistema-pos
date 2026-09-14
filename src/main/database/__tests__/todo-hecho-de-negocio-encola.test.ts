@@ -36,13 +36,36 @@
  * pruebas de cada servicio— sino que **nadie se saltee el envoltorio**, que es
  * el error que ya se cometió dos veces: en los seis servicios de la fase 1.a y
  * en el primer administrador.
+ *
+ * ===========================================================================
+ * DESDE LA FASE 4.a, TAMBIÉN SE ESCANEA `src/main/sincronizacion`
+ * ===========================================================================
+ *
+ * Hasta esa fase, `auditoria.registrar(` solo aparecía dentro de
+ * `src/main/domain`, y por eso la prueba escaneaba solo esa carpeta. La
+ * pantalla de sincronización agregó la PRIMERA escritura de auditoría fuera de
+ * `domain`: `ServicioDeSincronizacion.saltarLote`, que vive en
+ * `src/main/sincronizacion` porque necesita el repositorio de la cola, no
+ * porque el hecho que audita sea menos de negocio. Es exactamente la clase de
+ * caso que esta prueba existe para atrapar —un servicio nuevo que alguien
+ * agregue el año que viene, en cualquiera de las dos carpetas— así que se
+ * amplió el escaneo en vez de escribir una prueba aparte solo para ese
+ * archivo.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const CARPETA_DE_DOMINIO = join(__dirname, '..', '..', 'domain');
+/**
+ * Las dos carpetas donde este proyecto escribe hechos de negocio. Ver la
+ * cabecera de este archivo para por qué `sincronizacion` se sumó en la
+ * Fase 4.a.
+ */
+const CARPETAS_A_REVISAR = [
+  join(__dirname, '..', '..', 'domain'),
+  join(__dirname, '..', '..', 'sincronizacion'),
+];
 
 /**
  * Operaciones que escriben un asiento y **NO** deben encolar, con su razón.
@@ -107,7 +130,7 @@ function rangosDelEnvoltorio(fuente: string): { desde: number; hasta: number }[]
   return rangos;
 }
 
-/** Recorre `src/main/domain` y ubica cada asiento respecto del envoltorio. */
+/** Recorre las carpetas de negocio y ubica cada asiento respecto del envoltorio. */
 function asientosDelDominio(): AsientoEnElCodigo[] {
   const encontrados: AsientoEnElCodigo[] = [];
 
@@ -140,7 +163,9 @@ function asientosDelDominio(): AsientoEnElCodigo[] {
     }
   };
 
-  recorrer(CARPETA_DE_DOMINIO, '');
+  for (const carpeta of CARPETAS_A_REVISAR) {
+    recorrer(carpeta, '');
+  }
   return encontrados;
 }
 

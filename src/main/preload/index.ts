@@ -30,8 +30,13 @@ import {
   type ReporteDeInventarioIpc,
   type LimiteDeDescuentoIpc,
   type ConexionDeNubeIpc,
+  type DetalleDeSincronizacionIpc,
   type EstadoDeNubeIpc,
+  type LoteIdIpc,
+  type ResultadoDeSaltoDeLoteIpc,
   type ResumenDeConexionIpc,
+  type ResumenDeSincronizacionIpc,
+  type SaltoDeLoteIpc,
   type CambioDeLimiteIpc,
   type UsuarioEditadoIpc,
   type UsuarioIpc,
@@ -271,6 +276,25 @@ const apiPos: ApiPos = {
     conectar: (datos: ConexionDeNubeIpc): Promise<RespuestaIpc<ResumenDeConexionIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.nubeConectar, datos) as Promise<
         RespuestaIpc<ResumenDeConexionIpc>
+      >,
+  },
+
+  sincronizacion: {
+    resumen: (): Promise<RespuestaIpc<ResumenDeSincronizacionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.sincronizacionResumen) as Promise<
+        RespuestaIpc<ResumenDeSincronizacionIpc>
+      >,
+    detalle: (): Promise<RespuestaIpc<DetalleDeSincronizacionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.sincronizacionDetalle) as Promise<
+        RespuestaIpc<DetalleDeSincronizacionIpc>
+      >,
+    reintentarLote: (datos: LoteIdIpc): Promise<RespuestaIpc<boolean>> =>
+      ipcRenderer.invoke(CANALES_IPC.sincronizacionReintentarLote, datos) as Promise<
+        RespuestaIpc<boolean>
+      >,
+    saltarLote: (datos: SaltoDeLoteIpc): Promise<RespuestaIpc<ResultadoDeSaltoDeLoteIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.sincronizacionSaltarLote, datos) as Promise<
+        RespuestaIpc<ResultadoDeSaltoDeLoteIpc>
       >,
   },
 

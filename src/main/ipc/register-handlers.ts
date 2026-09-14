@@ -54,6 +54,7 @@ import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import type { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
+import type { ServicioDeSincronizacion } from '@main/sincronizacion/servicio-de-sincronizacion';
 import { generarHashDePin } from '@shared/auth';
 import { montoACadena } from '@shared/money';
 import { ejecutarConRespuesta } from './respuesta';
@@ -64,6 +65,7 @@ import {
 import { registrarManejadoresDeVenta } from './venta';
 import { registrarManejadoresDeUsuarios } from './usuarios';
 import { registrarManejadoresDeNube } from './nube';
+import { registrarManejadoresDeSincronizacion } from './sincronizacion';
 import { registrarManejadoresDeRecibos } from './recibos';
 import { registrarManejadoresDeReportes } from './reportes';
 
@@ -106,6 +108,15 @@ export interface DependenciasDeIpc {
    * registran y la pantalla lo dice, en vez de fingir que existen.
    */
   readonly nube?: SesionDeNube | undefined;
+  /**
+   * Estado y acciones de la cola de sincronización (Fase 4.a).
+   *
+   * **NO es opcional**, a diferencia de `nube`: `sync_cola` y el trabajador
+   * existen en toda instalación, con nube configurada o no —el adaptador
+   * simulado también la vacía sola (§4.17)—, así que la barra de estado y la
+   * pantalla tienen sentido incluso en desarrollo sin `POS_NUBE_URL`.
+   */
+  readonly sincronizacion: ServicioDeSincronizacion;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -157,6 +168,13 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   if (dependencias.nube !== undefined) {
     registrarManejadoresDeNube({ sesion: dependencias.sesion, nube: dependencias.nube });
   }
+  // Sincronización: siempre registrada (ver el comentario del campo). El
+  // resumen no lleva guard de rol; el detalle y las dos acciones sí.
+  registrarManejadoresDeSincronizacion({
+    sesion: dependencias.sesion,
+    servicio: dependencias.sincronizacion,
+    autenticacion: dependencias.autenticacion,
+  });
 
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,

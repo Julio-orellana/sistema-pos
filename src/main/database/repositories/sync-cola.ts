@@ -9,6 +9,23 @@
 import type { ElementoSyncCola, NuevoElementoSyncCola, OperacionSync } from './entidades';
 import { RepositorioBase, ahora, nuevoId } from './base';
 
+/** Cuántos pendientes hay, agrupados por qué tabla o tipo de archivo son. */
+export interface PendientesPorTabla {
+  readonly entidadTipo: string;
+  readonly total: number;
+}
+
+/** El lote que hoy detiene la cola, con lo que hace falta para decidir qué hacer. */
+export interface LoteBloqueante {
+  readonly loteId: string;
+  /** El error TAL CUAL lo devolvió la función de Postgres, sin resumir. */
+  readonly error: string;
+  readonly intentos: number;
+  /** Qué tablas trae el lote, para que la pantalla diga «ventas, productos» y no un UUID. */
+  readonly tablas: readonly string[];
+  readonly creadoEn: string;
+}
+
 /** Fila cruda de la tabla `sync_cola`. */
 interface FilaSyncCola {
   readonly id: string;
@@ -290,12 +307,12 @@ export class RepositorioDeSyncCola extends RepositorioBase {
   /**
    * Levanta el bloqueo de un lote para que la cola vuelva a intentarlo.
    *
-   * **HOY NO LO LLAMA NADIE EN PRODUCCIÓN, y eso es correcto:** la pantalla de
-   * sincronización que lo va a usar es de una fase posterior (§3.3 del
-   * diseño). Existe ahora porque es la otra mitad de `marcarLoteBloqueante`:
-   * sin ella, las pruebas no podrían comprobar que un lote desbloqueado deja
-   * pasar a los que estaban detrás, que es justamente lo que hay que
-   * garantizar.
+   * Es la mitad «reintentar ahora» de la pantalla de sincronización (Fase 4.a,
+   * §3.3 del diseño): `ServicioDeSincronizacion.reintentarLote` la llama y
+   * después dispara un ciclo inmediato. Nació antes de que esa pantalla
+   * existiera, como la otra mitad de `marcarLoteBloqueante` —sin ella, las
+   * pruebas no podían comprobar que un lote desbloqueado deja pasar a los que
+   * estaban detrás—, y ahora también tiene un llamador real.
    */
   public desbloquearLote(loteId: string): void {
     this.ejecutar(() => {
@@ -318,5 +335,134 @@ export class RepositorioDeSyncCola extends RepositorioBase {
       )
       .get() as { readonly total: number };
     return fila.total;
+  }
+
+  // =========================================================================
+  // LECTURA PARA LA PANTALLA DE SINCRONIZACIÓN (Fase 4.a)
+  // =========================================================================
+
+  /** Pendientes agrupados por tabla (o `archivo_foto` para las fotos). */
+  public contarPendientesPorTabla(): PendientesPorTabla[] {
+    const filas = this.base
+      .prepare(
+        `SELECT entidad_tipo, COUNT(*) AS total FROM sync_cola
+          WHERE sincronizado_en IS NULL
+          GROUP BY entidad_tipo
+          ORDER BY entidad_tipo`,
+      )
+      .all() as { readonly entidad_tipo: string; readonly total: number }[];
+    return filas.map((fila) => ({ entidadTipo: fila.entidad_tipo, total: fila.total }));
+  }
+
+  /**
+   * `creado_en` de la fila pendiente MÁS VIEJA, o `null` si no hay pendientes.
+   *
+   * Es la edad que decide si algo cuenta como «pendiente viejo» (decisión 8
+   * del diseño, umbral de 24 h, provisional) y lo que arma el texto del aviso
+   * al iniciar sesión: «desde ayer a las 09:12».
+   */
+  public obtenerPendienteMasVieja(): string | null {
+    const fila = this.base
+      .prepare(
+        `SELECT MIN(creado_en) AS creado_en FROM sync_cola WHERE sincronizado_en IS NULL`,
+      )
+      .get() as { readonly creado_en: string | null };
+    return fila.creado_en;
+  }
+
+  /**
+   * Cuándo se sincronizó algo por última vez, de verdad.
+   *
+   * Es el «último éxito» que pide la pantalla, y se lee de `sync_cola` en vez
+   * de guardarse en memoria: es el mismo criterio de siempre —todo el estado
+   * vive en la base, ninguno en memoria (§4.18)—, así que sobrevive a un
+   * cierre forzado y no depende de que el proceso lleve un rato corriendo.
+   */
+  public obtenerUltimoExito(): string | null {
+    const fila = this.base
+      .prepare(`SELECT MAX(sincronizado_en) AS ultimo FROM sync_cola WHERE sincronizado_en IS NOT NULL`)
+      .get() as { readonly ultimo: string | null };
+    return fila.ultimo;
+  }
+
+  /**
+   * El lote que hoy detiene la cola, o `null` si ninguno lo hace.
+   *
+   * **Solo puede haber uno a la vez en un sistema sano.** El trabajador nunca
+   * mira más allá del lote pendiente más viejo (`siguienteLotePendiente`), así
+   * que si ese queda bloqueante ningún lote más nuevo llega a intentarse. Se
+   * toma el más viejo de los que estén marcados por defensa, no porque se
+   * espere encontrar más de uno.
+   */
+  public obtenerLoteBloqueante(): LoteBloqueante | null {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM sync_cola
+          WHERE bloqueante = 1 AND sincronizado_en IS NULL
+          ORDER BY creado_en, rowid`,
+      )
+      .all() as FilaSyncCola[];
+
+    const primera = filas[0];
+    if (primera === undefined) {
+      return null;
+    }
+
+    const delMismoLote = filas.filter((fila) => fila.lote_id === primera.lote_id);
+    return {
+      loteId: primera.lote_id,
+      error: primera.error ?? '',
+      intentos: primera.intentos,
+      tablas: [...new Set(delMismoLote.map((fila) => fila.entidad_tipo))],
+      creadoEn: primera.creado_en,
+    };
+  }
+
+  /**
+   * Fotos que se apartaron un día porque el archivo ya no está en el disco
+   * (§2.5.4). No están bloqueando nada; son un aviso aparte.
+   */
+  public contarArchivosApartados(): number {
+    const fila = this.base
+      .prepare(
+        `SELECT COUNT(*) AS total FROM sync_cola
+          WHERE sincronizado_en IS NULL
+            AND substr(entidad_tipo, 1, 8) = 'archivo_'
+            AND proximo_intento_en IS NOT NULL`,
+      )
+      .get() as { readonly total: number };
+    return fila.total;
+  }
+
+  /**
+   * SALTA un lote a mano: lo marca resuelto SIN haberlo subido.
+   *
+   * **Es DISTINTO de `marcarLoteSincronizado`, y a propósito.** Aquel es la
+   * confirmación real de que la nube aceptó el lote; este dice lo contrario —
+   * que una PERSONA decidió dejar un hueco deliberado en el respaldo (§3.3 del
+   * diseño, decisión 9). El `error` no se limpia a NULL como en un éxito
+   * genuino: se REEMPLAZA por `nota`, para que quien mire la fila en el disco
+   * —sin pasar por la auditoría— no la confunda con una subida real. El
+   * registro completo de quién lo saltó y por qué vive en `auditoria_log`, que
+   * sí se sincroniza; esto es solo la marca local.
+   *
+   * Devuelve las filas que tenía el lote ANTES de marcarlas, porque quien
+   * llama las necesita para escribir el asiento de auditoría con lo que
+   * contenía.
+   */
+  public marcarLoteSaltado(loteId: string, nota: string): ElementoSyncCola[] {
+    const filas = this.leerLote(loteId);
+
+    this.ejecutar(() => {
+      this.base
+        .prepare(
+          `UPDATE sync_cola
+              SET sincronizado_en = ?, error = ?, bloqueante = 0, proximo_intento_en = NULL
+            WHERE lote_id = ? AND sincronizado_en IS NULL`,
+        )
+        .run(ahora(), nota, loteId);
+    });
+
+    return filas;
   }
 }

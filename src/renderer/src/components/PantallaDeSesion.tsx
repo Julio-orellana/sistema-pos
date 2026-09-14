@@ -5,9 +5,9 @@
  * llega en un prompt futuro y va a reemplazar este menú.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import type { SesionIniciada } from '@shared/types/ipc';
+import type { ResumenDeSincronizacionIpc, SesionIniciada } from '@shared/types/ipc';
 import { PanelDeVerificacion } from './PanelDeVerificacion';
 import { PantallaDeCaja } from './PantallaDeCaja';
 import { PantallaDeCategorias } from './PantallaDeCategorias';
@@ -19,6 +19,7 @@ import { PantallaDeRecibos } from './PantallaDeRecibos';
 import { PantallaDeReportes } from './PantallaDeReportes';
 import { PantallaDeLimites } from './PantallaDeLimites';
 import { PantallaDeNube } from './PantallaDeNube';
+import { PantallaDeSincronizacion } from './PantallaDeSincronizacion';
 import { PantallaDeVenta } from './PantallaDeVenta';
 
 export interface PantallaDeSesionProps {
@@ -39,13 +40,82 @@ type Vista =
   | 'recibos'
   | 'reportes'
   | 'limites'
-  | 'nube';
+  | 'nube'
+  | 'sincronizacion';
+
+/**
+ * El aviso de §3.3 al iniciar sesión, con el umbral de 24 h (decisión 8,
+ * provisional). Solo se muestra con algo REALMENTE pendiente: un install
+ * recién conectado, sin ninguna venta todavía, no tiene nada que avisar
+ * aunque no tenga credencial.
+ */
+function AvisoDePendientes({
+  resumen,
+  irASincronizacion,
+}: {
+  readonly resumen: ResumenDeSincronizacionIpc;
+  readonly irASincronizacion: () => void;
+}): React.JSX.Element | null {
+  if (resumen.pendientes === 0) {
+    return null;
+  }
+
+  const texto = ((): string | null => {
+    const cambios = resumen.pendientes === 1 ? '1 cambio' : `${String(resumen.pendientes)} cambios`;
+    if (resumen.estado === 'pendientes_viejos') {
+      const desde =
+        resumen.pendienteMasViejaDesde === null
+          ? ''
+          : ` desde ${new Date(resumen.pendienteMasViejaDesde).toLocaleString()}`;
+      return `Hay ${cambios} sin respaldar en la nube${desde}.`;
+    }
+    if (resumen.estado === 'detenida') {
+      return `La sincronización está DETENIDA. Hay ${cambios} esperando.`;
+    }
+    if (resumen.estado === 'sin_credencial') {
+      return `Esta terminal no tiene conexión con la nube. Hay ${cambios} esperando.`;
+    }
+    return null;
+  })();
+
+  if (texto === null) {
+    return null;
+  }
+
+  const clase = resumen.estado === 'pendientes_viejos' ? 'advertencia' : 'alerta';
+
+  return (
+    <div className={clase} data-prueba="aviso-de-pendientes">
+      <p>{texto}</p>
+      <button type="button" className="boton--secundario" onClick={irASincronizacion}>
+        Ver detalle
+      </button>
+    </div>
+  );
+}
 
 export function PantallaDeSesion({
   sesion,
   alCerrarSesion,
 }: PantallaDeSesionProps): React.JSX.Element {
   const [vista, setVista] = useState<Vista>('menu');
+  const [resumenDeNube, setResumenDeNube] = useState<ResumenDeSincronizacionIpc | null>(null);
+
+  useEffect(() => {
+    if (sesion.rol !== 'administrativo') {
+      return;
+    }
+    const control = new AbortController();
+    void (async (): Promise<void> => {
+      const respuesta = await window.pos.sincronizacion.resumen();
+      if (!control.signal.aborted && respuesta.ok) {
+        setResumenDeNube(respuesta.datos);
+      }
+    })();
+    return (): void => {
+      control.abort();
+    };
+  }, [sesion.rol]);
 
   if (vista === 'venta') {
     return (
@@ -85,6 +155,9 @@ export function PantallaDeSesion({
   if (vista === 'nube') {
     return <PantallaDeNube alVolver={() => { setVista('menu'); }} />;
   }
+  if (vista === 'sincronizacion') {
+    return <PantallaDeSincronizacion alVolver={() => { setVista('menu'); }} />;
+  }
 
   return (
     <div data-prueba="pantalla-de-sesion">
@@ -94,6 +167,13 @@ export function PantallaDeSesion({
           {sesion.nombre} · rol {sesion.rol}
         </p>
       </header>
+
+      {sesion.rol === 'administrativo' && resumenDeNube !== null && (
+        <AvisoDePendientes
+          resumen={resumenDeNube}
+          irASincronizacion={() => { setVista('sincronizacion'); }}
+        />
+      )}
 
       <div className="menu">
         <button type="button" data-prueba="ir-a-venta" onClick={() => { setVista('venta'); }}>
@@ -164,6 +244,13 @@ export function PantallaDeSesion({
               onClick={() => { setVista('nube'); }}
             >
               Conectar con la nube
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-sincronizacion"
+              onClick={() => { setVista('sincronizacion'); }}
+            >
+              Sincronización
             </button>
             <button
               type="button"

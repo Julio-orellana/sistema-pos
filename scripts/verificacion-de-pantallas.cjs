@@ -35,10 +35,12 @@
  */
 
 const { mkdtempSync, rmSync } = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
 const { _electron: electron } = require('playwright-core');
+const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
 
 /** Raíz del proyecto: este guion vive en scripts/. */
@@ -109,6 +111,33 @@ async function main() {
     }
     await prueba('tecla-confirmar').click();
   };
+
+  /**
+   * Inserta a mano un lote BLOQUEANTE en `sync_cola`, para poder ejercitar
+   * «reintentar» y «saltar» sin depender de que la nube de verdad rechace
+   * algo —esta corrida no tiene `POS_NUBE_URL`, así que nada llega a fallar
+   * solo—. Escribe directo en el archivo de la base TEMPORAL de esta corrida,
+   * nunca el de la tienda, con una conexión aparte y de un solo uso: SQLite
+   * en modo WAL admite otra conexión mientras la app tiene la suya abierta.
+   */
+  function forzarLoteBloqueante(error) {
+    const loteId = randomUUID();
+    const ahora = new Date().toISOString();
+    const conexion = new DatabaseConstructor(join(datos, 'pos-agricola.db'));
+    try {
+      conexion
+        .prepare(
+          `INSERT INTO sync_cola (
+             id, entidad_tipo, entidad_id, operacion, payload, creado_en,
+             lote_id, orden_en_lote, intentos, bloqueante, error
+           ) VALUES (?, 'usuarios', ?, 'insertar', '{}', ?, ?, 0, 1, 1, ?)`,
+        )
+        .run(randomUUID(), randomUUID(), ahora, loteId, error);
+    } finally {
+      conexion.close();
+    }
+    return loteId;
+  }
 
   try {
     // ---- Preparación: administrador y una categoría ------------------------
@@ -640,10 +669,177 @@ async function main() {
       botonesDeConectar === 0,
     );
 
-    // Y el alta sirve para algo solo si esa persona puede entrar: tiene que
-    // aparecer ofrecida en la pantalla de ingreso.
+    // =======================================================================
+    // La pantalla de SINCRONIZACIÓN (Fase 4.a). A diferencia de «nube», sus
+    // canales NO son opcionales —`sync_cola` existe con proyecto configurado
+    // o no (§4.17)—, así que tiene que renderizar de verdad aunque esta
+    // corrida no tenga POS_NUBE_URL.
+    // =======================================================================
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-sincronizacion').click();
+    await prueba('pantalla-de-sincronizacion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('sincronizacion-resumen').waitFor({ timeout: ESPERA_CORTA });
+
+    const avisoSinConfigurarDeSincronizacion = await prueba(
+      'sincronizacion-sin-configurar',
+    ).count();
+    comprobar(
+      'sin proyecto de nube, la pantalla de sincronización lo dice y no finge estar conectada',
+      '1 aviso de "sin configurar"',
+      `${String(avisoSinConfigurarDeSincronizacion)} avisos`,
+      avisoSinConfigurarDeSincronizacion === 1,
+    );
+
+    const textoDeSincronizacion = (await ventana.locator('body').textContent()) ?? '';
+    comprobar(
+      'el estado calculado por el proceso principal llega legible a la pantalla',
+      'contiene "Estado:"',
+      textoDeSincronizacion.includes('Estado:') ? 'aparece' : 'no aparece (mal)',
+      textoDeSincronizacion.includes('Estado:'),
+    );
+
+    // Sin ningún lote bloqueante en esta corrida, ni la acción de saltar ni la
+    // de reintentar deberían dibujarse: no hay nada que resolver.
+    const botonesDeSaltar = await prueba('sincronizacion-saltar').count();
+    comprobar(
+      'sin lote bloqueante, NO se ofrece la acción de saltar (no hay nada que saltar)',
+      '0 botones',
+      `${String(botonesDeSaltar)} botones`,
+      botonesDeSaltar === 0,
+    );
+
+    // =======================================================================
+    // «REINTENTAR AHORA» con un lote bloqueante DE VERDAD.
+    // =======================================================================
+    const loteParaReintentar = forzarLoteBloqueante(
+      '{"code":"23505","message":"duplicate key value violates unique constraint"}',
+    );
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    await prueba('ir-a-sincronizacion').click();
+    await prueba('pantalla-de-sincronizacion').waitFor({ timeout: ESPERA_CORTA });
+
+    await prueba('sincronizacion-lote-bloqueante').waitFor({ timeout: ESPERA_CORTA });
+    const errorCompleto = (await prueba('sincronizacion-error-completo').textContent()) ?? '';
+    comprobar(
+      'el error se muestra TAL CUAL lo devolvió la función de Postgres, sin resumir',
+      'contiene "23505" y "duplicate key"',
+      errorCompleto.includes('23505') && errorCompleto.includes('duplicate key')
+        ? 'lo contiene'
+        : `no lo contiene: "${errorCompleto}"`,
+      errorCompleto.includes('23505') && errorCompleto.includes('duplicate key'),
+    );
+
+    await prueba('sincronizacion-reintentar').click();
+    /*
+      El `onClick` dispara la acción con `void` (fire-and-forget: React no deja
+      awaitear un manejador de evento), así que `click()` de Playwright NO
+      espera a que la operación asincrónica termine, solo a que el clic se
+      despachó. Por eso se espera la CONSECUENCIA visible —que el aviso de
+      lote bloqueante desaparezca del DOM— y no un `waitForTimeout` a ciegas,
+      que en la primera versión de esta comprobación quedó corto y la hizo
+      fallar en falso.
+    */
+    await prueba('sincronizacion-lote-bloqueante').waitFor({
+      state: 'detached',
+      timeout: ESPERA_CORTA,
+    });
+    // Con el adaptador simulado (sin POS_NUBE_URL), CUALQUIER lote se acepta:
+    // "reintentar" lo desbloquea y el ciclo inmediato lo sube. La cola queda
+    // sin ese lote bloqueante.
+    const siguebloqueante = await prueba('sincronizacion-lote-bloqueante').count();
+    comprobar(
+      '«reintentar ahora» quita el lote bloqueado de la pantalla',
+      '0 lotes bloqueantes',
+      `${String(siguebloqueante)} lotes bloqueantes`,
+      siguebloqueante === 0,
+    );
+
+    // =======================================================================
+    // «SALTAR ESTE LOTE»: exige PIN y queda en auditoria_log (decisión 9).
+    // =======================================================================
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+    const loteParaSaltar = forzarLoteBloqueante('{"code":"23503","message":"foreign key violation"}');
+    await prueba('ir-a-sincronizacion').click();
+    await prueba('pantalla-de-sincronizacion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('sincronizacion-lote-bloqueante').waitFor({ timeout: ESPERA_CORTA });
+
+    await prueba('sincronizacion-saltar').click();
+    await prueba('confirmacion-de-salto').waitFor({ timeout: ESPERA_CORTA });
+    const errorEnConfirmacion = (await prueba('salto-error-original').textContent()) ?? '';
+    comprobar(
+      'ANTES de pedir el PIN, la confirmación muestra qué error tenía el lote (§4.9: ver antes de autorizar)',
+      'contiene "23503"',
+      errorEnConfirmacion.includes('23503') ? 'lo contiene' : `no lo contiene: "${errorEnConfirmacion}"`,
+      errorEnConfirmacion.includes('23503'),
+    );
+
+    // Primero un PIN EQUIVOCADO: no debería saltar nada.
+    await teclearPin('9999');
+    // Mismo caso que arriba: `alConfirmar` dispara la verificación con `void`,
+    // así que se espera a que el aviso de error aparezca en el DOM, no un
+    // tiempo fijo.
+    await prueba('sincronizacion-error').waitFor({ timeout: ESPERA_CORTA });
+    const mensajeDePinMalo = (await prueba('sincronizacion-error').textContent().catch(() => '')) ?? '';
+    comprobar(
+      'un PIN equivocado NO salta el lote: sigue pidiendo confirmación',
+      'sigue en la pantalla de confirmación, con un aviso',
+      mensajeDePinMalo !== '' ? `avisa: "${mensajeDePinMalo}"` : 'no avisó nada (mal)',
+      mensajeDePinMalo !== '',
+    );
+    const sigueEnConfirmacion = await prueba('confirmacion-de-salto').count();
+    comprobar(
+      'tras el PIN equivocado, el lote SIGUE bloqueante: no se saltó nada',
+      '1 (sigue en confirmación)',
+      `${String(sigueEnConfirmacion)}`,
+      sigueEnConfirmacion === 1,
+    );
+
+    // Ahora el PIN correcto: recién ahí se salta.
+    await teclearPin(PIN);
+    await prueba('pantalla-de-sincronizacion').waitFor({ timeout: ESPERA_CORTA });
+    const yaNoHayBloqueante = await prueba('sincronizacion-lote-bloqueante').count();
+    comprobar(
+      'con el PIN correcto, el lote se salta y desaparece de "detenido"',
+      '0 lotes bloqueantes',
+      `${String(yaNoHayBloqueante)} lotes bloqueantes`,
+      yaNoHayBloqueante === 0,
+    );
+
+    // Y la evidencia de fondo: quedó UN asiento en auditoria_log, firmado.
+    const conexionDeVerificacion = new DatabaseConstructor(join(datos, 'pos-agricola.db'), {
+      readonly: true,
+    });
+    let asientoDeSalto;
+    try {
+      asientoDeSalto = conexionDeVerificacion
+        .prepare(
+          `SELECT usuario_id, entidad_id FROM auditoria_log
+            WHERE accion = 'lote_de_sincronizacion_saltado'`,
+        )
+        .get();
+    } finally {
+      conexionDeVerificacion.close();
+    }
+    comprobar(
+      'el salto queda en auditoria_log, con el lote y quién lo autorizó (decisión 9)',
+      `entidad_id = ${loteParaSaltar}, con usuario_id`,
+      asientoDeSalto
+        ? `entidad_id = ${asientoDeSalto.entidad_id}, usuario_id = ${asientoDeSalto.usuario_id}`
+        : 'NO HAY NINGÚN ASIENTO (mal)',
+      Boolean(asientoDeSalto) &&
+        asientoDeSalto.entidad_id === loteParaSaltar &&
+        asientoDeSalto.usuario_id !== null,
+    );
+
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor();
+
+    // Y el alta sirve para algo solo si esa persona puede entrar: tiene que
+    // aparecer ofrecida en la pantalla de ingreso. Ya se está en el menú, así
+    // que no hace falta otro "Volver".
     await ventana.getByRole('button', { name: 'Cerrar sesión' }).click();
     await prueba('pantalla-de-ingreso').waitFor({ timeout: ESPERA_CORTA });
     const enElIngreso = (await ventana.locator('body').textContent()) ?? '';

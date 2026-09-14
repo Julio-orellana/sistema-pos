@@ -39,6 +39,7 @@ import sqlSyncColaLotes from './migrations/018_sync_cola_lotes.sql?raw';
   es UNO SOLO para las dos carpetas. Ver `supabase/migrations/README.md`.
 */
 import sqlLimitesIdDeterminista from './migrations/028_limites_descuento_id_determinista.sql?raw';
+import sqlSaltarLoteDeSincronizacion from './migrations/029_saltar_lote_de_sincronizacion.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -96,6 +97,11 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 28,
     nombre: '028_limites_descuento_id_determinista',
     sql: sqlLimitesIdDeterminista,
+  },
+  {
+    orden: 29,
+    nombre: '029_saltar_lote_de_sincronizacion',
+    sql: sqlSaltarLoteDeSincronizacion,
   },
 ];
 

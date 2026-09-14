@@ -214,7 +214,14 @@ describe('LA MIGRACIÓN 028 mueve lo que ya estaba, no solo lo que venga', () =>
 
   function baseSinLa028(): { base: Database; limpiar: () => void } {
     const nueva = crearBaseVacia();
-    aplicarMigraciones(nueva.base, MIGRACIONES.slice(0, -1));
+    /*
+      Se filtra por NÚMERO DE ORDEN y no por posición (`slice(0, -1)`): la
+      migración 028 dejó de ser la última en cuanto se agregó la 029, y un
+      corte posicional habría empezado a excluir la migración equivocada sin
+      que nada lo avisara. Filtrar por `orden < 28` sigue siendo correcto
+      aunque se agreguen more migraciones después.
+    */
+    aplicarMigraciones(nueva.base, MIGRACIONES.filter((m) => m.orden < 28));
     return nueva;
   }
 

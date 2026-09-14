@@ -20,11 +20,56 @@
  *
  * La barrera real sigue siendo el PIN. La ubicación solo evita el accidente y
  * que el cajero lo tenga delante como una opción más del día.
+ *
+ * ===========================================================================
+ * TAMBIÉN MUESTRA EL ESTADO DE SINCRONIZACIÓN (§3.3 del diseño, Fase 4.a)
+ * ===========================================================================
+ *
+ * Es el nivel «permanente» de los tres que describe el diseño: visible
+ * siempre, sin estorbar la venta, con un texto corto y un color. Consulta
+ * `sincronizacion:resumen`, el ÚNICO canal de sincronización sin guard de rol
+ * —esta barra está montada incluso antes de iniciar sesión— y que no lleva
+ * ningún dato sensible.
+ *
+ * Se sondea cada `INTERVALO_DE_SONDEO_MS`: es una consulta local a SQLite, sin
+ * red de por medio, así que el costo de refrescarla seguido es despreciable.
  */
 
 import { useEffect, useState } from 'react';
 
-import type { SesionIniciada } from '@shared/types/ipc';
+import type { ResumenDeSincronizacionIpc, SesionIniciada } from '@shared/types/ipc';
+
+/** Cada cuánto se refresca el indicador de sincronización. */
+const INTERVALO_DE_SONDEO_MS = 20_000;
+
+/** El texto y la clase de color para cada estado, calculados en el proceso principal. */
+function claseDeColor(estado: ResumenDeSincronizacionIpc['estado']): string {
+  if (estado === 'detenida' || estado === 'sin_credencial') {
+    return 'barra-estado__nube barra-estado__nube--rojo';
+  }
+  if (estado === 'pendientes_viejos') {
+    return 'barra-estado__nube barra-estado__nube--ambar';
+  }
+  return 'barra-estado__nube';
+}
+
+/** El texto corto, con los mismos nombres que usa `resumen-de-sincronizacion.ts`. */
+function textoDelResumen(resumen: ResumenDeSincronizacionIpc): string {
+  switch (resumen.estado) {
+    case 'detenida':
+      return 'Nube: DETENIDA';
+    case 'sin_credencial':
+      return 'Nube: sin conectar';
+    case 'pendientes_viejos':
+      return `Nube: ${String(resumen.pendientes)} pendientes (más de 24 h)`;
+    case 'sin_conexion':
+      return `Nube: sin conexión — ${String(resumen.pendientes)} pendientes`;
+    case 'pendientes':
+      return `Nube: ${String(resumen.pendientes)} pendientes`;
+    case 'al_dia':
+      return 'Nube: al día';
+  }
+}
 
 export function BarraDeEstado({
   sesion,
@@ -33,6 +78,7 @@ export function BarraDeEstado({
 }): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState('—');
+  const [resumen, setResumen] = useState<ResumenDeSincronizacionIpc | null>(null);
 
   useEffect(() => {
     const control = new AbortController();
@@ -44,6 +90,27 @@ export function BarraDeEstado({
     })();
     return (): void => {
       control.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    const control = new AbortController();
+
+    const consultar = async (): Promise<void> => {
+      const respuesta = await window.pos.sincronizacion.resumen();
+      if (!control.signal.aborted && respuesta.ok) {
+        setResumen(respuesta.datos);
+      }
+    };
+
+    void consultar();
+    const intervalo = setInterval(() => {
+      void consultar();
+    }, INTERVALO_DE_SONDEO_MS);
+
+    return (): void => {
+      control.abort();
+      clearInterval(intervalo);
     };
   }, []);
 
@@ -78,6 +145,17 @@ export function BarraDeEstado({
       </button>
 
       {error !== null && <span className="barra-estado__error">{error}</span>}
+
+      {resumen !== null && (
+        // "false" no es un texto engañoso: `configurada === false` significa
+        // que esta copia no tiene ningún proyecto de nube, y en ese caso el
+        // estado calculado ya es 'al_dia' (o 'pendientes'), nunca uno que
+        // alarme (ver `calcularEstadoDeSincronizacion`). No hace falta una
+        // rama aparte para "sin configurar": el propio cálculo ya lo cubre.
+        <span className={claseDeColor(resumen.estado)} data-prueba="barra-nube">
+          {textoDelResumen(resumen)}
+        </span>
+      )}
 
       <span className="barra-estado__relleno" />
       {sesion !== null && (

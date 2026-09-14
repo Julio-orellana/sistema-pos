@@ -169,6 +169,29 @@ export const CANALES_IPC = {
    * La contraseña viaja por este canal una vez y no se guarda en ningún lado.
    */
   nubeConectar: 'nube:conectar',
+
+  // --- Sincronización: barra de estado y pantalla (fase 4.a) ---------------
+  /**
+   * Resumen LIVIANO del estado de sincronización. SIN guard de rol: lo
+   * consulta la barra de estado, que está montada siempre, incluso antes de
+   * iniciar sesión. No devuelve nada sensible, solo cuántos pendientes hay y
+   * un estado ya calculado (§3.3 del diseño).
+   */
+  sincronizacionResumen: 'sincronizacion:resumen',
+  /**
+   * Detalle completo para la pantalla de sincronización. Solo rol
+   * administrativo: pendientes por tabla, el lote bloqueante con su error
+   * completo, y el estado de la credencial.
+   */
+  sincronizacionDetalle: 'sincronizacion:detalle',
+  /** «Reintentar ahora»: quita el bloqueo de un lote y agenda un ciclo. Solo rol administrativo. */
+  sincronizacionReintentarLote: 'sincronizacion:reintentar-lote',
+  /**
+   * «Saltar este lote»: exige PIN de administrador y queda en `auditoria_log`
+   * (decisión 9 del diseño). Es la única forma legítima de dejar un hueco
+   * deliberado en el respaldo de la nube.
+   */
+  sincronizacionSaltarLote: 'sincronizacion:saltar-lote',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -1024,6 +1047,96 @@ export interface EstadoDeNubeIpc {
   readonly filasPendientes: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// DTO: sincronización (fase 4.a — barra de estado y pantalla)
+// ---------------------------------------------------------------------------
+
+/**
+ * Los seis estados que puede mostrar la sincronización, calculados en el
+ * proceso principal (`resumen-de-sincronizacion.ts`). El renderer nunca
+ * decide el estado: solo lo muestra con el texto y el color que le
+ * corresponden.
+ */
+export type EstadoDeSincronizacionIpc =
+  | 'detenida'
+  | 'sin_credencial'
+  | 'pendientes_viejos'
+  | 'sin_conexion'
+  | 'pendientes'
+  | 'al_dia';
+
+/**
+ * Resumen LIVIANO. Lo pide la barra de estado, SIN sesión ni rol: no lleva
+ * ningún dato sensible, solo lo necesario para un texto corto y un color.
+ */
+export interface ResumenDeSincronizacionIpc {
+  /** `false` cuando esta copia no tiene ningún proyecto de nube configurado. */
+  readonly configurada: boolean;
+  readonly estado: EstadoDeSincronizacionIpc;
+  readonly pendientes: number;
+  /** ISO-8601 de la fila pendiente más vieja, o `null` si no hay pendientes. */
+  readonly pendienteMasViejaDesde: string | null;
+}
+
+/** Cuántos pendientes hay agrupados por tabla (o por `archivo_foto`). */
+export interface PendientesPorTablaIpc {
+  readonly entidadTipo: string;
+  readonly total: number;
+}
+
+/** El lote que hoy detiene la cola, con lo que hace falta para decidir. */
+export interface LoteBloqueanteIpc {
+  readonly loteId: string;
+  /** El error TAL CUAL lo devolvió la función de Postgres, sin resumir. */
+  readonly error: string;
+  readonly intentos: number;
+  readonly tablas: readonly string[];
+  readonly creadoEn: string;
+}
+
+/** El detalle completo. Solo rol administrativo. */
+export interface DetalleDeSincronizacionIpc extends ResumenDeSincronizacionIpc {
+  readonly pendientesPorTabla: readonly PendientesPorTablaIpc[];
+  readonly ultimoExitoEn: string | null;
+  readonly loteBloqueante: LoteBloqueanteIpc | null;
+  readonly archivosApartados: number;
+  readonly hayCredencial: boolean;
+  readonly revocada: boolean;
+  readonly conectada: boolean;
+}
+
+/** Payload de «reintentar ahora». */
+export const esquemaLoteId = z.object({ loteId: z.uuid() });
+export type LoteIdIpc = z.infer<typeof esquemaLoteId>;
+
+/** Largo del PIN en la frontera de «saltar lote»: mismo rango que la salida controlada. */
+const LARGO_MINIMO_PIN_SALTO = 4;
+const LARGO_MAXIMO_PIN_SALTO = 12;
+
+/** Payload de «saltar este lote»: el lote y el PIN de un administrador. */
+export const esquemaSaltoDeLote = z.object({
+  loteId: z.uuid(),
+  pin: z.string().min(LARGO_MINIMO_PIN_SALTO).max(LARGO_MAXIMO_PIN_SALTO),
+});
+export type SaltoDeLoteIpc = z.infer<typeof esquemaSaltoDeLote>;
+
+/** Qué contenía el lote saltado, para que la pantalla confirme qué se saltó. */
+export interface LoteSaltadoIpc {
+  readonly loteId: string;
+  readonly tablas: readonly string[];
+  readonly filas: number;
+}
+
+/** Resultado de intentar saltar un lote: puede fallar por PIN, no solo tener éxito. */
+export interface ResultadoDeSaltoDeLoteIpc {
+  readonly saltado: boolean;
+  readonly mensaje: string;
+  /** Segundos para reintentar si el candado de la superficie se bloqueó. */
+  readonly segundosParaReintentar: number | null;
+  /** Presente solo cuando `saltado` es `true`. */
+  readonly lote: LoteSaltadoIpc | null;
+}
+
 /** Lo que devuelve conectar cuando sale bien. */
 export interface ResumenDeConexionIpc {
   readonly correo: string | null;
@@ -1365,6 +1478,24 @@ export interface ApiPos {
     estado(): Promise<RespuestaIpc<EstadoDeNubeIpc>>;
     /** Inicia sesión y guarda el token de refresco. La contraseña se descarta. */
     conectar(datos: ConexionDeNubeIpc): Promise<RespuestaIpc<ResumenDeConexionIpc>>;
+  };
+
+  /**
+   * Sincronización con la nube: barra de estado y pantalla (fase 4.a).
+   *
+   * `resumen` NO exige rol ni sesión: la barra de estado está montada siempre,
+   * incluso antes de iniciar sesión, y no lleva ningún dato sensible. Las
+   * otras tres exigen rol administrativo del lado del proceso principal.
+   */
+  readonly sincronizacion: {
+    /** Liviano. Lo consulta la barra de estado en todo momento. */
+    resumen(): Promise<RespuestaIpc<ResumenDeSincronizacionIpc>>;
+    /** Completo: pendientes por tabla, último éxito, lote bloqueante con su error. */
+    detalle(): Promise<RespuestaIpc<DetalleDeSincronizacionIpc>>;
+    /** Quita el bloqueo de un lote y agenda un ciclo inmediato. */
+    reintentarLote(datos: LoteIdIpc): Promise<RespuestaIpc<boolean>>;
+    /** Salta un lote a mano. Exige PIN y queda en `auditoria_log` (decisión 9). */
+    saltarLote(datos: SaltoDeLoteIpc): Promise<RespuestaIpc<ResultadoDeSaltoDeLoteIpc>>;
   };
 
   /**

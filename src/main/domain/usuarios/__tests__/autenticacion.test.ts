@@ -628,15 +628,21 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
   });
 
-  it('la tabla cubre las CUATRO superficies, sin huecos', () => {
+  it('la tabla cubre las CINCO superficies, sin huecos', () => {
     // El tipo `Record<SuperficieDeAutorizacion, boolean>` ya lo exige al
     // compilar; esto lo comprueba también en ejecución, por si alguien agregara
     // una superficie con un `as` de por medio.
+    //
+    // Creció a cinco en la Fase 4.a con `saltar_lote_de_sincronizacion`
+    // (pantalla de sincronización, decisión 9 del diseño): NO acepta el
+    // remoto, por el mismo alcance mínimo que `salida_controlada` y
+    // `cierre_de_caja_ajena`.
     expect(Object.keys(ACEPTA_PIN_REMOTO).sort()).toEqual([
       'cierre_con_diferencia',
       'cierre_de_caja_ajena',
       'descuento_excedente',
       'salida_controlada',
+      'saltar_lote_de_sincronizacion',
     ]);
   });
 
@@ -645,9 +651,10 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     expect(ACEPTA_PIN_REMOTO.descuento_excedente).toBe(true);
   });
 
-  it('las DOS que NO lo aceptan siguen sin aceptarlo', () => {
+  it('las TRES que NO lo aceptan siguen sin aceptarlo', () => {
     expect(ACEPTA_PIN_REMOTO.salida_controlada).toBe(false);
     expect(ACEPTA_PIN_REMOTO.cierre_de_caja_ajena).toBe(false);
+    expect(ACEPTA_PIN_REMOTO.saltar_lote_de_sincronizacion).toBe(false);
   });
 
   it('y el comportamiento real coincide con la tabla, superficie por superficie', () => {

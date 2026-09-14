@@ -4555,6 +4555,178 @@ corrigió con un contador aparte, y ahora un ciclo con fotos apartadas lo dice:
 - **`npm run fotos:reducir` no se corrió contra un catálogo real con fotos**:
   la base de desarrollo no tiene ninguna. Su camino está probado con Vitest.
 
+
+### 4.34 La pantalla de sincronización, y los dos avisos que la acompañan (Fase 4.a)
+
+Cierra el `docs/SINCRONIZACION.md` §3.3: los tres niveles de visibilidad de la
+sincronización, del menos al más intrusivo.
+
+#### 1. Barra de estado: siempre visible, sin guard de rol
+
+`sincronizacion:resumen` es el único canal de sincronización que NO exige
+`requiereRol`, y no es un descuido: la barra de estado está montada **siempre**
+—incluso antes de iniciar sesión, en la pantalla de ingreso— y no lleva ningún
+dato sensible: ni correo, ni el texto del error, ni nada de la credencial.
+Solo un estado ya calculado y un número.
+
+Los seis estados posibles, y su color, viven en un módulo **puro**
+(`resumen-de-sincronizacion.ts`), separado del servicio, con el mismo criterio
+que `vida-del-token.ts` y `reintentos.ts`: la lógica que decide algo se prueba
+sin SQLite y sin reloj real.
+
+| Estado | Color | Cuándo |
+|---|---|---|
+| `sin_credencial` | rojo | No hay credencial guardada, o la nube la rechazó |
+| `detenida` | rojo | Un lote quedó bloqueante con un error determinístico |
+| `pendientes_viejos` | ámbar | Hay pendientes y el más viejo pasa el umbral de 24 h (decisión 8, **provisional**) |
+| `sin_conexion` | neutral | Hay credencial válida, pero no hay token vigente ahora mismo y hay pendientes |
+| `pendientes` | neutral | Pendientes recientes, nada raro |
+| `al_dia` | neutral | Sin pendientes |
+
+**La prioridad importa, y está probada**: sin credencial gana sobre detenida
+—es la causa de fondo, no el síntoma—, detenida gana sobre pendientes viejos, y
+pendientes viejos gana sobre sin conexión.
+
+> **EL TEXTO NO DICE «sin conexión desde HH:MM», aunque esa es la redacción
+> literal del diseño.** Esta aplicación no tiene ningún reloj que registre el
+> instante exacto en que se perdió la conexión —el detector de la fase 3.b solo
+> guarda el ÚLTIMO veredicto, no cuándo cambió—, y escribir una hora ahí sería
+> inventar una precisión que no se midió. Se dice cuántos pendientes hay, que
+> sí es un dato real. Hay una prueba que barre los seis estados y exige que
+> ninguno contenga algo con forma de hora.
+
+> **En desarrollo sin `POS_NUBE_URL` nunca se ve `sin_credencial` ni
+> `sin_conexion`**: esos dos estados solo aplican cuando hay un proyecto de
+> nube configurado de verdad. Sin él, la barra dice `al_dia` o `pendientes`
+> según haya algo en la cola, que es lo único honesto que se puede afirmar.
+
+#### 2. El aviso al iniciar sesión, solo administrativo
+
+En el menú de `PantallaDeSesion`, para rol administrativo, cuando el estado es
+`pendientes_viejos`, `detenida` o `sin_credencial` **y además hay pendientes de
+verdad** (`pendientes > 0`). Un install recién conectado, sin ninguna venta
+todavía, no tiene nada que avisar aunque no tenga credencial: mostrar un aviso
+rojo en una instalación nueva sería alarmar sin motivo.
+
+#### 3. La pantalla de sincronización, completa
+
+Nueva, solo administrativo (`sincronizacion:detalle`). Muestra:
+
+- **Pendientes por tabla**, con nombres legibles (`ventas`, no `entidad_tipo`).
+- **Último éxito**: `MAX(sincronizado_en)` leído de `sync_cola`, no guardado en
+  memoria. Mismo criterio de siempre —todo el estado vive en la base— así que
+  sobrevive a un cierre forzado.
+- **El lote bloqueante, con su error TAL CUAL lo devolvió la función de
+  Postgres**, sin resumir ni traducir: quien va a decidir si reintentar o
+  saltar tiene que ver exactamente lo que Postgres dijo.
+- **Archivos apartados** (§2.5.4, fase 3.c), si los hay.
+- Tres acciones: **reintentar ahora**, **saltar este lote** y (ya existente)
+  **conectar con la nube**.
+
+##### «Reintentar ahora»
+
+`desbloquearLote(loteId)` + un ciclo inmediato del trabajador
+(`planificador.ejecutarAhora()`). No verifica que el lote siga existiendo ni
+bloqueado: son operaciones seguras de pedir de más.
+
+> **CÓMO SE LE PASA EL PLANIFICADOR AL SERVICIO, cuando todavía no existe.**
+> `ServicioDeSincronizacion` se construye ANTES que
+> `planificadorDeSincronizacion` en el arranque (§4.18: el trabajador se crea
+> después de la ventana, para no competir con el arranque en un i3). La
+> dependencia `ejecutarCicloAhora` es una FUNCIÓN que lee la variable al
+> momento de llamarla, no ahora: `() => planificadorDeSincronizacion?.ejecutarAhora() ?? Promise.resolve(null)`.
+> El orden de construcción deja de importar.
+
+##### «Saltar este lote»: decisión 9, con PIN aunque ya haya sesión administrativa
+
+Es la acción más sensible de esta fase: deja un hueco **deliberado y
+permanente** en el respaldo de la nube. Por eso:
+
+- **Nueva superficie de autorización**, `saltar_lote_de_sincronizacion`
+  (migración local `029`, sin espejo en Postgres: `bloqueos_de_autorizacion` es
+  estado operativo de una terminal, igual que las otras cuatro). **No acepta el
+  PIN remoto**, por el mismo alcance mínimo que `salida_controlada` y
+  `cierre_de_caja_ajena` —acá el argumento es más fuerte todavía: el hueco es
+  permanente, así que quien autoriza tiene que estar viendo la pantalla—.
+- **Se pide el PIN aunque el canal YA exija `requiereRol('administrativo')`.**
+  No es una comprobación de permisos redundante: es la firma deliberada que el
+  diseño pide textualmente («tiene que quedar firmada»), el mismo criterio con
+  que `cierre_con_diferencia` y `cierre_de_caja_ajena` vuelven a pedir PIN
+  dentro de una sesión ya administrativa.
+- **Muestra el error ANTES de pedir el PIN** (mismo criterio del cierre de caja
+  descuadrado, §4.9): la confirmación repite las tablas y el error del lote.
+- **Quien queda como autorizante es a quien coincidió el PIN**
+  (`permiso.usuario.id`), no necesariamente la sesión activa —igual que
+  `descuento_excedente`—.
+- **Queda en `auditoria_log`** con el lote, las tablas que traía y quién
+  autorizó. Ese asiento en sí es un hecho de negocio y **se encola** como
+  cualquier otro, para llegar a la nube por `sincronizar_asiento` (la función
+  de la 0027).
+- **La marca local en `sync_cola` NO se limpia a `NULL`** como en un éxito
+  genuino: `marcarLoteSaltado` reemplaza `error` por una nota
+  («SALTADO A MANO el `<fecha>`: …») para que quien mire la fila en el disco
+  —sin pasar por la auditoría— no la confunda con una subida real.
+
+> **`ServicioDeSincronizacion` es la PRIMERA escritura de auditoría fuera de
+> `src/main/domain`.** Vive en `src/main/sincronizacion` porque necesita el
+> repositorio de la cola, no porque el hecho que audita sea menos de negocio.
+> La prueba estructural de §4.26 (`todo-hecho-de-negocio-encola.test.ts`) se
+> amplió para escanear también esa carpeta: es exactamente la clase de caso
+> que existe para atrapar, un servicio nuevo que se olvida del envoltorio.
+> **Falsificado**: quitándole `conBandejaDeSalida`, la prueba lo nombra por
+> archivo y línea.
+
+#### Verificado contra la aplicación REAL, con un lote bloqueante DE VERDAD
+
+No alcanzaba con Vitest para la acción más sensible de la fase. `verify:pantallas`
+abre una conexión SQLite APARTE contra el archivo temporal de la corrida —el
+mismo que usa la aplicación, en modo WAL— e inserta un lote `bloqueante = 1`
+con un error con forma de Postgres real (`23505 duplicate key…`), sin pasar por
+ninguna función de negocio: es la forma más directa de simular «un lote quedó
+detenido», sin depender de que la nube de verdad rechace algo en una corrida
+que no tiene `POS_NUBE_URL`.
+
+Con eso, se ejercitaron de punta a punta, contra la ventana real:
+
+- El error se **muestra tal cual**, con `23505` y `duplicate key` legibles.
+- **«Reintentar ahora»** hace desaparecer el lote bloqueado de la pantalla.
+- **«Saltar»** muestra el error ANTES de pedir el PIN.
+- Un **PIN equivocado** dice «PIN incorrecto.» y el lote sigue bloqueante: no
+  se pierde nada por un PIN mal tecleado.
+- El **PIN correcto** salta el lote, que desaparece de «detenido».
+- **El asiento quedó en `auditoria_log` de verdad**, leído con una tercera
+  conexión de solo lectura: `entidad_id` es el lote y `usuario_id` no es nulo.
+
+> **UN DEFECTO PROPIO DEL ARNÉS, ENCONTRADO Y CORREGIDO ANTES DE CERRAR.** La
+> primera versión de estas comprobaciones usaba `waitForTimeout(1000)` después
+> de cada clic, y «reintentar ahora» falló la primera vez: el lote seguía
+> apareciendo como bloqueante. La causa no era el código de la aplicación sino
+> el arnés: el `onClick` de React dispara la acción con `void`
+> (`fire-and-forget`, porque un manejador de evento no se puede awaitear), así
+> que `click()` de Playwright resuelve en cuanto el clic se despachó, **no**
+> cuando la operación asincrónica termina. Se corrigió esperando la
+> CONSECUENCIA visible —`waitFor({ state: 'detached' })` sobre el aviso de lote
+> bloqueante— en vez de un tiempo fijo a ciegas. Es la misma clase de lección
+> que ya dejaron los defectos anteriores de esta comprobación (§4.11): medir la
+> consecuencia, no suponer cuánto tarda.
+
+`verify:pantallas` pasó de 39 a **46 comprobaciones**, corrido tres veces
+seguidas sin inestabilidad.
+
+#### Lo que NO se verificó
+
+- **El umbral de 24 horas es un número provisional**, tal como el propio
+  diseño lo dice (decisión 8). No se ejercitó contra la aplicación real —haría
+  falta un pendiente de más de un día, y `verify:pantallas` corre en minutos—;
+  está probado en el módulo puro, con el borde exacto (23h59m59s vs. 24h).
+- **El aviso al iniciar sesión (nivel 2) no se ejercitó con `verify:pantallas`.**
+  Se probó con Vitest sobre el componente, pero no manejando la aplicación real
+  con un pendiente viejo de verdad.
+- **La superficie `saltar_lote_de_sincronizacion` no aceptó nunca un PIN
+  remoto en esta verificación**: no acepta ninguno, así que no había nada que
+  probar ahí más allá de que el candado exista (que sí está en la prueba de
+  `autenticacion.test.ts`).
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -4757,6 +4929,13 @@ corrigió con un contador aparte, y ahora un ciclo con fotos apartadas lo dice:
 | **CORREGIDO antes de cerrar: un lote apartado NO se cuenta como subido.** | Dejarlo como estaba, que funcionaba | Mi primera versión devolvía el lote apartado con `motivo: null` para que el ciclo siguiera, y el bucle lo sumaba a los subidos: el resumen decía **«cola_vaciada; 2 lotes»** de dos fotos que nunca salieron a la red. **La bitácora habría reportado como respaldado algo que no lo estaba**, que es justo lo que este proyecto trata como el peor de los errores. Lo encontró una prueba que esperaba `sin_pendientes` y recibió `cola_vaciada`. Ahora hay un contador aparte y el ciclo lo dice: «N archivo(s) sin subir: no están en el disco». | Prompt 49 — 2026-09-14 |
 | **Los PDF NO se suben, y se hace cumplir en TRES capas.** | Dejar la decisión escrita en la documentación y confiar; implementar la subida detrás de una bandera apagada | §2.5.3: un PDF es dato derivado que la reimpresión regenera desde las filas, y subirlos llena el gigabyte del plan gratuito en unos ocho meses para respaldar algo que la restauración reconstruye en segundos. Una bandera apagada sería código muerto que un día alguien enciende sin releer el motivo. Las tres capas: el módulo **no tiene parámetro de bucket** —no se le puede pedir—, una prueba estructural comprueba que ningún archivo del proceso principal arma una ruta a `recibos` (con un control del propio detector), y la nube no le da a la terminal **ninguna política** sobre ese bucket. Medido: `POST /storage/v1/object/recibos/… -> HTTP 400 new row violates row-level security policy`. | Prompt 49 — 2026-09-14 |
 | **DOS SEPARACIONES DEL DISEÑO, las dos con su razón medida: el SHA-256 va en línea y la subida usa la URL del proyecto.** | Seguir §2.5.2 al pie de la letra: `worker_thread` para el hash y `<ref>.storage.supabase.co` para subir | El `worker_thread` se pedía «porque leer 5 MB y hacer SHA-256 en un i3 son cientos de milisegundos que no tienen por qué congelar la ventana», y **esta misma fase eliminó la premisa**: la foto ya se guardó reducida, así que lo que se lee son decenas de KB. Un hilo aparte sería infraestructura para un problema que la reducción borró. La URL directa de Storage nunca se probó en este proyecto; la del proyecto **sí está medida y funcionando** desde la batería de la fase 2.c. Cambiar a un host no verificado para ganar nada medible es la clase de decisión que este proyecto no toma. Las dos separaciones quedan escritas en §4.33 para que se puedan revisar. | Prompt 49 — 2026-09-14 |
+| **El indicador de la barra de estado NO exige rol ni sesión: es el único canal de sincronización sin `requiereRol`.** | Exigir sesión, ya que la barra siempre se dibuja dentro de la app; exigir rol administrativo como el resto de la sincronización | La barra de estado está montada SIEMPRE —incluso en la pantalla de ingreso, antes de cualquier sesión (§4.5)— así que un guard de sesión la habría dejado sin nada que mostrar en el momento en que más hace falta: al prender la máquina. Y no hace falta el de rol porque la respuesta no lleva NINGÚN dato sensible: ni correo, ni el texto de un error, ni nada de la credencial, solo un estado ya calculado (por el proceso principal, nunca por el renderer) y un número. Hay una prueba de guard que fija esta excepción por NOMBRE de canal, para que no pueda ampliarse en silencio el día que se agregue un canal nuevo. | Prompt 50 — 2026-09-14 |
+| **«Saltar un lote» exige PIN de administrador AUNQUE el canal ya requiera sesión administrativa, y con su propia superficie de candado (`saltar_lote_de_sincronizacion`, migración local 029).** | Bastarse con `requiereRol` del canal, ya que solo un administrador logueado llega al botón; reusar la superficie de `cierre_de_caja_ajena` | El diseño lo pide con estas palabras: «tiene que quedar firmada». Es el mismo criterio que ya rige `cierre_con_diferencia` y `cierre_de_caja_ajena`: la sesión decide quién PUEDE llegar al botón, el PIN decide que ALGUIEN lo autorizó en ese instante concreto, con su nombre en la auditoría —y ese alguien es a quien coincidió el PIN, no necesariamente la sesión activa, el mismo criterio de `descuento_excedente`—. Reusar otra superficie mezclaría el candado de intentos de dos acciones sin relación: fallar tres veces al saltar un lote no debe bloquear el cierre de una caja ajena. **NO acepta el PIN remoto**, por el mismo alcance mínimo que `salida_controlada`, con un argumento más fuerte todavía: el hueco que deja es PERMANENTE, así que quien autoriza tiene que estar viendo la pantalla con el error delante, no recibiendo un código por teléfono. | Prompt 50 — 2026-09-14 |
+| **La marca local de un lote saltado NO se limpia a `NULL` como en un éxito real: se reemplaza por una nota que dice que fue saltado a mano.** | Limpiar `error` a `NULL`, como hace `marcarLoteSincronizado` | Un lote saltado y un lote realmente subido son hechos DISTINTOS y no pueden dejar el mismo rastro local. Si `marcarLoteSaltado` limpiara el error como un éxito genuino, alguien que mirara la fila en el disco —sin pasar por `auditoria_log`— no tendría forma de distinguir «la nube lo aceptó» de «una persona decidió dejarlo sin subir». El registro completo y auditable de quién y por qué vive en `auditoria_log`, que sí se sincroniza; la nota local es una segunda capa de honestidad, no la fuente de verdad. | Prompt 50 — 2026-09-14 |
+| **`ServicioDeSincronizacion` vive en `src/main/sincronizacion`, y la prueba estructural de §4.26 se amplió para escanearla también.** | Ponerlo en `src/main/domain/sincronizacion` para que la prueba existente lo cubriera sin tocarla | Es la PRIMERA escritura de `auditoria.registrar(` fuera de `src/main/domain` en toda la vida del proyecto. Moverlo a `domain/` habría torcido una convención de carpetas ya establecida —`sincronizacion/` es infraestructura de subida, no un servicio de negocio, y así lo describe §9 de este documento— solo para no tocar una prueba. Ampliar el escaneo de la prueba a las dos carpetas cubre exactamente la clase de caso que ya costó dos vueltas: un servicio nuevo, en cualquier carpeta, que se olvida del envoltorio. **Falsificado**: quitándole `conBandejaDeSalida` a `saltarLote`, la prueba lo nombra por archivo y línea. | Prompt 50 — 2026-09-14 |
+| **El texto de la barra NO dice «sin conexión desde HH:MM», aunque esa es la redacción literal del diseño.** | Seguir la redacción de §3.3 al pie de la letra | Esta aplicación no tiene ningún reloj que registre el INSTANTE en que se perdió la conexión: el detector de la fase 3.b solo guarda el último veredicto, no cuándo cambió. Escribir una hora ahí sería inventar una precisión que nunca se midió, exactamente el tipo de afirmación que este proyecto corrigió en voz alta en §4.22. Se dice cuántos pendientes hay en cambio, que sí es un dato real y verificable en la base en ese instante. Hay una prueba que barre los seis estados posibles y exige que ninguno tenga forma de hora. | Prompt 50 — 2026-09-14 |
+| **Verificado con `verify:pantallas` insertando un lote BLOQUEANTE de verdad, con una conexión SQLite aparte contra el archivo temporal de la corrida.** | Conformarse con las pruebas de Vitest para la acción más sensible de la fase; simular el bloqueo llamando al servicio directamente desde el guion | «Saltar un lote» es una acción irreversible y con PIN: es exactamente la clase de comportamiento que este proyecto no da por bueno sin verlo funcionar en la ventana real (regla general del proyecto). SQLite en modo WAL admite una segunda conexión de corta vida mientras la aplicación tiene la suya abierta, así que insertar el lote bloqueante a mano —sin pasar por ninguna función de negocio— es la forma más directa de simular «un lote quedó detenido» en una corrida sin `POS_NUBE_URL`, donde nada falla solo. Se ejercitaron reintentar, saltar con PIN equivocado (rechaza, el lote sigue bloqueante) y con PIN correcto (salta, y el asiento queda leíble en `auditoria_log` con una TERCERA conexión de solo lectura). `verify:pantallas` pasó de 39 a 46 comprobaciones. | Prompt 50 — 2026-09-14 |
+| **CORREGIDO en el propio arnés de verificación: un `waitForTimeout` fijo se reemplazó por esperar la consecuencia visible.** | Agrandar el tiempo fijo hasta que dejara de fallar | La primera versión de la comprobación de «reintentar ahora» falló: el lote seguía viéndose bloqueante después de esperar 1000 ms. La causa no era el trabajador sino el arnés: el `onClick` de React dispara la acción con `void` porque un manejador de evento no se puede awaitear, así que `click()` de Playwright resuelve en cuanto el clic se despacha, no cuando la operación asincrónica termina. Agrandar el tiempo fijo habría tapado el síntoma sin arreglar la causa, y dejado una comprobación lenta y frágil. Se corrigió con `waitFor({ state: 'detached' })` sobre el aviso que tenía que desaparecer: se espera la consecuencia, no un reloj a ciegas. Es la misma lección que ya dejaron los defectos anteriores de este arnés (§4.11). | Prompt 50 — 2026-09-14 |
 | **El id de `limites_descuento` pasa a ser FIJO por rol, con UUID en la migración (028 / 0028).** | `id = rol`, que sería más legible; derivar el UUID de la clave natural con un hash; dejarlo sorteado y enseñarle a `escribir_fila` la clave natural de cada tabla | Cierra la PRIMERA de las nueve restricciones únicas de §4.31, y es la única donde la clave natural **es** la identidad: `limites_descuento` tiene como mucho dos filas y siempre las mismas dos, una por rol. `id = 'venta'` no se puede sin reconstruir la tabla —SQLite exige `length(id) = 36` y Postgres es `UUID`—, y el rebuild de doce pasos ya se descartó en las migraciones 008 y 015. Derivar el UUID de un hash escondería en código una correspondencia que así queda **escrita en el esquema y comprobable a simple vista**. Y no se tocó `escribir_fila`, porque las otras ocho restricciones no son el mismo problema y una regla genérica les aplicaría una respuesta que no les corresponde. Rompe a propósito la regla de «UUID en el cliente», que existe para EVITAR colisiones entre instalaciones: acá la colisión es lo que se busca, igual que en `denominaciones` (Prompt 13) y en el `id = 'unica'` de `configuracion_negocio`. | Prompt 48 — 2026-09-14 |
 | **La migración mueve también lo que estaba esperando en `sync_cola`, no solo la fila de negocio.** | Mover solo `limites_descuento` y dejar la cola como estaba | Una migración que cambia una llave primaria tiene que mover con ella todo lo que la nombra. Si un lote quedara pendiente apuntando al id viejo —y con el id viejo adentro del payload—, al subirlo la nube recibiría la fila con una llave primaria que en esa base ya no existe y chocaría contra `UNIQUE (rol)`: **la propia migración provocando el `23505` que vino a cerrar**. Se mueven `entidad_id` y el `id` de adentro del payload JUNTOS, con `json_set`, porque §4.17 sostiene que el payload es byte a byte lo que quedó guardado. Tiene prueba propia, sobre una base a la que se le aplican todas las migraciones MENOS esta, se le siembra la fila con id sorteado y recién entonces se corre. | Prompt 48 — 2026-09-14 |
 | **El guion de la batería usa el id del ESQUEMA, no uno inventado por él.** | Dejarle su propio id fijo, que funcionaba | `verificacion-de-nube.cjs` ya tenía un id fijo propio con este comentario: «`limites_descuento.rol` es UNIQUE y esa tabla no se vacía entre corridas, así que un id nuevo por corrida chocaría contra la fila de la corrida anterior». **El diagnóstico era exacto y el arreglo estaba en el lugar equivocado**: nadie conectó que la aplicación sorteaba ese mismo id, así que el choque le esperaba igual a cualquier reinstalación o segunda terminal. Es una lección más general que este caso: **un arnés de prueba que esquiva un problema en vez de exhibirlo lo esconde**, y acá lo escondió durante dos fases. Ahora usa el id del esquema, y uno inventado sería rechazado por el CHECK. | Prompt 48 — 2026-09-14 |
@@ -4904,12 +5083,19 @@ negocio:
     negocio, y una foto que ya no está en el disco se aparta un día sin
     detener la cola. **Los PDF de recibos NO se suben**, por decisión de
     §2.5.3, y hay tres capas que lo impiden.
-  **Lo que sigue sin existir:** la pantalla de sincronización y la
-  restauración. **La aplicación sigue sin haber hecho una llamada de red en la
-  tienda**: sin `POS_NUBE_URL` no se construye la sesión de nube, y las únicas
-  llamadas reales las hacen `npm run verify:nube`,
-  `npm run diagnostico:credencial` y `npm run diagnostico:imagen`, guiones de
-  desarrollo.
+  - **Fase 4.a** (§4.34): los **tres niveles de visibilidad** de §3.3 del
+    diseño. El indicador de la barra de estado (siempre visible, sin guard de
+    rol); el aviso al iniciar sesión con pendientes de más de 24 h (decisión 8,
+    **provisional**); y la **pantalla de sincronización**, solo administrativo,
+    con el error de un lote bloqueante tal cual lo devolvió Postgres y dos
+    acciones —reintentar ahora, y **saltar el lote**, que exige PIN de
+    administrador (superficie propia, sin PIN remoto) y queda en
+    `auditoria_log` (decisión 9).
+  **Lo que sigue sin existir:** la restauración. **La aplicación sigue sin
+  haber hecho una llamada de red en la tienda**: sin `POS_NUBE_URL` no se
+  construye la sesión de nube, y las únicas llamadas reales las hacen
+  `npm run verify:nube`, `npm run diagnostico:credencial` y
+  `npm run diagnostico:imagen`, guiones de desarrollo.
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
   canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.

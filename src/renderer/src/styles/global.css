@@ -13,6 +13,7 @@
   --texto-tenue: #94a3b8;
   --acento: #22c55e;
   --alerta: #f87171;
+  --ambar: #fbbf24;
   color-scheme: dark;
 }
 
@@ -86,6 +87,16 @@ body {
   font-variant-numeric: tabular-nums;
   text-align: right;
   overflow-wrap: anywhere;
+}
+
+.alerta pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgb(0 0 0 / 25%);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 .alerta {
@@ -253,6 +264,27 @@ button:disabled {
 
 .barra-estado__dato {
   font-variant-numeric: tabular-nums;
+}
+
+/*
+  El indicador de sincronización (§3.3 del diseño, Fase 4.a). Tres colores
+  nada más: sin color cuando está al día o con pendientes recientes, ámbar
+  con pendientes viejos, rojo cuando está detenida o sin credencial. El color
+  lo decide el proceso principal (`colorDeEstado`); acá solo se traduce a una
+  clase.
+*/
+.barra-estado__nube {
+  font-variant-numeric: tabular-nums;
+}
+
+.barra-estado__nube--ambar {
+  color: var(--ambar);
+  font-weight: 600;
+}
+
+.barra-estado__nube--rojo {
+  color: var(--alerta);
+  font-weight: 600;
 }
 
 /* --- Ingreso, primer arranque y teclado numérico ------------------------- */

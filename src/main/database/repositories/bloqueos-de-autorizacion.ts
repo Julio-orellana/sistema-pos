@@ -34,7 +34,19 @@ export type SuperficieDeAutorizacion =
    * una sola tabla, `ACEPTA_PIN_REMOTO` de `autenticacion.ts`; no se decide en
    * quien llama.
    */
-  | 'descuento_excedente';
+  | 'descuento_excedente'
+  /**
+   * Saltar a mano un lote de sincronización detenido con un error
+   * determinístico (pantalla de sincronización, Fase 4.a).
+   *
+   * **Es la única forma legítima de dejar un hueco deliberado en el respaldo
+   * de la nube**, y por eso exige el PIN de un administrador con su propio
+   * candado: un error de tecleo acá no debe bloquear el ingreso de nadie ni
+   * ninguna otra autorización. No acepta el PIN remoto, por alcance mínimo —es
+   * incluso más sensible que autorizar una diferencia de caja, porque el hueco
+   * que deja es permanente—.
+   */
+  | 'saltar_lote_de_sincronizacion';
 
 /** Estado del candado de una superficie. */
 export interface BloqueoDeAutorizacion {

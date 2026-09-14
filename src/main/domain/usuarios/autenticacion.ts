@@ -98,6 +98,15 @@ export const ACEPTA_PIN_REMOTO: Readonly<Record<SuperficieDeAutorizacion, boolea
   cierre_de_caja_ajena: false,
   cierre_con_diferencia: true,
   descuento_excedente: true,
+  /*
+    NO acepta el remoto, por alcance mínimo (§4.9 de CLAUDE.md): cada
+    superficie nueva empieza en `false` y ampliarla exige una decisión
+    explícita, nunca heredarla. Acá el argumento es más fuerte que en
+    `cierre_de_caja_ajena`: saltar un lote deja un hueco PERMANENTE en el
+    respaldo, y quien lo autoriza tiene que estar viendo la pantalla con el
+    error, no recibiendo un código por teléfono.
+  */
+  saltar_lote_de_sincronizacion: false,
 };
 
 /** Intentos fallidos permitidos antes del bloqueo. */

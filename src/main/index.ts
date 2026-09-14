@@ -77,6 +77,8 @@ import { TrabajadorDeSincronizacion } from '@main/sincronizacion/trabajador';
 import { PlanificadorDeSincronizacion } from '@main/sincronizacion/planificador';
 import { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
 import { SupabaseSyncProvider } from '@main/sincronizacion/supabase-sync-provider';
+import { ServicioDeSincronizacion } from '@main/sincronizacion/servicio-de-sincronizacion';
+import type { CredencialParaElResumen } from '@main/sincronizacion/resumen-de-sincronizacion';
 import { DetectorDeConexion } from '@main/sincronizacion/deteccion-de-conexion';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
 import { AlmacenDeCredencial } from '@main/sincronizacion/credencial';
@@ -659,10 +661,46 @@ app.whenReady().then(
       });
     }
 
+    /*
+      ===================================================================
+      SERVICIO DE SINCRONIZACIÓN (Fase 4.a): barra de estado y pantalla
+      ===================================================================
+      NO es opcional: `sync_cola` y su trabajador existen en toda
+      instalación, con nube configurada o no (§4.17). El callback de
+      `credencial` lee `sesionDeNube` en el momento en que se LLAMA, no
+      ahora, así que sigue siendo correcto si más adelante `sesionDeNube` se
+      asigna o se pierde.
+
+      `ejecutarCicloAhora` hace lo mismo con `planificadorDeSincronizacion`,
+      que TODAVÍA NO EXISTE en este punto del arranque: se crea después de la
+      ventana, para no competir con el arranque en un i3 (ver más abajo). Una
+      función que lee la variable al momento de llamarla hace que el orden de
+      construcción no importe.
+    */
+    const servicioDeSincronizacion = new ServicioDeSincronizacion({
+      base: baseDeDatos,
+      cola: repositorios.syncCola,
+      auditoria: repositorios.auditoria,
+      credencial: (): CredencialParaElResumen | null => {
+        if (sesionDeNube === null) {
+          return null;
+        }
+        const estado = sesionDeNube.estado();
+        return {
+          hayCredencial: estado.hayCredencial,
+          revocada: estado.revocada,
+          conectada: estado.conectada,
+        };
+      },
+      ejecutarCicloAhora: (): Promise<unknown> =>
+        planificadorDeSincronizacion?.ejecutarAhora() ?? Promise.resolve(null),
+    });
+
     registrarManejadoresIpc({
       controladorDeSalida,
       autenticacion,
       sesion,
+      sincronizacion: servicioDeSincronizacion,
       usuarios: repositorios.usuarios,
       caja,
       venta: servicioDeVenta,
