@@ -82,6 +82,7 @@ import { ServicioDeSincronizacion } from '@main/sincronizacion/servicio-de-sincr
 import type { CredencialParaElResumen } from '@main/sincronizacion/resumen-de-sincronizacion';
 import { DetectorDeConexion } from '@main/sincronizacion/deteccion-de-conexion';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
+import { describirConfiguracionDeNube, leerConfiguracionDeNube } from '@main/configuracion-de-nube';
 import { ObservadorDelRelojDeLaNube } from '@main/sincronizacion/reloj-de-la-nube';
 import { PodaDeLaCola } from '@main/sincronizacion/poda-de-la-cola';
 import { ServicioDeRestauracion } from '@main/restauracion/servicio-de-restauracion';
@@ -676,8 +677,17 @@ app.whenReady().then(
     */
     const relojDeLaNube = new ObservadorDelRelojDeLaNube(anotarSincronizacion);
 
-    const urlDeLaNube = process.env.POS_NUBE_URL ?? '';
-    const llaveDeLaNube = process.env.POS_NUBE_LLAVE_PUBLICABLE ?? '';
+    /*
+      A QUÉ PROYECTO APUNTA ESTA COPIA (§4.38). Las variables de entorno ganan
+      —es lo que usan los arneses de verificación— y lo incrustado al compilar
+      es el respaldo, que es lo que hace que el `.exe` instalado se conecte
+      solo. Queda dicho en la bitácora en los dos casos: un instalador que
+      apunta a un proyecto y no lo dice es la confusión de §4.37.
+    */
+    const configuracionDeNube = leerConfiguracionDeNube();
+    anotarSincronizacion(describirConfiguracionDeNube(configuracionDeNube));
+    const urlDeLaNube = configuracionDeNube.url;
+    const llaveDeLaNube = configuracionDeNube.llavePublicable;
     if (urlDeLaNube !== '' && llaveDeLaNube !== '') {
       sesionDeNube = new SesionDeNube({
         auth: new ClienteDeAuthHttp(urlDeLaNube, llaveDeLaNube, undefined, {
@@ -870,7 +880,14 @@ app.whenReady().then(
           });
 
     const proveedorDeSincronizacion = crearSyncProvider(
-      leerConfiguracionAdaptadoresDelEntorno(process.env),
+      // El proveedor sale de la MISMA configuración que la URL, no de
+      // `process.env` suelto: si no, un instalador con la nube incrustada
+      // seguiría arrancando con el simulado y diría «al día» sin que nada
+      // hubiera viajado, que es la trampa medida en §4.35.
+      leerConfiguracionAdaptadoresDelEntorno({
+        ...process.env,
+        POS_SYNC_PROVIDER: configuracionDeNube.proveedor,
+      }),
       sesionDeNube === null || detectorDeConexion === null
         ? undefined
         : new SupabaseSyncProvider({

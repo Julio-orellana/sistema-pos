@@ -201,18 +201,58 @@ function revisarRutas(rutas, dependenciasAdmitidas) {
   return hallazgos;
 }
 
+/**
+ * A QUÉ PROYECTO DE SUPABASE APUNTA EL PAQUETE, leído del bundle.
+ *
+ * No es una regla que pueda fallar —apuntar al real puede ser exactamente lo
+ * que se quiere el día de la puesta en marcha— pero **tiene que estar a la
+ * vista**: un instalador que apunta a un proyecto y no lo dice es la confusión
+ * de §4.37, esa vez entre el de pruebas y el real. Se informa siempre, y
+ * cuando es el real se dice con todas las letras.
+ *
+ * Devuelve la referencia del proyecto, o `null` si el paquete se compiló sin
+ * nube, que también es un resultado válido y también se informa.
+ */
+function proyectoDelPaquete(rutaDelAsar) {
+  const asar = require('@electron/asar');
+  let bundle;
+  try {
+    bundle = asar.extractFile(rutaDelAsar, 'dist-electron/main/index.js').toString('utf8');
+  } catch {
+    return null;
+  }
+  const encontrada = /https:\/\/([a-z0-9-]+)\.supabase\.co/.exec(bundle);
+  return encontrada?.[1] ?? null;
+}
+
+/** La referencia del proyecto REAL, para poder nombrarlo cuando aparezca. */
+const PROYECTO_REAL = require('./proyectos-de-prueba.cjs').PROYECTO_REAL;
+
 /** Revisa un asar de verdad: lista sus rutas y les aplica las reglas. */
 function revisarPaquete(rutaDelAsar) {
   const rutas = listarAsar(rutaDelAsar);
   const produccion = dependenciasDeProduccion();
-  return { rutas, hallazgos: revisarRutas(rutas, produccion), produccion };
+  return {
+    rutas,
+    hallazgos: revisarRutas(rutas, produccion),
+    produccion,
+    proyecto: proyectoDelPaquete(rutaDelAsar),
+  };
 }
 
 /** Imprime el informe y devuelve el código de salida que corresponde. */
 function informar(rutaDelAsar, resultado) {
-  const { rutas, hallazgos, produccion } = resultado;
+  const { rutas, hallazgos, produccion, proyecto } = resultado;
   anotar(`Revisión del paquete: ${rutaDelAsar}`);
   anotar(`  ${String(rutas.length)} entradas en el asar`);
+  if (proyecto === null) {
+    anotar('  APUNTA A: ningún proyecto de nube (las pantallas van a decir «sin configurar»)');
+  } else if (proyecto === PROYECTO_REAL) {
+    anotar(`  APUNTA A: ${proyecto} — ***EL PROYECTO REAL, pos-jimmy-cano***. Lo que esta copia`);
+    anotar('            suba va a quedar en la base de la tienda, y `auditoria_log` es inmutable.');
+  } else {
+    anotar(`  APUNTA A: ${proyecto} (proyecto de pruebas)`);
+  }
   anotar(`  dependencias de producción admitidas (${String(produccion.size)}): ${[...produccion].sort().join(', ')}`);
 
   if (hallazgos.length === 0) {

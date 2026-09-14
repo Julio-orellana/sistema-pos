@@ -5815,6 +5815,112 @@ sin texto: un ícono de 16 px con letras es una mancha.
   van a decir «sin configurar», y eso es correcto hasta que se decida cómo
   viaja esa configuración al instalador.
 
+### 4.38 La nube incrustada al compilar: el instalador se conecta solo
+
+§4.37 dejó una pregunta abierta: **cómo llega la configuración de la nube a la
+terminal de Jimmy.** Hasta acá viajaba en variables de entorno, que sirven en
+una máquina de desarrollo y no en un `.exe` instalado —nadie va a definir
+variables de entorno en la computadora del mostrador, y el acceso directo que
+crea el instalador tampoco puede—. Medido sobre el primer instalador: no traía
+ninguna URL ni llave adentro y arrancaba sin nube.
+
+**Ahora los tres valores se incrustan al compilar.** Salen de
+`.env.empaquetado` —ignorado por git, con su plantilla versionada al lado— y
+`electron.vite.config.ts` los reemplaza por un literal en el bundle del proceso
+principal.
+
+#### El entorno gana, y lo incrustado es el respaldo
+
+No es caprichoso. Los arneses de verificación lanzan la aplicación con sus
+propias variables para apuntarla a donde ellos necesitan; si lo incrustado
+ganara, el arnés diría «descartable» y la aplicación estaría hablando con otro
+proyecto **en silencio**, que es la confusión de §4.37 otra vez y ahora con la
+nube de por medio. Y es **todo o nada**: si el entorno define la URL, los tres
+valores salen del entorno, porque media configuración de cada lado sería una
+tercera que nadie escribió —y encima apuntaría a un proyecto con la llave de
+otro—.
+
+Vive en `src/main/configuracion-de-nube.ts`, con 14 pruebas. **No alcanzaba con
+un `define` sobre `process.env.POS_NUBE_URL`**: el selector de proveedor no se
+lee así, sino como `entorno.POS_SYNC_PROVIDER` sobre un objeto que se pasa
+entero a `leerConfiguracionAdaptadoresDelEntorno`, así que un `define` sobre esa
+expresión no lo habría alcanzado y el instalador habría quedado apuntando a un
+proyecto **pero arrancando con el proveedor SIMULADO**: diciendo «al día» sin
+que nada viajara, que es exactamente la trampa medida en §4.35.
+
+#### Qué se incrusta, y qué no se va a incrustar nunca
+
+Se incrusta **a qué proyecto** conectarse. Los tres valores son públicos: la
+URL identifica el proyecto y la llave publicable, sola, no puede nada porque
+RLS está activo sin políticas para `anon` (§1.2 del diseño).
+
+> **NO se incrusta ninguna credencial de terminal, y no se va a incrustar.** El
+> correo y la contraseña del usuario de sincronización se teclean UNA vez en
+> «Conectar con la nube»; lo único que queda en el disco es el token de refresco
+> cifrado con `safeStorage` (§4.23). Una contraseña dentro del `.exe` la tendría
+> cualquiera que lo abra: es la misma clase de defecto que `verify:paquete`
+> existe para atrapar. **Incrustar el proyecto NO es iniciar sesión sola**: la
+> primera conexión la hace una persona, y a partir de ahí la terminal se
+> reconecta sola en cada arranque.
+
+#### Verificado corriendo la aplicación, sin una sola variable de entorno
+
+Lo que importaba no era que compilara sino que la aplicación se conectara sola.
+Se lanzó la aplicación compilada con el entorno **limpio de toda `POS_*`** y una
+carpeta de datos nueva:
+
+```
+variables POS_* en el entorno del proceso: 0
+[sincronizacion] proyecto de nube ztidrshifrblhfraiowg (incrustado al compilar); el trabajador va a usar SupabaseSyncProvider
+[sincronizacion] No hay ninguna credencial guardada. Conectá la terminal desde la pantalla «Conectar con la nube».
+[sincronizacion] trabajador en marcha con SupabaseSyncProvider; primer ciclo en 30 s. Pendientes en la cola: 0 filas en 0 lotes.
+--- pantalla de restauración ---
+  avisos de «sin configurar»: 0
+  dice: Se va a restaurar desde el proyecto ztidrshifrblhfraiowg de Supabase…
+```
+
+`SupabaseSyncProvider` y no el simulado, que es la diferencia entre subir de
+verdad y decir que se subió.
+
+#### `verify:paquete` ahora dice a qué proyecto apunta el instalador
+
+Leído del bundle, en cada empaquetado y también a mano. No es una regla que
+pueda fallar —apuntar al real es exactamente lo que se quiere el día de la
+puesta en marcha— pero **tiene que estar a la vista**, y cuando sea el real lo
+dice con todas las letras y recuerda que `auditoria_log` es inmutable:
+
+```
+  APUNTA A: ztidrshifrblhfraiowg (proyecto de pruebas)
+```
+
+#### Por qué este instalador apunta al DESCARTABLE
+
+Julio pidió primero apuntarlo al real y aceptó el reparo: cada venta de prueba
+subiría filas de verdad a `pos-jimmy-cano`, y `auditoria_log` es inmutable por
+trigger, así que esas filas solo saldrían con un `TRUNCATE` por SQL sobre el
+proyecto de producción. Es la regla de §9.5 del diseño —nada toca el real
+primero— y para eso existe el descartable.
+
+**El usuario de terminal del proyecto REAL ya está creado** (Julio, 2026-09-14),
+y quedó bien: `terminal-1@pos-jimmy-cano.invalid`, confirmado, con
+`raw_app_meta_data = {"rol":"terminal","provider":"email","providers":["email"]}`
+—o sea con el `||` que suma la clave sin borrar las de GoTrue, y `terminal` sin
+tilde—. Cuando se pase a producción, es cambiar la URL y la llave de
+`.env.empaquetado` por las del real y volver a compilar; el usuario ya espera.
+
+#### Lo que sigue sin verificarse
+
+- **Que el `.exe` instalado en Windows se conecte de verdad.** Lo medido es la
+  aplicación compilada corriendo en macOS. El binario es el mismo, pero eso es
+  razonamiento.
+- **Que la terminal SUBA una venta desde el instalador.** Hace falta teclear la
+  credencial de terminal en la ventana, y eso todavía no se hizo desde un
+  paquete: lo que se probó fue el arranque y a dónde apunta.
+- **Que dos instaladores compilados para proyectos distintos no se confundan.**
+  Hoy se distinguen solo por lo que dicen la bitácora y la pantalla; el nombre
+  del archivo es el mismo. Si alguna vez conviven los dos, conviene que el
+  nombre lo diga.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
