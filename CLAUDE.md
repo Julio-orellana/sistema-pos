@@ -4918,14 +4918,14 @@ cambie.**
 
 #### Lo que NO se verificó
 
-- ~~Nada de esto se corrió contra `pos-jimmy-cano`, y no puede: la `0029` no
-  está aplicada ahí~~ **La `0029` está en el real desde el 2026-09-14 (§4.4).**
-  Lo que sigue sin correrse contra el real es una restauración entera, y esta
-  sesión no puede hacerlo sola: la contraseña del usuario de restauración es
-  la de Julio, y no pasa por acá. Para eso existe
-  `npm run ensayo:restauracion -- --entorno=.env.nube-real` (el bloque de
-  abajo): abre la aplicación real sobre una carpeta descartable, Julio teclea
-  su contraseña en la ventana, y el guion hace el resto y vuelca la evidencia.
+- ~~Nada de esto se corrió contra `pos-jimmy-cano`~~ **HECHO el 2026-09-14: la
+  `0029` está en el real (§4.4) y la restauración se corrió entera contra él,
+  11 de 11**, con `npm run ensayo:restauracion -- --entorno=.env.nube-real` y
+  con Julio tecleando su contraseña en la ventana. Ver el bloque de abajo. Lo
+  que el real no puede ejercitar hoy es una restauración CON DATOS: está en
+  cero filas de negocio, así que lo que se probó es el camino entero —
+  precondiciones, las doce tablas, la suma por mes, la revisión y el cierre de
+  sesión— sobre una nube vacía.
 - ~~La pantalla no se manejó con `verify:pantallas` más allá del caso «sin
   configurar»~~ **HECHO el 2026-09-14 con `npm run verify:pantallas:restauracion`**,
   la contraparte con red de `verify:pantallas`: 44 comprobaciones clicando la
@@ -5174,14 +5174,80 @@ vacía no deja una terminal administrable. «Dejarla para después» cierra la
 sesión y conserva el puesto de control, así que esa carpeta ofrece retomar la
 próxima vez que se abra; en un ensayo se descarta la carpeta y listo.
 
-**Contra `pos-jimmy-cano`** el ensayo queda preparado con
-`--entorno=.env.nube-real` y solo lo puede correr Julio, porque la contraseña
-es suya. Lo que ya se sabe del real sin correrlo: la 0029 está aplicada y sus
-16 funciones son idénticas a las del descartable; la fila de
-`configuracion_negocio` tiene `2026-09-11T14:58:55.89473+00:00` (cinco
-decimales) y el convertidor los conserva; no hay usuarios, así que el ensayo
-va a terminar exactamente como el del descartable: revisión cuadrada y
-«Terminar» negado por falta de administrador.
+#### LA RESTAURACIÓN CONTRA `pos-jimmy-cano`, CORRIDA DE VERDAD: 11 de 11
+
+**2026-09-14, 17:07 UTC.** Es la primera vez en la vida del proyecto que la
+aplicación real baja el contenido del proyecto REAL. La corrió Julio: el guion
+abrió la ventana y esperó, él tecleó su correo y su contraseña —esta sesión no
+los maneja— y el resto lo hizo el guion. Salida cruda:
+
+```
+17:07:35.894Z [restauracion] sesión de restauración iniciada como julioes134@outlook.es
+17:07:37.025Z [restauracion] POST /rest/v1/rpc/contrato_de_sincronizacion -> HTTP 200
+17:07:37.274Z [restauracion] GET /rest/v1/denominaciones?limit=1000 -> HTTP 200
+17:07:37.276Z [restauracion] precondiciones cumplidas: nube alcanzable, contrato igual al esquema local, denominaciones idénticas
+17:07:37.567Z [restauracion] usuarios: 0 filas restauradas
+   …          (las doce tablas, cada una con su conteo y su página)
+17:07:40.906Z [restauracion] configuracion_negocio: 1 filas restauradas
+17:07:40.726Z [restauracion] fotos: 0 productos con foto, 0 sin archivo en la nube
+17:07:42.619Z [restauracion] POST /rest/v1/rpc/restauracion_ventas_por_mes -> HTTP 200
+17:07:42.622Z [restauracion] transferencia completa; verificación OK; queda la revisión
+17:07:43.658Z verificación en pantalla: Verificación · cuadra — usuarios: nube 0 · acá 0 ✓ · … · asientos de auditoría: nube 0 · acá 0 ✓
+17:07:44.712Z al pulsar «Terminar»: Todavía no se puede dar por terminada: no queda ningún administrador activo…
+17:07:44.941Z [restauracion] sesión de restauración cerrada (HTTP 204)
+17:07:47.785Z configuracion_negocio en la base del ensayo: {"id":"unica",…,"actualizado_en":"2026-09-11T14:58:55.89473Z"}
+  OK  configuracion_negocio.actualizado_en llegó con TODOS sus decimales y en la forma local (Z)
+  OK  las 11 denominaciones del quetzal están …
+  OK  en la base, todo usuario restaurado tiene el centinela «sin PIN» y ningún PIN remoto
+  OK  la sesión de la nube se cerró al dejar la restauración (logout con scope=local, en la bitácora)
+  11 comprobaciones, 0 fallidas
+```
+
+**La fila de los microsegundos pasó, y es la que motivó todo esto:** la nube
+tiene `2026-09-11 14:58:55.89473+00` y la base restaurada quedó con
+`2026-09-11T14:58:55.89473Z`, los cinco decimales enteros. Es la misma fila que
+hizo fallar tres veces la tercera corrida del arnés por la ventana antes de
+corregir la regla. La `0029` se ejercitó de verdad (`restauracion_ventas_por_mes
+-> HTTP 200`), y la precondición de deriva pasó contra el contrato vivo del
+real, que es lo que hasta ayer no podía pasar.
+
+El puesto de control quedó con `"proyecto": "https://zgsdaelmbxufgcsideep.supabase.co"`
+y `"correo": "julioes134@outlook.es"`. Nada se escribió en la nube: las 26
+peticiones son `GET`, dos `POST` a funciones de solo lectura y el `logout`.
+
+##### EL PRIMER INTENTO FALLÓ, Y LA CAUSA VALE MÁS QUE EL SÍNTOMA
+
+A las 17:00:03 la pantalla dijo «Supabase rechazó ese correo y esa contraseña».
+La credencial que se tecleó era la del **proyecto de pruebas**
+(`restauracion-pruebas@pos-pruebas.invalid`), la misma con la que el guion
+completa el ensayo del descartable. **Son dos proyectos de Supabase con dos
+tablas de usuarios distintas**: `pos-jimmy-cano` tiene un solo usuario de Auth,
+`julioes134@outlook.es`, leído de `auth.users`. Medido contra el real, con la
+misma llave y la misma petición que hace la aplicación:
+
+```
+POST …/auth/v1/token?grant_type=password  {"email":"restauracion-pruebas@pos-pruebas.invalid",…}
+-> HTTP 400 {"code":400,"error_code":"invalid_credentials","msg":"Invalid login credentials"}
+```
+
+Se descartaron primero las dos hipótesis más baratas, y las dos estaban bien:
+la ventana apuntaba al real (leído del entorno del proceso de Electron:
+`POS_NUBE_URL=https://zgsdaelmbxufgcsideep.supabase.co`), y el formulario **sí**
+recorta el correo (`correo.trim()` en las dos ramas). La contraseña NO se
+recorta, y eso es deliberado: recortarla cambiaría en silencio una credencial
+que puede llevar espacios a propósito.
+
+> **LO QUE FALTA, Y ES UN HUECO REAL: el fallo de Auth no queda en ninguna
+> bitácora.** El registro por petición de este mismo día cubre PostgREST y
+> Storage, que pasan por `pedir()`; las llamadas a Auth van por
+> `ClienteDeAuthHttp`, que no recibe ningún registrador, y la causa técnica
+> viaja al renderer dentro de la respuesta IPC sin pasar por
+> `log-tecnico.log`. O sea que el `error_code` exacto de Supabase hoy se pierde,
+> y hubo que reproducirlo por fuera con `curl` para verlo. **Propuesto y NO
+> hecho, a la espera de que Julio lo decida:** registrar el fallo de Auth con su
+> código y su `error_code`, y que la pantalla de restauración diga a qué
+> proyecto se va a conectar, porque hoy no lo muestra y es exactamente la
+> confusión que invita.
 
 ##### `--carpeta`: retomar un ensayo interrumpido, y tres defectos que apareció al construirlo
 
