@@ -32,9 +32,10 @@
  *
  * ===========================================================================
  *
- * TODO SE FILTRA POR `estado = 'completada'`, explícito, aunque hoy nada
- * produzca ventas anuladas. Es una precaución con nombre: el día que exista el
- * módulo de anulación, ningún reporte tiene que acordarse de agregar el filtro.
+ * LAS VENTAS ANULADAS QUEDAN FUERA DE TODO REPORTE, y lo decide la existencia
+ * de su fila en `anulaciones_de_venta`, nunca `ventas.estado`, que dice
+ * 'completada' también en las anuladas (docs/ANULACION-DE-VENTA.md §1.3). El
+ * filtro vive en los repositorios, en el fragmento `VENTA_SIN_ANULACION`.
  */
 
 import type Decimal from 'decimal.js';
@@ -193,7 +194,7 @@ export class ServicioDeReportes {
    */
   public resumenDeVentas(pedido: PeriodoPedido): ResumenDeVentas {
     const periodo = this.periodo(pedido);
-    const ventas = this.ventas.listarCompletadasEnRango(periodo.desdeIso, periodo.hastaIso);
+    const ventas = this.ventas.listarNoAnuladasEnRango(periodo.desdeIso, periodo.hastaIso);
 
     const enEfectivo = ventas.filter((venta) => venta.formaPago === 'efectivo');
     const conTarjeta = ventas.filter((venta) => venta.formaPago === 'tarjeta');
@@ -257,7 +258,7 @@ export class ServicioDeReportes {
    */
   public ventasPorProducto(pedido: PeriodoPedido): ReporteDeVentasPorProducto {
     const periodo = this.periodo(pedido);
-    const lineas = this.ventaDetalle.listarDeVentasCompletadasEnRango(
+    const lineas = this.ventaDetalle.listarDeVentasNoAnuladasEnRango(
       periodo.desdeIso,
       periodo.hastaIso,
     );

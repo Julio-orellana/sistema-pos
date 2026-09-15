@@ -9,6 +9,7 @@
 
 import type { Database } from 'better-sqlite3';
 
+import { RepositorioDeAnulacionesDeVenta } from './anulaciones-de-venta';
 import { RepositorioDeAuditoria } from './auditoria-log';
 import { RepositorioDeBloqueosDeAutorizacion } from './bloqueos-de-autorizacion';
 import { RepositorioDeCajaSesiones } from './caja-sesiones';
@@ -29,6 +30,7 @@ import { RepositorioDeVentas } from './ventas';
 
 export * from './entidades';
 export { RepositorioBase, ahora, nuevoId } from './base';
+export { RepositorioDeAnulacionesDeVenta } from './anulaciones-de-venta';
 export { RepositorioDeAuditoria } from './auditoria-log';
 export {
   RepositorioDeBloqueosDeAutorizacion,
@@ -59,6 +61,7 @@ export interface Repositorios {
   readonly desgloseDeCaja: RepositorioDeDesgloseDeCaja;
   readonly ventas: RepositorioDeVentas;
   readonly ventaDetalle: RepositorioDeVentaDetalle;
+  readonly anulacionesDeVenta: RepositorioDeAnulacionesDeVenta;
   readonly recibos: RepositorioDeRecibos;
   readonly configuracionNegocio: RepositorioDeConfiguracionDeNegocio;
   readonly auditoria: RepositorioDeAuditoria;
@@ -79,6 +82,7 @@ export function crearRepositorios(base: Database): Repositorios {
     desgloseDeCaja: new RepositorioDeDesgloseDeCaja(base),
     ventas: new RepositorioDeVentas(base),
     ventaDetalle: new RepositorioDeVentaDetalle(base),
+    anulacionesDeVenta: new RepositorioDeAnulacionesDeVenta(base),
     recibos: new RepositorioDeRecibos(base),
     configuracionNegocio: new RepositorioDeConfiguracionDeNegocio(base),
     auditoria: new RepositorioDeAuditoria(base),

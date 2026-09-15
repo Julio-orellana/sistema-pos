@@ -360,7 +360,7 @@ describe('Caja, ventas y detalle', () => {
     expect(montoACadena(linea?.precioUnitarioSnap ?? '0')).toBe('2.23');
   });
 
-  it('anular una venta no la borra', () => {
+  it('anular una venta no la borra ni la toca: la anulación es una fila aparte', () => {
     const { usuarioId } = sembrarCatalogo();
     const sesion = repos.cajaSesiones.abrir({ usuarioId, montoInicial: '500' });
     const venta = repos.ventas.crear({
@@ -372,9 +372,20 @@ describe('Caja, ventas y detalle', () => {
       // Desde la migración 014 la base exige el número de boleta con tarjeta.
       numBoleta: '004512',
     });
+    const antes = base.prepare('SELECT * FROM ventas WHERE id = ?').get(venta.id);
 
-    repos.ventas.anular(venta.id);
-    expect(repos.ventas.obtenerPorId(venta.id)?.estado).toBe('anulada');
+    const anulacion = repos.anulacionesDeVenta.crear({
+      ventaId: venta.id,
+      solicitadaPor: usuarioId,
+      autorizadaPor: usuarioId,
+      autorizadaVia: 'presencial',
+      motivo: 'error de carga',
+      fecha: '2026-09-15T12:00:00.000Z',
+    });
+
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(venta.id)?.id).toBe(anulacion.id);
+    expect(base.prepare('SELECT * FROM ventas WHERE id = ?').get(venta.id)).toEqual(antes);
+    expect(repos.ventas.obtenerPorId(venta.id)?.estado).toBe('completada');
   });
 
   it('una venta nace pendiente de sincronizar', () => {

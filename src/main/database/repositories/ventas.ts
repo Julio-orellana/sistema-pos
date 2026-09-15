@@ -14,6 +14,21 @@ import type {
 import { RepositorioBase, ahora, nuevoId } from './base';
 import { aColumnaMonto, aColumnaDecimalNulable, desdeColumnaDecimal, desdeColumnaDecimalNulable } from '../decimal-columns';
 
+/**
+ * EL FILTRO DE «VENTA NO ANULADA», EN UN SOLO FRAGMENTO CON NOMBRE
+ * (docs/ANULACION-DE-VENTA.md §1.3).
+ *
+ * Una venta está anulada si y solo si existe su fila en `anulaciones_de_venta`.
+ * **Ninguna consulta decide por `ventas.estado`**, que dice 'completada' también
+ * en las anuladas; hay una prueba estructural que lo exige.
+ *
+ * Exige que la consulta nombre a `ventas` con el alias `v`. Es texto fijo de
+ * este archivo, sin ningún dato de afuera adentro: los valores van siempre como
+ * parámetros ligados.
+ */
+export const VENTA_SIN_ANULACION =
+  'NOT EXISTS (SELECT 1 FROM anulaciones_de_venta AS anulacion WHERE anulacion.venta_id = v.id)';
+
 /** Fila cruda de la tabla `ventas`. */
 interface FilaVenta {
   readonly id: string;
@@ -130,31 +145,32 @@ export class RepositorioDeVentas extends RepositorioBase {
   }
 
   /**
-   * Ventas COMPLETADAS de un rango de fechas, para los reportes.
+   * Ventas NO ANULADAS de un rango de fechas, para los reportes.
    *
    * EL FILTRO VA EN SQL Y LA SUMA NO, y la distinción es la regla central de
-   * los reportes de este proyecto (CLAUDE.md §4.15). `fecha` y `estado` son
-   * texto de verdad, así que compararlos en SQL es exacto y barato. `total`,
+   * los reportes de este proyecto (CLAUDE.md §4.15). `fecha` es texto de verdad
+   * y la anulación es la existencia de una fila, así que filtrar en SQL es
+   * exacto y barato. `total`,
    * `subtotal` y `descuento_valor` son TEXT canónico: un `SUM()` de SQLite los
    * convertiría a punto flotante —medido: diez montos que suman Q13.47 exactos
    * dan `13.459999999999999`— y el error quedaría escondido dentro de un
    * reporte que nadie audita línea por línea. Se devuelven las FILAS y suma
    * quien llama, con Decimal.js.
    *
-   * `estado = 'completada'` va EXPLÍCITO aunque hoy nada produzca ventas
-   * anuladas. El día que exista el módulo de anulación, el reporte no tiene que
-   * acordarse de nada: ya está filtrando.
+   * La venta anulada queda fuera por `VENTA_SIN_ANULACION`, y NUNCA por
+   * `ventas.estado`: esa columna dice 'completada' también en las anuladas
+   * (docs/ANULACION-DE-VENTA.md §1.3).
    *
    * Los dos extremos son INCLUSIVOS. Quien arma el rango pone en `hasta` el
    * último milisegundo del día, no la medianoche siguiente.
    */
-  public listarCompletadasEnRango(desdeIso: string, hastaIso: string): Venta[] {
+  public listarNoAnuladasEnRango(desdeIso: string, hastaIso: string): Venta[] {
     const filas = this.base
       .prepare(
-        `SELECT * FROM ventas
-          WHERE fecha >= ? AND fecha <= ?
-            AND estado = 'completada'
-          ORDER BY fecha`,
+        `SELECT v.* FROM ventas v
+          WHERE v.fecha >= ? AND v.fecha <= ?
+            AND ${VENTA_SIN_ANULACION}
+          ORDER BY v.fecha`,
       )
       .all(desdeIso, hastaIso) as FilaVenta[];
     return filas.map(aEntidad);
@@ -180,15 +196,6 @@ export class RepositorioDeVentas extends RepositorioBase {
     return filas.map(aEntidad);
   }
 
-  /** Anula una venta. Nunca se borra: el histórico no se reescribe. */
-  public anular(id: string): void {
-    this.ejecutar(() => {
-      this.base
-        .prepare("UPDATE ventas SET estado = 'anulada', actualizado_en = ? WHERE id = ?")
-        .run(ahora(), id);
-    });
-  }
-
   public marcarSincronizacion(id: string, estado: EstadoSincronizacion): void {
     this.ejecutar(() => {
       this.base
@@ -197,33 +204,45 @@ export class RepositorioDeVentas extends RepositorioBase {
     });
   }
 
-  /** Suma de los totales de un turno, calculada con Decimal.js y no en SQL. */
+  /** Los totales de las ventas no anuladas de un turno; la suma la hace quien llama, con Decimal.js. */
   public sumarTotalesDeSesion(cajaSesionId: string): Decimal[] {
-    return this.listarPorSesionDeCaja(cajaSesionId)
-      .filter((venta) => venta.estado === 'completada')
-      .map((venta) => venta.total);
+    const filas = this.base
+      .prepare(
+        `SELECT v.* FROM ventas v
+          WHERE v.caja_sesion_id = ?
+            AND ${VENTA_SIN_ANULACION}
+          ORDER BY v.fecha`,
+      )
+      .all(cajaSesionId) as FilaVenta[];
+    return filas.map((fila) => aEntidad(fila).total);
   }
 
   /**
-   * Los totales de las ventas EN EFECTIVO y completadas de un turno.
+   * Los totales de las ventas EN EFECTIVO y NO ANULADAS de un turno.
    *
    * Es la base de `monto_esperado` del corte de caja: lo que debería haber en
    * el cajón. Las ventas con tarjeta quedan fuera a propósito —ese dinero
    * nunca entró al cajón, entra por el banco— y las anuladas también.
    *
-   * El filtro se hace en SQL porque `forma_pago` y `estado` son texto de
-   * verdad, no decimales. La SUMA, en cambio, se hace afuera con Decimal.js:
+   * LA ANULADA SE EXCLUYE, NO SE RESTA (docs/ANULACION-DE-VENTA.md §3.2): como
+   * solo se anula con la caja abierta, la venta y su anulación caen siempre en
+   * el mismo turno, y excluirla da el mismo número sin inventar un movimiento
+   * negativo. Es la ÚNICA fórmula del esperado: la usan `montoEsperadoDe` y el
+   * resumen del turno.
+   *
+   * El filtro se hace en SQL porque `forma_pago` es texto de verdad y la
+   * anulación es la existencia de una fila, no un decimal. La SUMA, en cambio, se hace afuera con Decimal.js:
    * `total` es TEXT canónico y un `SUM()` de SQLite lo convertiría a punto
    * flotante, que es exactamente lo que descuadraría el corte.
    */
   public totalesEnEfectivoDeSesion(cajaSesionId: string): Decimal[] {
     const filas = this.base
       .prepare(
-        `SELECT * FROM ventas
-          WHERE caja_sesion_id = ?
-            AND forma_pago = 'efectivo'
-            AND estado = 'completada'
-          ORDER BY fecha`,
+        `SELECT v.* FROM ventas v
+          WHERE v.caja_sesion_id = ?
+            AND v.forma_pago = 'efectivo'
+            AND ${VENTA_SIN_ANULACION}
+          ORDER BY v.fecha`,
       )
       .all(cajaSesionId) as FilaVenta[];
     return filas.map((fila) => aEntidad(fila).total);
