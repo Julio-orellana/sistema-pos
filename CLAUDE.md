@@ -291,7 +291,7 @@ En concreto:
 | ¿Qué se revierte? | **Toda** la transacción: la venta, su detalle, el descuento de inventario y el contador de ventas. No queda nada a medias. |
 | ¿Hay que rehacer la venta desde cero? | **No.** Se revierte la transacción de base, no el carrito de la pantalla. El cajero vuelve a pulsar Cobrar; no vuelve a capturar los productos. |
 | ¿Qué ve el cajero? | `CONFLICTO_DE_INVENTARIO`: *"El inventario de {producto} cambió mientras se cobraba. No se registró la venta. Revisá la cantidad y volvé a cobrar."* El código y el mensaje ya existen en `errores.ts` (`errorDeConflictoDeInventario`). |
-| ¿Queda registrado? | **Sí**, un asiento de auditoría. En esta arquitectura no debería ocurrir nunca, así que cada ocurrencia es evidencia de que algo hay que investigar. |
+| ¿Queda registrado? | **Sí**, el asiento `conflicto_de_inventario`, escrito **después de revertir**, en una transacción aparte y en su propio lote de la cola, que sube por `sincronizar_asiento`. En esta arquitectura no debería ocurrir nunca, así que cada ocurrencia es evidencia de que algo hay que investigar. **HASTA EL 2026-09-15 ESTA FILA DECÍA «SÍ» Y NO ESTABA IMPLEMENTADO**: el servicio lanzaba el error dentro de la transacción y nadie escribía nada después. Ver «El asiento del conflicto», más abajo. |
 
 **Por qué cero reintentos, y no uno o tres con espera:**
 
@@ -302,6 +302,12 @@ En concreto:
    falla, la premisa se rompió: hay un segundo escritor sobre el archivo, o el
    saldo se leyó fuera de la transacción, que es exactamente el error que este
    patrón existe para atrapar. **Reintentar taparía el defecto.**
+   **(CORREGIDO EL 2026-09-15: el código NO abre `BEGIN IMMEDIATE`.**
+   `enTransaccionDeNegocio` llama a `base.transaction(fn)()`, que corre `BEGIN`
+   a secas —`node_modules/better-sqlite3/lib/methods/transaction.js`, línea
+   42—, y en `src/main` no hay ningún `.immediate`. Qué cambia eso está medido
+   en «Lo que el asiento NO cubre», más abajo. La razón de los cero reintentos
+   sigue valiendo; lo que no es cierto es el mecanismo que se nombra acá.**)**
 2. **Un reintento silencioso podría cobrar algo distinto de lo que el cajero
    vio.** Al releer el saldo, la venta se recalcularía contra un inventario que
    nadie revisó, con un cliente esperando. Preferimos un mensaje claro.
@@ -314,12 +320,121 @@ hace el propio controlador: better-sqlite3 espera hasta su `timeout`, que por
 omisión es de **5000 ms** (verificado en `node_modules/better-sqlite3/lib/database.js`).
 Eso es contención de bloqueo, no un conflicto de datos, y no lo maneja nuestro
 código. Si vence ese tiempo, la venta falla igual y el cajero reintenta.
+**(PRECISADO EL 2026-09-15, medido: con `BEGIN` a secas y WAL, si otra
+conexión confirma una escritura DESPUÉS de que la venta leyó, la primera
+escritura de la venta lanza `SQLITE_BUSY_SNAPSHOT` en el acto. Ese código no lo
+espera el `timeout`: la ventana recibe «La operación no pudo completarse.» a los
+2 ms.)**
 
 **Cuándo revisar esta decisión:** si un conflicto de inventario llega a
 ocurrir en la tienda, la respuesta NO es agregar reintentos, sino averiguar de
 dónde salió el segundo escritor. Probablemente signifique que se abrió el punto
 pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
 un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
+
+#### El asiento del conflicto: prometido desde el Prompt 7, escrito desde el 2026-09-15
+
+**La discrepancia.** La tabla de arriba decía «¿Queda registrado? Sí» y el
+código no lo hacía. `ServicioDeVenta.registrar` lanzaba
+`errorDeConflictoDeInventario` dentro de la transacción, en el paso 4
+(inventario) y en el paso 6 (cantidad vendida). La transacción se revertía y
+nadie escribía nada después. La encontró el diseño de la anulación
+(`docs/ANULACION-DE-VENTA.md` §0.4). Antes de tocar nada se confirmó de dos
+formas:
+
+```
+$ grep -rn "CONFLICTO_DE_INVENTARIO" src/main   (sin contar pruebas)
+src/main/database/errores.ts:23:  | 'CONFLICTO_DE_INVENTARIO'
+src/main/database/errores.ts:208:    'CONFLICTO_DE_INVENTARIO',
+
+sonda con el código anterior (432723b), conflicto forzado en cada paso:
+[sonda] descontarSiSigueIgual ANTES: auditoria_log por accion=[{"accion":"caja_abierta","n":1}]
+[sonda] descontarSiSigueIgual: error.codigo=CONFLICTO_DE_INVENTARIO mensaje="El inventario de Maíz cambió mientras se cobraba. No se registró la venta. Revisá la cantidad y volvé a cobrar."
+[sonda] descontarSiSigueIgual DESPUÉS: auditoria_log por accion=[{"accion":"caja_abierta","n":1}]
+[sonda] descontarSiSigueIgual DESPUÉS: sync_cola por entidad_tipo=[{"entidad_tipo":"auditoria_log","n":1},{"entidad_tipo":"caja_sesiones","n":1}]
+[sonda] registrarVentaDeProducto DESPUÉS: auditoria_log por accion=[{"accion":"caja_abierta","n":1}]
+```
+
+**Qué hace ahora.** El conflicto sale de la transacción envuelto en
+`ConflictoAlVender`, que es interno del servicio. Con la transacción ya
+revertida, `registrar` escribe el asiento con `conBandejaDeSalida` y relanza el
+MISMO `ErrorDeNegocio` de siempre. El cajero ve exactamente lo mismo que antes:
+código, mensaje y causa técnica. Hay pruebas con los textos literales y con el
+sobre de IPC.
+
+| Campo | Valor |
+|---|---|
+| `accion` | `conflicto_de_inventario`, la misma que usa la anulación; la operación va como dato |
+| `usuario_id` | Quien vendía |
+| `entidad_tipo` / `entidad_id` | `productos` / el producto que falló. **No `ventas`**: la venta nunca existió, y un id de venta revertida apuntaría a la nada |
+| `fecha` | El instante de la venta intentada |
+| `valor_nuevo` | `{ operacion: 'venta', productoId, nombre, comparacion, saldoQueSeLeyo, cantidadVendidaQueSeLeyo, momento }` |
+| En la cola | Una sola fila, `auditoria_log`, en su propio lote. Un lote de puros asientos va a `sincronizar_asiento` (0027); no hizo falta migración |
+
+`comparacion` es `inventario_disponible` o `cantidad_vendida` y dice cuál de
+los dos comparar-y-cambiar afectó cero filas. Van los dos valores leídos
+siempre: con solo `saldoQueSeLeyo`, un conflicto del paso 6 quedaría con el
+dato que no falló.
+
+> **LAS CLAVES NO COINCIDEN CON LAS DE LA ANULACIÓN, y hay que decidirlo.** La
+> anulación (§4.45) escribe la misma acción con `saldoLeido`,
+> `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Las dos
+> operaciones se escribieron a la vez, sin verse. Ningún código lee estos
+> asientos todavía, así que alinearlas no rompe nada; es el punto 23 de §6.2.
+
+**Si el asiento no se puede escribir, el cajero recibe IGUAL el conflicto.** La
+falla va a `log-tecnico.log` con origen `[venta]`. Por eso `ServicioDeVenta`
+recibe `log`, obligatorio: opcional, un sitio que se olvidara de pasarlo dejaría
+esa falla sin rastro. No se espera que pase (haría falta que la base falle justo
+después de revertir), pero si pasa no puede cambiar lo que ve el cajero.
+
+**Pruebas, y cómo se falsificaron.** Once en `servicio-de-venta.test.ts` y una
+de punta a punta en `integracion-fase-3b.test.ts`, que usa el trabajador y el
+proveedor reales y exige que se llame a `['sincronizar_asiento']`. El conflicto
+se provoca con el UPDATE real: justo antes del comparar-y-cambiar se mueve el
+saldo por la misma conexión, y la sentencia afecta cero filas. Contra el código
+anterior fallaban 6 de las 11; pasaban las 5 que fijan lo que ya funcionaba.
+Falsificaciones, restaurando el archivo y comprobando su sha256 cada vez:
+
+| Mutación | Pruebas que caen |
+|---|---|
+| Quitar la escritura del asiento | 7, con `expected [] to have a length of 1 but got +0` y `expected [] to deeply equal [ 'sincronizar_asiento' ]` |
+| Escribirlo DENTRO de la transacción, antes de lanzar | 6 (el `ROLLBACK` se lo lleva) |
+| Relanzar el envoltorio en vez del error de negocio | 12, entre ellas 2 que ya existían |
+| Dejar que la falla del asiento se escape | 1: `expected SqliteError: sin espacio en disco (simula…) to be an instance of ErrorDeNegocio` |
+
+#### Lo que el asiento NO cubre (medido el 2026-09-15)
+
+**El segundo escritor de verdad no llega a este asiento.** El asiento cubre el
+comparar-y-cambiar que afecta cero filas: el saldo se movió por la misma
+conexión, o se leyó fuera de la transacción. Una segunda conexión real no
+produce cero filas. Como la venta abre `BEGIN` a secas y la base está en WAL,
+la primera escritura lanza `SQLITE_BUSY_SNAPSHOT`, que no es un error de negocio.
+Medido con el servicio real sobre una base migrada y una segunda conexión que
+escribe entre la lectura y el UPDATE:
+
+```
+[sonda] journal_mode=[{"journal_mode":"wal"}]
+[sonda] la OTRA conexión escribió y confirmó: changes=1; base.inTransaction=true
+[sonda] +2ms respuesta a la ventana: {"ok":false,"error":{"codigo":"COBRO_FALLIDO","mensaje":"La operación no pudo completarse.","detalle":"database is locked"}}
+[sonda] asientos conflicto_de_inventario={"n":0}; filas nuevas en sync_cola=0; saldo={"s":"47.000"}; ventas={"n":0}
+```
+
+Y con una sonda mínima (dos conexiones, sin la aplicación), `BEGIN` contra
+`BEGIN IMMEDIATE`:
+
+```
+[default]   +0ms    A leyó dentro de la transacción: 50.000
+[default]   +1ms    B escribió y confirmó (autocommit): changes=1
+[default]   +1ms    A comparar-y-cambiar LANZÓ: SQLITE_BUSY_SNAPSHOT database is locked
+[immediate] +0ms    A leyó dentro de la transacción: 50.000
+[immediate] +1589ms B NO pudo escribir: SQLITE_BUSY database is locked
+[immediate] +1590ms A comparar-y-cambiar: changes=1
+```
+
+**No se cambió.** Pasar `enTransaccionDeNegocio` a `.immediate()` afecta a las
+ocho operaciones de negocio, no solo a la venta. Es una decisión aparte: punto 22
+de §6.2. Esto se midió en macOS; Windows no.
 
 ### 4.4 Estado del proyecto en Supabase
 
@@ -7396,6 +7511,7 @@ del reporte de §3.5, que no se construyó en este prompt.
 | **La anulación de una venta usa UN canal, `venta:anular`, llamado dos veces: sin PIN valida y devuelve la vista previa; con PIN vuelve a validar, autoriza y ejecuta.** | Dos canales, uno para pedir y otro para confirmar; una autorización pendiente como la del cierre de caja | Es lo que dice §4.3 del diseño y el patrón del descuento excedente. Acá no hay ningún monto oculto que revelar después del PIN, así que la autorización pendiente del cierre (§4.40.5) no agrega nada. Volver a validar antes de mirar el PIN hace que una caja cerrada o una venta anulada mientras tanto no consuman un intento. §4.45. | Prompt 69 — 2026-09-15 |
 | **`RepositorioDeVentas.anular()` se elimina y las consultas filtran con `VENTA_SIN_ANULACION`; dos se renombran a «NoAnuladas».** | Dejar `anular()` sin uso; dejar los nombres «Completadas» | Es el camino que el diseño descarta (§1.3), y dejarlo invita a usarlo. «Completadas» afirmaría que filtra por `estado`, que dice 'completada' también en las anuladas. Dos pruebas estructurales lo fijan. §4.45. | Prompt 69 — 2026-09-15 |
 | **El lote de la anulación se encola desde el núcleo local aunque su puerta en la nube no exista todavía; y una versión con este núcleo no se instala en una terminal conectada.** | No encolar hasta el prompt de sincronización; encolar y cablear el enrutador ya | Encolar es el paso 8 de la transacción (§2.2), y no hacerlo dejaría anulaciones que nunca subirían sin que nada fallara. Cablear el enrutador sin la función de la nube no evita que la cola se detenga. La deriva anota la tabla en una lista que obliga a sacarla cuando llegue su espejo. §4.45. | Prompt 69 — 2026-09-15 |
+| **Un conflicto de inventario al vender deja el asiento `conflicto_de_inventario` DESPUÉS de revertir, en una transacción aparte y en su propio lote. Si el asiento no se puede escribir, el cajero recibe igual el conflicto y la falla va a la bitácora técnica.** Hasta esta fecha §4.3 afirmaba que quedaba registrado y NO estaba implementado. | Escribirlo dentro de la transacción de la venta; corregir el texto de §4.3 en vez del código; dejar que una falla del asiento reemplace al conflicto; `log` opcional en `ServicioDeVenta` | Adentro, el `ROLLBACK` se lo lleva con la venta, que es lo que pasaba: medido con el código anterior, después del conflicto la bitácora solo tenía `caja_abierta`. Corregir solo el texto habría quitado la única evidencia de una premisa rota. Que la falla del asiento reemplazara al conflicto le mostraría al cajero «La operación no pudo completarse» en vez del producto que falló. El `log` es obligatorio para que ningún sitio la deje sin rastro. `entidad_tipo` es `productos` porque la venta nunca existió. **No cubre un segundo escritor en otra conexión**: con `BEGIN` a secas eso da `SQLITE_BUSY_SNAPSHOT` (medido); ver puntos 22 y 23 de §6.2. §4.3. | 2026-09-15 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -7438,6 +7554,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
 | 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. La interpretación sobre los diálogos se cerró en el Prompt 59: tampoco lo muestran al rol venta (§4.40.3). |
+| 22 | **¿La transacción de negocio debe abrir `BEGIN IMMEDIATE`, como dice §4.3, o se corrige el texto?** | Hoy `enTransaccionDeNegocio` abre `BEGIN` a secas. Medido el 2026-09-15: si otra conexión escribe entre la lectura y el comparar-y-cambiar, la venta falla con `SQLITE_BUSY_SNAPSHOT` en el acto, la ventana ve «La operación no pudo completarse.» y no queda asiento de conflicto. Con `.immediate()` la otra conexión es la que espera y falla. Afecta a las ocho operaciones de negocio, no solo a la venta. Hoy la instancia única lo hace improbable; importa si se abre el punto 10. §4.3. | Abierto — decisión técnica de Julio |
+| 23 | **¿Qué claves lleva `valor_nuevo` del asiento `conflicto_de_inventario`?** | La venta escribe `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo`, `comparacion` y `momento`. La anulación (§4.45) escribe `saldoLeido`, `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Es la misma acción con dos formas. Ningún código lee estos asientos, así que alinearlas no rompe nada, pero un auditor que filtre por la acción va a encontrar las dos. §4.3. | Abierto — de bajo riesgo |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
