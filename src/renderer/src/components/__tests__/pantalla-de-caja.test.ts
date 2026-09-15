@@ -19,6 +19,12 @@ import { createRoot, type Root } from 'react-dom/client';
 
 import type { EstadoDeCaja, TurnoAbierto } from '@shared/types/ipc';
 import { PantallaDeCaja } from '../PantallaDeCaja';
+import {
+  CODIGO_SIN_RESPUESTA,
+  LIMITE_DE_RESPUESTA_MS,
+  MENSAJE_SIN_RESPUESTA,
+  llamarAlProcesoPrincipal,
+} from '../llamar-al-proceso-principal';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -191,13 +197,25 @@ describe('Estado 3: hay una caja abierta y la abrió OTRA persona', () => {
     expect(texto()).toContain('500.00');
   });
 
-  it('avisa que cerrarla necesita autorización', async () => {
+  it('avisa, SIN ambigüedad, quién la abrió y que cerrarla necesita el PIN de un administrador', async () => {
     await montar();
 
     const aviso = porPrueba('aviso-de-caja-ajena');
     expect(aviso).not.toBeNull();
-    expect(aviso?.textContent).toContain('Rosa');
-    expect(aviso?.textContent).toContain('autorización');
+    expect(aviso?.textContent).toContain('Esta caja la abrió Rosa.');
+    expect(aviso?.textContent).toContain('Vas a necesitar el PIN de un administrador para cerrarla.');
+  });
+
+  it('dice en qué orden: primero se cuenta y después se pide el PIN, que puede ser el propio', async () => {
+    await montar();
+
+    const pasos = porPrueba('aviso-de-caja-ajena-pasos')?.textContent ?? '';
+    expect(pasos).toContain('Primero contás el efectivo');
+    expect(pasos).toContain('se pide el PIN');
+    expect(pasos).toContain('Si sos administrador, sirve el tuyo.');
+    // Y lo sigue diciendo en el paso de contar, que es donde se busca el PIN.
+    irAContar();
+    expect(porPrueba('aviso-de-caja-ajena-pasos')).not.toBeNull();
   });
 
   it('el botón de cerrar lo dice también', async () => {
@@ -713,5 +731,75 @@ describe('UN PIN INCORRECTO NUNCA LLEGA A MOSTRAR NINGÚN MONTO', () => {
     expect(texto()).not.toContain('630.50');
     expect(texto()).not.toContain('Debería haber');
     expect(llamadas.confirmar).toBe(0);
+  });
+});
+
+// ===========================================================================
+/**
+ * LO QUE VIO JIMMY: el botón «Cerrar turno (requiere autorización)» no hacía
+ * nada. El canal se RECHAZABA (el proceso principal no podía clonar su
+ * respuesta) y la pantalla no atrapaba el rechazo: quedaba «trabajando» para
+ * siempre, con el botón deshabilitado y sin ningún mensaje.
+ */
+describe('Si el canal se rechaza, la pantalla lo DICE y no se congela', () => {
+  it('al cerrar: aparece el aviso de que no hubo respuesta y el botón vuelve a estar disponible', async () => {
+    instalarApi(TURNO_DE_ROSA);
+    const pos = (window as unknown as { pos: { caja: Record<string, unknown> } }).pos;
+    pos.caja.cerrar = async (): Promise<unknown> =>
+      Promise.reject(new Error('Error invoking remote method: An object could not be cloned.'));
+    await montar();
+    irAContar();
+
+    act(() => {
+      porPrueba('modo-simple')?.click();
+    });
+    for (const digito of '100') {
+      act(() => {
+        porPrueba(`tecla-${digito}`)?.click();
+      });
+    }
+    const boton = (): HTMLButtonElement | null =>
+      contenedor.querySelector<HTMLButtonElement>('[data-prueba="confirmar-caja"]');
+    expect(boton()?.disabled).toBe(false);
+
+    await act(async () => {
+      boton()?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(porPrueba('mensaje-de-caja')?.textContent).toBe(MENSAJE_SIN_RESPUESTA);
+    expect(boton()?.disabled).toBe(false);
+    expect(porPrueba('autorizacion-de-caja-ajena')).toBeNull();
+  });
+
+  it('llamarAlProcesoPrincipal deja pasar una respuesta normal tal cual', async () => {
+    const respuesta = await llamarAlProcesoPrincipal(async () =>
+      Promise.resolve({ ok: true as const, datos: 7 }),
+    );
+    expect(respuesta).toEqual({ ok: true, datos: 7 });
+  });
+
+  it('LO QUE PASÓ DE VERDAD: una llamada que NUNCA contesta también termina en ok: false al vencer el límite', async () => {
+    const respuesta = await llamarAlProcesoPrincipal(
+      async () => new Promise<never>(() => undefined),
+      20,
+    );
+    expect(respuesta).toEqual({
+      ok: false,
+      error: { codigo: CODIGO_SIN_RESPUESTA, mensaje: MENSAJE_SIN_RESPUESTA },
+    });
+  });
+
+  it('el límite por omisión es de 15 segundos', () => {
+    expect(LIMITE_DE_RESPUESTA_MS).toBe(15_000);
+  });
+
+  it('y convierte un rechazo en ok: false con su código, sin lanzar', async () => {
+    const respuesta = await llamarAlProcesoPrincipal(async () => Promise.reject(new Error('x')));
+    expect(respuesta).toEqual({
+      ok: false,
+      error: { codigo: CODIGO_SIN_RESPUESTA, mensaje: MENSAJE_SIN_RESPUESTA },
+    });
   });
 });

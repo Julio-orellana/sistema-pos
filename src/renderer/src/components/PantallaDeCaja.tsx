@@ -54,6 +54,7 @@ import type {
 import { formatearQuetzales } from '@shared/money';
 import { CapturaDeEfectivo } from './CapturaDeEfectivo';
 import { TecladoNumerico } from './TecladoNumerico';
+import { llamarAlProcesoPrincipal } from './llamar-al-proceso-principal';
 
 /**
  * Con la caja abierta, en qué paso del cierre está la pantalla.
@@ -147,7 +148,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
   useEffect(() => {
     const control = new AbortController();
     void (async (): Promise<void> => {
-      const respuesta = await window.pos.caja.estado();
+      const respuesta = await llamarAlProcesoPrincipal(async () => window.pos.caja.estado());
       if (control.signal.aborted) {
         return;
       }
@@ -188,7 +189,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
     }
     setTrabajando(true);
     void (async (): Promise<void> => {
-      const respuesta = await window.pos.caja.abrir(efectivo);
+      const respuesta = await llamarAlProcesoPrincipal(async () => window.pos.caja.abrir(efectivo));
       setTrabajando(false);
       if (!respuesta.ok) {
         setMensaje(respuesta.error.mensaje);
@@ -213,10 +214,12 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
       }
       setTrabajando(true);
       void (async (): Promise<void> => {
-        const respuesta = await window.pos.caja.cerrar(
-          efectivo,
-          codigos.diferencia,
-          codigos.cajaAjena ?? pinDeCajaAjena ?? undefined,
+        const respuesta = await llamarAlProcesoPrincipal(async () =>
+          window.pos.caja.cerrar(
+            efectivo,
+            codigos.diferencia,
+            codigos.cajaAjena ?? pinDeCajaAjena ?? undefined,
+          ),
         );
         setTrabajando(false);
         setPin('');
@@ -299,7 +302,9 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
       }
       setTrabajando(true);
       void (async (): Promise<void> => {
-        const respuesta = await window.pos.caja.confirmarCierreAutorizado(efectivo);
+        const respuesta = await llamarAlProcesoPrincipal(async () =>
+          window.pos.caja.confirmarCierreAutorizado(efectivo),
+        );
         setTrabajando(false);
         if (!respuesta.ok) {
           setMensaje(respuesta.error.mensaje);
@@ -329,7 +334,9 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
     (anterior: DialogoConPin | null): void => {
       setTrabajando(true);
       void (async (): Promise<void> => {
-        const respuesta = await window.pos.caja.cancelarAutorizacionDeCierre();
+        const respuesta = await llamarAlProcesoPrincipal(async () =>
+          window.pos.caja.cancelarAutorizacionDeCierre(),
+        );
         setTrabajando(false);
         if (!respuesta.ok) {
           setMensaje(respuesta.error.mensaje);
@@ -737,10 +744,20 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
   const avisos = (
     <>
       {turno !== null && esAjena && (
-        <p className="advertencia" data-prueba="aviso-de-caja-ajena">
-          Esta caja la abrió {turno.abiertaPorNombre}. Para cerrarla hace falta la
-          autorización de un administrador.
-        </p>
+        <div className="advertencia" data-prueba="aviso-de-caja-ajena">
+          {/* Dicho para quien la tiene delante, aunque sea administrador: el PIN
+              se pide igual (§4.9), y se pide DESPUÉS de contar. Sin la segunda
+              frase, un administrador buscaba dónde teclear el PIN antes de
+              contar y no lo encontraba. */}
+          <p className="advertencia__principal">
+            Esta caja la abrió <strong>{turno.abiertaPorNombre}</strong>. Vas a necesitar el
+            PIN de un administrador para cerrarla.
+          </p>
+          <p data-prueba="aviso-de-caja-ajena-pasos">
+            Primero contás el efectivo; al tocar «Cerrar turno» se pide el PIN. Si sos
+            administrador, sirve el tuyo.
+          </p>
+        </div>
       )}
 
       {mensaje !== null && (
