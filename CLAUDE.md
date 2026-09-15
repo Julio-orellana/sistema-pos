@@ -358,7 +358,7 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**DESDE EL 2026-09-14 HAY UNA MIGRACIÓN ESCRITA Y SIN APLICAR EN NINGÚN PROYECTO: la `0031_productos_precio_compra`** (§4.39). No es aditiva para el contrato: cambia la forma del payload de `productos`, así que se aplica en el mismo momento en que se instala la versión que trae la 031 local, primero en el proyecto de pruebas y después en el real con aprobación. Lo que sigue de este párrafo describe el estado ANTERIOR a ella.
+**DESDE EL 2026-09-14 HAY DOS MIGRACIONES ESCRITAS Y SIN APLICAR EN NINGÚN PROYECTO: la `0031_productos_precio_compra`** (§4.39) **y la `0032_venta_detalle_costo_unitario_snap`** (§4.40, que además NO se probó todavía contra Postgres). Las dos esperan que Julio vea el SQL y lo apruebe, también para `pos-pruebas-descartable`. La 0031, en particular, No es aditiva para el contrato: cambia la forma del payload de `productos`, así que se aplica en el mismo momento en que se instala la versión que trae la 031 local, primero en el proyecto de pruebas y después en el real con aprobación. Lo que sigue de este párrafo describe el estado ANTERIOR a ella.
 
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE EN `pos-jimmy-cano`: la `0029`
 (`restauracion_ventas_por_mes`, fase 4.b, §4.35) se aplicó el 2026-09-14**, con
@@ -6018,6 +6018,11 @@ apareció a los 10.0 s, sin navegar.
 > ciegas**: contar sin ver el esperado. Se construyó tal como se pidió; la
 > decisión de ocultarlo en el paso de conteo, o de mostrarlo solo al rol
 > administrativo, es de Julio y queda como el punto 21 de §6.2.
+>
+> **RESUELTO EL MISMO DÍA (§4.40), y este bloque queda como constancia de lo
+> que se construyó primero.** Julio decidió las dos cosas: el teórico solo
+> viaja a un rol administrativo, y el paso donde se teclea el conteo no lo
+> muestra a nadie.
 
 #### 3. La confirmación del cierre
 
@@ -6082,6 +6087,10 @@ tiene costo, y dice cuántos productos quedaron fuera y cuánto vendieron.
 > guarda el precio, no el costo. Si el costo cambia en el período, las ventas
 > viejas se calculan con el nuevo. Está dicho en la pantalla. Congelar el costo
 > por venta sería una columna más en `venta_detalle` y su espejo.
+>
+> **SUPERADO EL MISMO DÍA (§4.40): esa columna existe,
+> `venta_detalle.costo_unitario_snap`, y el margen usa la foto de cada línea.**
+> El párrafo de arriba describe la primera versión, que nunca llegó a Jimmy.
 
 **LA 0031 NO ESTÁ APLICADA EN NINGÚN PROYECTO, y es a propósito.** Las funciones
 de la nube exigen EXACTAMENTE las columnas de la tabla, así que una terminal y
@@ -6116,6 +6125,108 @@ pantallas «sin configurar». `POS_COMPILAR_SIN_NUBE=1` compila sin nube, y lo u
 `verify:pantallas` y `verify:pantallas:caja`. El empaquetado no cambió. **`npm
 run dev` y `npm run build` a secas siguen incrustando el proyecto de pruebas**
 mientras exista el archivo.
+
+### 4.40 El teórico se oculta al contar, y el costo es una foto de la venta (2026-09-14)
+
+Dos correcciones de Julio sobre §4.39, el mismo día.
+
+#### 1. Quién ve el efectivo teórico
+
+**La razón, en sus palabras:** si quien cuenta puede ver el número que el
+sistema espera, pierde sentido contar físicamente —podría copiar el número en
+vez de verificar el cajón—, que es exactamente el propósito del conteo.
+
+| Dónde | Administrativo | Venta |
+|---|---|---|
+| Resumen de la caja abierta (consulta durante el día) | **Sí** | No |
+| `window.pos.caja.estado()` llamado desde la consola | **Sí** | `null` |
+| `window.pos.venta.estado()` | `null` | `null` |
+| **Paso donde se teclea el conteo del cierre** | **No** | No |
+| Confirmación «Caja cerrada con éxito» | Sí | Sí |
+
+**La regla del rol la aplica el proceso principal**, en
+`src/main/ipc/turno-para-la-ventana.ts`: para quien no es administrativo el
+teórico, las ventas en efectivo y su cantidad viajan en `null`, y **ni se
+calculan**. Esconderlo en la pantalla no alcanzaba: el canal se llama desde la
+consola. Las ventas en efectivo se ocultan JUNTO con el teórico porque inicial
+más ventas ES el teórico. El estado de la venta no lo manda a ningún rol.
+
+**La regla del conteo la aplica la pantalla**, porque el administrativo sí lo
+recibe: cerrar la caja pasó a ser **dos pasos**. «Caja abierta» (resumen, con
+el teórico si viajó) y, tras «Contar para cerrar», «Cerrar caja» (el conteo).
+El paso de conteo no lee el campo: la fila no existe en el árbol, no está
+escondida con CSS. «Volver a contar» desde un diálogo de autorización vuelve al
+paso de conteo, no al resumen.
+
+**El conteo sellado viaja sin el esperado ni la diferencia** mientras se
+cuenta: solo cuándo se confirmó y cuánto se contó, que lo escribió la propia
+persona. El pedido de PIN de una caja ajena, que ocurre antes de contar, manda
+`montoEsperado: null`.
+
+> **UNA INTERPRETACIÓN, dicha para que Julio la confirme.** Después de
+> CONFIRMAR un conteo, los diálogos de diferencia y de reconteo siguen
+> mostrando «Debería haber» y la diferencia, a cualquier rol. Se dejó así
+> porque en ese momento el conteo ya quedó sellado en `auditoria_log` (§4.39):
+> cualquier corrección posterior exige PIN aunque cuadre, y quien autoriza
+> tiene que ver qué aprueba (§4.9). La consecuencia a saber: un cajero puede
+> descubrir el teórico confirmando un número cualquiera, pero ese número queda
+> registrado y corregirlo necesita a un administrador. Si Julio prefiere que
+> esos diálogos no muestren el esperado al rol venta, el cambio es acotado.
+
+**Verificado en la aplicación real** (`npm run verify:pantallas:caja`, 37
+comprobaciones, macOS). El escenario pedido, salida cruda:
+
+```
+window.pos.caja.estado() con la sesión del ADMINISTRATIVO: {…,"ventasEnEfectivo":"27.50","cantidadDeVentasEnEfectivo":2,"montoTeorico":"527.50",…}
+texto visible de la pantalla de conteo del administrativo: "Cerrar caja\n\nContá el efectivo que hay en el cajón. El monto que el sistema espera se muestra después de confirmar el conteo.\n\nLa abrió\nVos\nDesde\n…\nContar billetes y monedas\nEscribir el total\n…\nTotal contado\nQ0.00\nCerrar turno\nVolver\nNube: al día\nJimmy de verificación · administrativo\nv1.0.0"
+OK  EL ADMINISTRATIVO, EN LA PANTALLA DE CONTEO: ni la fila del teórico ni la de ventas, y ni «527.50» ni «teórico» en todo el texto visible
+window.pos.caja.estado() con la sesión de la CAJERA: {…,"ventasEnEfectivo":null,"cantidadDeVentasEnEfectivo":null,"montoTeorico":null,"primerConteoSellado":null}
+texto visible del resumen de caja de la CAJERA: "Caja abierta\nLa abrió\nVos\nDesde\n…\nMonto inicial\nQ200.00\nContar para cerrar\nVolver\nNube: al día\nCajera de verificación · venta\nv1.0.0"
+OK  LA CONFIRMACIÓN SÍ le muestra el teórico a la cajera, una vez registrado el conteo
+```
+
+Falsificado: dejando ver el teórico a cualquier sesión caen 3 de las 11 pruebas
+de `turno-para-la-ventana.test.ts`; dibujándolo en el paso de conteo caen 4 de
+las 21 de `pantalla-de-caja.test.ts`.
+
+#### 2. El costo de cada venta es una foto (migraciones 032 / 0032)
+
+`venta_detalle.costo_unitario_snap`, nulable. Se llena con
+`productos.precio_compra` **dentro de la transacción de la venta**, en el mismo
+paso que `precio_unitario_snap` (§4.13). El margen del reporte por producto usa
+esa foto línea por línea: `subtotal_impreso − costo_unitario_snap × cantidad`,
+exacto, redondeado una vez por producto. **Una línea con la foto en `NULL` no
+entra en el margen ni cuenta como cero**: se cuenta aparte, por fila («1 línea
+sin dato de costo») y en el total del período, con lo que se cobró en ellas.
+
+Son `NULL` las ventas anteriores a la 032 —la migración no rellena con el costo
+de hoy, que sería inventar el del pasado— y las de productos que no tenían
+costo al venderse.
+
+Verificado en la aplicación real: se vendieron 2 maíz con costo 3.00, se cambió
+el costo a 5.00 desde la pantalla, y el margen siguió en Q2.50 (con el costo de
+hoy habría dado −Q1.50):
+
+```
+productos.precio_compra del maíz tras editarlo: 5.00
+venta_detalle en la base: [{"producto_nombre_snap":"Frijol negro","cantidad":"1.000","subtotal_impreso":"9.00","costo_unitario_snap":null},{"producto_nombre_snap":"Maíz blanco","cantidad":"2.000","subtotal_impreso":"8.50","costo_unitario_snap":"3.00"}]
+filas del reporte por producto: ["Frijol negro1 unidad · 1 ventaQ9.00Margen: sin dato (1 línea sin dato de costo)","Maíz blanco2 unidad · 1 ventaQ8.50Margen: Q2.50"]
+```
+
+**Esa corrida encontró un defecto propio**: la primera versión solo decía
+cuántas líneas faltaban cuando el producto tenía ALGUNA con costo, así que la
+fila del frijol decía «sin dato» sin decir de cuántas líneas. Ahora lo dice
+siempre.
+
+Falsificado en Vitest: leyendo el costo del catálogo en vez de la foto caen 4
+pruebas; guardando la foto siempre en `NULL` caen 9.
+
+**La 0032 NO está aplicada en ningún proyecto y NO se probó contra Postgres.**
+Tiene el mismo problema de forma de payload que la 0031 (§4.39): mientras una
+terminal con la 032 y la nube difieran, la cola se detiene en el primer lote de
+venta. Se aplica con la aprobación de Julio y en el mismo momento que se instala
+la versión que la trae; la 032 local ya agrega la clave a los payloads que
+esperaban en la cola.
 
 ## 5. Registro de decisiones técnicas
 
@@ -6365,6 +6476,10 @@ mientras exista el archivo.
 | **El efectivo teórico en vivo sale del MISMO cálculo que `monto_esperado`, y se refresca cada 10 s.** | Calcularlo en la pantalla; una fórmula aparte para el turno | Dos cálculos terminan diciendo dos números. La pantalla no suma. Diez segundos porque las ventas se cobran en otra pantalla de la misma terminal. **La tensión con el conteo a ciegas queda abierta como punto 21 de §6.2.** | Prompt 57 — 2026-09-14 |
 | **`productos.precio_compra` es nulable y `NULL` no es cero; el margen sin costo es «sin dato».** Migraciones 031 / 0031. | Default cero; exigir el costo al crear | El catálogo real no llegó y el costo no se conoce para todo. Cero diría que el producto no deja ganancia. El margen usa el costo vigente y lo dice. | Prompt 57 — 2026-09-14 |
 | **La 0031 NO se aplicó a `pos-pruebas-descartable`: se midió dentro de un bloque revertido.** | Aplicarla ya, como las migraciones aditivas | Las funciones de la nube exigen el payload exacto, y la instalación de Jimmy sube a ese proyecto: aplicarla le detendría la cola. A diferencia de la 0027, esta cambia la forma del payload. Se aplica al instalar la versión con la 031. | Prompt 57 — 2026-09-14 |
+| **El efectivo teórico solo viaja a la ventana de un rol ADMINISTRATIVO, y lo filtra el proceso principal.** | Esconderlo en la pantalla según el rol; mostrárselo a todos | Julio: si quien cuenta ve el número esperado, puede copiarlo en vez de contar. Esconderlo en la pantalla no protege: `window.pos.caja.estado()` se llama desde la consola. Para el rol venta ni se calcula. Las ventas en efectivo se ocultan con él porque inicial + ventas ES el teórico. §4.40. | Prompt 58 — 2026-09-14 |
+| **Cerrar la caja son dos pasos, y el de conteo no muestra el teórico A NADIE, administrador incluido.** | Ocultarlo solo al rol venta; ocultarlo con CSS en la misma pantalla | El administrativo lo necesita para consultar durante el día, pero cuando cuenta es un cajero más. Con dos pasos la fila no está en el árbol mientras se cuenta. Se revela en la confirmación. Resuelve el punto 21 de §6.2. | Prompt 58 — 2026-09-14 |
+| **INTERPRETACIÓN a confirmar: los diálogos posteriores a CONFIRMAR un conteo (diferencia y reconteo) siguen mostrando el esperado.** | Ocultarlo también ahí al rol venta | El conteo ya está sellado en `auditoria_log` y toda corrección exige PIN; quien autoriza tiene que ver qué aprueba (§4.9). Queda señalado en §4.40. | Prompt 58 — 2026-09-14 |
+| **`venta_detalle.costo_unitario_snap` guarda el costo al vender; el margen usa esa foto, y una línea sin foto se cuenta aparte, nunca como cero.** Migraciones 032 / 0032. **SUPERA la fila del Prompt 57 que decía «el margen usa el costo vigente».** | Seguir con el costo vigente; rellenar las ventas viejas con el costo de hoy | Con el costo vigente, corregir un precio de compra hoy cambiaría el margen de ventas ya hechas. Rellenar el pasado con el costo de hoy sería inventarlo. Es el mismo criterio de `precio_unitario_snap` (§4.13). | Prompt 58 — 2026-09-14 |
 | **`POS_COMPILAR_SIN_NUBE=1` compila sin la nube incrustada; lo usan los arneses de pantalla.** | Borrar `.env.empaquetado` antes de verificar; incrustar solo en `dist` | Desde §4.38 toda compilación apuntaba al proyecto de pruebas y `verify:pantallas` medía otra cosa. La variable no cambia el empaquetado. Mover la incrustación solo a `dist` sería lo más limpio y cambia cómo compila `npm run dev`: queda para decidir. | Prompt 57 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
@@ -6407,7 +6522,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
-| 21 | **¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?** | Hoy se muestra en la misma pantalla donde se cuenta (§4.39), como se pidió. Un cajero que teclea el teórico a la primera nunca dispara el sello del recuento, aunque falte dinero. Las salidas son ocultarlo en el paso de conteo, mostrarlo solo al rol administrativo, o dejarlo. Es un control de auditoría, así que lo decide Julio. | Abierto |
+| 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. Queda a confirmar una interpretación: los diálogos posteriores a confirmar un conteo sí muestran el esperado. |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -6576,7 +6691,9 @@ npm run seed:limites:limpiar  # los quita, y los dos roles vuelven a cero
                          # aplicación, con su auditoría (§4.16).
 npm run verify:pantallas # maneja la app real y comprueba qué se ve en pantalla
 npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en vivo, cierre con
-                         # confirmación, EL RECUENTO SELLADO (escenario de Jimmy) y el margen.
+                         # confirmación, EL RECUENTO SELLADO (escenario de Jimmy), el margen con
+                         # la foto del costo, y quién ve el teórico: el administrativo en el
+                         # resumen y NO al contar; la cajera ni en pantalla ni por el canal.
                          # Deja capturas y lee la base al final (§4.39).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
