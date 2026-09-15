@@ -56,6 +56,7 @@ import { ServicioDeRestauracion } from '@main/restauracion/servicio-de-restaurac
 import { AlmacenDelPuestoDeControl } from '@main/restauracion/puesto-de-control';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import { ServicioDeImpresora } from '@main/impresora/servicio-de-impresora';
+import { ServicioDeHistorialDeCajas } from '@main/domain/caja/historial-de-cajas';
 import {
   EnviadorSimulado,
   IMPRESORA_SIMULADA_DESCONECTADA,
@@ -288,6 +289,13 @@ function dependenciasSobre(
       auditoria: repos.auditoria,
       nombreDeUsuario: (id): string | null => repos.usuarios.obtenerPorId(id)?.nombre ?? null,
     }),
+    historialDeCajas: new ServicioDeHistorialDeCajas({
+      cajaSesiones: repos.cajaSesiones,
+      auditoria: repos.auditoria,
+      usuarios: repos.usuarios,
+      desglose: repos.desgloseDeCaja,
+      denominaciones: repos.denominaciones,
+    }),
     impresora: new ServicioDeImpresora({
       carpetaDeDatos: carpeta,
       listar: (): Promise<ReturnType<typeof impresorasSimuladas>> => Promise.resolve(impresorasSimuladas()),
@@ -494,6 +502,14 @@ describe('1. En una tienda con datos, cada canal devuelve algo que el puente pue
     expect(datosDe(pedido, 'pedido de caja ajena').codigo).toBe('REQUIERE_AUTORIZACION_DE_CAJA_AJENA');
     const ajena = await llamar(CANALES_IPC.cerrarCaja, 'AJENA con PIN', { efectivo: exacto, pinCajaAjena: PIN_DE_JIMMY });
     expect(datosDe(ajena, 'cierre ajeno').cerrada).toBe(true);
+
+    const historial = datosDe(
+      await llamar(CANALES_IPC.cajasHistorial, 'todas', { desde: null, hasta: null, abiertaPor: null }),
+      'historial',
+    );
+    await llamar(CANALES_IPC.cajasHistorial, 'solo Rosa', { desde: null, hasta: null, abiertaPor: rosa?.id });
+    const primera = (historial.sesiones as { id: string }[])[0];
+    await llamar(CANALES_IPC.cajasDetalle, 'la más reciente', { id: primera?.id });
   });
 
   it('salida controlada', async () => {

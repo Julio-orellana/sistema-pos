@@ -99,6 +99,26 @@ export class RepositorioDeAuditoria extends RepositorioBase {
   }
 
   /**
+   * Todos los asientos de un tipo de entidad con alguna de estas acciones, del
+   * más viejo al más nuevo. Una sola consulta para todo el historial de cajas,
+   * en vez de dos por fila.
+   */
+  public listarPorTipoYAcciones(entidadTipo: string, acciones: readonly string[]): AsientoAuditoria[] {
+    if (acciones.length === 0) {
+      return [];
+    }
+    const marcas = acciones.map(() => '?').join(', ');
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM auditoria_log
+          WHERE entidad_tipo = ? AND accion IN (${marcas})
+          ORDER BY fecha ASC, rowid ASC`,
+      )
+      .all(entidadTipo, ...acciones) as FilaAuditoria[];
+    return filas.map(aEntidad);
+  }
+
+  /**
    * Los asientos de UNA acción sobre una entidad, del más VIEJO al más nuevo.
    *
    * Desempata por `rowid`, que en esta tabla crece con cada inserción: dos

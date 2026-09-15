@@ -147,6 +147,39 @@ export class RepositorioDeCajaSesiones extends RepositorioBase {
     return fila === undefined ? null : aEntidad(fila);
   }
 
+  /**
+   * Las sesiones para el historial, de la apertura más reciente a la más vieja.
+   *
+   * Se filtra y se ordena por `abierta_en` y `usuario_id`, que son texto de
+   * verdad (fecha ISO en UTC y UUID): comparar y ordenar eso en SQL es exacto.
+   * NINGÚN monto se compara ni se ordena acá (§4.15). El desempate por `rowid`
+   * evita que dos aperturas en el mismo milisegundo cambien de orden.
+   */
+  public listarParaHistorial(filtro: {
+    readonly desdeIso: string | null;
+    readonly hastaIso: string | null;
+    readonly usuarioId: string | null;
+  }): CajaSesion[] {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM caja_sesiones
+          WHERE (@desde IS NULL OR abierta_en >= @desde)
+            AND (@hasta IS NULL OR abierta_en <= @hasta)
+            AND (@usuario IS NULL OR usuario_id = @usuario)
+          ORDER BY abierta_en DESC, rowid DESC`,
+      )
+      .all({ desde: filtro.desdeIso, hasta: filtro.hastaIso, usuario: filtro.usuarioId }) as FilaCajaSesion[];
+    return filas.map(aEntidad);
+  }
+
+  /** Los ids de todas las personas que abrieron alguna caja, sin repetir. */
+  public listarQuienesAbrieron(): string[] {
+    const filas = this.base.prepare('SELECT DISTINCT usuario_id FROM caja_sesiones').all() as {
+      readonly usuario_id: string;
+    }[];
+    return filas.map((fila) => fila.usuario_id);
+  }
+
   public listarPorEstado(estado: EstadoCaja): CajaSesion[] {
     const filas = this.base
       .prepare('SELECT * FROM caja_sesiones WHERE estado = ? ORDER BY abierta_en DESC')

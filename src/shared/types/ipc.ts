@@ -245,6 +245,17 @@ export const CANALES_IPC = {
   impresoraImprimirPrueba: 'impresora:imprimir-prueba',
   /** Lo que la persona vio salir del ticket de prueba. */
   impresoraConfirmarPrueba: 'impresora:confirmar-prueba',
+
+  // --- Historial de cajas (§4.44) ----------------------------------------------
+  /**
+   * Los dos exigen rol administrativo. El historial muestra cuánto se contó,
+   * cuánto faltó y quién autorizó cada corrección: es para auditar, no para
+   * operar la caja.
+   */
+  /** Todas las sesiones de caja, con filtro por días de apertura y por quién abrió. */
+  cajasHistorial: 'cajas:historial',
+  /** Una sesión con su desglose de denominaciones y todos sus conteos sellados. */
+  cajasDetalle: 'cajas:detalle',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -1618,13 +1629,125 @@ export interface ReciboVistoIpc {
 }
 
 // ---------------------------------------------------------------------------
-// Superficie que el preload expone al renderer
+// DTO: historial de cajas (§4.44)
 // ---------------------------------------------------------------------------
 
-/**
- * API que `window.pos` ofrece a React. Es la única puerta del renderer hacia
- * el proceso principal; no hay `require`, ni `ipcRenderer` suelto, ni Node.
- */
+/** Filtro del historial. Los dos días van juntos o no va ninguno. */
+export const esquemaFiltroDeHistorialDeCajas = z.object({
+  /** Primer día de APERTURA incluido, `AAAA-MM-DD` de Guatemala. */
+  desde: z.string().max(LARGO_DE_UN_DIA_ISO).nullable(),
+  /** Último día de APERTURA incluido, `AAAA-MM-DD` de Guatemala. */
+  hasta: z.string().max(LARGO_DE_UN_DIA_ISO).nullable(),
+  /** Solo las sesiones que abrió este usuario; `null` son todas. */
+  abiertaPor: z.uuid().nullable(),
+});
+
+export type FiltroDeHistorialDeCajasIpc = z.infer<typeof esquemaFiltroDeHistorialDeCajas>;
+
+export const esquemaIdDeSesionDeCaja = z.object({ id: z.uuid() });
+
+/** Una persona, con el nombre que tiene HOY en la tabla de usuarios. */
+export interface PersonaIpc {
+  readonly id: string;
+  readonly nombre: string;
+}
+
+/** Un conteo de cierre sellado: se confirmó y daba diferencia (§4.39). */
+export interface ConteoSelladoEnHistorialIpc {
+  readonly fecha: string;
+  readonly montoEsperado: string;
+  readonly montoReal: string;
+  readonly diferencia: string;
+}
+
+/** Si el efectivo contado cuadró, faltó o sobró. */
+export type TipoDeDiferenciaIpc = 'cuadra' | 'faltante' | 'sobrante';
+
+/** Cómo terminó una sesión cerrada. */
+export interface CierreEnHistorialIpc {
+  readonly cerradaEn: string;
+  /** Quien cerró. Es quien abrió cuando `cerradaPorOtraPersona` es falso. */
+  readonly cerradaPor: PersonaIpc;
+  /** `true` cuando `caja_sesiones.cerrada_por` no es nulo: la cerró otra persona. */
+  readonly cerradaPorOtraPersona: boolean;
+  /** El administrador que autorizó cerrar la caja ajena, leído del asiento del cierre. */
+  readonly cierreAjenoAutorizadoPor: PersonaIpc | null;
+  /** `monto_esperado`: inicial más ventas en efectivo del turno (§4.10). */
+  readonly montoTeorico: string;
+  readonly montoReal: string;
+  readonly diferencia: string;
+  readonly tipoDeDiferencia: TipoDeDiferenciaIpc;
+  /** Quién autorizó la diferencia y por qué vía. `null` si cuadró. */
+  readonly diferenciaAutorizada: {
+    readonly por: PersonaIpc;
+    readonly via: 'presencial' | 'remoto';
+  } | null;
+}
+
+/** Un conteo sellado que después se corrigió con autorización (§4.39). */
+export interface ReconteoEnHistorialIpc {
+  readonly fecha: string;
+  /** Los conteos sellados ANTES del final, del más viejo al más nuevo. */
+  readonly conteosSellados: readonly ConteoSelladoEnHistorialIpc[];
+  readonly conteoFinal: {
+    readonly montoEsperado: string;
+    readonly montoReal: string;
+    readonly diferencia: string;
+  };
+  readonly autorizadoPor: PersonaIpc | null;
+  readonly via: 'presencial' | 'remoto' | null;
+}
+
+/** Una fila del historial. */
+export interface SesionDeCajaEnHistorialIpc {
+  readonly id: string;
+  readonly estado: 'abierta' | 'cerrada';
+  readonly abiertaEn: string;
+  readonly abiertaPor: PersonaIpc;
+  readonly montoInicial: string;
+  readonly cierre: CierreEnHistorialIpc | null;
+  /** Cuántos conteos se sellaron en esta sesión, corregidos o no. */
+  readonly cantidadDeConteosSellados: number;
+  readonly reconteo: ReconteoEnHistorialIpc | null;
+  /**
+   * Lo que no se pudo leer de la bitácora, dicho para una persona. Un asiento
+   * ilegible se AVISA en vez de esconderse: este historial existe para auditar.
+   */
+  readonly avisos: readonly string[];
+}
+
+/** La lista, con el período aplicado y las personas que alguna vez abrieron caja. */
+export interface HistorialDeCajasIpc {
+  readonly sesiones: readonly SesionDeCajaEnHistorialIpc[];
+  /** El rango de días aplicado, o `null` si se pidieron todas las fechas. */
+  readonly periodo: PeriodoResueltoIpc | null;
+  /** Para el filtro: todas las personas que abrieron alguna caja, con o sin filtro. */
+  readonly personasQueAbrieron: readonly PersonaIpc[];
+}
+
+/** Un renglón del desglose por denominación. */
+export interface LineaDeDesgloseEnHistorialIpc {
+  readonly valor: string;
+  readonly tipo: 'billete' | 'moneda';
+  readonly cantidad: number;
+  readonly subtotal: string;
+}
+
+/** El desglose de un momento, o `null` si ese momento se contó en modo simple. */
+export interface DesgloseEnHistorialIpc {
+  readonly lineas: readonly LineaDeDesgloseEnHistorialIpc[];
+  readonly total: string;
+}
+
+/** La sesión expandida. */
+export interface DetalleDeSesionDeCajaIpc {
+  readonly sesion: SesionDeCajaEnHistorialIpc;
+  /** TODOS los conteos sellados, incluso los de una caja que sigue abierta. */
+  readonly conteosSellados: readonly ConteoSelladoEnHistorialIpc[];
+  readonly desgloseDeApertura: DesgloseEnHistorialIpc | null;
+  readonly desgloseDeCierre: DesgloseEnHistorialIpc | null;
+}
+
 // ---------------------------------------------------------------------------
 // DTO: impresora térmica de esta terminal (§4.43)
 // ---------------------------------------------------------------------------
@@ -1710,6 +1833,14 @@ export interface ConfirmacionDePruebaRegistradaIpc {
   readonly mensaje: string;
 }
 
+// ---------------------------------------------------------------------------
+// Superficie que el preload expone al renderer
+// ---------------------------------------------------------------------------
+
+/**
+ * API que `window.pos` ofrece a React. Es la única puerta del renderer hacia
+ * el proceso principal; no hay `require`, ni `ipcRenderer` suelto, ni Node.
+ */
 export interface ApiPos {
   readonly diagnostico: {
     /** Verifica la conexión a SQLite y, opcionalmente, escribe un registro de prueba. */
@@ -1920,6 +2051,12 @@ export interface ApiPos {
   };
 
   /** Impresora térmica de esta terminal (§4.43). Todo con rol administrativo. */
+  /** Historial de cajas. Solo rol administrativo (§4.44). */
+  readonly historialDeCajas: {
+    listar(filtro: FiltroDeHistorialDeCajasIpc): Promise<RespuestaIpc<HistorialDeCajasIpc>>;
+    detalle(id: string): Promise<RespuestaIpc<DetalleDeSesionDeCajaIpc>>;
+  };
+
   readonly impresora: {
     estado(): Promise<RespuestaIpc<EstadoDeImpresoraIpc>>;
     listar(): Promise<RespuestaIpc<readonly ImpresoraDelSistemaIpc[]>>;

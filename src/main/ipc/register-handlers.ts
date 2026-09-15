@@ -41,6 +41,8 @@ import { ejecutarDiagnostico } from '@main/database/connection';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import type { ServicioDeImpresora } from '@main/impresora/servicio-de-impresora';
 import { registrarManejadoresDeImpresora } from './impresora';
+import type { ServicioDeHistorialDeCajas } from '@main/domain/caja/historial-de-cajas';
+import { registrarManejadoresDeHistorialDeCajas } from './historial-de-cajas';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import { turnoParaLaVentana } from './turno-para-la-ventana';
@@ -132,6 +134,8 @@ export interface DependenciasDeIpc {
   readonly restauracion: ServicioDeRestauracion;
   /** La impresora térmica de esta terminal: lista, guarda, quita y prueba (§4.43). */
   readonly impresora: ServicioDeImpresora;
+  /** El historial de cajas, para auditar cortes y correcciones (§4.44). */
+  readonly historialDeCajas: ServicioDeHistorialDeCajas;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -195,6 +199,8 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   registrarManejadoresDeRestauracion({ servicio: dependencias.restauracion });
   // Impresora de esta terminal: los seis canales exigen rol administrativo.
   registrarManejadoresDeImpresora({ sesion: dependencias.sesion, impresora: dependencias.impresora });
+  // Historial de cajas: los dos canales exigen rol administrativo.
+  registrarManejadoresDeHistorialDeCajas({ sesion: dependencias.sesion, historial: dependencias.historialDeCajas });
 
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,

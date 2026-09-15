@@ -40,6 +40,7 @@ import { ImpresoraSegunElArchivo } from '@main/adapters/impresora-configurada';
 import { EnviadorPorPowerShell, type EnviadorRaw } from '@main/adapters/cola-de-windows';
 import { EnviadorSimulado, impresorasSimuladas } from '@main/adapters/impresoras-simuladas';
 import { ServicioDeImpresora, type ImpresoraListada } from '@main/impresora/servicio-de-impresora';
+import { ServicioDeHistorialDeCajas } from '@main/domain/caja/historial-de-cajas';
 import { SUBCARPETA_DE_RECIBOS } from '@main/domain/recibo/ruta-de-pdf';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
@@ -852,6 +853,13 @@ app.whenReady().then(
       reportes: servicioDeReportes,
       limitesDeDescuento: servicioDeLimites,
       impresora: servicioDeImpresora,
+      historialDeCajas: new ServicioDeHistorialDeCajas({
+        cajaSesiones: repositorios.cajaSesiones,
+        auditoria: repositorios.auditoria,
+        usuarios: repositorios.usuarios,
+        desglose: repositorios.desgloseDeCaja,
+        denominaciones: repositorios.denominaciones,
+      }),
       nube: sesionDeNube ?? undefined,
       catalogo: {
         categorias: servicioDeCategorias,

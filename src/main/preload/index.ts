@@ -30,6 +30,9 @@ import {
   type ReporteDeInventarioIpc,
   type LimiteDeDescuentoIpc,
   type ConexionDeNubeIpc,
+  type DetalleDeSesionDeCajaIpc,
+  type FiltroDeHistorialDeCajasIpc,
+  type HistorialDeCajasIpc,
   type ConfirmacionDePruebaIpc,
   type ConfirmacionDePruebaRegistradaIpc,
   type EstadoDeImpresoraIpc,
@@ -301,6 +304,13 @@ const apiPos: ApiPos = {
       ipcRenderer.invoke(CANALES_IPC.nubeConectar, datos) as Promise<
         RespuestaIpc<ResumenDeConexionIpc>
       >,
+  },
+
+  historialDeCajas: {
+    listar: (filtro: FiltroDeHistorialDeCajasIpc): Promise<RespuestaIpc<HistorialDeCajasIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.cajasHistorial, filtro) as Promise<RespuestaIpc<HistorialDeCajasIpc>>,
+    detalle: (id: string): Promise<RespuestaIpc<DetalleDeSesionDeCajaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.cajasDetalle, { id }) as Promise<RespuestaIpc<DetalleDeSesionDeCajaIpc>>,
   },
 
   impresora: {
