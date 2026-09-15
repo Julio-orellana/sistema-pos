@@ -8042,14 +8042,34 @@ la 0032. Sí tiene el 2 y el 3.
 #### Lo que se encontró de paso
 
 - **`.env.nube-real` tiene las contraseñas del usuario de terminal y del de
-  restauración del proyecto real**, aunque su cabecera dice «SOLO datos
+  restauración del proyecto real**, aunque su cabecera decía «SOLO datos
   públicos… NINGUNA contraseña». Se comprobó por largo, sin leer los valores. No
   entraron a ningún instalador (búsqueda de arriba). Está ignorado por git
-  (`.gitignore:55`).
-- **El correo del usuario de terminal del real en ese archivo es
+  (`.gitignore:55`). **Cabecera corregida el 2026-09-15**: ahora dice qué guarda
+  cada variable, sin los valores. El archivo no se commitea.
+- ~~**El correo del usuario de terminal del real en ese archivo es
   `terminal@pos-jimmy-cano.invalid`**, y §4.38 dice
   `terminal-1@pos-jimmy-cano.invalid`. Uno de los dos está desactualizado. No se
-  consultó `auth.users`.
+  consultó `auth.users`.~~ **CONSULTADO EL 2026-09-15, solo con `SELECT`, y el
+  desactualizado era el archivo.** En `pos-jimmy-cano` (`zgsdaelmbxufgcsideep`)
+  hay tres cuentas de Auth:
+
+  ```
+  SELECT email, email_confirmed_at IS NOT NULL AS confirmado, raw_app_meta_data->>'rol' AS rol FROM auth.users ORDER BY email;
+  [{"email":"julioes134@outlook.es","confirmado":true,"rol":"restauracion"},
+   {"email":"terminal-1@pos-jimmy-cano.invalid","confirmado":true,"rol":"terminal"},
+   {"email":"terminal@pos-jimmy-cano.invalid","confirmado":true,"rol":null}]
+  ```
+
+  | Cuenta | Rol | Qué es |
+  |---|---|---|
+  | `julioes134@outlook.es` | `restauracion` | La de Julio (§4.21) |
+  | `terminal-1@pos-jimmy-cano.invalid` | `terminal` | **La cuenta de terminal correcta**, confirmado por Julio. §4.38 estaba bien |
+  | `terminal@pos-jimmy-cano.invalid` | ninguno | Sobrante, de origen desconocido. No se tocó (punto 30 de §6.2) |
+
+  `.env.nube-real` guardaba el correo y la contraseña de la **sobrante**
+  (comparado sin imprimir el valor). Se corrigió el mismo día: el correo es
+  `terminal-1@…` y la clave quedó vacía para que Julio la escriba.
 
 #### Lo que NO se verificó, y solo se ve instalando en Windows
 
@@ -8408,7 +8428,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 26 | ~~**La licencia dice «Versión: 1.1.0» y el package.json dice 1.0.0.**~~ | ~~El instalador de verificación salió como `POS-Jimmy-Cano-Setup-1.0.0.exe` con una licencia de la 1.1.0.~~ | **RESUELTO (2026-09-15, Julio): `package.json` pasó a 1.1.0.** Una prueba exige ahora que la versión de la licencia sea la del `package.json`, así que cada release futuro obliga a actualizar el texto aprobado (§4.48). |
 | 27 | **¿Quién figura como titular en el copyright del instalador?** | Hoy «Julio Orellana (Vixo POS)» (§4.48). Poner solo «Vixo POS» depende de que la marca tenga una persona jurídica detrás o de cómo se inscriba ante el Registro de la Propiedad Intelectual. Es legal, no técnico. | Abierto — decisión de Julio |
 | 28 | **El instalador de producción 1.1.0 no puede sincronizar con `pos-jimmy-cano` hasta aplicar la `0031` y la `0032` en el real.** | Medido con `list_migrations`: el real termina en la 0029. La 1.1.0 sube columnas que el real no tiene y la cola se detiene en la primera venta (§4.49). Además, la anulación no tiene puerta en ninguna nube (§4.45). Aplicarlas exige mostrar el SQL y la aprobación de Julio. | Abierto — **bloquea instalar el de producción en la tienda** |
-| 29 | **`.env.nube-real` contiene las contraseñas de terminal y de restauración del real, aunque su cabecera dice que no.** Y su correo de terminal (`terminal@…`) no coincide con el de §4.38 (`terminal-1@…`). | Está ignorado por git y no entró a ningún instalador (§4.49). Hay que decidir si esas contraseñas deben estar en un archivo de la máquina de desarrollo, y corregir la cabecera o el archivo. | Abierto — decisión de Julio |
+| 29 | **`.env.nube-real` contiene las contraseñas de terminal y de restauración del real.** ~~Aunque su cabecera dice que no. Y su correo de terminal (`terminal@…`) no coincide con el de §4.38 (`terminal-1@…`).~~ | Está ignorado por git y no entró a ningún instalador (§4.49). **Corregido el 2026-09-15:** la cabecera dice qué guarda cada variable. `auth.users` se consultó con `SELECT`: el real tiene tres cuentas (`julioes134@outlook.es` con `restauracion`, `terminal-1@pos-jimmy-cano.invalid` con `terminal`, `terminal@pos-jimmy-cano.invalid` sin rol). La correcta es `terminal-1@` (confirmado por Julio); §4.38 estaba bien y el archivo guardaba la sobrante. El correo del archivo ya es `terminal-1@` y su clave la escribe Julio. Sigue abierto si esas contraseñas deben vivir en un archivo de la máquina de desarrollo. | Parcialmente resuelto — queda la decisión de Julio sobre el archivo |
+| 30 | **`terminal@pos-jimmy-cano.invalid` es una cuenta de Auth sobrante en `pos-jimmy-cano`: confirmada, sin `app_metadata.rol`, de origen desconocido** (probablemente un intento anterior de crear la de terminal). | No tiene ningún permiso: las funciones de sincronización y las políticas exigen un rol, y la aplicación rechaza conectar la terminal con ella (§4.23). No es sensible por sí sola, pero no puede quedar sin documentar. **No se borró ni se modificó**, por decisión de Julio. | Abierto — decidir si se elimina o se reutiliza |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
