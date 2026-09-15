@@ -4,6 +4,8 @@
 > Escrito el 2026-09-15. Ninguna migración de este documento se aplica a ningún
 > proyecto de Supabase —tampoco a `pos-pruebas-descartable`— sin que Julio vea
 > el SQL completo primero.
+>
+> **Decisión 9 resuelta el 2026-09-15** (sección 3.3 y la tabla de la sección 12).
 
 ## Alcance decidido (no se reabre)
 
@@ -31,6 +33,8 @@
 10. [Cómo se va a verificar](#10-cómo-se-va-a-verificar)
 11. [Lo que este diseño no hace](#11-lo-que-este-diseño-no-hace)
 12. [Decisiones que este diseño te pide](#12-decisiones-que-este-diseño-te-pide)
+
+Y, dentro de la sección 3, [3.5 El reporte de cobros con tarjeta](#35-el-reporte-de-cobros-con-tarjeta).
 
 ---
 
@@ -342,6 +346,7 @@ historia no importa, por 2.1.
 | Hubo **otra venta** del mismo producto entre las dos | Lo mismo | 2.1 |
 | El saldo cambió **entre la lectura y la escritura** de la propia anulación | `CONFLICTO_DE_INVENTARIO`: se revierte todo, cero reintentos | §4.3. Con una sola conexión síncrona no debería poder pasar; si pasa, hay un segundo escritor. |
 | El producto está **desactivado** | Se repone igual, no se reactiva, la vista previa lo avisa y el asiento lo anota | §4.11: desactivar conserva el inventario y la mercadería volvió igual |
+| La venta fue **con tarjeta** y el voucher tecleado no coincide con el de la venta | **Se rechaza antes de pedir el PIN**, sin escribir nada | Decisión 9. Ver 3.3. |
 | Cambió la **unidad** del producto (`tipo_medida` o `unidad_peso`) | **Se rechaza la anulación entera antes de pedir el PIN**, sin escribir nada | No hay factores de conversión (§6.2, punto 1). Sumar 2.500 lb a un producto que hoy se cuenta por unidad dejaría un saldo falso **sin ningún error**. Se compara la foto `venta_detalle.unidad_snap` con la unidad actual, calculada igual que al vender (`servicio-de-venta.ts:687-689`). |
 | `cantidad_vendida` quedaría **negativa**, o `contador_ventas` bajaría **de cero** | Se rechaza, sin corregir en silencio | Son datos inconsistentes. Los CHECK de la 015 y de la 001 son la última red. |
 | Cambiaron el precio, el costo o el nombre | No importa | La reposición mueve cantidades. El dinero sale de `ventas.total`, que no cambió. |
@@ -454,14 +459,50 @@ Ejemplo:
 | **Se anula A** | **Q512.00** |
 | **Se anula B** | **Q512.00**, sin cambio |
 
-### 3.3 Con tarjeta
+### 3.3 Con tarjeta: el voucher de la venta original (decisión 9, resuelta)
 
 No cambia el efectivo esperado, igual que al registrarla: ese dinero nunca
 entró al cajón. **La devolución al cliente se hace en la terminal del banco, y
-el sistema no tiene cómo verlo.** Si hace falta guardar la referencia de esa
-anulación bancaria es una pregunta para Jimmy (sección 12), y conviene
-contestarla **antes** de implementar: agregar la columna después es otro par de
-migraciones y un cambio de forma del lote.
+el sistema no tiene cómo verlo.**
+
+**Lo decidido el 2026-09-15:**
+
+1. Para anular una venta **con tarjeta**, el flujo pide el **número de voucher**
+   junto con el motivo, **antes de la vista previa**. Es el mismo momento en que
+   se valida la unidad cambiada (2.3).
+2. Se compara contra `ventas.num_boleta` **de esa venta exacta**.
+3. Si no coincide, se rechaza con el mensaje «El voucher no coincide con el de
+   la venta original» y **no se llega a pedir el PIN**.
+4. **No hay tabla de vouchers ni columna nueva.** El voucher ya está guardado en
+   la venta desde que se cobró. Para ver qué cobros con tarjeta quedaron
+   anulados hay un reporte de solo lectura (3.5).
+
+**Cómo se compara, con precisión:**
+
+| Pregunta | Respuesta |
+|---|---|
+| ¿Contra qué? | `ventas.num_boleta` de la fila con ese `venta_id`. Nunca contra otras ventas: un voucher correcto de otra venta se rechaza igual. |
+| ¿Qué normalización? | Se quitan los espacios de los dos extremos **de los dos lados**, y nada más. Distingue mayúsculas y **no** quita ceros a la izquierda: `0012` y `12` son distintos. |
+| ¿Por qué recortar también lo guardado? | La pantalla de cobro recorta la boleta antes de mandarla (`cobro.ts:100`), pero `ServicioDeVenta` la guarda **tal como llega** (`servicio-de-venta.ts:267`) y solo la recorta para validar (`:508`). Una venta cobrada llamando al canal a mano podría tener espacios guardados. |
+| ¿Y si la venta fue en efectivo? | No se pide voucher. Si el pedido trae uno, se rechaza con `DATO_INVALIDO` («Una venta en efectivo no lleva voucher»), igual que el cobro rechaza una boleta en efectivo. |
+| ¿Y si es con tarjeta y falta el voucher? | Se rechaza antes del PIN: «Esta venta fue con tarjeta: escribí el número de voucher». |
+| ¿Puede una venta con tarjeta no tener `num_boleta`? | No. La migración 014 lo exige no vacío (`ventas_boleta_solo_con_tarjeta`). Para ventas anteriores a la 014 es **inferencia, no medición**: SQLite se niega a agregar un CHECK que una fila existente viola, medido para la 008 (§4.9), así que una base con una venta así no habría llegado a aplicar la 014. En la nube, la 0014 quedó `convalidated = true` (§4.4). |
+| ¿El mensaje dice cuál era el voucher correcto? | No. |
+| ¿Consume un intento del candado de PIN? | No. No se llegó a comparar ningún PIN (§4.1). |
+| ¿Deja asiento? | **No, igual que la unidad cambiada**: no se escribió nada ni se pidió autorización. Queda en la sección 12 (decisión 13) por si preferís lo contrario. |
+| ¿Se vuelve a comparar con el PIN? | Sí. El pedido con PIN trae el voucher otra vez y la transacción de 2.2 lo valida de nuevo, como todo lo demás. |
+| ¿Se guarda el voucher tecleado? | No hace falta: si la anulación existe, el voucher tecleado **es** `ventas.num_boleta`, y ese ya va en `valor_anterior.numBoleta` del asiento (6.2). |
+
+> **LO QUE ESTE CONTROL GARANTIZA Y LO QUE NO, dicho en voz alta.** El número de
+> boleta **sale impreso en el recibo** (`plantilla-de-recibo.ts:182-183`), y la
+> reimpresión desde el historial de recibos muestra ese mismo texto a cualquiera
+> con sesión (§4.14). Entonces el voucher prueba que quien anula **tiene a mano
+> el número de esa venta**, y evita anular la venta equivocada por un error de
+> número de recibo. **No prueba que tenga el comprobante del banco**, porque el
+> número se puede leer de la reimpresión. El control contra el fraude sigue
+> siendo el PIN de administrador (sección 4). No reabro la decisión: lo dejo
+> escrito para que nadie le atribuya al voucher más de lo que da. Queda como
+> decisión 14 por si querés cambiar algo.
 
 ### 3.4 Lo que la anulación toca de la caja abierta
 
@@ -473,6 +514,56 @@ migraciones y un cambio de forma del lote.
 | Los conteos sellados | Quedan como estaban, y un turno con un sello se sigue cerrando solo con autorización (§4.39). **Pero hoy, si el número final es el mismo del sello, esa autorización no queda registrada en ningún lado** (0.7). Se arregla antes de implementar. |
 | El historial de cajas (§4.44) | No cambia: muestra el esperado que se guardó al cerrar, y ese ya incluye la anulación. |
 | Lo que ve el rol venta | Nada del teórico. La respuesta de la anulación nunca lo lleva (§4.40). |
+
+### 3.5 El reporte de cobros con tarjeta
+
+Una sección de solo lectura en la pantalla de reportes, **«Cobros con tarjeta»**,
+junto a las tres que ya existen. Sirve para cotejar contra la terminal del banco
+qué cobros siguen en pie y cuáles se anularon en el sistema.
+
+**Qué muestra:** todas las ventas con `forma_pago = 'tarjeta'`, de la más
+reciente a la más vieja, una fila por venta.
+
+| Columna | De dónde sale |
+|---|---|
+| Fecha y hora, en hora de Guatemala | `ventas.fecha` (§4.15) |
+| Recibo No. | `recibos.numero_recibo`; «sin recibo» si la aplicación se cayó antes de emitirlo (§4.14) |
+| Voucher | `ventas.num_boleta` |
+| Total | `ventas.total`, tal cual, sin sumar nada |
+| Quién vendió | `ventas.usuario_id`, con el nombre de hoy |
+| **Estado** | **«Anulado»** si existe su fila en `anulaciones_de_venta`; **«Activo»** si no |
+| Anulado el | `anulaciones_de_venta.fecha`, solo si está anulado |
+
+**La consulta.** Filtra y ordena en SQL sobre texto ISO y sobre columnas que no
+son decimales, que es exacto (§4.15). No agrega nada:
+
+```sql
+SELECT v.id, v.fecha, v.num_boleta, v.total, v.usuario_id,
+       r.numero_recibo,
+       a.fecha AS anulada_en
+  FROM ventas v
+  LEFT JOIN recibos r              ON r.venta_id = v.id
+  LEFT JOIN anulaciones_de_venta a ON a.venta_id = v.id
+ WHERE v.forma_pago = 'tarjeta'
+ ORDER BY v.fecha DESC, v.id;
+```
+
+`recibos.venta_id` y `anulaciones_de_venta.venta_id` son `UNIQUE`, así que los
+dos `LEFT JOIN` no pueden duplicar una venta.
+
+**Por qué no puede divergir:** el estado **no se guarda en ningún lado**. Se
+deriva en cada consulta de la misma regla de 1.1 —anulada si y solo si existe
+la fila—, que es la que usan el efectivo esperado y los demás reportes. No lee
+`ventas.estado` (1.3) ni los asientos de auditoría (6.3).
+
+| Detalle | Decisión |
+|---|---|
+| Quién la ve | **Rol administrativo**, con `requiereRol`, como los otros tres reportes (§4.15). Es información de dueño. La prueba que cuenta canales y guards del archivo de reportes pasa de 5 a 6. |
+| Canal | `reportes:cobros-con-tarjeta`, sin payload, y en la prueba de clonado de todos los canales (§4.42). |
+| Período | **Ninguno: muestra todos**, como se pidió. No se midió cuánto tarda con años de ventas en el i3. Si hiciera falta, agregar el selector de período que ya usan los otros reportes es un cambio acotado y no toca esta regla. |
+| Totales | **No muestra sumas.** No se pidieron. Si hicieran falta, se suman en la aplicación con Decimal, nunca con `SUM()` (§4.15). |
+| La pantalla | No calcula nada: recibe el estado ya resuelto. |
+| Nube y restauración | Nada nuevo: lee `ventas` y `recibos`, que ya se sincronizan y se restauran, y `anulaciones_de_venta`, que este diseño ya sincroniza y restaura (secciones 7 y 8). |
 
 ---
 
@@ -522,10 +613,13 @@ Es el patrón del descuento excedente: primero se muestra qué se va a
 autorizar, después se pide el PIN. Acá no hay ningún monto oculto que revelar
 después, así que no hace falta el paso extra de §4.40.5.
 
-1. **Pedido sin PIN.** `venta:anular` recibe `{ ventaId, motivo }`. Se valida:
+1. **Pedido sin PIN.** `venta:anular` recibe `{ ventaId, motivo, voucher }`,
+   con `voucher` en `null` para una venta en efectivo. Se valida, en este orden:
    - que la venta exista;
    - que su caja esté abierta;
    - que no tenga anulación;
+   - **si fue con tarjeta, que el voucher coincida con su `num_boleta`** (3.3);
+     si fue en efectivo, que no traiga voucher;
    - que ninguna unidad haya cambiado;
    - que el motivo sea válido.
 
@@ -540,12 +634,14 @@ después, así que no hace falta el paso extra de §4.40.5.
 **La vista previa muestra lo que se va a anular:**
 - número de recibo, fecha y hora;
 - quién vendió y quién abrió la caja;
-- forma de pago y total;
+- forma de pago y total, y el voucher si fue con tarjeta (ya lo tecleó quien
+  pide, así que no revela nada);
 - cada línea con su nombre y su unidad de la foto;
 - los productos desactivados, avisados.
 
-Si fue en efectivo, dice «Hay que devolverle Q27.50 al cliente». **No muestra
-el teórico.**
+Si fue en efectivo, dice «Hay que devolverle Q27.50 al cliente». Si fue con
+tarjeta, dice «La devolución se hace en la terminal del banco». **No muestra el
+teórico.**
 
 | Pregunta | Respuesta |
 |---|---|
@@ -553,7 +649,7 @@ el teórico.**
 | ¿De dónde sale quién la pidió? | De la sesión del proceso principal, nunca del payload (§4.13). |
 | ¿Un administrador con sesión también teclea el PIN? | Sí, el suyo. Es la regla que decidiste, la misma del cierre de caja ajena. |
 | ¿Si la caja la abrió otra persona, hace falta además el PIN de caja ajena? | **No.** El alcance dice «sin importar quién la abrió», y el PIN de administrador ya se exige siempre. Un segundo PIN no agregaría un control distinto. El asiento anota quién abrió la caja. |
-| ¿Desde qué pantalla? | Desde el historial de recibos: ahí el cajero ya busca la venta por número. El botón solo aparece si la caja de esa venta sigue abierta. |
+| ¿Desde qué pantalla? | Desde el historial de recibos: ahí el cajero ya busca la venta por número. El botón solo aparece si la caja de esa venta sigue abierta. Si la venta fue con tarjeta, el formulario pide el voucher además del motivo. |
 
 ---
 
@@ -669,6 +765,8 @@ lo que movió:
 
 - `efectivoQueDejaDeContar` es el total si fue en efectivo y `0.00` si fue con
   tarjeta.
+- El voucher tecleado no va aparte: coincide por construcción con
+  `numBoleta`, que ya está en `valor_anterior` (3.3).
 - **Nunca se registra el PIN**, ni en claro ni con hash.
 - `numeroRecibo` va `null` si la venta no llegó a tener recibo, porque la
   aplicación se cayó entre las dos cosas (§4.14).
@@ -852,6 +950,16 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
   acumulado**;
 - un producto desactivado se repone y no se reactiva;
 - con la unidad cambiada se rechaza **sin escribir nada**, contando filas;
+- con tarjeta y **voucher distinto** se rechaza con «El voucher no coincide con
+  el de la venta original», **sin pedir PIN, sin sumar intento al candado y sin
+  escribir nada**, contando filas;
+- con tarjeta, el voucher **correcto de OTRA venta** también se rechaza;
+- con tarjeta y **sin voucher** se rechaza antes del PIN;
+- en efectivo, un pedido **con voucher** se rechaza;
+- el voucher se compara recortando espacios de los dos lados, **incluida una
+  boleta guardada con espacios** por el canal, y distingue `0012` de `12`;
+- el pedido con PIN y un voucher distinto del primer pedido se rechaza en la
+  transacción;
 - con la caja cerrada se rechaza;
 - la segunda anulación de la misma venta se rechaza;
 - sin motivo se rechaza;
@@ -868,8 +976,19 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 - el candado es independiente de las otras cinco superficies y del ingreso, en
   los dos sentidos.
 
+**El reporte de cobros con tarjeta (3.5):**
+- lista **solo** las ventas con tarjeta, de la más reciente a la más vieja, con
+  su voucher;
+- una venta anulada dice «Anulado» con su fecha, y una sin anular dice «Activo»;
+- **no depende de `ventas.estado`**: con la fila de anulación presente y
+  `estado = 'completada'`, dice «Anulado»;
+- una venta sin recibo aparece igual, con «sin recibo»;
+- el rol venta recibe `PERMISO_DENEGADO` y el servicio no se ejecuta;
+- la respuesta pasa `structuredClone`.
+
 **Estructurales:**
 - ninguna consulta decide por `ventas.estado`;
+- no hay tabla ni columna de vouchers en ninguna migración;
 - ningún archivo de producción escribe `'anulada'`;
 - el canal nuevo tiene su guard y pasa por la prueba de clonado de todos los
   canales (§4.42).
@@ -891,6 +1010,9 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 - volver al saldo del asiento de la venta en vez de sumar;
 - no bajar los contadores;
 - dejar el filtro por `estado`;
+- comparar el voucher contra cualquier venta con tarjeta y no contra la de ese
+  `venta_id`;
+- que el reporte lea `ventas.estado` en vez de `anulaciones_de_venta`;
 - aceptar el PIN remoto;
 - encolar la fila de `ventas`.
 
@@ -898,13 +1020,21 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 
 Un arnés `verify:pantallas:anulacion` arma el escenario por los canales reales.
 
-1. Ana abre la caja y cobra una venta en efectivo y otra con tarjeta.
+1. Ana abre la caja y cobra una venta en efectivo y **dos con tarjeta**.
 2. Rosa pide anular la de efectivo desde el historial de recibos.
 3. La vista previa no muestra el teórico, y un PIN equivocado deja el asiento.
 4. Jimmy teclea su PIN, y el esperado baja.
 5. El recibo reimpreso dice «VENTA ANULADA».
 6. Una segunda anulación se rechaza.
-7. Con la caja cerrada, el botón ya no aparece y el canal se niega.
+7. Rosa pide anular una de tarjeta con un **voucher equivocado**: aparece «El
+   voucher no coincide con el de la venta original», **no aparece el teclado
+   del PIN**, el candado sigue en 0 intentos y la base no cambia.
+8. Con el voucher correcto, llega la vista previa, y con el PIN de Jimmy se
+   anula.
+9. Jimmy abre «Cobros con tarjeta»: la anulada dice «Anulado» con su fecha y la
+   otra dice «Activo». Rosa no ve la sección, y el canal le contesta
+   `PERMISO_DENEGADO`.
+10. Con la caja cerrada, el botón ya no aparece y el canal se niega.
 
 Al final lee la base con otra conexión y guarda capturas.
 
@@ -932,7 +1062,11 @@ fecha del robo.
 - **Anular líneas sueltas**, y **devoluciones parciales**. `ventas` y
   `venta_detalle` siguen con sus campos sin piso reservados para ese módulo
   (§4.2).
-- **Hablar con el banco** para una venta con tarjeta.
+- **Hablar con el banco** para una venta con tarjeta. El sistema no sabe si la
+  anulación se hizo en la terminal bancaria; el reporte de 3.5 sirve para
+  cotejarlo a mano.
+- **Guardar el voucher de la anulación bancaria.** Decisión 9: no hay tabla ni
+  columna de vouchers.
 - **Un reporte de anulaciones por persona.** Recomiendo construirlo pronto: el
   fraude de anulación se detecta por patrones —quién anula más, a qué hora, por
   cuánto—, no por un solo PIN. Este diseño deja todos los datos para hacerlo.
@@ -953,7 +1087,9 @@ fecha del robo.
 | 6 | Si cada PIN rechazado deja asiento | **Sí** (6.1) |
 | 7 | El motivo | **Obligatorio, texto libre, hasta 200 caracteres**, como el ajuste de inventario |
 | 8 | Si la caja ajena exige un segundo PIN | **No** (4.3) |
-| 9 | **Para Jimmy:** cómo anula hoy un cobro con tarjeta en la terminal del banco, y si hace falta guardar la referencia de esa anulación | Preguntarlo **antes de implementar** (3.3) |
+| 9 | ~~**Para Jimmy:** cómo anula hoy un cobro con tarjeta en la terminal del banco, y si hace falta guardar la referencia de esa anulación~~ | **RESUELTA el 2026-09-15:** se pide el voucher antes de la vista previa y se compara con `ventas.num_boleta` de esa venta; si no coincide se rechaza sin PIN. No hay tabla de vouchers; hay un reporte de solo lectura de cobros con tarjeta, Activo o Anulado (3.3, 3.5) |
 | 10 | Endurecer `sincronizar_venta` para que rechace una venta existente con otro contenido | Decidirlo por separado (0.2) |
 | 11 | El reporte de anulaciones por persona | Hacerlo después de esto (sección 11) |
 | 12 | El cierre que exige PIN por un sello y no registra quién lo autorizó (0.7) | **Arreglarlo antes de implementar la anulación**: registrar la autorización siempre que un sello la haya exigido |
+| 13 | Si un voucher que no coincide deja asiento de auditoría | **No**, igual que la unidad cambiada: no se pidió autorización ni se escribió nada (3.3) |
+| 14 | El voucher sale impreso en el recibo, así que no prueba tener el comprobante del banco | **Dejarlo como está**: es un control contra anular la venta equivocada, y el PIN sigue siendo el control contra el fraude (3.3) |
