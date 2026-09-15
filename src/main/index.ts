@@ -46,6 +46,7 @@ import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import {
   limpiarLimitesDeDescuento,
   sembrarLimitesDeDescuento,
@@ -610,6 +611,21 @@ app.whenReady().then(
       auditoria: repositorios.auditoria,
     });
 
+    // La anulación de una venta también recibe la CONEXIÓN: reponer inventario,
+    // bajar contadores, escribir la anulación, su asiento y su lote es una sola
+    // transacción (docs/ANULACION-DE-VENTA.md §2.2).
+    const servicioDeAnulacionDeVenta = new ServicioDeAnulacionDeVenta({
+      base: baseDeDatos,
+      ventas: repositorios.ventas,
+      ventaDetalle: repositorios.ventaDetalle,
+      productos: repositorios.productos,
+      cajaSesiones: repositorios.cajaSesiones,
+      recibos: repositorios.recibos,
+      usuarios: repositorios.usuarios,
+      anulaciones: repositorios.anulacionesDeVenta,
+      auditoria: repositorios.auditoria,
+    });
+
     // Modo semilla: siembra o limpia el catálogo de ejemplo y sale, sin abrir
     // ventana. Va después de construir los repositorios y antes de cualquier
     // cosa de interfaz.
@@ -845,6 +861,7 @@ app.whenReady().then(
       usuarios: repositorios.usuarios,
       caja,
       venta: servicioDeVenta,
+      anulacionDeVenta: servicioDeAnulacionDeVenta,
       gestionDeUsuarios: servicioDeUsuarios,
       negocio: servicioDeNegocio,
       recibos: servicioDeRecibos,
