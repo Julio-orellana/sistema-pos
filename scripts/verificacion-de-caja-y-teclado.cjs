@@ -26,6 +26,8 @@
  *      compra después no mueve el margen de una venta ya hecha.
  *   9. La cajera que cuenta de menos ve que hace falta autorización, y NO el
  *      esperado; al recontar el número exacto ve el mismo diálogo.
+ *  10. La salida controlada acepta el PIN REMOTO de un administrador, y el
+ *      asiento lo registra como «remoto». Va al final: cierra la aplicación.
  *
  * Por qué es un guion aparte y no más pasos de `verify:pantallas`: aquel
  * recorre la tienda entera y tarda; este existe para mostrar, con capturas y
@@ -896,6 +898,72 @@ async function main() {
       teoricoParaLaCajera.includes('204.25'),
     );
     await capturar('7c-cajera-confirmacion-con-teorico');
+
+    // =======================================================================
+    // PROMPT #2 — LA SALIDA CONTROLADA CON EL PIN REMOTO (ampliada el
+    // 2026-09-15). Va AL FINAL: si funciona, la aplicación se cierra sola.
+    // =======================================================================
+    anotar('--- salida controlada con el PIN REMOTO de un administrador ---');
+    const PIN_REMOTO = '8642';
+    await prueba('aceptar-confirmacion-de-cierre').click();
+    await volver();
+    await ventana.getByRole('button', { name: 'Cerrar sesión' }).click();
+    await prueba('pantalla-de-ingreso').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('usuario-para-ingreso').filter({ hasText: 'Jimmy de verificación' }).click();
+    await teclearPin(PIN);
+    await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('ir-a-pin-remoto').click();
+    await prueba('pantalla-de-pin-remoto').waitFor({ timeout: ESPERA_CORTA });
+    await teclearPin(PIN_REMOTO);
+    await teclearPin(PIN_REMOTO);
+    await prueba('pin-remoto-guardado').waitFor({ timeout: ESPERA_CORTA });
+    await volver();
+    // El botón de salida está en todas las pantallas, también en el ingreso.
+    // Se cierra la sesión del administrador para salir desde ahí, como al final
+    // del día sin ningún administrador presente.
+    await ventana.getByRole('button', { name: 'Cerrar sesión' }).click();
+    await prueba('pantalla-de-ingreso').waitFor({ timeout: ESPERA_CORTA });
+
+    await prueba('boton-salida').click();
+    await prueba('dialogo-salida').waitFor({ timeout: ESPERA_CORTA });
+    const textoDelDialogoDeSalida = await texto('dialogo-salida');
+    anotar(`texto del diálogo de salida: ${JSON.stringify(textoDelDialogoDeSalida)}`);
+    await prueba('dialogo-salida').locator('input').fill(PIN_REMOTO);
+    await capturar('8-salida-con-pin-remoto');
+    const procesoTerminado = new Promise((resolver) => {
+      app.process().once('exit', (codigo) => {
+        resolver(codigo);
+      });
+    });
+    const inicioDeLaSalida = Date.now();
+    await prueba('dialogo-salida').getByRole('button', { name: 'Cerrar aplicación' }).click();
+    const codigoDeSalida = await Promise.race([
+      procesoTerminado,
+      new Promise((resolver) => {
+        setTimeout(() => {
+          resolver('NO SE CERRÓ en 15 s');
+        }, 15000);
+      }),
+    ]);
+    anotar(`el proceso de Electron terminó con ${String(codigoDeSalida)} a los ${String(Date.now() - inicioDeLaSalida)} ms`);
+    const asientoDeSalida = leerBase(
+      `SELECT accion, usuario_id, valor_nuevo FROM auditoria_log
+        WHERE accion IN ('salida_controlada_autorizada', 'salida_controlada_rechazada') ORDER BY fecha, rowid`,
+    );
+    anotar(`auditoria_log de la salida: ${JSON.stringify(asientoDeSalida)}`);
+    const autorizada = asientoDeSalida.find((f) => f.accion === 'salida_controlada_autorizada');
+    const datosDeLaSalida = autorizada ? JSON.parse(autorizada.valor_nuevo) : null;
+    comprobar(
+      'LA SALIDA CONTROLADA CON EL PIN REMOTO cierra la aplicación, y el asiento dice «remoto» con el administrador real',
+      `el proceso termina; salida_controlada_autorizada; boton_de_interfaz; remoto; usuario ${idAdministrador}`,
+      `proceso: ${String(codigoDeSalida)}; ${autorizada ? autorizada.accion : 'SIN ASIENTO'}; ` +
+        `${String(datosDeLaSalida?.origen)}; ${String(datosDeLaSalida?.autorizadaVia)}; usuario ${String(autorizada?.usuario_id)}`,
+      codigoDeSalida !== 'NO SE CERRÓ en 15 s' &&
+        autorizada !== undefined &&
+        datosDeLaSalida.origen === 'boton_de_interfaz' &&
+        datosDeLaSalida.autorizadaVia === 'remoto' &&
+        autorizada.usuario_id === idAdministrador,
+    );
   } catch (error) {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);
     await ventana.screenshot({ path: join(capturas, 'error.png') }).catch(() => undefined);
