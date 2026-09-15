@@ -55,6 +55,13 @@ import { AlmacenDeCredencial, type CifradoSeguro } from '@main/sincronizacion/cr
 import { ServicioDeRestauracion } from '@main/restauracion/servicio-de-restauracion';
 import { AlmacenDelPuestoDeControl } from '@main/restauracion/puesto-de-control';
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
+import { ServicioDeImpresora } from '@main/impresora/servicio-de-impresora';
+import {
+  EnviadorSimulado,
+  IMPRESORA_SIMULADA_DESCONECTADA,
+  IMPRESORA_SIMULADA_QUE_RECIBE,
+  impresorasSimuladas,
+} from '@main/adapters/impresoras-simuladas';
 import { NubeDeMentira } from '@main/restauracion/__tests__/nube-de-mentira';
 import {
   PIN_DE_JIMMY,
@@ -281,6 +288,12 @@ function dependenciasSobre(
       auditoria: repos.auditoria,
       nombreDeUsuario: (id): string | null => repos.usuarios.obtenerPorId(id)?.nombre ?? null,
     }),
+    impresora: new ServicioDeImpresora({
+      carpetaDeDatos: carpeta,
+      listar: (): Promise<ReturnType<typeof impresorasSimuladas>> => Promise.resolve(impresorasSimuladas()),
+      enviador: new EnviadorSimulado(carpeta),
+      log: new LogTecnicoSilencioso(),
+    }),
     nube: sesionDeNube,
     sincronizacion: new ServicioDeSincronizacion({
       base,
@@ -427,6 +440,20 @@ describe('1. En una tienda con datos, cada canal devuelve algo que el puente pue
     await llamar(CANALES_IPC.reportesInventario, 'por cantidad', { orden: 'cantidad' });
     await llamar(CANALES_IPC.limitesListar, 'listar');
     await llamar(CANALES_IPC.limitesFijar, 'fijar', { rol: 'venta', porcentaje: '12', montoFijo: '25' });
+  });
+
+  it('impresora: estado, lista, las dos pruebas, la confirmación, guardar y quitar', async () => {
+    await llamar(CANALES_IPC.impresoraEstado, 'sin impresora');
+    await llamar(CANALES_IPC.impresoraListar, 'simuladas');
+    await llamar(CANALES_IPC.impresoraImprimirPrueba, 'desconectada', { nombre: IMPRESORA_SIMULADA_DESCONECTADA });
+    const prueba = datosDe(
+      await llamar(CANALES_IPC.impresoraImprimirPrueba, 'la que recibe', { nombre: IMPRESORA_SIMULADA_QUE_RECIBE }),
+      'prueba que recibe',
+    );
+    await llamar(CANALES_IPC.impresoraConfirmarPrueba, 'ilegible', { pruebaId: prueba.pruebaId, resultado: 'ilegible' });
+    await llamar(CANALES_IPC.impresoraGuardar, 'guardar', { nombre: IMPRESORA_SIMULADA_QUE_RECIBE });
+    await llamar(CANALES_IPC.impresoraEstado, 'con impresora');
+    await llamar(CANALES_IPC.impresoraQuitar, 'quitar');
   });
 
   it('nube y sincronización, con un lote detenido de verdad', async () => {

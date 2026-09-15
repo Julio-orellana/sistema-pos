@@ -93,7 +93,7 @@ export function PanelDeVerificacion(): React.JSX.Element {
             <Dato etiqueta="Versión" valor={aplicacion.version} />
             <Dato etiqueta="Entorno" valor={aplicacion.entorno} />
             <Dato etiqueta="Electron" valor={aplicacion.versionElectron} />
-            <Dato etiqueta="Adaptador de impresión" valor={aplicacion.adaptadorImpresion} />
+            <Dato etiqueta="Impresora" valor={aplicacion.impresora} />
             <Dato etiqueta="Adaptador de sincronización" valor={aplicacion.adaptadorSincronizacion} />
             <Dato
               etiqueta="Supabase"

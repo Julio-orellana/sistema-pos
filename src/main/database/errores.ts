@@ -29,7 +29,11 @@ export type CodigoErrorDeNegocio =
   | 'AUDITORIA_INMUTABLE'
   | 'PERMISO_DENEGADO'
   | 'VALOR_DECIMAL_INVALIDO'
-  | 'DATO_INVALIDO';
+  | 'DATO_INVALIDO'
+  // Impresora de la terminal (§4.43).
+  | 'IMPRESORAS_NO_LISTADAS'
+  | 'IMPRESORA_NO_INSTALADA'
+  | 'PRUEBA_NO_VIGENTE';
 
 /**
  * Error de negocio. Lleva un mensaje pensado para mostrarse en pantalla y

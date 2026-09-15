@@ -36,7 +36,10 @@ import { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-de-lim
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { generarPdfDesdeHtml } from '@main/recibo/generador-de-pdf';
 import { LogTecnicoEnArchivo } from '@main/log-tecnico';
-import { crearImpresoraConfigurada } from '@main/adapters/impresora-configurada';
+import { ImpresoraSegunElArchivo } from '@main/adapters/impresora-configurada';
+import { EnviadorPorPowerShell, type EnviadorRaw } from '@main/adapters/cola-de-windows';
+import { EnviadorSimulado, impresorasSimuladas } from '@main/adapters/impresoras-simuladas';
+import { ServicioDeImpresora, type ImpresoraListada } from '@main/impresora/servicio-de-impresora';
 import { SUBCARPETA_DE_RECIBOS } from '@main/domain/recibo/ruta-de-pdf';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
@@ -545,11 +548,39 @@ app.whenReady().then(
       La impresora se lee de un archivo LOCAL de esta terminal y no de
       `configuracion_negocio`: dos cajas podrían tener la impresora en puertos
       distintos, y esa tabla se espeja en la nube. Ver §4.14.
+
+      Desde §4.43 el archivo guarda el NOMBRE de la impresora instalada en
+      Windows, y los bytes van por la cola del sistema en modo RAW, con
+      PowerShell. Las impresoras SIMULADAS solo existen fuera del instalador:
+      con la aplicación empaquetada, `POS_IMPRESORAS_SIMULADAS` se ignora.
     */
     const carpetaDePdf = join(app.getPath('userData'), SUBCARPETA_DE_RECIBOS);
     mkdirSync(carpetaDePdf, { recursive: true });
     const logTecnico = new LogTecnicoEnArchivo(app.getPath('userData'));
-    const impresora = crearImpresoraConfigurada(app.getPath('userData'), logTecnico);
+    const carpetaDeImpresorasSimuladas = app.isPackaged ? '' : (process.env.POS_IMPRESORAS_SIMULADAS ?? '');
+    const enviadorDeImpresion: EnviadorRaw =
+      carpetaDeImpresorasSimuladas === '' ? new EnviadorPorPowerShell() : new EnviadorSimulado(carpetaDeImpresorasSimuladas);
+    const impresora = new ImpresoraSegunElArchivo(app.getPath('userData'), enviadorDeImpresion, logTecnico);
+    // La ventana todavía no existe acá; la lista se le pide cuando alguien abre
+    // la pantalla, y para entonces ya está.
+    let ventanaQueListaImpresoras: BrowserWindow | null = null;
+    const servicioDeImpresora = new ServicioDeImpresora({
+      carpetaDeDatos: app.getPath('userData'),
+      enviador: enviadorDeImpresion,
+      log: logTecnico,
+      listar: async (): Promise<readonly ImpresoraListada[]> => {
+        if (carpetaDeImpresorasSimuladas !== '') {
+          return impresorasSimuladas();
+        }
+        if (ventanaQueListaImpresoras === null || ventanaQueListaImpresoras.isDestroyed()) {
+          throw new Error('La ventana principal no está disponible para pedir la lista de impresoras.');
+        }
+        return ventanaQueListaImpresoras.webContents.getPrintersAsync();
+      },
+    });
+    if (carpetaDeImpresorasSimuladas !== '') {
+      logTecnico.registrar('impresion', `Impresoras SIMULADAS del arnés, en ${carpetaDeImpresorasSimuladas}.`);
+    }
 
     const servicioDeRecibos = new ServicioDeRecibos({
       base: baseDeDatos,
@@ -820,6 +851,7 @@ app.whenReady().then(
       preciosEspeciales: repositorios.preciosEspeciales,
       reportes: servicioDeReportes,
       limitesDeDescuento: servicioDeLimites,
+      impresora: servicioDeImpresora,
       nube: sesionDeNube ?? undefined,
       catalogo: {
         categorias: servicioDeCategorias,
@@ -829,6 +861,7 @@ app.whenReady().then(
     });
 
     const ventana = crearVentanaPrincipal(RUTA_PRELOAD, !enVerificacionDeArranque);
+    ventanaQueListaImpresoras = ventana;
     controladorDeSalida.conectarVentana(ventana);
     interceptarCierresDelSistema(ventana, controladorDeSalida);
     cargarInterfaz(ventana, DIRECTORIO_RENDERER);

@@ -34,12 +34,13 @@ import {
   type UsuarioParaIngreso,
 } from '@shared/types/ipc';
 import {
-  crearReceiptPrinterProvider,
   crearSyncProvider,
   leerConfiguracionAdaptadoresDelEntorno,
 } from '@shared/adapters';
 import { ejecutarDiagnostico } from '@main/database/connection';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
+import type { ServicioDeImpresora } from '@main/impresora/servicio-de-impresora';
+import { registrarManejadoresDeImpresora } from './impresora';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import { turnoParaLaVentana } from './turno-para-la-ventana';
@@ -129,6 +130,8 @@ export interface DependenciasDeIpc {
    * que no puede funcionar (la lección de la fase 3.a, §4.23).
    */
   readonly restauracion: ServicioDeRestauracion;
+  /** La impresora térmica de esta terminal: lista, guarda, quita y prueba (§4.43). */
+  readonly impresora: ServicioDeImpresora;
 }
 
 /** Milisegundos que tiene un segundo. */
@@ -190,6 +193,8 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   // Restauración desde la nube: sin guard de sesión, porque corre sobre una
   // instalación vacía. Quien autoriza es la nube (ver restauracion.ts).
   registrarManejadoresDeRestauracion({ servicio: dependencias.restauracion });
+  // Impresora de esta terminal: los seis canales exigen rol administrativo.
+  registrarManejadoresDeImpresora({ sesion: dependencias.sesion, impresora: dependencias.impresora });
 
   ipcMain.handle(
     CANALES_IPC.diagnosticoBaseDeDatos,
@@ -205,7 +210,6 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     async (): Promise<RespuestaIpc<DiagnosticoAplicacion>> =>
       ejecutarConRespuesta('DIAGNOSTICO_APLICACION_FALLIDO', async () => {
         const configuracion = leerConfiguracionAdaptadoresDelEntorno(process.env);
-        const impresora = crearReceiptPrinterProvider(configuracion);
         const sincronizador = crearSyncProvider(configuracion);
         const estadoSincronizacion = await sincronizador.consultarEstado();
 
@@ -217,7 +221,8 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           versionNode: process.versions.node,
           versionChrome: process.versions.chrome,
           plataforma: process.platform,
-          adaptadorImpresion: impresora.nombre,
+          // La frase para la persona, leída de `impresora.json`, no el nombre de una clase.
+          impresora: dependencias.impresora.estado().descripcion,
           adaptadorSincronizacion: sincronizador.nombre,
           sincronizacionSimulada: estadoSincronizacion.simulado,
         };

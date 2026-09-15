@@ -30,6 +30,11 @@ import {
   type ReporteDeInventarioIpc,
   type LimiteDeDescuentoIpc,
   type ConexionDeNubeIpc,
+  type ConfirmacionDePruebaIpc,
+  type ConfirmacionDePruebaRegistradaIpc,
+  type EstadoDeImpresoraIpc,
+  type ImpresoraDelSistemaIpc,
+  type ResultadoDePruebaDeImpresoraIpc,
   type DetalleDeSincronizacionIpc,
   type EstadoDeNubeIpc,
   type LoteIdIpc,
@@ -295,6 +300,25 @@ const apiPos: ApiPos = {
     conectar: (datos: ConexionDeNubeIpc): Promise<RespuestaIpc<ResumenDeConexionIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.nubeConectar, datos) as Promise<
         RespuestaIpc<ResumenDeConexionIpc>
+      >,
+  },
+
+  impresora: {
+    estado: (): Promise<RespuestaIpc<EstadoDeImpresoraIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.impresoraEstado) as Promise<RespuestaIpc<EstadoDeImpresoraIpc>>,
+    listar: (): Promise<RespuestaIpc<readonly ImpresoraDelSistemaIpc[]>> =>
+      ipcRenderer.invoke(CANALES_IPC.impresoraListar) as Promise<RespuestaIpc<readonly ImpresoraDelSistemaIpc[]>>,
+    guardar: (nombre: string): Promise<RespuestaIpc<EstadoDeImpresoraIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.impresoraGuardar, { nombre }) as Promise<RespuestaIpc<EstadoDeImpresoraIpc>>,
+    quitar: (): Promise<RespuestaIpc<EstadoDeImpresoraIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.impresoraQuitar) as Promise<RespuestaIpc<EstadoDeImpresoraIpc>>,
+    imprimirPrueba: (nombre: string): Promise<RespuestaIpc<ResultadoDePruebaDeImpresoraIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.impresoraImprimirPrueba, { nombre }) as Promise<
+        RespuestaIpc<ResultadoDePruebaDeImpresoraIpc>
+      >,
+    confirmarPrueba: (datos: ConfirmacionDePruebaIpc): Promise<RespuestaIpc<ConfirmacionDePruebaRegistradaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.impresoraConfirmarPrueba, datos) as Promise<
+        RespuestaIpc<ConfirmacionDePruebaRegistradaIpc>
       >,
   },
 

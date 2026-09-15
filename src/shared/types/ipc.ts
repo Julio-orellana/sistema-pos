@@ -226,6 +226,25 @@ export const CANALES_IPC = {
   restauracionAsignarPin: 'restauracion:asignar-pin',
   /** Cierra la restauración: asiento, cierre de sesión en la nube, fin del puesto de control. */
   restauracionTerminar: 'restauracion:terminar',
+
+  // --- Impresora térmica de ESTA terminal (§4.43) -----------------------------
+  /**
+   * Todos exigen rol administrativo. La impresora es configuración de la
+   * terminal (vive en `impresora.json`, no en la base) y el ticket de prueba
+   * gasta papel de verdad.
+   */
+  /** Qué impresora hay configurada, dicho para una persona, y la última prueba. */
+  impresoraEstado: 'impresora:estado',
+  /** Las impresoras que el sistema operativo tiene instaladas. */
+  impresoraListar: 'impresora:listar',
+  /** Guarda en `impresora.json` el NOMBRE de una impresora de la lista. */
+  impresoraGuardar: 'impresora:guardar',
+  /** Quita la impresora: los recibos vuelven a quedar solo en PDF. */
+  impresoraQuitar: 'impresora:quitar',
+  /** Manda un ticket de prueba corto, sin datos de ventas, a la impresora elegida. */
+  impresoraImprimirPrueba: 'impresora:imprimir-prueba',
+  /** Lo que la persona vio salir del ticket de prueba. */
+  impresoraConfirmarPrueba: 'impresora:confirmar-prueba',
 } as const;
 
 /** Unión de todos los canales válidos. */
@@ -318,8 +337,12 @@ export interface DiagnosticoAplicacion {
   readonly versionNode: string;
   readonly versionChrome: string;
   readonly plataforma: string;
-  /** Adaptador de impresión en uso (por defecto, el que solo genera PDF). */
-  readonly adaptadorImpresion: string;
+  /**
+   * La impresora de esta terminal, dicha para una persona: «Sin impresora
+   * configurada — los recibos solo se generan en PDF» o «Impresora
+   * configurada: [nombre]». Nunca el nombre de una clase del código.
+   */
+  readonly impresora: string;
   /** Adaptador de sincronización en uso (por defecto, el simulado). */
   readonly adaptadorSincronizacion: string;
   /** `true` si la sincronización no está tocando la red (plan gratuito protegido). */
@@ -1602,6 +1625,91 @@ export interface ReciboVistoIpc {
  * API que `window.pos` ofrece a React. Es la única puerta del renderer hacia
  * el proceso principal; no hay `require`, ni `ipcRenderer` suelto, ni Node.
  */
+// ---------------------------------------------------------------------------
+// DTO: impresora térmica de esta terminal (§4.43)
+// ---------------------------------------------------------------------------
+
+/** Una impresora instalada en el sistema operativo, tal como la lista Electron. */
+export interface ImpresoraDelSistemaIpc {
+  /** El nombre con que la conoce el sistema: es lo que se guarda y a lo que se imprime. */
+  readonly nombre: string;
+  /** El nombre para mostrar. Suele coincidir con `nombre`. */
+  readonly nombreVisible: string;
+  readonly descripcion: string;
+}
+
+/** Qué vio salir la persona del ticket de prueba. */
+export const RESULTADOS_DE_CONFIRMACION_IPC = ['bien', 'ilegible', 'nada'] as const;
+export type ResultadoDeConfirmacionIpc = (typeof RESULTADOS_DE_CONFIRMACION_IPC)[number];
+
+/**
+ * Cómo terminó el ENVÍO del ticket de prueba, antes de que nadie lo mire.
+ *
+ *   · `enviado`: Windows aceptó el trabajo entero. NO dice que salió legible:
+ *     una térmica ESC/POS no responde nada, así que eso lo dice la persona.
+ *   · `no_encontrada`: el sistema no tiene ninguna impresora con ese nombre.
+ *   · `no_se_pudo_enviar`: existe, pero abrirla o escribirle falló.
+ *   · `trabajo_con_error`: Windows aceptó el trabajo y la impresora o el
+ *     trabajo reportan un problema (desconectada, sin papel, error).
+ *   · `entorno`: esta computadora no pudo ejecutar el envío (no es Windows,
+ *     PowerShell no arrancó, o una política bloqueó el código de envío).
+ */
+export const CLASES_DE_ENVIO_IPC = [
+  'enviado',
+  'no_encontrada',
+  'no_se_pudo_enviar',
+  'trabajo_con_error',
+  'entorno',
+] as const;
+export type ClaseDeEnvioIpc = (typeof CLASES_DE_ENVIO_IPC)[number];
+
+/** La última prueba, guardada en `impresora.json`. */
+export interface UltimaPruebaDeImpresoraIpc {
+  readonly impresora: string;
+  readonly fecha: string;
+  readonly envio: ClaseDeEnvioIpc;
+  /** `null` mientras nadie contestó, o si el envío no llegó a salir. */
+  readonly confirmacion: ResultadoDeConfirmacionIpc | null;
+}
+
+export interface EstadoDeImpresoraIpc {
+  /** `ninguna`, `cola` (nombre de impresora, el formato actual) o `ruta` (el formato viejo, solo se lee). */
+  readonly tipo: 'ninguna' | 'cola' | 'ruta';
+  /** El nombre de la impresora o la ruta vieja; `null` sin impresora. */
+  readonly nombre: string | null;
+  /** La frase para la persona, sin nombres de clases. */
+  readonly descripcion: string;
+  readonly ultimaPrueba: UltimaPruebaDeImpresoraIpc | null;
+}
+
+export interface ResultadoDePruebaDeImpresoraIpc {
+  readonly clase: ClaseDeEnvioIpc;
+  readonly titulo: string;
+  readonly mensaje: string;
+  /** El detalle técnico, para quien tenga que revisarlo (código de Windows, estado del trabajo). */
+  readonly detalle: string | null;
+  /** Solo si `clase` es `enviado`: con esto se contesta qué salió. */
+  readonly pruebaId: string | null;
+}
+
+const LARGO_MAXIMO_NOMBRE_DE_IMPRESORA = 256;
+
+export const esquemaNombreDeImpresora = z.object({
+  nombre: z.string().trim().min(1).max(LARGO_MAXIMO_NOMBRE_DE_IMPRESORA),
+});
+
+export const esquemaConfirmacionDePrueba = z.object({
+  pruebaId: z.uuid(),
+  resultado: z.enum(RESULTADOS_DE_CONFIRMACION_IPC),
+});
+export type ConfirmacionDePruebaIpc = z.infer<typeof esquemaConfirmacionDePrueba>;
+
+/** Lo que se contesta después de anotar qué salió del ticket. */
+export interface ConfirmacionDePruebaRegistradaIpc {
+  readonly estado: EstadoDeImpresoraIpc;
+  readonly mensaje: string;
+}
+
 export interface ApiPos {
   readonly diagnostico: {
     /** Verifica la conexión a SQLite y, opcionalmente, escribe un registro de prueba. */
@@ -1809,6 +1917,16 @@ export interface ApiPos {
     revisarUsuario(datos: RevisionDeUsuarioIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
     asignarPin(datos: PinDeRestauracionIpc): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
     terminar(): Promise<RespuestaIpc<ProgresoDeRestauracionIpc>>;
+  };
+
+  /** Impresora térmica de esta terminal (§4.43). Todo con rol administrativo. */
+  readonly impresora: {
+    estado(): Promise<RespuestaIpc<EstadoDeImpresoraIpc>>;
+    listar(): Promise<RespuestaIpc<readonly ImpresoraDelSistemaIpc[]>>;
+    guardar(nombre: string): Promise<RespuestaIpc<EstadoDeImpresoraIpc>>;
+    quitar(): Promise<RespuestaIpc<EstadoDeImpresoraIpc>>;
+    imprimirPrueba(nombre: string): Promise<RespuestaIpc<ResultadoDePruebaDeImpresoraIpc>>;
+    confirmarPrueba(datos: ConfirmacionDePruebaIpc): Promise<RespuestaIpc<ConfirmacionDePruebaRegistradaIpc>>;
   };
 
   /**
