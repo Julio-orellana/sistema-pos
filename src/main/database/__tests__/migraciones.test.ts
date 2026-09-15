@@ -13,6 +13,8 @@ import { crearBaseVacia, migrar } from './ayuda-base-de-datos';
 
 /** Las once tablas del esquema, más la de control del migrador. */
 const TABLAS_ESPERADAS = [
+  // Desde la 033: la anulación de una venta es una fila aparte (docs/ANULACION-DE-VENTA.md §1).
+  'anulaciones_de_venta',
   'auditoria_log',
   'bloqueos_de_autorizacion',
   'caja_sesion_denominaciones',
@@ -91,7 +93,7 @@ describe('Las migraciones corren limpias desde una base vacía', () => {
     expect(indices.map((i) => i.name)).toContain('idx_ventas_fecha');
   });
 
-  it('crea los triggers que hacen inmutable la bitácora de auditoría', () => {
+  it('crea los triggers que hacen inmutables la bitácora de auditoría y las anulaciones de venta', () => {
     const prueba = crearBaseVacia();
     limpiar = prueba.limpiar;
     migrar(prueba.base);
@@ -101,6 +103,9 @@ describe('Las migraciones corren limpias desde una base vacía', () => {
       .all() as { readonly name: string }[];
 
     expect(triggers.map((t) => t.name).sort()).toEqual([
+      // Desde la 033: una anulación es evidencia de un control contra el fraude.
+      'anulaciones_de_venta_prohibir_delete',
+      'anulaciones_de_venta_prohibir_update',
       'auditoria_log_prohibir_delete',
       'auditoria_log_prohibir_update',
     ]);

@@ -46,7 +46,15 @@ export type SuperficieDeAutorizacion =
    * incluso más sensible que autorizar una diferencia de caja, porque el hueco
    * que deja es permanente—.
    */
-  | 'saltar_lote_de_sincronizacion';
+  | 'saltar_lote_de_sincronizacion'
+  /**
+   * Anular una venta ya registrada (docs/ANULACION-DE-VENTA.md, sección 4;
+   * migración 034). Exige el PIN de un administrador SIEMPRE, también cuando el
+   * cajero corrige su propio error. No acepta el PIN remoto: el fraude que este
+   * PIN frena —cobrar en efectivo, anular y quedarse con el dinero— es el que un
+   * teléfono no puede verificar.
+   */
+  | 'anulacion_de_venta';
 
 /** Estado del candado de una superficie. */
 export interface BloqueoDeAutorizacion {

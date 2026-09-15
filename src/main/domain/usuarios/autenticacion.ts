@@ -119,6 +119,15 @@ export const ACEPTA_PIN_REMOTO: Readonly<Record<SuperficieDeAutorizacion, boolea
     error, no recibiendo un código por teléfono.
   */
   saltar_lote_de_sincronizacion: false,
+  /*
+    NO acepta el remoto (docs/ANULACION-DE-VENTA.md §4.2, decisión 2). Quien
+    autoriza tiene que ver que hay un cliente, que la mercadería volvió y que el
+    dinero salió del cajón: por teléfono lo que se autoriza es un relato. Y
+    mueve más que un descuento: borra del corte el total entero de una venta ya
+    cobrada y sube el inventario. Ampliarlo exigiría una decisión explícita,
+    como el descuento y la salida.
+  */
+  anulacion_de_venta: false,
 };
 
 /** Intentos fallidos permitidos antes del bloqueo. */

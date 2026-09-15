@@ -636,7 +636,7 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
   });
 
-  it('la tabla cubre las CINCO superficies, sin huecos', () => {
+  it('la tabla cubre las SEIS superficies, sin huecos', () => {
     // El tipo `Record<SuperficieDeAutorizacion, boolean>` ya lo exige al
     // compilar; esto lo comprueba también en ejecución, por si alguien agregara
     // una superficie con un `as` de por medio.
@@ -644,7 +644,11 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     // Creció a cinco en la Fase 4.a con `saltar_lote_de_sincronizacion`
     // (pantalla de sincronización, decisión 9 del diseño): NO acepta el
     // remoto, por el mismo alcance mínimo que `cierre_de_caja_ajena`.
+    //
+    // Creció a seis con `anulacion_de_venta` (docs/ANULACION-DE-VENTA.md §4):
+    // tampoco acepta el remoto.
     expect(Object.keys(ACEPTA_PIN_REMOTO).sort()).toEqual([
+      'anulacion_de_venta',
       'cierre_con_diferencia',
       'cierre_de_caja_ajena',
       'descuento_excedente',
@@ -659,9 +663,12 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     expect(ACEPTA_PIN_REMOTO.salida_controlada).toBe(true);
   });
 
-  it('las DOS que NO lo aceptan siguen sin aceptarlo: la ampliación no se hereda', () => {
+  it('las TRES que NO lo aceptan siguen sin aceptarlo: la ampliación no se hereda', () => {
     expect(ACEPTA_PIN_REMOTO.cierre_de_caja_ajena).toBe(false);
     expect(ACEPTA_PIN_REMOTO.saltar_lote_de_sincronizacion).toBe(false);
+    // docs/ANULACION-DE-VENTA.md §4.2: el fraude que este PIN frena es el que un
+    // teléfono no puede verificar.
+    expect(ACEPTA_PIN_REMOTO.anulacion_de_venta).toBe(false);
   });
 
   it('y el comportamiento real coincide con la tabla, superficie por superficie', () => {
