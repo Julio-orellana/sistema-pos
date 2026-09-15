@@ -1,0 +1,798 @@
+{
+  "funciones": {
+    "auditoria_log_es_inmutable": {
+      "argumentos": "",
+      "devuelve": "trigger",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "contrato_de_sincronizacion": {
+      "argumentos": "",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "escribir_fila": {
+      "argumentos": "destino regclass, datos jsonb, si_existe text",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "exigir_claves_conocidas": {
+      "argumentos": "destino regclass, datos jsonb",
+      "devuelve": "void",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "exigir_forma_del_cambio": {
+      "argumentos": "cambio jsonb, posicion integer",
+      "devuelve": "void",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "fijar_recibido_en": {
+      "argumentos": "",
+      "devuelve": "trigger",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "huella_de_fila": {
+      "argumentos": "fila jsonb",
+      "devuelve": "text",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "restauracion_ventas_por_mes": {
+      "argumentos": "",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
+    "sincronizar_apertura_de_caja": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
+    "sincronizar_asiento": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
+    "sincronizar_cierre_de_caja": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
+    "sincronizar_lote_simple": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
+    "sincronizar_usuario": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
+    "sincronizar_venta": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
+    "version_del_contrato_de_sincronizacion": {
+      "argumentos": "",
+      "devuelve": "integer",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    }
+  },
+  "tablas": {
+    "auditoria_log": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "usuario_id",
+        "nulable": true,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "accion",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "entidad_tipo",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "entidad_id",
+        "nulable": true,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "valor_anterior",
+        "nulable": true,
+        "tipo": "jsonb"
+      },
+      {
+        "nombre": "valor_nuevo",
+        "nulable": true,
+        "tipo": "jsonb"
+      },
+      {
+        "nombre": "fecha",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "caja_sesion_denominaciones": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "caja_sesion_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "denominacion_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "momento",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "cantidad",
+        "nulable": false,
+        "tipo": "integer"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "caja_sesiones": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "usuario_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "monto_inicial",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "abierta_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "monto_esperado",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "monto_real",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "diferencia",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "cerrada_en",
+        "nulable": true,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "estado",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "diferencia_autorizada_por",
+        "nulable": true,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "diferencia_autorizada_via",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "cerrada_por",
+        "nulable": true,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "categorias": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "nombre",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "orden",
+        "nulable": false,
+        "tipo": "integer"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "activo",
+        "nulable": false,
+        "tipo": "boolean"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "configuracion_negocio": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "nombre_comercial",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "direccion",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "telefono",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "nit",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "denominaciones": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "valor",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "tipo",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "orden",
+        "nulable": false,
+        "tipo": "integer"
+      },
+      {
+        "nombre": "activo",
+        "nulable": false,
+        "tipo": "boolean"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "limites_descuento": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "rol",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "descuento_max_porcentaje",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "descuento_max_monto_fijo",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "editado_por",
+        "nulable": true,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "precios_especiales": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "producto_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "tipo",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "valor",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "vigente_desde",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "vigente_hasta",
+        "nulable": true,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "activo",
+        "nulable": false,
+        "tipo": "boolean"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "productos": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "nombre",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "categoria_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "foto_path",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "tipo_medida",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "unidad_peso",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "cantidad_predefinida_icono",
+        "nulable": false,
+        "tipo": "numeric(14,3)"
+      },
+      {
+        "nombre": "precio_base",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "inventario_disponible",
+        "nulable": false,
+        "tipo": "numeric(14,3)"
+      },
+      {
+        "nombre": "contador_ventas",
+        "nulable": false,
+        "tipo": "integer"
+      },
+      {
+        "nombre": "activo",
+        "nulable": false,
+        "tipo": "boolean"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "cantidad_vendida",
+        "nulable": false,
+        "tipo": "numeric(14,3)"
+      },
+      {
+        "nombre": "precio_compra",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "recibos": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "venta_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "numero_recibo",
+        "nulable": false,
+        "tipo": "bigint"
+      },
+      {
+        "nombre": "pdf_path",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "impreso",
+        "nulable": false,
+        "tipo": "boolean"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "usuarios": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "nombre",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "rol",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "activo",
+        "nulable": false,
+        "tipo": "boolean"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
+    "venta_detalle": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "venta_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "producto_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "producto_nombre_snap",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "unidad_snap",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "cantidad",
+        "nulable": false,
+        "tipo": "numeric(14,3)"
+      },
+      {
+        "nombre": "precio_unitario_snap",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "subtotal_exacto",
+        "nulable": false,
+        "tipo": "numeric(18,6)"
+      },
+      {
+        "nombre": "subtotal_impreso",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "orden_linea",
+        "nulable": false,
+        "tipo": "integer"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "costo_unitario_snap",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      }
+    ],
+    "ventas": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "caja_sesion_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "usuario_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "fecha",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "subtotal",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "descuento_tipo",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "descuento_valor",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "descuento_autorizado_por",
+        "nulable": true,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "total",
+        "nulable": false,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "forma_pago",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "num_boleta",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "estado",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "creado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "actualizado_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "descuento_autorizado_via",
+        "nulable": true,
+        "tipo": "text"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ]
+  },
+  "version_del_contrato": 1
+}

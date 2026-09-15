@@ -1,0 +1,1729 @@
+/* Estilos del andamiaje. La identidad visual de la tienda de Jimmy llega con
+   el módulo de interfaz; nada de esto es definitivo. */
+
+:root {
+  /* Alto de la barra de estado fija: 6+6 de relleno, ~15 de línea y el borde.
+     Vive acá porque la pantalla de venta necesita reservar exactamente ese
+     espacio para que su pie no quede tapado. */
+  --alto-barra-estado: 30px;
+  --fondo: #0f172a;
+  --superficie: #1e293b;
+  --borde: #334155;
+  --texto: #e2e8f0;
+  --texto-tenue: #94a3b8;
+  --acento: #22c55e;
+  --alerta: #f87171;
+  --ambar: #fbbf24;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  /* En un kiosko nada debe poder seleccionarse ni arrastrarse por accidente. */
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+.pantalla {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 48px;
+}
+
+.encabezado h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+}
+
+.subtitulo {
+  margin: 4px 0 24px;
+  color: var(--texto-tenue);
+}
+
+/* Un dato secundario dentro de un texto que ya es secundario: la URL entera
+   del proyecto al lado de su referencia, que es lo que de verdad se lee. */
+.tenue {
+  opacity: 0.7;
+  font-size: 0.9em;
+}
+
+.tarjeta {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.tarjeta h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--texto-tenue);
+}
+
+.dato {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 4%);
+}
+
+.dato:last-child {
+  border-bottom: none;
+}
+
+.dato__etiqueta {
+  color: var(--texto-tenue);
+}
+
+.dato__valor {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.alerta pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgb(0 0 0 / 25%);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.alerta {
+  background: rgb(248 113 113 / 12%);
+  border: 1px solid var(--alerta);
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: var(--alerta);
+}
+
+.pendiente {
+  color: var(--texto-tenue);
+  margin: 0;
+}
+
+.pie {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+button {
+  background: var(--acento);
+  color: #052e16;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.nota {
+  margin: 0;
+  color: var(--texto-tenue);
+  font-size: 13px;
+}
+
+/* --- Diálogo de salida controlada -------------------------------------- */
+/* No tiene disparador visible: solo aparece con el atajo del administrador. */
+
+.capa-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 65%);
+  z-index: 100;
+}
+
+.modal {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+  padding: 24px;
+  width: min(420px, 90vw);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 45%);
+}
+
+.modal h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.modal__texto {
+  margin: 0 0 16px;
+  color: var(--texto-tenue);
+}
+
+.modal__error {
+  margin: 12px 0 0;
+  color: var(--alerta);
+  font-size: 14px;
+}
+
+.modal__acciones {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.boton--secundario {
+  background: transparent;
+  color: var(--texto-tenue);
+  border: 1px solid var(--borde);
+}
+
+/* --- Barra de estado ----------------------------------------------------- */
+/* Cromo de la aplicación, no del flujo de venta. El control de salida va en la
+   esquina IZQUIERDA, lo más lejos posible de donde irá el botón de cobrar. */
+
+.pantalla {
+  padding-bottom: 64px;
+}
+
+.barra-estado {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: rgb(15 23 42 / 92%);
+  border-top: 1px solid var(--borde);
+  font-size: 12px;
+  color: var(--texto-tenue);
+}
+
+.barra-estado__salir {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  color: var(--texto-tenue);
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.barra-estado__salir:hover,
+.barra-estado__salir:focus-visible {
+  opacity: 1;
+  color: var(--texto);
+  border-color: var(--texto-tenue);
+}
+
+.barra-estado__relleno {
+  flex: 1;
+}
+
+.barra-estado__error {
+  color: var(--alerta);
+}
+
+.barra-estado__dato {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+  El indicador de sincronización (§3.3 del diseño, Fase 4.a). Tres colores
+  nada más: sin color cuando está al día o con pendientes recientes, ámbar
+  con pendientes viejos, rojo cuando está detenida o sin credencial. El color
+  lo decide el proceso principal (`colorDeEstado`); acá solo se traduce a una
+  clase.
+*/
+.barra-estado__nube {
+  font-variant-numeric: tabular-nums;
+}
+
+.barra-estado__nube--ambar {
+  color: var(--ambar);
+  font-weight: 600;
+}
+
+.barra-estado__nube--rojo {
+  color: var(--alerta);
+  font-weight: 600;
+}
+
+/* --- Ingreso, primer arranque y teclado numérico ------------------------- */
+/* Todo pensado para una pantalla táctil de mostrador: objetivos grandes, sin
+   depender de teclado físico. El pulido visual llega en un prompt futuro. */
+
+.visualmente-oculto {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ingreso {
+  max-width: 560px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.ingreso h1 {
+  margin: 8px 0 4px;
+  font-size: 26px;
+}
+
+.ingreso__usuarios {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.ingreso__usuario {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 76px;
+  padding: 14px 18px;
+  background: var(--superficie);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+  text-align: left;
+}
+
+.ingreso__usuario:disabled {
+  opacity: 0.5;
+}
+
+.ingreso__nombre {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.ingreso__rol,
+.ingreso__bloqueado {
+  font-size: 12px;
+  color: var(--texto-tenue);
+  font-weight: 400;
+}
+
+.ingreso__bloqueado {
+  color: var(--alerta);
+}
+
+.teclado {
+  margin: 20px auto 0;
+  width: min(320px, 100%);
+}
+
+.teclado__puntos {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+/* Un punto por dígito: retroalimentación sin mostrar el PIN. */
+.teclado__punto {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--borde);
+}
+
+.teclado__punto--lleno {
+  background: var(--acento);
+  border-color: var(--acento);
+}
+
+.teclado__grilla {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.teclado__tecla {
+  min-height: 62px;
+  font-size: 24px;
+  font-weight: 600;
+  background: var(--superficie);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: 12px;
+}
+
+.teclado__tecla:disabled {
+  opacity: 0.35;
+}
+
+.teclado__tecla--principal {
+  background: var(--acento);
+  color: #052e16;
+  border-color: var(--acento);
+}
+
+.teclado__tecla--secundaria {
+  color: var(--texto-tenue);
+}
+
+.configuracion__paso {
+  margin-top: 20px;
+}
+
+.configuracion__etiqueta {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--texto-tenue);
+}
+
+.configuracion__campo {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 18px;
+  background: var(--fondo);
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  color: var(--texto);
+  margin-bottom: 16px;
+}
+
+/* --- Caja, conteo de efectivo y autorización ----------------------------- */
+
+.menu {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.captura__modos {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.captura__modo {
+  flex: 1;
+  min-height: 48px;
+  background: var(--superficie);
+  color: var(--texto-tenue);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.captura__modo--activo {
+  background: var(--acento);
+  color: #052e16;
+  border-color: var(--acento);
+  font-weight: 600;
+}
+
+.contador__fila {
+  display: grid;
+  grid-template-columns: 1fr auto 100px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgb(255 255 255 / 4%);
+}
+
+.contador__valor {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-variant-numeric: tabular-nums;
+}
+
+.contador__tipo {
+  font-size: 11px;
+  color: var(--texto-tenue);
+}
+
+.contador__controles {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contador__controles button {
+  width: 44px;
+  height: 44px;
+  font-size: 22px;
+  background: var(--superficie);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+}
+
+.contador__cantidad {
+  min-width: 40px;
+  text-align: center;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.contador__subtotal {
+  text-align: right;
+  color: var(--texto-tenue);
+  font-variant-numeric: tabular-nums;
+}
+
+.contador__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 2px solid var(--borde);
+  font-size: 18px;
+}
+
+.autorizacion__resumen {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 16px 0;
+  text-align: left;
+}
+
+.autorizacion__diferencia {
+  color: var(--alerta);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.advertencia {
+  background: rgb(250 204 21 / 10%);
+  border: 1px solid rgb(250 204 21 / 45%);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  text-align: left;
+  font-size: 14px;
+}
+
+.advertencia p {
+  margin: 8px 0 0;
+  color: var(--texto-tenue);
+}
+
+/* La frase que hay que leer primero: no va tenue como las aclaraciones. */
+.advertencia p.advertencia__principal {
+  margin-top: 0;
+  color: inherit;
+  font-size: 16px;
+}
+
+/* ---------------------------------------------------------------------------
+   Pantallas de administración del catálogo (categorías y productos).
+
+   Sin pulido visual a propósito: el trabajo fino se reserva para la pantalla
+   de venta. Lo que sí se respeta acá son las reglas táctiles del proyecto —
+   objetivos grandes y alto contraste — porque esta pantalla también se usa en
+   el mostrador, con el mismo dedo y la misma luz.
+   --------------------------------------------------------------------------- */
+
+.campo {
+  display: block;
+  margin-bottom: 14px;
+  border: 0;
+  padding: 0;
+}
+
+.campo__etiqueta {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--texto-tenue);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.campo input[type='text'],
+.campo input[type='search'],
+.campo input[type='number'],
+/* El de contraseña faltaba, y se vio en la pantalla de usuarios: el campo del
+   PIN quedaba diminuto y con el fondo que le pone el navegador por omisión,
+   en medio de campos altos y oscuros. */
+.campo input[type='password'],
+.campo select {
+  width: 100%;
+  /* 48 px de alto: objetivo táctil cómodo en la pantalla del mostrador. */
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  background: var(--fondo);
+  color: var(--texto);
+  font-size: 16px;
+  /* Los campos de texto son la única excepción a la selección bloqueada del
+     kiosko: sin esto no se puede corregir lo que uno escribió. */
+  user-select: text;
+}
+
+.campo input:focus-visible,
+.campo select:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: 1px;
+}
+
+.opciones {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.opcion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  background: var(--fondo);
+  /* EL COLOR VA EXPLÍCITO, y se descubrió manejando la aplicación real. La
+     regla base de `button` usa `color: #052e16`, un verde casi negro pensado
+     para leerse sobre el fondo de acento. Al usar `.opcion` en un `<button>`
+     —el selector de período de los reportes— se heredaba ese color sobre el
+     fondo oscuro y el texto quedaba prácticamente invisible. Sobre un `<label>`
+     nunca se notó porque las etiquetas heredan el color del cuerpo.
+     Cualquier clase que cambie el fondo de un botón tiene que fijar su color. */
+  color: var(--texto);
+  cursor: pointer;
+}
+
+.acciones {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.filtros {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.filtros .campo {
+  flex: 1 1 200px;
+  margin-bottom: 0;
+}
+
+.lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lista__fila {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--borde);
+}
+
+.lista__fila:last-child {
+  border-bottom: 0;
+}
+
+/* Una fila desactivada se atenúa pero NO se oculta: tiene que poder verse
+   para reactivarla, y su nombre sigue ocupado por el UNIQUE de la tabla. */
+.lista__fila--inactiva {
+  opacity: 0.55;
+}
+
+.lista__principal {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lista__nombre {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.lista__detalle {
+  color: var(--texto-tenue);
+  font-size: 13px;
+}
+
+.lista__acciones {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lista__acciones button {
+  min-height: 44px;
+}
+
+.etiqueta {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border: 1px solid var(--alerta);
+  border-radius: 999px;
+  color: var(--alerta);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.miniatura {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  border: 1px solid var(--borde);
+  object-fit: cover;
+  background: var(--fondo);
+}
+
+/*
+   Marcador de "todavía sin foto": las iniciales del producto sobre un color
+   derivado de su nombre. NO es un hueco ni un error de carga; es el estado
+   normal de un producto recién dado de alta, y tiene que verse intencional.
+   El color lo pone el componente en línea, porque depende del nombre.
+*/
+.miniatura--sin-foto {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Sin borde: el borde es lo que hacía que el recuadro vacío pareciera un
+     marco esperando una imagen que nunca llegó. */
+  border: 0;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  /* Las iniciales son una etiqueta, no texto que alguien vaya a copiar. */
+  user-select: none;
+}
+
+/* La vista previa del formulario: mismo marcador, más grande. */
+.miniatura--grande {
+  width: 96px;
+  height: 96px;
+}
+
+.miniatura--grande.miniatura--sin-foto {
+  font-size: 34px;
+}
+
+.foto {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.foto .acciones {
+  margin-top: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   PANTALLA DE VENTA — dirección visual importada de Claude Design
+   ("Mockup POS agrícola táctil", pantalla 01 · Venta).
+
+   LA PALETA ESTÁ ACOTADA A ESTA PANTALLA, a propósito. El diseño es CLARO
+   —fondo cálido, verde de acento— y el resto de la aplicación sigue siendo
+   oscuro. Migrar las otras cinco pantallas al diseño nuevo es una decisión
+   aparte, no algo que deba colarse dentro del prompt de la venta.
+
+   TIPOGRAFÍA: el diseño pide Archivo e IBM Plex Mono desde Google Fonts. NO se
+   cargan desde la red: la política de seguridad de contenido lo prohíbe y la
+   tienda tiene que funcionar sin internet. Se nombran igual, de primeras, para
+   que se usen si algún día se empaquetan con la aplicación, y detrás va una
+   pila del sistema que existe en Windows.
+   --------------------------------------------------------------------------- */
+
+.venta {
+  --venta-fondo: oklch(0.96 0.014 92);
+  --venta-superficie: oklch(0.99 0.006 92);
+  --venta-superficie-alt: oklch(0.955 0.014 92);
+  --venta-borde: oklch(0.88 0.015 92);
+  --venta-texto: oklch(0.24 0.02 155);
+  --venta-texto-tenue: oklch(0.55 0.02 150);
+  --venta-verde: oklch(0.5 0.1 150);
+  --venta-verde-sombra: oklch(0.4 0.09 150);
+  --venta-verde-oscuro: oklch(0.3 0.045 155);
+  --venta-precio: oklch(0.45 0.1 150);
+  --venta-ambar: oklch(0.74 0.14 72);
+  --venta-ambar-texto: oklch(0.28 0.04 70);
+  --venta-aviso-fondo: oklch(0.94 0.045 82);
+  --venta-aviso-borde: oklch(0.83 0.09 78);
+  --venta-aviso-texto: oklch(0.42 0.07 62);
+
+  --venta-titulo: Archivo, 'Segoe UI', system-ui, sans-serif;
+  --venta-mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, ui-monospace, monospace;
+
+  position: fixed;
+  /*
+    La barra de estado del kiosko va fija abajo y está SIEMPRE montada, en
+    todas las pantallas: es la salida controlada. La venta ocupa el resto, no
+    toda la ventana, porque si no el pie del ticket —con el botón de cobrar—
+    queda debajo de ella y no se puede tocar.
+  */
+  inset: 0 0 var(--alto-barra-estado) 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--venta-fondo);
+  color: var(--venta-texto);
+  font-family: var(--venta-titulo);
+}
+
+.venta__barra {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  background: var(--venta-verde-oscuro);
+  color: oklch(0.96 0.014 92);
+}
+
+.venta__turno {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: oklch(0.42 0.09 150);
+  border-radius: 999px;
+  padding: 11px 18px;
+  font: 600 15px/1 var(--venta-mono);
+}
+
+.venta__punto {
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  background: oklch(0.85 0.16 130);
+}
+
+.venta__espacio {
+  flex: 1;
+}
+
+.venta__barra .boton--secundario {
+  min-height: 48px;
+}
+
+.venta__cuerpo {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.venta__catalogo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+/* --- Barra lateral de categorías ----------------------------------------- */
+
+.venta__categorias {
+  /* El diseño está dibujado a 1920 px de ancho. En una pantalla menor, los dos
+     paneles fijos se comen la cuadrícula y la dejan en una sola columna: por
+     eso ceden ancho en vez de imponerlo. A 1920 quedan en su medida original. */
+  width: clamp(180px, 15%, 244px);
+  flex: none;
+  background: var(--venta-superficie);
+  border-right: 1px solid var(--venta-borde);
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.venta__rotulo {
+  margin: 0 0 2px 6px;
+  font: 700 12px/1 var(--venta-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--venta-texto-tenue);
+}
+
+.categoria {
+  /* 96 px: muy por encima del mínimo táctil, como en el diseño. */
+  min-height: 96px;
+  flex: none;
+  border-radius: 14px;
+  border: 1px solid var(--venta-borde);
+  background: var(--venta-superficie-alt);
+  color: var(--venta-texto);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 20px;
+  cursor: pointer;
+  transition: transform 60ms ease;
+}
+
+.categoria--activa {
+  background: var(--venta-verde);
+  color: oklch(0.98 0.01 150);
+  border-color: transparent;
+  box-shadow: 0 5px 0 var(--venta-verde-sombra);
+}
+
+/* Retroalimentación de "presionado": el botón se hunde sobre su propia
+   sombra, que es el gesto que el diseño ya insinúa con el desplazamiento. */
+.categoria:active,
+.icono-producto:active {
+  transform: translateY(2px);
+}
+
+.categoria__nombre {
+  font: 700 24px/1 var(--venta-titulo);
+}
+
+.categoria__conteo {
+  font: 500 14px/1 var(--venta-mono);
+  opacity: 0.85;
+}
+
+/* --- Cuadrícula de productos --------------------------------------------- */
+
+.venta__productos {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.venta__encabezado {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.venta__vista {
+  margin: 0;
+  font: 700 30px/1 var(--venta-titulo);
+}
+
+.venta__buscador input {
+  width: 320px;
+  min-height: 56px;
+  padding: 0 20px;
+  border-radius: 12px;
+  border: 1px solid var(--venta-borde);
+  background: var(--venta-superficie);
+  color: var(--venta-texto);
+  font: 400 17px/1 var(--venta-titulo);
+  user-select: text;
+}
+
+.cuadricula {
+  flex: 1;
+  min-height: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-auto-rows: 250px;
+  gap: 16px;
+  overflow-y: auto;
+  /* Desplazamiento táctil con inercia y sin rebote hacia el resto de la app. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.icono-producto {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* Muy por encima del mínimo de 80 px pedido para el objetivo táctil. */
+  min-height: 200px;
+  background: var(--venta-superficie);
+  border: 1px solid var(--venta-borde);
+  border-radius: 16px;
+  box-shadow: 0 4px 0 oklch(0.9 0.015 92);
+  padding: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  color: var(--venta-texto);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 60ms ease;
+}
+
+.icono-producto__foto {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.icono-producto__foto .miniatura {
+  width: 100%;
+  height: 100%;
+  border-radius: 11px;
+}
+
+.icono-producto__nombre {
+  font: 700 21px/1.1 var(--venta-titulo);
+}
+
+.icono-producto__medida {
+  font: 500 14px/1 var(--venta-mono);
+  color: var(--venta-texto-tenue);
+}
+
+.icono-producto__precio {
+  font: 700 25px/1 var(--venta-mono);
+  color: var(--venta-precio);
+}
+
+.icono-producto__insignia {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--venta-ambar);
+  color: var(--venta-ambar-texto);
+  border-radius: 999px;
+  padding: 7px 13px 7px 8px;
+  font: 700 12px/1 var(--venta-titulo);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 8px oklch(0.24 0.02 155 / 0.25);
+}
+
+.icono-producto__puesto {
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--venta-ambar-texto);
+  color: oklch(0.92 0.09 78);
+  font: 700 12px/20px var(--venta-mono);
+  text-align: center;
+}
+
+/* --- Ticket --------------------------------------------------------------- */
+
+.ticket {
+  width: clamp(360px, 34%, 552px);
+  flex: none;
+  background: var(--venta-superficie);
+  border-left: 1px solid var(--venta-borde);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ticket__encabezado {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 22px;
+  background: var(--venta-superficie-alt);
+  border-bottom: 1px solid var(--venta-borde);
+}
+
+.ticket__titulo {
+  margin: 0;
+  font: 700 25px/1 var(--venta-titulo);
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--venta-texto);
+}
+
+.ticket__conteo {
+  font: 500 15px/1 var(--venta-mono);
+  color: var(--venta-texto-tenue);
+}
+
+.ticket__lineas {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 22px;
+}
+
+.ticket__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ticket__linea {
+  position: relative;
+  border: 1px solid var(--venta-borde);
+  border-radius: 14px;
+  background: var(--venta-superficie);
+  padding: 11px;
+}
+
+.ticket__linea--activa {
+  border: 2px solid var(--venta-verde);
+  box-shadow: 0 4px 14px oklch(0.5 0.1 150 / 0.12);
+}
+
+.ticket__tocar {
+  width: 100%;
+  min-height: 80px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: none;
+  border: 0;
+  /* Espacio reservado para el botón de quitar, que va superpuesto arriba a la
+     derecha: sin él, el subtotal quedaba tapado justo en su último dígito. */
+  padding: 0 62px 0 0;
+  color: var(--venta-texto);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ticket__miniatura .miniatura {
+  width: 62px;
+  height: 62px;
+  border-radius: 10px;
+}
+
+.ticket__datos {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ticket__nombre {
+  font: 700 20px/1.1 var(--venta-titulo);
+}
+
+.ticket__detalle {
+  font: 500 14px/1 var(--venta-mono);
+  color: var(--venta-texto-tenue);
+}
+
+.ticket__subtotal {
+  font: 700 21px/1 var(--venta-mono);
+}
+
+.ticket__quitar {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--venta-borde);
+  background: var(--venta-superficie-alt);
+  color: var(--venta-texto-tenue);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.ticket__aviso {
+  margin: 9px 0 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--venta-aviso-fondo);
+  border: 1px solid var(--venta-aviso-borde);
+  color: var(--venta-aviso-texto);
+  font: 600 14px/1.3 var(--venta-titulo);
+}
+
+.ticket__pista {
+  margin: 12px 2px 0;
+  font: 500 15px/1 var(--venta-titulo);
+  color: var(--venta-texto-tenue);
+}
+
+.ticket__pie {
+  flex: none;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--venta-borde);
+  background: var(--venta-superficie-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.ticket__total {
+  display: flex;
+  align-items: center;
+}
+
+.ticket__total-etiqueta {
+  flex: 1;
+  font: 700 26px/1 var(--venta-titulo);
+}
+
+.ticket__total-valor {
+  font: 800 40px/1 var(--venta-mono);
+  color: oklch(0.35 0.09 150);
+  letter-spacing: -0.02em;
+}
+
+.ticket__acciones {
+  display: flex;
+  gap: 10px;
+}
+
+.ticket__cancelar {
+  flex: none;
+  width: 120px;
+  height: 96px;
+  border-radius: 14px;
+  border: 0;
+  background: oklch(0.9 0.02 92);
+  color: oklch(0.4 0.02 150);
+  font: 700 19px/1 var(--venta-titulo);
+  cursor: pointer;
+}
+
+.ticket__cobrar {
+  flex: 1;
+  height: 96px;
+  border-radius: 14px;
+  border: 0;
+  background: var(--venta-verde);
+  box-shadow: 0 6px 0 var(--venta-verde-sombra);
+  color: oklch(0.98 0.01 150);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  cursor: pointer;
+}
+
+.ticket__cobrar:active {
+  transform: translateY(3px);
+  box-shadow: 0 3px 0 var(--venta-verde-sombra);
+}
+
+.ticket__cobrar:disabled,
+.ticket__cancelar:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
+.ticket__cobrar-texto {
+  font: 800 30px/1 var(--venta-titulo);
+  letter-spacing: -0.01em;
+}
+
+.ticket__cobrar-monto {
+  font: 700 30px/1 var(--venta-mono);
+  opacity: 0.85;
+}
+
+/* --- Los diálogos de esta pantalla siguen su misma paleta clara ----------- */
+
+.venta .modal {
+  background: var(--venta-superficie);
+  border: 1px solid var(--venta-borde);
+  color: var(--venta-texto);
+}
+
+.venta .modal h2 {
+  color: var(--venta-texto);
+}
+
+.venta .modal__texto {
+  color: var(--venta-texto-tenue);
+}
+
+.venta .teclado__tecla {
+  background: var(--venta-superficie-alt);
+  border: 1px solid var(--venta-borde);
+  color: var(--venta-texto);
+}
+
+.venta .teclado__tecla--principal {
+  background: var(--venta-verde);
+  color: oklch(0.98 0.01 150);
+  border-color: transparent;
+}
+
+/* --- Teclado en modo cantidad -------------------------------------------- */
+
+.teclado__cantidad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.teclado__numero {
+  font: 800 44px/1 var(--venta-mono, ui-monospace, monospace);
+  letter-spacing: -0.02em;
+}
+
+.teclado__leyenda {
+  font: 500 15px/1 var(--venta-mono, ui-monospace, monospace);
+  opacity: 0.7;
+}
+
+/* --- Diálogo de cobro ---------------------------------------------------- */
+
+/*
+  Más ancho que un modal normal: muestra un resumen con montos, y partir un
+  «Q1,234.56» en dos renglones lo vuelve ilegible justo cuando más importa.
+*/
+.cobro {
+  min-width: 460px;
+  max-width: 560px;
+}
+
+.cobro__resumen {
+  margin: 4px 0 18px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--venta-superficie-alt, oklch(0.96 0.01 92));
+  border: 1px solid var(--venta-borde, oklch(0.88 0.01 92));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cobro__fila {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.cobro__fila dt {
+  flex: 1;
+  font: 500 16px/1 var(--venta-titulo, inherit);
+  color: var(--venta-texto-tenue, inherit);
+}
+
+.cobro__fila dd {
+  margin: 0;
+  font: 600 18px/1 var(--venta-mono, ui-monospace, monospace);
+}
+
+/* El renglón que importa —el total, o el exceso a autorizar— se separa y crece. */
+.cobro__fila--fuerte {
+  padding-top: 9px;
+  border-top: 1px solid var(--venta-borde, oklch(0.88 0.01 92));
+}
+
+.cobro__fila--fuerte dt {
+  font-weight: 700;
+  color: inherit;
+}
+
+.cobro__fila--fuerte dd {
+  font: 800 26px/1 var(--venta-mono, ui-monospace, monospace);
+}
+
+.cobro__bloque {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.cobro__opciones {
+  display: flex;
+  gap: 8px;
+}
+
+/* Botones de dedo, no de puntero: esta pantalla se usa tocando. */
+.cobro__opcion {
+  flex: 1;
+  min-height: 64px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--venta-borde, oklch(0.88 0.01 92));
+  background: var(--venta-superficie-alt, oklch(0.96 0.01 92));
+  color: inherit;
+  font: 600 17px/1.2 var(--venta-titulo, inherit);
+  cursor: pointer;
+}
+
+.cobro__opcion--activa {
+  border-color: transparent;
+  background: var(--venta-verde, oklch(0.55 0.13 150));
+  color: oklch(0.98 0.01 150);
+}
+
+.campo__pista {
+  display: block;
+  margin-top: 6px;
+  font-size: 14px;
+  opacity: 0.75;
+}
+
+.cobro__titulo-listo {
+  margin-bottom: 4px;
+}
+
+/* El número que el cajero le canta al cliente: es lo único que se mira acá. */
+.cobro__total-cobrado {
+  margin: 6px 0 10px;
+  font: 800 52px/1 var(--venta-mono, ui-monospace, monospace);
+  letter-spacing: -0.02em;
+  color: oklch(0.35 0.09 150);
+}
+
+.cobro__referencia {
+  margin: 14px 0 0;
+  font: 500 12px/1.4 var(--venta-mono, ui-monospace, monospace);
+  opacity: 0.6;
+  word-break: break-all;
+}
+
+/* --- Precio especial en el ticket ---------------------------------------- */
+
+/*
+  Una línea rebajada se distingue de un vistazo. El borde a la izquierda es el
+  cambio mínimo que se ve sin mover nada de lugar; el color es el mismo verde
+  de la marca y no un rojo de oferta, que en esta pantalla significa error.
+*/
+.ticket__linea--especial {
+  border-left: 4px solid var(--venta-verde, oklch(0.55 0.13 150));
+}
+
+.ticket__precio-viejo {
+  opacity: 0.55;
+}
+
+/*
+  Ocupa su propia fila, a lo ancho de la línea. Sin versalitas ni espaciado de
+  letras: en la columna angosta del ticket, un texto en mayúsculas espaciadas
+  ocupa casi el doble y se parte en cuatro renglones.
+*/
+.ticket__especial {
+  margin: 9px 0 0;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: oklch(0.94 0.05 150);
+  color: oklch(0.35 0.1 150);
+  font: 600 14px/1.3 var(--venta-titulo, inherit);
+}
+
+/* --- Confirmación de la venta recién registrada -------------------------- */
+
+.aviso-exito {
+  margin: 0 0 10px;
+  padding: 11px 16px;
+  border-radius: 10px;
+  background: oklch(0.94 0.05 150);
+  border: 1px solid oklch(0.78 0.09 150);
+  color: oklch(0.33 0.09 150);
+  font: 600 16px/1.3 var(--venta-titulo, inherit);
+}
+
+/*
+  Los campos de texto DENTRO de la pantalla de venta siguen su paleta clara.
+  El estilo general de `.campo` es del tema oscuro del resto de la aplicación,
+  y un recuadro azul marino dentro de un diálogo color hueso se lee como un
+  error de dibujo, no como un campo.
+*/
+.venta .campo input[type='text'] {
+  background: var(--venta-superficie-alt);
+  border: 1px solid var(--venta-borde);
+  color: var(--venta-texto);
+}
+
+.venta .campo__etiqueta,
+.venta .campo__pista {
+  color: var(--venta-texto-tenue);
+}
+
+/* --- Vista de un recibo -------------------------------------------------- */
+
+/*
+  Más ancho que un modal normal: el recibo son 48 columnas de texto
+  monoespaciado, y partirlas lo volvería ilegible justo cuando se lo está
+  cotejando contra el papel.
+*/
+.modal--recibo {
+  min-width: 520px;
+  max-width: 640px;
+}
+
+/*
+  El recibo se muestra tal cual sale del rollo. Monoespaciado y con los
+  espacios respetados: es el mismo texto que recibe la impresora, no una
+  versión maquillada de los mismos datos.
+*/
+.recibo-papel {
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--borde);
+  background: oklch(0.97 0.005 92);
+  color: oklch(0.2 0.01 92);
+  font: 400 12px/1.45 ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+}
+
+.recibo-ruta {
+  font-size: 12px;
+  word-break: break-all;
+  opacity: 0.75;
+}
+
+/* ---------------------------------------------------------------------------
+   Reportes
+   ---------------------------------------------------------------------------
+   Las solapas y los números grandes de los reportes. La cifra principal se
+   dibuja con `tabular-nums` como el resto de los montos del sistema: con cifras
+   de ancho variable, dos totales uno debajo del otro no se pueden comparar de
+   un vistazo.
+   --------------------------------------------------------------------------- */
+.solapas {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.solapa {
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  background: var(--fondo);
+  color: var(--texto);
+  cursor: pointer;
+}
+.solapa--activa {
+  border-color: var(--acento);
+  color: var(--acento);
+  font-weight: 600;
+}
+.opcion--activa {
+  border-color: var(--acento);
+  color: var(--acento);
+  font-weight: 600;
+}
+.reporte__titulo {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--texto-tenue);
+  font-weight: 600;
+}
+.reporte__destacado {
+  margin: 0 0 16px;
+  font-size: 34px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.reporte__monto {
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* El renglón de descuentos es una REFERENCIA, no un sumando: se despega del
+   resto para que nadie lo lea como parte de la columna que suma. */
+.reporte__referencia {
+  margin-top: 10px;
+  border-top: 1px solid var(--borde);
+  border-bottom: none;
+  color: var(--texto-tenue);
+}
+
+/* --- Teclado alfanumérico en pantalla (formularios) ---------------------- */
+/* Anclado abajo, encima de la barra de estado, y siempre por encima de un
+   modal: el modal de ajuste de inventario también lo usa. Las teclas miden
+   52 px de alto como mínimo, que es lo que un dedo acierta en un mostrador. */
+
+.teclado-en-pantalla {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--alto-barra-estado);
+  z-index: 2000;
+  padding: 10px 12px 12px;
+  background: #0b1220;
+  border-top: 2px solid var(--acento);
+  box-shadow: 0 -12px 40px rgb(0 0 0 / 45%);
+}
+
+.teclado-en-pantalla__reserva {
+  height: 380px;
+}
+
+.teclado-en-pantalla__vista {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  max-width: 980px;
+  margin: 0 auto 8px;
+  padding: 6px 10px;
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+}
+
+.teclado-en-pantalla__etiqueta {
+  font-size: 13px;
+  color: var(--texto-tenue);
+  white-space: nowrap;
+}
+
+.teclado-en-pantalla__valor {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--texto);
+  overflow-wrap: anywhere;
+}
+
+.teclado-en-pantalla__filas {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.teclado-en-pantalla[data-disposicion='decimal'] .teclado-en-pantalla__filas,
+.teclado-en-pantalla[data-disposicion='entero'] .teclado-en-pantalla__filas {
+  max-width: 420px;
+}
+
+.teclado-en-pantalla__fila {
+  display: flex;
+  gap: 6px;
+}
+
+.teclado-en-pantalla__tecla {
+  flex: 1 1 0;
+  min-height: 52px;
+  font-size: 20px;
+  font-weight: 600;
+  /* Fija fondo Y color: la regla base de `button` pinta texto oscuro pensado
+     para el fondo de acento (§5, fila del selector de período). */
+  background: var(--superficie);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+}
+
+.teclado-en-pantalla__tecla--espacio {
+  flex-grow: 4;
+}
+
+.teclado-en-pantalla__tecla--activa {
+  background: #1e3a5f;
+  border-color: #60a5fa;
+}
+
+.teclado-en-pantalla__tecla--listo {
+  background: var(--acento);
+  color: #052e16;
+  border-color: var(--acento);
+}
+
+/* Un modal con campos de texto se abre arriba y no centrado: centrado, el
+   teclado en pantalla le taparía la mitad inferior, que es donde están sus
+   botones. */
+.capa-modal--arriba {
+  align-items: flex-start;
+  padding-top: 24px;
+  /* Con una pantalla baja, el modal puede ser más alto que lo que el teclado
+     deja libre: se desplaza, y el espacio al pie deja subir sus botones por
+     encima del teclado. Lo midió `verify:pantallas:teclado` a 720 px, con el
+     botón del cobro tapado (2026-09-15). */
+  overflow-y: auto;
+  padding-bottom: calc(420px + var(--alto-barra-estado));
+}
+
+/* La cantidad de una denominación se toca para escribirla con el teclado. */
+.contador__cantidad--tocable {
+  min-height: 44px;
+  min-width: 56px;
+  padding: 0 10px;
+  background: var(--fondo);
+  color: var(--texto);
+  border: 1px dashed var(--borde);
+  border-radius: 8px;
+}
+
+.contador__teclado {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+/* Monto y margen de un producto, uno debajo del otro y alineados a la derecha. */
+.reporte__montos {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.reporte__margen {
+  font-size: 13px;
+  color: var(--acento);
+  white-space: nowrap;
+}
+
+.reporte__margen--sin-dato {
+  color: var(--texto-tenue);
+  font-style: italic;
+}

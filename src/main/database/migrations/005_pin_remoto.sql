@@ -1,0 +1,21 @@
+-- ===========================================================================
+-- 005_pin_remoto.sql — PIN de autorización remota
+-- ===========================================================================
+--
+-- Un segundo PIN por administrador, pensado para DICTARSE POR TELÉFONO cuando
+-- hay que autorizar algo y el administrador no está en la tienda.
+--
+-- POR QUÉ UN PIN APARTE Y NO EL DE SIEMPRE: el PIN normal abre la sesión del
+-- administrador en la caja. Dictarlo por teléfono se lo entrega a quien
+-- escucha, para siempre y para todo. Con un PIN separado, lo que se cede al
+-- dictarlo es únicamente la capacidad de autorizar a distancia, y queda
+-- registrado en la auditoría como autorización remota y no como presencial.
+--
+-- NULL significa que ese administrador no tiene autorización remota
+-- configurada, que es el estado inicial de todos.
+--
+-- Se espeja en Postgres (`0005_...`) porque es una columna de `usuarios`, que
+-- es dato de negocio y ya se sincroniza entera.
+-- ===========================================================================
+
+ALTER TABLE usuarios ADD COLUMN pin_remoto_hash TEXT;
