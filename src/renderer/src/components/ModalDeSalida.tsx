@@ -7,36 +7,57 @@
  * absolutamente nada.
  *
  * El PIN se envía al proceso principal y se verifica allá. El renderer nunca
- * conoce el PIN correcto ni decide si la salida procede.
+ * conoce el PIN correcto ni decide si la salida procede. El candado de
+ * intentos, la ventana de dos minutos y las tres vías de entrada (atajo,
+ * cierre del sistema y botón) viven en `controlled-exit.ts`: este archivo solo
+ * junta los dígitos.
+ *
+ * ---------------------------------------------------------------------------
+ * EL PIN SE TECLEA EN PANTALLA (2026-09-15)
+ * ---------------------------------------------------------------------------
+ * Hasta ese día el PIN era un `<input type="password">` nativo: el diálogo
+ * nació el 2026-09-04, dos días antes de que existiera `TecladoNumerico`, y
+ * nunca se migró. En la pantalla táctil de la tienda, sin teclado físico,
+ * NO HABÍA CÓMO ESCRIBIRLO. Ahora usa el mismo teclado numérico que el ingreso
+ * y que todas las autorizaciones con PIN.
+ *
+ * Un teclado físico, si hay uno conectado, sigue sirviendo igual que antes:
+ * dígitos, borrar, Enter para confirmar y Escape para cancelar. No es un
+ * detalle: es como un administrador sale desde la computadora de desarrollo.
  */
 
 import { useEffect, useRef, useState } from 'react';
 
-/** Largo máximo que acepta el campo, igual al del contrato IPC. */
-const LARGO_MAXIMO_PIN = 12;
+import { LARGO_DEL_PIN } from '@shared/pin';
+import { useCerrarTecladoEnPantalla } from './TecladoEnPantalla';
+import { TecladoNumerico } from './TecladoNumerico';
 
 export function ModalDeSalida(): React.JSX.Element | null {
   const [visible, setVisible] = useState<boolean>(false);
   const [pin, setPin] = useState<string>('');
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [enviando, setEnviando] = useState<boolean>(false);
-  const campoPin = useRef<HTMLInputElement>(null);
+  const dialogo = useRef<HTMLDivElement>(null);
+  const cerrarTecladoEnPantalla = useCerrarTecladoEnPantalla();
 
   // Suscripción al aviso del proceso principal.
   useEffect(() => {
     const darseDeBaja = window.pos.kiosko.alSolicitarSalida(() => {
+      // Si había un formulario a medio escribir, su teclado alfanumérico va
+      // por encima de todo modal y taparía las teclas del PIN.
+      cerrarTecladoEnPantalla();
       setVisible(true);
       setPin('');
       setMensaje(null);
     });
     return darseDeBaja;
-  }, []);
+  }, [cerrarTecladoEnPantalla]);
 
-  // El foco va al campo apenas aparece, para que el administrador pueda
-  // teclear el PIN sin tocar el mouse.
+  // El foco va al diálogo apenas aparece, para que un teclado físico escriba
+  // el PIN sin tocar el mouse y Escape lo cancele.
   useEffect(() => {
     if (visible) {
-      campoPin.current?.focus();
+      dialogo.current?.focus();
     }
   }, [visible]);
 
@@ -50,14 +71,21 @@ export function ModalDeSalida(): React.JSX.Element | null {
     setMensaje(null);
   };
 
+  const completo = pin.length === LARGO_DEL_PIN;
+
   const confirmar = (): void => {
+    if (!completo || enviando) {
+      return;
+    }
     setEnviando(true);
     void (async (): Promise<void> => {
       const respuesta = await window.pos.kiosko.confirmarSalida(pin);
 
       if (!respuesta.ok) {
         setMensaje(respuesta.error.mensaje);
+        setPin('');
         setEnviando(false);
+        dialogo.current?.focus();
         return;
       }
 
@@ -67,21 +95,43 @@ export function ModalDeSalida(): React.JSX.Element | null {
         setMensaje(respuesta.datos.mensaje);
         setPin('');
         setEnviando(false);
-        campoPin.current?.focus();
+        dialogo.current?.focus();
       }
     })();
   };
 
   return (
     <div
+      ref={dialogo}
       className="capa-modal"
       data-prueba="dialogo-salida"
       role="dialog"
       aria-modal="true"
       aria-labelledby="titulo-salida"
+      tabIndex={-1}
       onKeyDown={(evento) => {
         if (evento.key === 'Escape') {
           cerrarDialogo();
+          return;
+        }
+        if (enviando) {
+          return;
+        }
+        if (/^[0-9]$/.test(evento.key)) {
+          evento.preventDefault();
+          setPin((anterior) =>
+            anterior.length < LARGO_DEL_PIN ? anterior + evento.key : anterior,
+          );
+          return;
+        }
+        if (evento.key === 'Backspace') {
+          evento.preventDefault();
+          setPin((anterior) => anterior.slice(0, -1));
+          return;
+        }
+        if (evento.key === 'Enter') {
+          evento.preventDefault();
+          confirmar();
         }
       }}
     >
@@ -91,33 +141,24 @@ export function ModalDeSalida(): React.JSX.Element | null {
           Ingresá el PIN de un administrador, en persona o dictado por teléfono, para cerrar el punto de venta de forma ordenada.
         </p>
 
-        <input
-          ref={campoPin}
-          className="modal__pin"
-          type="password"
-          inputMode="numeric"
-          autoComplete="off"
-          maxLength={LARGO_MAXIMO_PIN}
-          value={pin}
-          disabled={enviando}
-          onChange={(evento) => {
-            // Solo dígitos: cualquier otra cosa se descarta al teclear.
-            setPin(evento.target.value.replace(/[^0-9]/g, ''));
-          }}
-          onKeyDown={(evento) => {
-            if (evento.key === 'Enter' && !enviando) {
-              confirmar();
-            }
-          }}
+        <TecladoNumerico
+          valor={pin}
+          alCambiar={setPin}
+          alConfirmar={confirmar}
+          deshabilitado={enviando}
         />
 
-        {mensaje !== null && <p className="modal__error">{mensaje}</p>}
+        {mensaje !== null && (
+          <p className="modal__error" data-prueba="mensaje-de-salida">
+            {mensaje}
+          </p>
+        )}
 
         <div className="modal__acciones">
           <button type="button" className="boton--secundario" onClick={cerrarDialogo} disabled={enviando}>
             Cancelar
           </button>
-          <button type="button" onClick={confirmar} disabled={enviando || pin.length === 0}>
+          <button type="button" onClick={confirmar} disabled={enviando || !completo}>
             {enviando ? 'Verificando…' : 'Cerrar aplicación'}
           </button>
         </div>

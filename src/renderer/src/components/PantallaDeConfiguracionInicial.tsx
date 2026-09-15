@@ -14,6 +14,7 @@ import { useState } from 'react';
 
 import type { SesionIniciada } from '@shared/types/ipc';
 import { LARGO_DEL_PIN } from '@shared/pin';
+import { CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 
 export interface PantallaDeConfiguracionInicialProps {
@@ -85,14 +86,14 @@ export function PantallaDeConfiguracionInicial({
           <label className="configuracion__etiqueta" htmlFor="nombre-del-administrador">
             Nombre del administrador
           </label>
-          <input
+          <CampoDeTexto
             id="nombre-del-administrador"
             className="configuracion__campo"
             data-prueba="campo-nombre"
-            type="text"
+            etiqueta="Nombre del administrador"
             maxLength={80}
-            value={nombre}
-            onChange={(evento) => { setNombre(evento.target.value); }}
+            valor={nombre}
+            alCambiar={setNombre}
           />
           <button
             type="button"

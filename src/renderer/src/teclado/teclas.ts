@@ -46,6 +46,23 @@ export const FILAS_DE_TEXTO: readonly (readonly string[])[] = [
   ['á', 'é', 'í', 'ó', 'ú', 'ü', '(', ')', '/', '%'],
 ];
 
+/**
+ * Filas de la capa de SÍMBOLOS de la disposición de texto.
+ *
+ * Existe por dos campos concretos que la capa de letras no alcanzaba: el
+ * CORREO del usuario de la nube (sin `@` no hay correo que escribir) y su
+ * CONTRASEÑA, que Supabase acepta con cualquier signo. Se entra y se sale con
+ * la tecla «#@» / «abc»; las filas de dígitos se conservan arriba para no
+ * obligar a cambiar de capa en medio de un correo como `caja1@tienda.gt`.
+ */
+export const FILAS_DE_SIMBOLOS: readonly (readonly string[])[] = [
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+  ['@', '_', '.', '-', '+', '=', '#', '$', '&', '*'],
+  ['!', '?', '¿', '¡', ':', ';', '"', "'", ',', '/'],
+  ['(', ')', '[', ']', '{', '}', '<', '>', '%', '\\'],
+  ['|', '~', '^', '`', '°', '€', '£', '¬', '·', 'ç'],
+];
+
 /** Filas de las disposiciones numéricas. El punto solo existe en `decimal`. */
 export const FILAS_NUMERICAS: readonly (readonly string[])[] = [
   ['1', '2', '3'],

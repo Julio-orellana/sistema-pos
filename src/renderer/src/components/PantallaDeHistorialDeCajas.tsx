@@ -24,6 +24,7 @@ import type {
   ReconteoEnHistorialIpc,
   SesionDeCajaEnHistorialIpc,
 } from '@shared/types/ipc';
+import { CampoDeFecha } from './TecladoEnPantalla';
 import { llamarAlProcesoPrincipal } from './llamar-al-proceso-principal';
 
 const MENSAJE_SIN_RESPUESTA =
@@ -170,25 +171,11 @@ export function PantallaDeHistorialDeCajas({
         <div className="filtros">
           <label className="campo">
             <span className="campo__etiqueta">Abiertas desde</span>
-            <input
-              type="date"
-              value={desde}
-              data-prueba="historial-desde"
-              onChange={(evento) => {
-                setDesde(evento.target.value);
-              }}
-            />
+            <CampoDeFecha valor={desde} data-prueba="historial-desde" alCambiar={setDesde} />
           </label>
           <label className="campo">
             <span className="campo__etiqueta">Hasta</span>
-            <input
-              type="date"
-              value={hasta}
-              data-prueba="historial-hasta"
-              onChange={(evento) => {
-                setHasta(evento.target.value);
-              }}
-            />
+            <CampoDeFecha valor={hasta} data-prueba="historial-hasta" alCambiar={setHasta} />
           </label>
           <label className="campo">
             <span className="campo__etiqueta">Abrió</span>

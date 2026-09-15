@@ -21,6 +21,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import type { RolIpc, UsuarioIpc } from '@shared/types/ipc';
 import { LARGO_DEL_PIN, tieneFormatoDePinValido } from '@shared/pin';
+import { CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 
 /** Estado del formulario, tanto para crear como para editar. */
@@ -189,13 +190,13 @@ export function PantallaDeUsuarios({
 
         <label className="campo">
           <span className="campo__etiqueta">Nombre</span>
-          <input
-            type="text"
-            value={borrador.nombre}
+          <CampoDeTexto
+            etiqueta="Nombre del usuario"
+            valor={borrador.nombre}
             maxLength={60}
             data-prueba="usuario-nombre"
-            onChange={(evento) => {
-              setBorrador((anterior) => ({ ...anterior, nombre: evento.target.value }));
+            alCambiar={(nombre) => {
+              setBorrador((anterior) => ({ ...anterior, nombre }));
             }}
           />
         </label>
@@ -225,16 +226,20 @@ export function PantallaDeUsuarios({
         {!editando && (
           <label className="campo">
             <span className="campo__etiqueta">PIN de {LARGO_DEL_PIN} dígitos</span>
-            <input
-              type="password"
-              inputMode="numeric"
-              value={borrador.pin}
+            <CampoDeTexto
+              etiqueta={`PIN de ${String(LARGO_DEL_PIN)} dígitos`}
+              disposicion="entero"
+              oculto
+              autoComplete="off"
+              valor={borrador.pin}
               maxLength={LARGO_DEL_PIN}
               data-prueba="usuario-pin"
-              onChange={(evento) => {
+              alCambiar={(valor) => {
+                // El teclado en pantalla ya solo escribe dígitos; esto cubre
+                // un teclado físico, que puede mandar cualquier cosa.
                 setBorrador((anterior) => ({
                   ...anterior,
-                  pin: evento.target.value.replace(/\D/g, ''),
+                  pin: valor.replace(/\D/g, ''),
                 }));
               }}
             />

@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { EstadoDeNubeIpc, ResumenDeConexionIpc } from '@shared/types/ipc';
+import { CampoDeTexto } from './TecladoEnPantalla';
 
 /** Segundos que tiene un minuto, para mostrar la vida del token en minutos. */
 const SEGUNDOS_POR_MINUTO = 60;
@@ -272,28 +273,27 @@ export function PantallaDeNube({
 
         <label className="campo">
           <span className="campo__etiqueta">Correo del usuario de terminal</span>
-          <input
-            type="email"
-            value={correo}
+          <CampoDeTexto
+            etiqueta="Correo del usuario de terminal"
+            valor={correo}
             maxLength={320}
+            mayusculaInicial={false}
             autoComplete="off"
             data-prueba="nube-correo-entrada"
-            onChange={(evento) => {
-              setCorreo(evento.target.value);
-            }}
+            alCambiar={setCorreo}
           />
         </label>
 
         <label className="campo">
           <span className="campo__etiqueta">Contraseña</span>
-          <input
-            type="password"
-            value={contrasena}
+          <CampoDeTexto
+            etiqueta="Contraseña"
+            oculto
+            mayusculaInicial={false}
+            valor={contrasena}
             autoComplete="off"
             data-prueba="nube-contrasena-entrada"
-            onChange={(evento) => {
-              setContrasena(evento.target.value);
-            }}
+            alCambiar={setContrasena}
           />
         </label>
 

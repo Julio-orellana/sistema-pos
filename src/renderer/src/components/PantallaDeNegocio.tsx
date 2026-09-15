@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { ConfiguracionDeNegocioIpc } from '@shared/types/ipc';
+import { CampoDeTexto } from './TecladoEnPantalla';
 
 /** Lo que se muestra en el recibo cuando un campo sigue vacío. */
 const MARCADORES: Record<keyof ConfiguracionDeNegocioIpc, string> = {
@@ -140,15 +141,15 @@ export function PantallaDeNegocio({
         {CAMPOS.map((campo) => (
           <label className="campo" key={campo.clave}>
             <span className="campo__etiqueta">{campo.etiqueta}</span>
-            <input
-              type="text"
-              value={borrador[campo.clave] ?? ''}
+            <CampoDeTexto
+              etiqueta={campo.etiqueta}
+              valor={borrador[campo.clave] ?? ''}
               maxLength={campo.largo}
               data-prueba={`negocio-${campo.clave}`}
-              onChange={(evento) => {
+              alCambiar={(valor) => {
                 setAviso(null);
                 setBorrador((anterior) =>
-                  anterior === null ? anterior : { ...anterior, [campo.clave]: evento.target.value },
+                  anterior === null ? anterior : { ...anterior, [campo.clave]: valor },
                 );
               }}
             />

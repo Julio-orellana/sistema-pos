@@ -24,6 +24,7 @@ import { useState } from 'react';
 
 import { formatearQuetzales, montoACadena } from '@shared/money';
 import type { PedidoDeCobro, ResultadoDeCobro, VentaRegistrada } from '@shared/types/ipc';
+import { CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 import {
   boletaDelBorrador,
@@ -288,7 +289,9 @@ export function DialogoDeCobro({
   // Pasos 1 y 2: descuento y forma de pago
   // =========================================================================
   return (
-    <div className="capa-modal">
+    // Arriba y no centrado: el valor del descuento y la boleta abren el
+    // teclado en pantalla, que centrado le taparía los botones de abajo.
+    <div className="capa-modal capa-modal--arriba">
       <section className="modal cobro" data-prueba="dialogo-de-cobro">
         <h2>{paso === 'descuento' ? 'Descuento' : 'Forma de pago'}</h2>
 
@@ -366,15 +369,19 @@ export function DialogoDeCobro({
                     ? 'Porcentaje de descuento'
                     : 'Descuento en quetzales'}
                 </span>
-                <input
-                  type="text"
-                  inputMode="decimal"
+                <CampoDeTexto
+                  etiqueta={
+                    borrador.tipoDeDescuento === 'porcentaje'
+                      ? 'Porcentaje de descuento'
+                      : 'Descuento en quetzales'
+                  }
+                  disposicion="decimal"
                   className="campo__entrada"
                   data-prueba="descuento-valor"
-                  value={borrador.valorDeDescuento}
+                  valor={borrador.valorDeDescuento}
                   autoFocus
-                  onChange={(evento) => {
-                    setBorrador({ ...borrador, valorDeDescuento: evento.target.value });
+                  alCambiar={(valorDeDescuento) => {
+                    setBorrador({ ...borrador, valorDeDescuento });
                     setAviso(null);
                   }}
                 />
@@ -423,14 +430,15 @@ export function DialogoDeCobro({
             {borrador.formaPago === 'tarjeta' && (
               <label className="campo">
                 <span className="campo__etiqueta">Número de boleta del voucher</span>
-                <input
-                  type="text"
+                <CampoDeTexto
+                  etiqueta="Número de boleta del voucher"
+                  mayusculaInicial={false}
                   className="campo__entrada"
                   data-prueba="pago-boleta"
-                  value={borrador.numBoleta}
+                  valor={borrador.numBoleta}
                   autoFocus
-                  onChange={(evento) => {
-                    setBorrador({ ...borrador, numBoleta: evento.target.value });
+                  alCambiar={(numBoleta) => {
+                    setBorrador({ ...borrador, numBoleta });
                     setAviso(null);
                   }}
                 />

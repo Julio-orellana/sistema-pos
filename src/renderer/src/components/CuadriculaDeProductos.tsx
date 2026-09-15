@@ -14,6 +14,7 @@
 import type { CategoriaDeVenta, ProductoParaVender } from '@shared/types/ipc';
 import { formatearQuetzales } from '@shared/money';
 import { MiniaturaDeProducto } from './MiniaturaDeProducto';
+import { CampoDeTexto } from './TecladoEnPantalla';
 import { descripcionDeCantidad } from '../venta/ticket';
 
 /** Valor del filtro que significa "todas las categorías". */
@@ -120,14 +121,13 @@ export function CuadriculaDeProductos({
           <div className="venta__espacio" />
           <label className="venta__buscador">
             <span className="visualmente-oculto">Buscar producto</span>
-            <input
-              type="search"
-              value={busqueda}
+            <CampoDeTexto
+              etiqueta="Buscar producto"
+              valor={busqueda}
               placeholder="Buscar producto"
+              mayusculaInicial={false}
               data-prueba="venta-buscador"
-              onChange={(evento) => {
-                alBuscar(evento.target.value);
-              }}
+              alCambiar={alBuscar}
             />
           </label>
         </div>

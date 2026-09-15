@@ -180,23 +180,6 @@ button:disabled {
   color: var(--texto-tenue);
 }
 
-.modal__pin {
-  width: 100%;
-  padding: 12px 14px;
-  font-size: 24px;
-  letter-spacing: 0.4em;
-  text-align: center;
-  background: var(--fondo);
-  border: 1px solid var(--borde);
-  border-radius: 8px;
-  color: var(--texto);
-}
-
-.modal__pin:focus {
-  outline: 2px solid var(--acento);
-  outline-offset: 1px;
-}
-
 .modal__error {
   margin: 12px 0 0;
   color: var(--alerta);
@@ -1698,6 +1681,12 @@ button:disabled {
 .capa-modal--arriba {
   align-items: flex-start;
   padding-top: 24px;
+  /* Con una pantalla baja, el modal puede ser más alto que lo que el teclado
+     deja libre: se desplaza, y el espacio al pie deja subir sus botones por
+     encima del teclado. Lo midió `verify:pantallas:teclado` a 720 px, con el
+     botón del cobro tapado (2026-09-15). */
+  overflow-y: auto;
+  padding-bottom: calc(420px + var(--alto-barra-estado));
 }
 
 /* La cantidad de una denominación se toca para escribirla con el teclado. */

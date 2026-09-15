@@ -29,6 +29,7 @@ import type {
   UsuarioRestauradoIpc,
 } from '@shared/types/ipc';
 import { LARGO_DEL_PIN } from '@shared/pin';
+import { CampoDeFecha, CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 
 /** Cada cuánto se refresca el progreso mientras la restauración corre. */
@@ -273,27 +274,26 @@ export function PantallaDeRestauracion({ alTerminar, alVolver }: PantallaDeResta
           <h2>{retomando ? 'Retomar' : 'Iniciar'}</h2>
           <label className="campo">
             <span className="campo__etiqueta">Correo del usuario de restauración</span>
-            <input
-              type="email"
-              value={correo}
+            <CampoDeTexto
+              etiqueta="Correo del usuario de restauración"
+              valor={correo}
               maxLength={320}
+              mayusculaInicial={false}
               autoComplete="off"
               data-prueba="restauracion-correo"
-              onChange={(evento) => {
-                setCorreo(evento.target.value);
-              }}
+              alCambiar={setCorreo}
             />
           </label>
           <label className="campo">
             <span className="campo__etiqueta">Contraseña</span>
-            <input
-              type="password"
-              value={contrasena}
+            <CampoDeTexto
+              etiqueta="Contraseña"
+              oculto
+              mayusculaInicial={false}
+              valor={contrasena}
               autoComplete="off"
               data-prueba="restauracion-contrasena"
-              onChange={(evento) => {
-                setContrasena(evento.target.value);
-              }}
+              alCambiar={setContrasena}
             />
           </label>
 
@@ -328,13 +328,11 @@ export function PantallaDeRestauracion({ alTerminar, alVolver }: PantallaDeResta
               {motivo === 'robo' && (
                 <label className="campo">
                   <span className="campo__etiqueta">Fecha y hora aproximadas del robo</span>
-                  <input
-                    type="datetime-local"
-                    value={fechaDelRobo}
+                  <CampoDeFecha
+                    conHora
+                    valor={fechaDelRobo}
                     data-prueba="restauracion-fecha-del-robo"
-                    onChange={(evento) => {
-                      setFechaDelRobo(evento.target.value);
-                    }}
+                    alCambiar={setFechaDelRobo}
                   />
                   <span className="campo__pista">
                     Todo lo que la nube recibió después de esa hora se muestra aparte para revisarlo. Ante la duda, una

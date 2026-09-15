@@ -116,14 +116,23 @@ export function App(): React.JSX.Element {
 
   return (
     <main className="pantalla">
-      {/* Invisible hasta que se pide la salida controlada. */}
-      <ModalDeSalida />
+      {/*
+        Un solo teclado en pantalla para toda la aplicación, y TODO el
+        cascarón va adentro: fuera del proveedor, un `CampoDeTexto` se degrada
+        en silencio a un campo común sin teclado. Hasta el 2026-09-15 el
+        diálogo de salida estaba montado afuera, y por eso ni siquiera un
+        `CampoDeTexto` le habría servido. La prueba
+        `todo-campo-usa-el-teclado.test.ts` exige que el proveedor sea el único
+        hijo de `<main>`.
+      */}
+      <ProveedorDeTeclado>
+        {/* Invisible hasta que se pide la salida controlada. */}
+        <ModalDeSalida />
 
-      {/* Un solo teclado en pantalla para toda la aplicación: los campos de
-          texto lo abren al tocarlos (componente `CampoDeTexto`). */}
-      <ProveedorDeTeclado>{contenido}</ProveedorDeTeclado>
+        {contenido}
 
-      <BarraDeEstado sesion={sesion} />
+        <BarraDeEstado sesion={sesion} />
+      </ProveedorDeTeclado>
     </main>
   );
 }

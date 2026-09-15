@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { LimiteDeDescuentoIpc, RolIpc } from '@shared/types/ipc';
+import { CampoDeTexto } from './TecladoEnPantalla';
 
 /** Cómo se lee cada rol en la pantalla. */
 const NOMBRES_DE_ROL: Record<RolIpc, string> = {
@@ -202,14 +203,14 @@ export function PantallaDeLimites({
 
           <label className="campo">
             <span className="campo__etiqueta">Porcentaje máximo</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={borrador.porcentaje}
+            <CampoDeTexto
+              etiqueta="Porcentaje máximo"
+              disposicion="decimal"
+              valor={borrador.porcentaje}
               data-prueba="limite-porcentaje"
-              onChange={(evento) => {
+              alCambiar={(porcentaje) => {
                 setMensaje(null);
-                setBorrador((anterior) => ({ ...anterior, porcentaje: evento.target.value }));
+                setBorrador((anterior) => ({ ...anterior, porcentaje }));
               }}
             />
             <span className="campo__pista">0 significa que este rol no puede dar descuento.</span>
@@ -217,14 +218,14 @@ export function PantallaDeLimites({
 
           <label className="campo">
             <span className="campo__etiqueta">Monto fijo máximo, en quetzales</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={borrador.montoFijo}
+            <CampoDeTexto
+              etiqueta="Monto fijo máximo, en quetzales"
+              disposicion="decimal"
+              valor={borrador.montoFijo}
               data-prueba="limite-monto"
-              onChange={(evento) => {
+              alCambiar={(montoFijo) => {
                 setMensaje(null);
-                setBorrador((anterior) => ({ ...anterior, montoFijo: evento.target.value }));
+                setBorrador((anterior) => ({ ...anterior, montoFijo }));
               }}
             />
           </label>

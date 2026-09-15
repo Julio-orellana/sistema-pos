@@ -25,6 +25,7 @@ import type {
   ReporteDeVentasPorProductoIpc,
   ResumenDeVentasIpc,
 } from '@shared/types/ipc';
+import { CampoDeFecha } from './TecladoEnPantalla';
 
 /** Qué reporte se está mirando. */
 type Solapa = 'resumen' | 'productos' | 'inventario';
@@ -172,25 +173,11 @@ export function PantallaDeReportes({
             <div className="filtros" data-prueba="rango-personalizado">
               <label className="campo">
                 <span className="campo__etiqueta">Desde</span>
-                <input
-                  type="date"
-                  value={desde}
-                  data-prueba="rango-desde"
-                  onChange={(evento) => {
-                    setDesde(evento.target.value);
-                  }}
-                />
+                <CampoDeFecha valor={desde} data-prueba="rango-desde" alCambiar={setDesde} />
               </label>
               <label className="campo">
                 <span className="campo__etiqueta">Hasta</span>
-                <input
-                  type="date"
-                  value={hasta}
-                  data-prueba="rango-hasta"
-                  onChange={(evento) => {
-                    setHasta(evento.target.value);
-                  }}
-                />
+                <CampoDeFecha valor={hasta} data-prueba="rango-hasta" alCambiar={setHasta} />
               </label>
               <button type="button" data-prueba="rango-ver" onClick={consultarAMano}>
                 Ver

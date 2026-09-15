@@ -7,7 +7,14 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { aplicarTecla, conMayuscula, type OpcionesDeTecla, type Tecla } from '../teclas';
+import {
+  FILAS_DE_SIMBOLOS,
+  FILAS_DE_TEXTO,
+  aplicarTecla,
+  conMayuscula,
+  type OpcionesDeTecla,
+  type Tecla,
+} from '../teclas';
 
 const texto: OpcionesDeTecla = { disposicion: 'texto' };
 const decimal: OpcionesDeTecla = { disposicion: 'decimal' };
@@ -75,5 +82,26 @@ describe('Disposición DECIMAL: precios y cantidades', () => {
 describe('Disposición ENTERO: el orden de una categoría', () => {
   it('solo dígitos: el punto no existe', () => {
     expect(escribir(entero, c('1'), c('.'), c('2'))).toBe('12');
+  });
+});
+
+describe('Capa de SÍMBOLOS: el correo y la contraseña de la nube (2026-09-15)', () => {
+  it('trae la arroba: sin ella no hay correo que escribir', () => {
+    expect(FILAS_DE_SIMBOLOS.flat()).toContain('@');
+  });
+
+  it('cada tecla escribe UN carácter, y ninguna se repite en la capa (una tecla repetida es un toque ambiguo)', () => {
+    for (const capa of [FILAS_DE_TEXTO, FILAS_DE_SIMBOLOS]) {
+      const teclas = capa.flat();
+      expect(teclas.every((tecla) => Array.from(tecla).length === 1)).toBe(true);
+      expect(new Set(teclas).size).toBe(teclas.length);
+    }
+  });
+
+  it('todo símbolo se admite en la disposición de texto y en ninguna numérica', () => {
+    for (const signo of FILAS_DE_SIMBOLOS.flat().filter((tecla) => !/[0-9.]/.test(tecla))) {
+      expect(aplicarTecla('', c(signo), texto), signo).toBe(signo);
+      expect(aplicarTecla('', c(signo), entero), signo).toBe('');
+    }
   });
 });
