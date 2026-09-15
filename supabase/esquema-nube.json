@@ -560,6 +560,11 @@
         "tipo": "numeric(14,3)"
       },
       {
+        "nombre": "precio_compra",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      },
+      {
         "nombre": "recibido_en",
         "nulable": false,
         "tipo": "timestamp with time zone"

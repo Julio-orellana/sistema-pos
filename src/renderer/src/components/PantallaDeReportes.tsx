@@ -318,7 +318,21 @@ function PorProducto({
                     {fila.vecesVendido === 1 ? 'venta' : 'ventas'}
                   </span>
                 </span>
-                <span className="dato__valor reporte__monto">Q{fila.montoGenerado}</span>
+                <span className="reporte__montos">
+                  <span className="dato__valor reporte__monto">Q{fila.montoGenerado}</span>
+                  {/* «Sin dato» y no Q0.00: cero diría que el producto no deja
+                      ganancia, y lo que pasa es que no se sabe su costo. */}
+                  <span
+                    className={
+                      fila.margen === null
+                        ? 'reporte__margen reporte__margen--sin-dato'
+                        : 'reporte__margen'
+                    }
+                    data-prueba="margen-de-producto"
+                  >
+                    Margen: {fila.margen === null ? 'sin dato' : `Q${fila.margen}`}
+                  </span>
+                </span>
               </li>
             ))}
           </ul>
@@ -328,6 +342,22 @@ function PorProducto({
               Q{datos.montoTotal}
             </span>
           </div>
+          <div className="dato">
+            <span className="dato__etiqueta">
+              Margen del período
+              {datos.productosSinCosto > 0 &&
+                ` (sin ${String(datos.productosSinCosto)} ${datos.productosSinCosto === 1 ? 'producto' : 'productos'} sin costo, que vendieron Q${datos.montoSinCosto})`}
+            </span>
+            <span className="dato__valor" data-prueba="margen-total">
+              Q{datos.margenTotal}
+            </span>
+          </div>
+          <p className="nota">
+            El margen es lo cobrado menos el precio de compra por la cantidad vendida, y usa el
+            precio de compra cargado HOY: si cambió durante el período, las ventas anteriores se
+            calculan con el nuevo. Un producto sin precio de compra no entra en el margen del
+            período.
+          </p>
           <p className="nota">
             La cantidad es la de ESTE período. No es el acumulado de toda la vida del producto,
             que es otra medida y vive en el catálogo.

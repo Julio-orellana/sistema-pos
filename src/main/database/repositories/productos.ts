@@ -31,6 +31,7 @@ interface FilaProducto {
   readonly inventario_disponible: string;
   readonly contador_ventas: number;
   readonly cantidad_vendida: string;
+  readonly precio_compra: string | null;
   readonly activo: number;
   readonly creado_en: string;
   readonly actualizado_en: string;
@@ -55,6 +56,10 @@ function aEntidad(fila: FilaProducto): Producto {
     ),
     contadorVentas: fila.contador_ventas,
     cantidadVendida: desdeColumnaDecimal(fila.cantidad_vendida, 'productos.cantidad_vendida'),
+    precioCompra:
+      fila.precio_compra === null
+        ? null
+        : desdeColumnaDecimal(fila.precio_compra, 'productos.precio_compra'),
     activo: desdeColumnaBooleana(fila.activo, 'productos.activo'),
     creadoEn: fila.creado_en,
     actualizadoEn: fila.actualizado_en,
@@ -72,11 +77,11 @@ export class RepositorioDeProductos extends RepositorioBase {
           `INSERT INTO productos (
              id, nombre, categoria_id, foto_path, tipo_medida, unidad_peso,
              cantidad_predefinida_icono, precio_base, inventario_disponible,
-             contador_ventas, activo, creado_en, actualizado_en
+             contador_ventas, precio_compra, activo, creado_en, actualizado_en
            ) VALUES (
              @id, @nombre, @categoria_id, @foto_path, @tipo_medida, @unidad_peso,
              @cantidad_predefinida_icono, @precio_base, @inventario_disponible,
-             0, @activo, @creado_en, @actualizado_en
+             0, @precio_compra, @activo, @creado_en, @actualizado_en
            )`,
         )
         .run({
@@ -89,6 +94,10 @@ export class RepositorioDeProductos extends RepositorioBase {
           cantidad_predefinida_icono: aColumnaCantidad(datos.cantidadPredefinidaIcono),
           precio_base: aColumnaMonto(datos.precioBase),
           inventario_disponible: aColumnaCantidad(datos.inventarioDisponible),
+          precio_compra:
+            datos.precioCompra === undefined || datos.precioCompra === null
+              ? null
+              : aColumnaMonto(datos.precioCompra),
           activo: aColumnaBooleana(datos.activo ?? true),
           creado_en: momento,
           actualizado_en: momento,
@@ -192,6 +201,7 @@ export class RepositorioDeProductos extends RepositorioBase {
                   unidad_peso = @unidad_peso,
                   cantidad_predefinida_icono = @cantidad_predefinida_icono,
                   precio_base = @precio_base,
+                  precio_compra = @precio_compra,
                   actualizado_en = @actualizado_en
             WHERE id = @id`,
         )
@@ -204,6 +214,7 @@ export class RepositorioDeProductos extends RepositorioBase {
           unidad_peso: cambios.unidadPeso,
           cantidad_predefinida_icono: aColumnaCantidad(cambios.cantidadPredefinidaIcono),
           precio_base: aColumnaMonto(cambios.precioBase),
+          precio_compra: cambios.precioCompra === null ? null : aColumnaMonto(cambios.precioCompra),
           actualizado_en: ahora(),
         });
     });

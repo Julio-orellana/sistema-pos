@@ -674,6 +674,11 @@ const camposDeProducto = {
   unidadPeso: z.enum(UNIDADES_DE_PESO_IPC).nullable(),
   cantidadPredefinidaIcono: z.string().min(1).max(LARGO_MAXIMO_NUMERO),
   precioBase: z.string().min(1).max(LARGO_MAXIMO_NUMERO),
+  /**
+   * Costo para la tienda. OBLIGATORIO en el payload y nulable: la pantalla
+   * dice siempre qué quiere, y `null` (o vacío) es «sin costo cargado».
+   */
+  precioCompra: z.string().max(LARGO_MAXIMO_NUMERO).nullable(),
   fotoPath: z.string().max(LARGO_MAXIMO_RUTA_FOTO).nullable(),
 };
 
@@ -725,6 +730,12 @@ export interface ProductoIpc {
   readonly cantidadPredefinidaIcono: string;
   /** Precio, como cadena canónica de dos decimales. */
   readonly precioBase: string;
+  /**
+   * Costo, como cadena canónica de dos decimales, o `null` si no se cargó.
+   * Solo viaja en este DTO, que exige rol administrativo: la cuadrícula de
+   * venta (`ProductoParaVender`) no lo lleva.
+   */
+  readonly precioCompra: string | null;
   /** Inventario, como cadena canónica de tres decimales. */
   readonly inventarioDisponible: string;
   /** Ruta relativa guardada en la base, o `null`. */
@@ -1452,6 +1463,10 @@ export interface VentasDeUnProductoIpc {
   readonly cantidadVendida: string;
   readonly montoGenerado: string;
   readonly vecesVendido: number;
+  /** Costo vigente con que se calculó el margen, o `null` si no tiene. */
+  readonly precioCompra: string | null;
+  /** Margen del período, o `null` = «sin dato». Nunca cero por falta de costo. */
+  readonly margen: string | null;
 }
 
 /** El reporte de ventas por producto, ya ordenado por monto descendente. */
@@ -1459,6 +1474,12 @@ export interface ReporteDeVentasPorProductoIpc {
   readonly periodo: PeriodoResueltoIpc;
   readonly productos: readonly VentasDeUnProductoIpc[];
   readonly montoTotal: string;
+  /** Suma de los márgenes con dato. */
+  readonly margenTotal: string;
+  /** Productos vendidos sin costo cargado, que no entran en `margenTotal`. */
+  readonly productosSinCosto: number;
+  /** Lo que vendieron esos productos. */
+  readonly montoSinCosto: string;
 }
 
 /** Cómo se ordena el reporte de inventario. */

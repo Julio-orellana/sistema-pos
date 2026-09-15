@@ -1712,3 +1712,22 @@ button:disabled {
   gap: 8px;
   padding-bottom: 10px;
 }
+
+/* Monto y margen de un producto, uno debajo del otro y alineados a la derecha. */
+.reporte__montos {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.reporte__margen {
+  font-size: 13px;
+  color: var(--acento);
+  white-space: nowrap;
+}
+
+.reporte__margen--sin-dato {
+  color: var(--texto-tenue);
+  font-style: italic;
+}

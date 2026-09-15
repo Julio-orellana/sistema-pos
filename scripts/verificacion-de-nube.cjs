@@ -375,6 +375,9 @@ const filaProducto = (id, nombre, categoriaId, precio, inventario, contador, ven
   creado_en: FECHA,
   actualizado_en: FECHA,
   cantidad_vendida: vendida,
+  // Migración 031/0031 (§4.39): el payload es la fila entera, así que la
+  // columna tiene que venir aunque sea null. La batería exige la 0031 aplicada.
+  precio_compra: null,
 });
 
 /** `cierre` en null es una caja abierta; con valores, una cerrada. */

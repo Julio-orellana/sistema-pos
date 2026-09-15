@@ -32,6 +32,8 @@ interface Borrador {
   readonly unidadPeso: UnidadPesoIpc | null;
   readonly cantidadPredefinidaIcono: string;
   readonly precioBase: string;
+  /** Vacío es «sin costo cargado», que no es cero. */
+  readonly precioCompra: string;
   readonly inventarioInicial: string;
   readonly fotoPath: string | null;
   readonly fotoUrl: string | null;
@@ -59,6 +61,7 @@ function borradorInicial(
       unidadPeso: producto.unidadPeso,
       cantidadPredefinidaIcono: producto.cantidadPredefinidaIcono,
       precioBase: producto.precioBase,
+      precioCompra: producto.precioCompra ?? '',
       inventarioInicial: producto.inventarioDisponible,
       fotoPath: producto.fotoPath,
       fotoUrl: producto.fotoUrl,
@@ -71,6 +74,7 @@ function borradorInicial(
     unidadPeso: null,
     cantidadPredefinidaIcono: '1',
     precioBase: '0.00',
+    precioCompra: '',
     inventarioInicial: '0',
     fotoPath: null,
     fotoUrl: null,
@@ -173,6 +177,8 @@ export function FormularioDeProducto({
       unidadPeso: borrador.unidadPeso,
       cantidadPredefinidaIcono: borrador.cantidadPredefinidaIcono.trim(),
       precioBase: borrador.precioBase.trim(),
+      // Vacío viaja como `null`: el proceso principal lo guarda sin costo.
+      precioCompra: borrador.precioCompra.trim() === '' ? null : borrador.precioCompra.trim(),
       fotoPath: borrador.fotoPath,
     };
 
@@ -309,6 +315,27 @@ export function FormularioDeProducto({
             setBorrador((anterior) => ({ ...anterior, precioBase }));
           }}
         />
+      </label>
+
+      <label className="campo">
+        <span className="campo__etiqueta">
+          Precio de compra en quetzales (opcional, por{' '}
+          {borrador.tipoMedida === 'peso' ? (borrador.unidadPeso ?? 'lb') : 'unidad'})
+        </span>
+        <CampoDeTexto
+          etiqueta="Precio de compra"
+          disposicion="decimal"
+          valor={borrador.precioCompra}
+          placeholder="Sin costo cargado"
+          data-prueba="producto-precio-compra"
+          alCambiar={(precioCompra) => {
+            setBorrador((anterior) => ({ ...anterior, precioCompra }));
+          }}
+        />
+        <span className="nota">
+          Sirve para calcular el margen en los reportes. Si lo dejás vacío, el margen de este
+          producto se muestra como «sin dato», no como cero.
+        </span>
       </label>
 
       {esNuevo ? (

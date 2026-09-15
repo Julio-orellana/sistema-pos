@@ -50,6 +50,7 @@ const MAIZ: ProductoIpc = {
   cantidadPredefinidaIcono: '1.000',
   precioBase: '4.25',
   inventarioDisponible: '250.000',
+  precioCompra: null,
   fotoPath: null,
   fotoUrl: null,
   activo: true,

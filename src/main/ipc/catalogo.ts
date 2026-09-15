@@ -93,6 +93,7 @@ function aProductoIpc(producto: Producto, nombreDeCategoria: string): ProductoIp
     unidadPeso: producto.unidadPeso,
     cantidadPredefinidaIcono: cantidadACadena(producto.cantidadPredefinidaIcono),
     precioBase: montoACadena(producto.precioBase),
+    precioCompra: producto.precioCompra === null ? null : montoACadena(producto.precioCompra),
     inventarioDisponible: cantidadACadena(producto.inventarioDisponible),
     fotoPath: producto.fotoPath,
     fotoUrl: producto.fotoPath === null ? null : urlDeFoto(producto.fotoPath),

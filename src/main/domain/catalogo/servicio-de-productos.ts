@@ -87,6 +87,15 @@ export interface DatosDeProducto {
   readonly unidadPeso: UnidadPeso | null;
   readonly cantidadPredefinidaIcono: string;
   readonly precioBase: string;
+  /**
+   * Costo para la tienda, o `null` si no se conoce.
+   *
+   * OPCIONAL en la firma y no en el significado: si falta, al EDITAR se
+   * conserva el costo que el producto ya tenía y al CREAR queda sin costo.
+   * La pantalla lo manda siempre, explícito; el opcional existe para que los
+   * guiones y las pruebas que no hablan de costos no tengan que inventar uno.
+   */
+  readonly precioCompra?: string | null;
   readonly fotoPath: string | null;
 }
 
@@ -121,6 +130,8 @@ interface DatosVerificados {
   readonly unidadPeso: UnidadPeso | null;
   readonly cantidadPredefinidaIcono: Decimal;
   readonly precioBase: Decimal;
+  /** `undefined`: no vino (se conserva al editar). `null`: sin costo. */
+  readonly precioCompra: Decimal | null | undefined;
   readonly fotoPath: string | null;
 }
 
@@ -283,6 +294,25 @@ export class ServicioDeProductos {
       );
     }
 
+    // Un campo vacío en la pantalla es «no sé cuánto cuesta», no «cuesta
+    // cero»: se guarda como NULL.
+    const textoDelCosto = datos.precioCompra?.trim();
+    let precioCompra: Decimal | null | undefined;
+    if (datos.precioCompra === undefined) {
+      precioCompra = undefined;
+    } else if (textoDelCosto === undefined || textoDelCosto === '') {
+      precioCompra = null;
+    } else {
+      precioCompra = redondearMonto(this.aDecimal(textoDelCosto, 'El precio de compra'));
+      if (esNegativo(precioCompra)) {
+        throw new ErrorDeNegocio(
+          'DATO_INVALIDO',
+          'El precio de compra no puede ser negativo. Dejalo vacío si todavía no lo sabés.',
+          `precio_compra recibido: ${montoACadena(precioCompra)}`,
+        );
+      }
+    }
+
     return {
       nombre,
       categoriaId: datos.categoriaId,
@@ -290,6 +320,7 @@ export class ServicioDeProductos {
       unidadPeso: datos.unidadPeso,
       cantidadPredefinidaIcono: cantidadIcono,
       precioBase: precio,
+      precioCompra,
       fotoPath: datos.fotoPath,
     };
   }
@@ -399,6 +430,7 @@ export class ServicioDeProductos {
         unidadPeso: verificados.unidadPeso,
         cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
         precioBase: verificados.precioBase,
+        precioCompra: verificados.precioCompra ?? null,
         inventarioDisponible: inventarioInicial,
         activo: true,
       });
@@ -414,6 +446,7 @@ export class ServicioDeProductos {
           tipoMedida: creado.tipoMedida,
           unidadPeso: creado.unidadPeso,
           precioBase: montoACadena(creado.precioBase),
+          precioCompra: creado.precioCompra === null ? null : montoACadena(creado.precioCompra),
           inventarioInicial: cantidadACadena(creado.inventarioDisponible),
         },
         fecha: new Date(this.ahora()).toISOString(),
@@ -456,6 +489,11 @@ export class ServicioDeProductos {
       );
     }
 
+    // Sin costo en el pedido, el que ya tenía se conserva: editar el nombre
+    // desde un guion no puede borrar un costo cargado a mano.
+    const precioCompra =
+      verificados.precioCompra === undefined ? anterior.precioCompra : verificados.precioCompra;
+
     return conBandejaDeSalida(this.base, () => {
       this.productos.actualizar(id, {
         nombre: verificados.nombre,
@@ -465,6 +503,7 @@ export class ServicioDeProductos {
         unidadPeso: verificados.unidadPeso,
         cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
         precioBase: verificados.precioBase,
+        precioCompra,
       });
 
       const asiento = this.auditoria.registrar({
@@ -478,6 +517,7 @@ export class ServicioDeProductos {
           tipoMedida: anterior.tipoMedida,
           unidadPeso: anterior.unidadPeso,
           precioBase: montoACadena(anterior.precioBase),
+          precioCompra: anterior.precioCompra === null ? null : montoACadena(anterior.precioCompra),
           fotoPath: anterior.fotoPath,
         },
         valorNuevo: {
@@ -486,6 +526,7 @@ export class ServicioDeProductos {
           tipoMedida: verificados.tipoMedida,
           unidadPeso: verificados.unidadPeso,
           precioBase: montoACadena(verificados.precioBase),
+          precioCompra: precioCompra === null ? null : montoACadena(precioCompra),
           fotoPath: verificados.fotoPath,
         },
         fecha: new Date(this.ahora()).toISOString(),

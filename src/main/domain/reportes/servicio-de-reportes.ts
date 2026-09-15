@@ -45,6 +45,8 @@ import {
   cantidadLegible,
   comparar,
   montoACadena,
+  multiplicar,
+  restar,
   sumarLista,
 } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
@@ -99,6 +101,17 @@ export interface VentasDeUnProducto {
   readonly montoGenerado: string;
   /** En cuántas ventas distintas apareció. */
   readonly vecesVendido: number;
+  /**
+   * Costo con que se calculó el margen: el `precio_compra` VIGENTE del
+   * producto, o `null` si no tiene. Ver `ventasPorProducto`.
+   */
+  readonly precioCompra: string | null;
+  /**
+   * `montoGenerado − precio_compra × cantidad vendida`, o `null` —«sin
+   * dato»— si el producto no tiene costo cargado. NUNCA cero en ese caso:
+   * cero diría que el producto no deja ganancia, que es otra cosa.
+   */
+  readonly margen: string | null;
 }
 
 /** El reporte de ventas por producto, ya ordenado. */
@@ -107,6 +120,19 @@ export interface ReporteDeVentasPorProducto {
   readonly productos: readonly VentasDeUnProducto[];
   /** Suma de los montos de todos los productos. Cuadra con el reporte 1. */
   readonly montoTotal: string;
+  /**
+   * Suma de los márgenes de los productos QUE TIENEN COSTO. Es la suma exacta
+   * de la columna que se ve, así que cuadra con ella.
+   */
+  readonly margenTotal: string;
+  /** Cuántos productos vendidos no tienen costo y quedaron fuera del margen. */
+  readonly productosSinCosto: number;
+  /**
+   * Cuánto vendieron esos productos. Hace falta para leer `margenTotal`: un
+   * margen total de Q300 sobre Q10 000 de ventas no dice lo mismo si Q6 000 de
+   * esas ventas no tienen costo.
+   */
+  readonly montoSinCosto: string;
 }
 
 /** Una fila del reporte de inventario. */
@@ -265,14 +291,34 @@ export class ServicioDeReportes {
     const productos: VentasDeUnProducto[] = [...porProducto.entries()].map(
       ([productoId, acumulado]) => {
         const actual = this.productos.obtenerPorId(productoId);
+        const cantidad = sumarLista(acumulado.cantidades);
+        const monto = sumarLista(acumulado.montos);
+        /*
+          EL MARGEN: (precio de venta − precio de compra) × cantidad, sumado por
+          línea. Como el precio de venta de cada línea es lo que pagó el
+          cliente —`subtotal_impreso`, ya con precio especial y descuento—, esa
+          suma es exactamente `monto − costo × cantidad`, sin redondear nada en
+          el medio: se redondea UNA vez, al final (§5, política de redondeo).
+
+          USA EL COSTO DE HOY, no el del día de la venta. No existe una foto
+          del costo por venta (`venta_detalle` guarda el precio, no el costo),
+          así que si el costo cambió en el período el margen de las ventas
+          viejas se calcula contra el nuevo. Está dicho en la pantalla y en
+          §4.39.
+        */
+        const costo = actual?.precioCompra ?? null;
+        const margen =
+          costo === null ? null : montoACadena(restar(monto, multiplicar(costo, cantidad)));
         return {
           productoId,
           // El nombre de hoy; el del comprobante solo si el producto ya no está.
           nombre: actual?.nombre ?? acumulado.nombreDeRespaldo,
           unidad: acumulado.unidad,
-          cantidadVendida: cantidadLegible(sumarLista(acumulado.cantidades)),
-          montoGenerado: montoACadena(sumarLista(acumulado.montos)),
+          cantidadVendida: cantidadLegible(cantidad),
+          montoGenerado: montoACadena(monto),
           vecesVendido: acumulado.ventas.size,
+          precioCompra: costo === null ? null : montoACadena(costo),
+          margen,
         };
       },
     );
@@ -293,6 +339,15 @@ export class ServicioDeReportes {
       periodo,
       productos,
       montoTotal: montoACadena(sumarLista(productos.map((fila) => fila.montoGenerado))),
+      margenTotal: montoACadena(
+        sumarLista(productos.flatMap((fila) => (fila.margen === null ? [] : [fila.margen]))),
+      ),
+      productosSinCosto: productos.filter((fila) => fila.margen === null).length,
+      montoSinCosto: montoACadena(
+        sumarLista(
+          productos.flatMap((fila) => (fila.margen === null ? [fila.montoGenerado] : [])),
+        ),
+      ),
     };
   }
 

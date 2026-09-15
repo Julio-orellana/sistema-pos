@@ -565,3 +565,71 @@ describe('La cuadrícula de venta tiene un orden determinista', () => {
     expect(productos.listarParaVenta().map((p) => p.nombre)).toEqual(['Vigente']);
   });
 });
+
+// ===========================================================================
+/**
+ * El costo del producto (§4.39). Lo que importa es que «sin costo» siga siendo
+ * «sin costo» en cada paso: un cero colado en cualquier punto haría que el
+ * reporte dijera que el producto no deja ganancia.
+ */
+describe('EL PRECIO DE COMPRA: vacío es «sin costo», nunca cero', () => {
+  it('se guarda redondeado a centavos', () => {
+    const creado = productos.crear(idAdmin, maiz({ precioCompra: '4.5' }));
+    expect(creado.precioCompra?.toFixed(2)).toBe('4.50');
+  });
+
+  it('vacío o solo espacios se guarda como SIN COSTO (null), no como 0.00', () => {
+    expect(productos.crear(idAdmin, maiz({ precioCompra: '' })).precioCompra).toBeNull();
+    expect(
+      productos.crear(idAdmin, maiz({ nombre: 'Maíz amarillo', precioCompra: '   ' })).precioCompra,
+    ).toBeNull();
+    expect(
+      productos.crear(idAdmin, maiz({ nombre: 'Maíz quebrado', precioCompra: null })).precioCompra,
+    ).toBeNull();
+  });
+
+  it('un costo NEGATIVO se rechaza con mensaje de negocio y sin escribir nada', () => {
+    expect(() => productos.crear(idAdmin, maiz({ precioCompra: '-1' }))).toThrow(
+      /precio de compra no puede ser negativo/,
+    );
+    expect(escriturasEnLaBase).toBe(0);
+  });
+
+  it('un costo que no es un número se rechaza', () => {
+    expect(() => productos.crear(idAdmin, maiz({ precioCompra: 'barato' }))).toThrow(ErrorDeNegocio);
+  });
+
+  it('editar SIN mandar el costo lo CONSERVA: corregir el nombre no borra un costo cargado', () => {
+    const creado = productos.crear(idAdmin, maiz({ precioCompra: '4.50' }));
+    const { inventarioInicial: _inventario, precioCompra: _costo, ...sinCosto } = maiz();
+    const editado = productos.editar(idAdmin, creado.id, { ...sinCosto, nombre: 'Maíz blanco fino' });
+    expect(editado.precioCompra?.toFixed(2)).toBe('4.50');
+  });
+
+  it('editar mandando null lo BORRA, a propósito', () => {
+    const creado = productos.crear(idAdmin, maiz({ precioCompra: '4.50' }));
+    const { inventarioInicial: _inventario, ...datos } = maiz();
+    const editado = productos.editar(idAdmin, creado.id, { ...datos, precioCompra: null });
+    expect(editado.precioCompra).toBeNull();
+  });
+
+  it('el cambio de costo queda en la auditoría con el valor anterior y el nuevo', () => {
+    const creado = productos.crear(idAdmin, maiz());
+    const { inventarioInicial: _inventario, ...datos } = maiz();
+    productos.editar(idAdmin, creado.id, { ...datos, precioCompra: '3.75' });
+
+    const asiento = base
+      .prepare("SELECT valor_anterior, valor_nuevo FROM auditoria_log WHERE accion = 'producto_editado'")
+      .get() as { valor_anterior: string; valor_nuevo: string };
+    expect(JSON.parse(asiento.valor_anterior)).toEqual(expect.objectContaining({ precioCompra: null }));
+    expect(JSON.parse(asiento.valor_nuevo)).toEqual(expect.objectContaining({ precioCompra: '3.75' }));
+  });
+
+  it('viaja a la nube dentro del payload de productos, con la forma canónica', () => {
+    const creado = productos.crear(idAdmin, maiz({ precioCompra: '4.5' }));
+    const fila = base
+      .prepare("SELECT payload FROM sync_cola WHERE entidad_tipo = 'productos' AND entidad_id = ?")
+      .get(creado.id) as { payload: string };
+    expect(JSON.parse(fila.payload)).toEqual(expect.objectContaining({ precio_compra: '4.50' }));
+  });
+});

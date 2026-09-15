@@ -148,6 +148,11 @@ export interface Producto {
   readonly contadorVentas: number;
   /** Cuánta CANTIDAD acumulada salió. No es comparable entre unidades. */
   readonly cantidadVendida: Decimal;
+  /**
+   * Costo del producto para la tienda. `null` es «no se cargó», que NO es
+   * cero: con cero el reporte diría que el producto no deja ganancia (§4.39).
+   */
+  readonly precioCompra: Decimal | null;
   readonly activo: boolean;
   readonly creadoEn: string;
   readonly actualizadoEn: string;
@@ -163,6 +168,8 @@ export interface NuevoProducto {
   readonly cantidadPredefinidaIcono: Decimal | string;
   readonly precioBase: Decimal | string;
   readonly inventarioDisponible: Decimal | string;
+  /** Sin costo cargado si falta. */
+  readonly precioCompra?: Decimal | string | null;
   readonly activo?: boolean;
 }
 
@@ -184,6 +191,8 @@ export interface CambiosDeProducto {
   readonly unidadPeso: UnidadPeso | null;
   readonly cantidadPredefinidaIcono: Decimal | string;
   readonly precioBase: Decimal | string;
+  /** `null` borra el costo; es un valor explícito, no «dejarlo como estaba». */
+  readonly precioCompra: Decimal | string | null;
 }
 
 // ---------------------------------------------------------------------------

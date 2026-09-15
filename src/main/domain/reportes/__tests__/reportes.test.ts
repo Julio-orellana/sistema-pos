@@ -572,3 +572,101 @@ describe('Tarea 3 — El estado de inventario', () => {
     expect(primera).toEqual(['Azúcar', 'Frijol negro', 'Maíz blanco']);
   });
 });
+
+// ===========================================================================
+/**
+ * El margen por producto (§4.39): lo cobrado menos el precio de compra por la
+ * cantidad vendida, sumado con Decimal y redondeado UNA vez.
+ */
+describe('EL MARGEN POR PRODUCTO: «sin dato» cuando no hay costo, nunca cero', () => {
+  const fijarCosto = (productoId: string, costo: string | null): void => {
+    base.prepare('UPDATE productos SET precio_compra = ? WHERE id = ?').run(costo, productoId);
+  };
+
+  it('margen = cobrado − costo × cantidad', () => {
+    fijarCosto(idMaiz, '4.50');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '3' }]);
+
+    const maiz = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find((f) => f.productoId === idMaiz);
+    // 5 lb a Q6 = Q30; costo 5 × 4.50 = Q22.50.
+    expect(maiz?.montoGenerado).toBe('30.00');
+    expect(maiz?.precioCompra).toBe('4.50');
+    expect(maiz?.margen).toBe('7.50');
+  });
+
+  it('SIN COSTO CARGADO el margen es null («sin dato»), NO 0.00', () => {
+    vender(HOY_TARDE, [{ productoId: idFrijol, cantidad: '1' }]);
+
+    const frijol = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find(
+      (f) => f.productoId === idFrijol,
+    );
+    expect(frijol?.margen).toBeNull();
+    expect(frijol?.margen).not.toBe('0.00');
+  });
+
+  it('un costo IGUAL al precio sí da 0.00: no deja ganancia, que es distinto de no saberlo', () => {
+    fijarCosto(idFrijol, '9.00');
+    vender(HOY_TARDE, [{ productoId: idFrijol, cantidad: '2' }]);
+
+    const frijol = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find(
+      (f) => f.productoId === idFrijol,
+    );
+    expect(frijol?.margen).toBe('0.00');
+  });
+
+  it('vender por debajo del costo da un margen NEGATIVO, que se informa tal cual', () => {
+    fijarCosto(idAzucar, '8.00');
+    vender(HOY_TARDE, [{ productoId: idAzucar, cantidad: '2' }]);
+
+    const azucar = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find(
+      (f) => f.productoId === idAzucar,
+    );
+    expect(azucar?.margen).toBe('-5.00');
+  });
+
+  it('SE REDONDEA UNA SOLA VEZ, al final: tres ventas de 0.333 lb no acumulan centavos', () => {
+    // Cada venta: 0.333 × 6.00 = 1.998 → cobrado Q2.00. Costo exacto de las
+    // tres: 0.999 × 4.55 = 4.54545. Margen = 6.00 − 4.54545 = 1.45455 → 1.45.
+    // Redondeando el costo por línea (1.52 × 3 = 4.56) daría 1.44: un centavo
+    // en contra de la tienda.
+    fijarCosto(idMaiz, '4.55');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
+
+    const maiz = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find((f) => f.productoId === idMaiz);
+    expect(maiz?.montoGenerado).toBe('6.00');
+    expect(maiz?.margen).toBe('1.45');
+  });
+
+  it('el margen total SOLO suma los productos con costo, y dice cuántos quedaron fuera y cuánto vendieron', () => {
+    fijarCosto(idMaiz, '4.50');
+    vender(HOY_TARDE, [
+      { productoId: idMaiz, cantidad: '5' },
+      { productoId: idFrijol, cantidad: '1' },
+      { productoId: idAzucar, cantidad: '2' },
+    ]);
+
+    const reporte = reportes.ventasPorProducto({ clase: 'hoy' });
+    expect(reporte.margenTotal).toBe('7.50');
+    expect(reporte.productosSinCosto).toBe(2);
+    // Frijol Q9.00 + azúcar Q11.00.
+    expect(reporte.montoSinCosto).toBe('20.00');
+  });
+
+  it('el margen total cuadra con la suma de la columna que se ve', () => {
+    fijarCosto(idMaiz, '4.55');
+    fijarCosto(idFrijol, '7.33');
+    vender(HOY_TARDE, [
+      { productoId: idMaiz, cantidad: '0.333' },
+      { productoId: idFrijol, cantidad: '1.777' },
+    ]);
+
+    const reporte = reportes.ventasPorProducto({ clase: 'hoy' });
+    const columna = sumarLista(
+      reporte.productos.map((f) => f.margen).filter((m): m is string => m !== null),
+    );
+    expect(reporte.margenTotal).toBe(montoACadena(columna));
+  });
+});
