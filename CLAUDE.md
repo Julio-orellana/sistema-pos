@@ -6506,6 +6506,63 @@ texto a «con el PIN de un administrador» y lo frenó una prueba existente. Esa
 pantalla no debe sugerir que un PIN desbloquea vender en el turno ajeno (§4.12).
 Se dejó como estaba.
 
+#### La misma protección, extendida a los 56 canales
+
+Julio pidió no quedarse en el canal de cierre: el defecto es de patrón —un
+servicio que devuelve un objeto de dominio y un manejador que lo pasa tal
+cual—, así que podía estar en otro canal. Se agregaron dos cosas.
+
+**1. `todo-canal-responde-algo-serializable.test.ts` llama a TODOS los
+manejadores.** Registra `registrarManejadoresIpc` completo con los servicios
+reales sobre SQLite, con Electron simulado solo para capturar los manejadores,
+y llama cada canal como la ventana: una tienda sembrada con
+`sembrarTerminalDeOrigen`, una restauración contra `NubeDeMentira` y una
+instalación vacía. Exige cuatro cosas: que cada canal registrado se haya
+llamado, que cada uno haya dado al menos una respuesta `ok` (para clonar datos
+y no solo errores), que ninguna respuesta falle `structuredClone` y que ninguna
+llegue rescatada por el envoltorio. **Un canal nuevo sin su llamada hace fallar
+la prueba.** Salida cruda de la corrida, resumida:
+
+```
+[canal] caja:cerrar       propia, con diferencia=ok · PIN correcto: revela=ok · PIN otra vez=ok · confirmar=ok · AJENA sin PIN=ok · AJENA con PIN=ok
+[canal] venta:cobrar      efectivo sin descuento=ok · descuento sin PIN=ok · descuento con PIN=ok
+[canal] restauracion:terminar   sin PIN (se niega)=DATO_INVALIDO · terminar=ok
+[canal] 56 canales registrados, 56 llamados, 78 llamadas
+```
+
+**Resultado: hoy ningún otro canal tiene el defecto.** Los 56 devuelven
+respuestas clonables.
+
+Falsificado antes de agregar la protección, en dos módulos: con la `sesion`
+metida en la respuesta del cierre y un Decimal metido en el reporte por
+producto, la prueba falla nombrando canal, paso y ruta:
+
+```
+"reportes:ventas-por-producto [este mes]: function Decimal(v) { — respuesta.datos.falsificado.constructor es una función (Decimal)",
+"caja:cerrar [AJENA sin PIN]: function Decimal(v) { — respuesta.datos.sesion.montoInicial.constructor es una función (Decimal)",
+```
+
+**2. `ejecutarConRespuesta` comprueba que el resultado se pueda clonar.** Es el
+envoltorio único de los 56 canales. Si el resultado no se puede clonar,
+devuelve `RESPUESTA_NO_SERIALIZABLE` con la ruta del valor en el detalle, y lo
+escribe en la consola del proceso principal. Así la llamada nunca queda
+pendiente, en ninguna pantalla. El mensaje no promete que no pasó nada: la
+operación corrió y pudo haber escrito. Con el defecto reintroducido en la app
+real (macOS):
+
+```
+main stderr: [ipc] CIERRE_DE_CAJA_FALLIDO: la respuesta no se puede mandar a la ventana: datos.sesion.montoInicial.constructor es una función (Decimal)
+window.pos.caja.cerrar(Q100) SIN PIN -> {"ok":false,"error":{"codigo":"RESPUESTA_NO_SERIALIZABLE",…,"detalle":"datos.sesion.montoInicial.constructor es una función (Decimal)"}}
+2.5 s después: confirmar-caja disabled=false; mensaje-de-caja=La operación se ejecutó, pero su resultado no se pudo mostrar. …
+```
+
+Antes, esa misma llamada no respondía en 5 s. Con el envoltorio activo la
+prueba de los canales sigue delatando el defecto: la última comprobación falla
+con `"caja:cerrar [confirmar]: datos.sesion.montoInicial.constructor es una
+función (Decimal)"`. Clonar cada respuesta cuesta una copia en memoria; las
+respuestas más grandes son listas del catálogo y reportes, y no se midió en el
+i3.
+
 > **LA INSTALACIÓN DE JIMMY SIGUE CON EL DEFECTO.** Mientras corra
 > `v1.0.0-prueba.1`, una caja ajena no se puede cerrar desde la pantalla; solo
 > la cierra quien la abrió. Se arregla instalando una versión posterior. En
@@ -6613,6 +6670,7 @@ Se dejó como estaba.
 | **AMPLIACIÓN DECIDIDA, NO CORRECCIÓN, POR SEGUNDA VEZ: `salida_controlada` acepta también el PIN remoto.** Su candado sigue exactamente igual; lo único que cambia es qué PIN acepta, y el asiento registra la vía en `autorizadaVia`. | Dejarla como estaba y que la computadora quede encendida si no hay un administrador; ampliar de paso `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` «por coherencia» | **LA FILA QUE DECÍA QUE NO LO ACEPTABA NO ESTABA EQUIVOCADA.** El PIN remoto se pidió para autorizar diferencias por teléfono, y dárselo a cerrar la aplicación lo ampliaba más allá de lo pedido; el valor por omisión era «no» y ampliarlo exigía una decisión explícita. **Julio la tomó el 2026-09-15**, con un motivo concreto: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. Es la segunda vez que el mecanismo funciona como se diseñó —la primera fue el descuento— y no una excepción por conveniencia. **EL PRINCIPIO DE ALCANCE MÍNIMO SIGUE VIGENTE**: `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo, con pruebas en el mismo archivo. Se reutilizó la verificación dual existente cambiando UNA entrada de `ACEPTA_PIN_REMOTO`, sin lógica nueva. La contrapartida: quien recibe el PIN remoto dictado puede, hasta que se cambie, también cerrar la aplicación; cerrar es ordenado y queda auditado con su vía. §4.41. | Prompt 61 — 2026-09-15 |
 | **NO se separa el PIN remoto por superficie. Un solo PIN remoto por administrador sigue autorizando la diferencia, el descuento y la salida.** Evaluado y descartado a propósito. | Un PIN remoto distinto para cada superficie que lo acepta, para que dictar uno no conceda los otros | Julio lo decidió el 2026-09-15, después de leer la contrapartida de la fila anterior. **El control real ya existe**: si cambia a quién se le dicta el PIN remoto, o deja de haber confianza en quien lo escuchó, el administrador lo cambia en cualquier momento desde «PIN de autorización remota», y el anterior deja de servir para todo a la vez. Un PIN por superficie duplicaría ese mecanismo sin agregar un control distinto: habría que dictar, recordar y cambiar tres códigos en vez de uno. **Si alguien lo reconsidera, esto ya se pensó**: lo que cambiaría la respuesta es que las superficies pasen a tener responsables distintos, no la cantidad de superficies. §4.41. | Prompt 62 — 2026-09-15 |
 | **Toda llamada de la pantalla de caja al proceso principal tiene límite: un rechazo o 15 s sin respuesta se muestran como mensaje. Y toda respuesta del cierre se prueba con `structuredClone`.** | Solo el `try/catch`; confiar en que el manejador ya no manda objetos de dominio | En `v1.0.0-prueba.1` el cierre de una caja ajena mandaba la `sesion` con montos Decimal; decimal.js les pone `constructor` como propiedad propia y el puente IPC no clona funciones. **Medido con Electron 44: la llamada queda pendiente para siempre, no se rechaza.** Por eso el `catch` solo no cambió nada en la app real. Quince segundos quedan muy por encima de la operación más lenta (verificar un PIN con scrypt). Ya se había arreglado sin saberlo en `0959a18`; la prueba de clonado es lo que impide que vuelva. §4.42. | Prompt 63 — 2026-09-15 |
+| **Una prueba llama a los 56 canales IPC con servicios reales y exige que cada respuesta se pueda clonar; y el envoltorio único convierte un resultado no clonable en `RESPUESTA_NO_SERIALIZABLE`.** | Probar solo el canal de cierre; una comprobación de tipos; revisar los manejadores a ojo | Pedido de Julio: el defecto de §4.42 es de patrón. Los tipos no lo ven: un spread mete propiedades de más sin que TypeScript se queje. La prueba exige que cada canal registrado se llame y dé al menos un `ok`, así que un canal nuevo no puede escaparse. El envoltorio es la red en producción: sin él, Electron 44 deja la llamada pendiente para siempre. Hoy no se encontró ningún otro canal con el defecto. §4.42. | Prompt 64 — 2026-09-15 |
 | **Qué superficie acepta el PIN remoto pasa a ser una TABLA (`ACEPTA_PIN_REMOTO`), no un argumento de quien llama.** | Dejar el parámetro `aceptaPinRemoto` en cada llamada; un `if` por superficie dentro del servicio | La verificación dual —probar los PIN normales, después los remotos, y reportar cuál coincidió— **nunca estuvo duplicada**: vive en `autorizarComoAdministrador` desde el Prompt 13. Lo que sí estaba repetido era la POLÍTICA: los cuatro lugares que autorizan escribían `{ aceptaPinRemoto: true/false }` a mano al lado del nombre de la superficie. Dos datos que tienen que concordar siempre, decididos en archivos distintos, es una discrepancia esperando a ocurrir: alcanzaba con copiar un bloque y cambiar el nombre de la superficie sin tocar el booleano para que una superficie empezara a aceptar un PIN que la documentación dice que no acepta, **sin que nada fallara**. Con la tabla, quien llama no tiene dónde contradecir la política, y `Record<SuperficieDeAutorizacion, boolean>` obliga a decidir explícitamente qué acepta cada superficie nueva. Al hacer el cambio, el compilador marcó los cuatro llamados, que es exactamente la señal que se buscaba. **Cada superficie conserva su propio candado**: compartir qué PIN aceptan no es compartir contador, y hay pruebas nuevas del par `cierre_con_diferencia` ↔ `descuento_excedente`, un caso que antes no podía existir porque solo una superficie aceptaba el remoto. | Prompt 26 — 2026-09-11 |
 | **`ventas.descuento_autorizado_via` registra CÓMO se autorizó un descuento, y va siempre con el autorizante** (migración 017 y su espejo 0017). El asiento de auditoría también lleva la vía. | Deducir la vía de otro dato; no registrarla y quedarse solo con quién autorizó | Mientras la superficie aceptaba un solo PIN, la respuesta era siempre «presencial» y la columna habría sido ruido. Desde que acepta los dos, **«Jimmy autorizó Q40» dejó de ser una sola cosa**: autorizarlo frente al mostrador viendo el ticket y autorizarlo por teléfono sin verlo son dos hechos distintos, y es exactamente lo que un auditor va a querer separar. No se puede deducir de ningún otro dato guardado. La columna de la venta guarda el ESTADO final y el asiento guarda el HECHO, igual que con el cierre de caja. El par autorizante/vía se hace inseparable en las **tres** capas: un solo objeto en el tipo (`AutorizacionDeDescuento`, imposible construir uno sin el otro), el servicio descarta las dos mitades juntas cuando el descuento no excedía, y el CHECK de la base rechaza la fila. | Prompt 26 — 2026-09-11 |
 | **El CHECK de coherencia NO copia la forma de la migración 007: los `IS NOT NULL` van ADELANTE.** | Copiar literalmente `(via IS NULL AND por IS NULL) OR (via IN (...) AND por IS NOT NULL)`, que es la forma que ya estaba en el proyecto | **Se midió antes de escribir la migración, y la forma de la 007 NO rechaza un autorizante sin vía.** El motivo es la lógica de tres valores de SQL: con `via` en NULL, `via IN ('presencial','remoto')` no da FALSO sino NULL, la segunda rama entera da NULL, y **un CHECK pasa cuando su expresión da NULL**; solo falla cuando da FALSO. Así que `por` lleno con `via` vacía entraba sin protestar, justo la mitad que el comentario de la 007 decía proteger. En `caja_sesiones` el hueco está tapado por otra vía —el CHECK de la migración 008 exige `diferencia_autorizada_via IS NOT NULL` de forma explícita— así que **no hay ningún dato mal guardado hoy**, pero la forma de la 007 por sí sola es más débil de lo que aparenta. Acá no hay una segunda restricción que salve, así que se escribe con los `IS NOT NULL` adelante, que cortocircuitan a FALSO. Verificado con las ocho combinaciones, incluidos los dos UPDATE que romperían el par. | Prompt 26 — 2026-09-11 |
