@@ -24,6 +24,8 @@
  *      `window.pos.venta.estado()`), y lo ve recién en la confirmación.
  *   8. El margen usa la FOTO del costo de cada venta: cambiar el precio de
  *      compra después no mueve el margen de una venta ya hecha.
+ *   9. La cajera que cuenta de menos ve que hace falta autorización, y NO el
+ *      esperado; al recontar el número exacto ve el mismo diálogo.
  *
  * Por qué es un guion aparte y no más pasos de `verify:pantallas`: aquel
  * recorre la tienda entera y tarda; este existe para mostrar, con capturas y
@@ -730,11 +732,87 @@ async function main() {
     );
     await capturar('7b-cajera-contando-sin-teorico');
 
+    // La cajera cuenta DE MENOS (Q200.00 contra Q204.25): el diálogo de
+    // diferencia no le puede decir cuánto se esperaba (§4.40).
+    await prueba('modo-simple').click();
+    for (const digito of '200') {
+      await prueba(`tecla-${digito}`).click();
+    }
+    await prueba('confirmar-caja').click();
+    await prueba('autorizacion-de-diferencia').waitFor({ timeout: ESPERA_CORTA });
+    const cuerpoDiferenciaCajera = await ventana.locator('body').innerText();
+    anotar(`texto visible del diálogo de diferencia de la CAJERA: ${JSON.stringify(cuerpoDiferenciaCajera)}`);
+    comprobar(
+      'LA CAJERA EN EL DIÁLOGO DE DIFERENCIA: ve que hay que autorizar, y NO el esperado, ni la diferencia, ni si falta o sobra',
+      'aviso de autorización; sin 204.25, sin Q4.25, sin «Debería haber», sin faltante/sobrante, sin fila de diferencia',
+      `aviso ${String(await prueba('diferencia-sin-monto').count())}; fila de diferencia ${String(await prueba('diferencia').count())}; ` +
+        `204.25 ${cuerpoDiferenciaCajera.includes('204.25') ? 'PRESENTE' : 'ausente'}; Q4.25 ${cuerpoDiferenciaCajera.includes('Q4.25') ? 'PRESENTE' : 'ausente'}; ` +
+        `«Debería haber» ${cuerpoDiferenciaCajera.includes('Debería haber') ? 'PRESENTE' : 'ausente'}; ` +
+        `faltante/sobrante ${/faltante|sobrante/i.test(cuerpoDiferenciaCajera) ? 'PRESENTE' : 'ausente'}`,
+      (await prueba('diferencia-sin-monto').count()) === 1 &&
+        (await prueba('diferencia').count()) === 0 &&
+        /autorizar/.test(cuerpoDiferenciaCajera) &&
+        !cuerpoDiferenciaCajera.includes('204.25') &&
+        !cuerpoDiferenciaCajera.includes('Q4.25') &&
+        !cuerpoDiferenciaCajera.includes('Debería haber') &&
+        !/faltante|sobrante/i.test(cuerpoDiferenciaCajera),
+    );
+    await capturar('7b2-cajera-dialogo-de-diferencia-sin-esperado');
+
+    // Por el canal, con la sesión de la cajera y el MISMO conteo (el mismo par
+    // no vuelve a sellar): la respuesta cruda del proceso principal.
+    const crudoDiferencia = await ventana.evaluate(async () =>
+      window.pos.caja.cerrar({ modo: 'simple', monto: '200.00' }),
+    );
+    anotar(`window.pos.caja.cerrar(Q200.00) con la sesión de la CAJERA: ${JSON.stringify(crudoDiferencia)}`);
+    const sellosDeLaCajera = leerBase(
+      "SELECT valor_nuevo FROM auditoria_log WHERE accion = 'conteo_de_cierre_sellado' ORDER BY fecha, rowid",
+    ).map((f) => f.valor_nuevo);
+    anotar(`auditoria_log, sellos de todo el recorrido: ${JSON.stringify(sellosDeLaCajera)}`);
+    comprobar(
+      'POR EL CANAL: a la cajera el cierre le devuelve esperado y diferencia en null, y el mensaje sin montos; la bitácora SÍ guarda el esperado',
+      'montoEsperado null, diferencia null, sin 204.25 en la respuesta; sello con montoEsperado 204.25 y un solo sello por el par',
+      `montoEsperado ${String(crudoDiferencia.datos.montoEsperado)}, diferencia ${String(crudoDiferencia.datos.diferencia)}, «${crudoDiferencia.datos.mensaje}»; ` +
+        `sellos con 204.25: ${String(sellosDeLaCajera.filter((v) => v.includes('"montoEsperado":"204.25"')).length)}`,
+      crudoDiferencia.datos.montoEsperado === null &&
+        crudoDiferencia.datos.diferencia === null &&
+        !JSON.stringify(crudoDiferencia).includes('204.25') &&
+        sellosDeLaCajera.filter((v) => v.includes('"montoEsperado":"204.25"')).length === 1,
+    );
+
+    // Vuelve a contar y ahora teclea EXACTAMENTE el esperado. El servicio
+    // contesta «reconteo»; a la cajera tiene que llegarle igual que una
+    // diferencia, o el cambio de diálogo le diría que acertó.
+    await ventana.getByRole('button', { name: 'Volver a contar' }).click();
+    await prueba('paso-de-conteo').waitFor({ timeout: ESPERA_CORTA });
     await prueba('modo-simple').click();
     for (const tecla of ['2', '0', '4', 'punto', '2', '5']) {
       await prueba(`tecla-${tecla}`).click();
     }
     await prueba('confirmar-caja').click();
+    await prueba('autorizacion-de-diferencia').waitFor({ timeout: ESPERA_CORTA });
+    const cuerpoReconteoCajera = await ventana.locator('body').innerText();
+    anotar(`texto visible tras recontar Q204.25 (CAJERA): ${JSON.stringify(cuerpoReconteoCajera)}`);
+    const crudoReconteo = await ventana.evaluate(async () =>
+      window.pos.caja.cerrar({ modo: 'simple', monto: '204.25' }),
+    );
+    anotar(`window.pos.caja.cerrar(Q204.25) con la sesión de la CAJERA: ${JSON.stringify(crudoReconteo)}`);
+    comprobar(
+      'AL ACERTAR EL ESPERADO, la cajera ve el MISMO diálogo que con diferencia: nada dice que ahora cuadra',
+      'diálogo de diferencia (no el de reconteo); código REQUIERE_AUTORIZACION; sin «cuadra», «sin diferencia» ni «Debería haber»',
+      `diferencia ${String(await prueba('autorizacion-de-diferencia').count())}, reconteo ${String(await prueba('autorizacion-de-reconteo').count())}; ` +
+        `código ${crudoReconteo.datos.codigo}; «cuadra» ${/cuadra/i.test(cuerpoReconteoCajera) ? 'PRESENTE' : 'ausente'}; ` +
+        `«sin diferencia» ${/sin diferencia/i.test(cuerpoReconteoCajera) ? 'PRESENTE' : 'ausente'}`,
+      (await prueba('autorizacion-de-diferencia').count()) === 1 &&
+        (await prueba('autorizacion-de-reconteo').count()) === 0 &&
+        crudoReconteo.datos.codigo === 'REQUIERE_AUTORIZACION' &&
+        crudoReconteo.datos.montoEsperado === null &&
+        !/cuadra|sin diferencia|Debería haber/i.test(cuerpoReconteoCajera),
+    );
+    await capturar('7b3-cajera-reconteo-igual-que-diferencia');
+
+    // Autoriza un administrador con su PIN, en la sesión de la cajera.
+    await teclearPin(PIN);
     await prueba('confirmacion-de-cierre').waitFor({ timeout: ESPERA_CORTA });
     const teoricoParaLaCajera = await texto('cierre-efectivo-teorico');
     comprobar(
