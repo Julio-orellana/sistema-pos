@@ -20,6 +20,48 @@ export function describirError(error: unknown): string {
   return String(error);
 }
 
+/** Código de la respuesta cuyo resultado no puede cruzar el puente IPC. */
+export const CODIGO_RESPUESTA_NO_SERIALIZABLE = 'RESPUESTA_NO_SERIALIZABLE';
+
+/**
+ * Qué ve la persona cuando pasa. No afirma que no pasó nada: la operación
+ * corrió y lo que falló fue mandar el resultado, así que pudo haber escrito.
+ */
+export const MENSAJE_RESPUESTA_NO_SERIALIZABLE =
+  'La operación se ejecutó, pero su resultado no se pudo mostrar. Volvé a abrir esta pantalla para ver cómo quedó antes de repetirla.';
+
+/**
+ * La ruta del primer valor que el puente IPC no puede clonar, o `null`.
+ *
+ * El puente no clona funciones ni symbols. El caso que ya pasó (§4.42): un
+ * objeto Decimal, porque decimal.js le pone `constructor` como propiedad
+ * PROPIA. La ruta sale como `datos.sesion.montoInicial.constructor`, que es lo
+ * que hace falta para encontrar qué manejador mandó un objeto de dominio.
+ */
+export function rutaDelPrimerValorNoClonable(
+  valor: unknown,
+  ruta = 'datos',
+  vistos: Set<unknown> = new Set<unknown>(),
+): string | null {
+  if (typeof valor === 'function') {
+    return `${ruta} es una función (${valor.name === '' ? 'anónima' : valor.name})`;
+  }
+  if (typeof valor === 'symbol') {
+    return `${ruta} es un symbol`;
+  }
+  if (valor === null || typeof valor !== 'object' || vistos.has(valor)) {
+    return null;
+  }
+  vistos.add(valor);
+  for (const [clave, hijo] of Object.entries(valor)) {
+    const encontrada = rutaDelPrimerValorNoClonable(hijo, `${ruta}.${clave}`, vistos);
+    if (encontrada !== null) {
+      return encontrada;
+    }
+  }
+  return null;
+}
+
 /**
  * Ejecuta un manejador y devuelve siempre un sobre, nunca una excepción.
  *
@@ -36,7 +78,19 @@ export async function ejecutarConRespuesta<T>(
   operacion: () => T | Promise<T>,
 ): Promise<RespuestaIpc<T>> {
   try {
-    return respuestaExitosa(await operacion());
+    const datos = await operacion();
+    // El resultado tiene que poder cruzar el puente. Si no puede, Electron 44
+    // no rechaza la llamada: la deja pendiente para siempre y la pantalla se
+    // congela sin decir nada (§4.42). Se comprueba acá, en el único envoltorio
+    // de los 56 canales, y se convierte en un error que la ventana sí recibe.
+    try {
+      structuredClone(datos);
+    } catch (errorDeClonado) {
+      const causa = rutaDelPrimerValorNoClonable(datos) ?? describirError(errorDeClonado);
+      console.error(`[ipc] ${codigoDeError}: la respuesta no se puede mandar a la ventana: ${causa}`);
+      return respuestaFallida<T>(CODIGO_RESPUESTA_NO_SERIALIZABLE, MENSAJE_RESPUESTA_NO_SERIALIZABLE, causa);
+    }
+    return respuestaExitosa(datos);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return respuestaFallida<T>(

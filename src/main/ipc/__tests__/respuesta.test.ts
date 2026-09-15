@@ -18,7 +18,14 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { ErrorDeNegocio } from '@main/database/errores';
-import { ejecutarConRespuesta } from '../respuesta';
+import Decimal from 'decimal.js';
+
+import {
+  CODIGO_RESPUESTA_NO_SERIALIZABLE,
+  MENSAJE_RESPUESTA_NO_SERIALIZABLE,
+  ejecutarConRespuesta,
+  rutaDelPrimerValorNoClonable,
+} from '../respuesta';
 
 /** Saca el error de una respuesta, o falla si la respuesta fue exitosa. */
 function errorDe<T>(respuesta: Awaited<ReturnType<typeof ejecutarConRespuesta<T>>>): {
@@ -175,5 +182,43 @@ describe('Los flujos anteriores no dependían de este envoltorio', () => {
 
     expect(respuesta.ok).toBe(true);
     expect(respuesta.ok && respuesta.datos.diferencia).toBe('-20.00');
+  });
+});
+
+// ===========================================================================
+describe('Un resultado que NO puede cruzar el puente IPC (§4.42)', () => {
+  it('se convierte en un error con su código, en vez de quedar la ventana esperando para siempre', async () => {
+    const respuesta = await ejecutarConRespuesta('CIERRE_DE_CAJA_FALLIDO', () => ({
+      cerrada: false,
+      sesion: { montoInicial: new Decimal('100') },
+    }));
+
+    const error = errorDe(respuesta);
+    expect(error.codigo).toBe(CODIGO_RESPUESTA_NO_SERIALIZABLE);
+    expect(error.mensaje).toBe(MENSAJE_RESPUESTA_NO_SERIALIZABLE);
+    expect(error.detalle).toBe('datos.sesion.montoInicial.constructor es una función (Decimal)');
+  });
+
+  it('una función suelta en el resultado también', async () => {
+    const error = errorDe(await ejecutarConRespuesta('DA_IGUAL', () => ({ alCerrar: (): void => undefined })));
+    expect(error.codigo).toBe(CODIGO_RESPUESTA_NO_SERIALIZABLE);
+    expect(error.detalle).toBe('datos.alCerrar es una función (alCerrar)');
+  });
+
+  it('lo que el puente SÍ clona pasa igual: fechas, listas, nulos y objetos anidados', async () => {
+    const datos = { cuando: new Date(0), lista: [1, 'dos', null], anidado: { total: '16.80' } };
+    const respuesta = await ejecutarConRespuesta('DA_IGUAL', () => datos);
+    expect(respuesta.ok).toBe(true);
+  });
+
+  it('el mensaje no promete que no pasó nada: la operación pudo haber escrito', () => {
+    expect(MENSAJE_RESPUESTA_NO_SERIALIZABLE).toContain('se ejecutó');
+    expect(MENSAJE_RESPUESTA_NO_SERIALIZABLE).toContain('antes de repetirla');
+  });
+
+  it('el buscador de la ruta no se pierde en referencias circulares', () => {
+    const circular: Record<string, unknown> = { nombre: 'a' };
+    circular.yo = circular;
+    expect(rutaDelPrimerValorNoClonable(circular)).toBeNull();
   });
 });
