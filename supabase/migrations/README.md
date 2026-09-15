@@ -64,7 +64,7 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
-| **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018, 0029 (la local; ver la nota sobre el 29), 0030, 0034 |
+| **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018, 0029 (la local; ver la nota sobre el 29), 0030, 0034, 0036, 0037 |
 | **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027, 0029 (la de la nube; ver la nota sobre el 29) |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
@@ -117,6 +117,8 @@ carpetas: el hueco es información, y renumerar la destruye.
 | `032_venta_detalle_costo_unitario_snap` | `0032_venta_detalle_costo_unitario_snap.sql` | Foto del costo en cada línea de venta: dato de negocio que viaja en el payload de `venta_detalle`. **Aplicado en `pos-pruebas-descartable` el 2026-09-15; NO en `pos-jimmy-cano`.** Mismo problema de forma de payload que el 0031 |
 | `033_anulaciones_de_venta` | **`0033_anulaciones_de_venta.sql`, TODAVÍA NO ESCRITO** | La anulación de una venta: dato de negocio (`docs/ANULACION-DE-VENTA.md` §1). El espejo, la función `0035` y el enrutador son del prompt de sincronización. Hasta entonces, **una terminal con la 033 no se conecta a la nube**: el lote de una anulación detendría la cola |
 | `034_superficie_anulacion_de_venta` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja. El `0034` queda reservado |
+| `036_totp_de_autorizacion_remota` | **(ninguno, NUNCA)** | El secreto de TOTP cifrado y el último paso usado. **Regla no negociable: el secreto nunca sube a la nube, bajo ninguna circunstancia** (CLAUDE.md §4.47). No es «todavía no»: ningún diseño futuro lo espeja. El `0036` queda reservado |
+| `037_quitar_pin_remoto_hash` | **(ninguno, a propósito)** | Quita `usuarios.pin_remoto_hash` de SQLite. En Postgres esa columna ya no existe desde la `0021`, así que no hay nada que quitar. El `0037` queda reservado |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
@@ -133,6 +135,13 @@ agrega a `sync_cola` las cinco columnas de la bandeja de salida (`lote_id`,
 `orden_en_lote`, `intentos`, `proximo_intento_en`, `bloqueante`), y `sync_cola`
 es la lista local de qué falta subir, así que tampoco se espeja ninguna
 migración que la toque.
+
+**El 0036 y el 0037 son dos casos más, del 2026-09-15** (CLAUDE.md §4.47), y
+suben el total a **once números omitidos**. El 0036 es el único hueco de esta
+lista que es **permanente por regla de seguridad**: el secreto de TOTP calcula
+todos los códigos futuros de una persona y no sale nunca de la terminal. El
+0037 no tiene espejo porque en Postgres la columna ya se había quitado con la
+`0021`.
 
 Los dos casos **no son equivalentes**, aunque hoy tomen la misma decisión:
 

@@ -151,7 +151,7 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
   a cualquier otra aplicación abierta.
 - **Requiere PIN de administrador.** El PIN se verifica en el proceso
   principal, nunca en la interfaz. Tres intentos fallidos bloquean el atajo 30
-  segundos. **Desde el 2026-09-15 acepta también el PIN REMOTO** de un
+  segundos. **Desde el 2026-09-15 acepta también el código REMOTO** (desde §4.47, el de seis dígitos de la app de autenticación) de un
   administrador, por decisión explícita de Julio (§4.41); el asiento registra
   cuál se usó en `autorizadaVia`. El candado no cambió.
 - **Qué cuenta como intento fallido:** un PIN **completo y bien formado pero
@@ -1087,6 +1087,12 @@ el de gestión de usuarios y el de autenticación. Escribirla dos veces sería
 garantizar que un día se apliquen criterios distintos en cada puerta, y la
 colisión entraría por la que quedó floja.
 
+> **SUPERADO EL 2026-09-15 (§4.47):** el PIN remoto fijo ya no existe; la
+> autorización remota es un código TOTP con un secreto que nadie elige. La fila
+> «También se mira el PIN REMOTO», la puerta «Configurar un PIN remoto» y el
+> párrafo siguiente describen el estado anterior. Para el PIN normal, la regla
+> de colisión sigue exactamente igual.
+
 Las dos comprobaciones del PIN remoto **no son la misma y las dos hacen falta**.
 La vieja mira el PIN normal de uno mismo, y lo que protege es no regalar el
 acceso a la propia sesión al dictar el código por teléfono; conserva su propio
@@ -1293,6 +1299,14 @@ ajena y encima encontrarla descuadrada. Son superficies distintas, con candados
 distintos, y se piden en ese orden.
 
 #### PIN normal y PIN remoto: por qué son dos
+
+> **EL MECANISMO REMOTO CAMBIÓ EL 2026-09-15 (§4.47).** Ya no es un PIN fijo
+> de cuatro dígitos en `pin_remoto_hash` (la migración 037 quitó la columna):
+> es el código de seis dígitos de una app de autenticación, TOTP, con el secreto
+> cifrado en `totp_secreto_cifrado`, que **nunca sube a la nube**. Lo que sigue
+> vale para el PIN normal y para la tabla de superficies; lo que dice del PIN
+> remoto fijo (hash, «no el mismo código en los dos», probar primero los
+> normales) describe el estado anterior. Qué se tecleó lo decide ahora el LARGO.
 
 | | PIN normal (`pin_hash`) | PIN remoto (`pin_remoto_hash`) |
 |---|---|---|
@@ -7451,6 +7465,233 @@ Hasta hoy eso estaba razonado, no medido.
   correr: hablan con el proyecto de pruebas de Supabase. Sus `fill()` siguen
   siendo válidos sobre `CampoDeTexto`.
 
+### 4.47 El PIN remoto fijo se reemplaza por un código TOTP (2026-09-15)
+
+**Qué se pidió.** Que la autorización a distancia deje de ser un PIN fijo de
+cuatro dígitos y pase a ser el código de seis dígitos que muestra una app de
+autenticación (Google Authenticator, Microsoft Authenticator). Cambia cada 30
+segundos. Las tres superficies que aceptaban el remoto lo siguen aceptando:
+`cierre_con_diferencia`, `descuento_excedente` y `salida_controlada`. El
+candado, `autorizadaVia` y la tabla `ACEPTA_PIN_REMOTO` no cambiaron.
+
+> **LA REGLA NO NEGOCIABLE, en palabras de Julio:** «El secreto compartido de
+> TOTP NUNCA sube a la nube, bajo ninguna circunstancia». Un hash de PIN es de
+> una sola vía; el secreto de TOTP no: quien lo tenga calcula todos los códigos
+> futuros de esa persona. Por eso la columna nunca se sincroniza, nunca aparece
+> en un payload de `sync_cola` y ninguna migración de la nube la incluye.
+
+#### Las piezas
+
+| Pieza | Qué hace |
+|---|---|
+| `domain/usuarios/totp.ts` | HMAC-SHA1, truncación dinámica de RFC 4226, Base32 de RFC 4648, la ventana de ±1 paso y la URI `otpauth://`. Sin dependencias: `node:crypto`. |
+| Migración `036_totp_de_autorizacion_remota` | `usuarios.totp_secreto_cifrado` (BLOB, el CHECK rechaza texto y bytes vacíos) y `usuarios.totp_ultimo_paso` (entero ≥ 0). **Solo local.** |
+| Migración `037_quitar_pin_remoto_hash` | `DROP COLUMN pin_remoto_hash`. **Los PIN remotos fijos no se conservan**, por decisión de Julio. |
+| `COLUMNAS_EXCLUIDAS.usuarios` | Suma `totp_secreto_cifrado` y `totp_ultimo_paso`. |
+| `ServicioDeAutenticacion` | Recibe `cifrado` (el `safeStorage` real, igual que la credencial de §4.23). Inscripción en tres métodos: iniciar, confirmar y cancelar. |
+| `domain/usuarios/qr.ts` | La matriz del QR con `qrcode-generator`. |
+| Tres canales IPC | `sesion:autorizacion-remota-iniciar`, `-confirmar` y `-cancelar`. Solo rol administrativo, y el usuario sale de la sesión. Reemplazan a `sesion:configurar-pin-remoto`. |
+| `PantallaDeAutorizacionRemota` | El QR dibujado con rectángulos SVG, el secreto en grupos de cuatro y un teclado de seis dígitos. Reemplaza a `PantallaDePinRemoto`. |
+| `TecladoNumerico` | Nueva prop `largos`. Los diálogos que aceptan remoto pasan `[4, 6]`; la inscripción pasa `[6]`. |
+
+**La librería de QR es `qrcode-generator` 2.0.4 (MIT), y no es nativa.**
+Comprobado sobre el paquete instalado:
+
+- su `package.json` no declara `dependencies` ni `gypfile`;
+- su único script es `test`;
+- no trae ningún `.node`, `binding.gyp` ni `prebuilds/`.
+
+Es JavaScript puro y viaja en el asar sin recompilar nada (§4.37).
+
+#### Cómo se decide qué se tecleó
+
+**El largo lo dice.** Cuatro dígitos son el PIN normal (`presencial`). Seis
+dígitos son el código de la app (`remoto`), y solo en una superficie que acepta
+remoto. En una que no lo acepta, seis dígitos son `FORMATO_INVALIDO` y no
+consumen intento. Un mismo número ya no puede ser las dos cosas, así que la
+regla vieja de «probar primero los normales» dejó de hacer falta.
+
+#### La inscripción
+
+1. **Iniciar** genera 160 bits aleatorios y los guarda en memoria, 10 minutos.
+   No escribe nada. Si `safeStorage` no está disponible, no muestra ningún
+   secreto (`CIFRADO_NO_DISPONIBLE`): un secreto que no se puede guardar no se
+   muestra.
+2. **Confirmar** exige el código de la app:
+   - si coincide, guarda el secreto cifrado, consume ese paso, escribe el
+     asiento `autorizacion_remota_inscrita` (`{mecanismo, reemplazoUnaAnterior}`)
+     y encola `usuarios` más el asiento;
+   - si es un código bien formado que no coincide, **descarta la inscripción
+     entera sin dejar rastro**: ni columna, ni asiento, ni cola, ni candado;
+   - si está mal formado, no descarta nada.
+3. **Reinscribirse** reemplaza el secreto sin conocer el anterior, y el código
+   viejo deja de servir.
+
+#### Tres decisiones técnicas tomadas acá, dichas para que Julio las revise
+
+| Decisión | Por qué | Consecuencia a saber |
+|---|---|---|
+| **Un código sirve UNA vez** (`totp_ultimo_paso`, comparar-y-cambiar) | RFC 6238 §5.2. Sin esto, quien escucha el código dictado lo puede reusar durante unos 90 segundos. | Dos autorizaciones seguidas por teléfono: la segunda espera al código siguiente (hasta 30 s). El código de la confirmación tampoco sirve para autorizar. |
+| **Un código que coincide con DOS administradores se rechaza** (`CODIGO_AMBIGUO`), sin consumir intento ni paso | Atribuirlo a uno sería la atribución equivocada de §4.7. Con secretos aleatorios pasa aproximadamente una vez cada millón de códigos. | Se pide el código siguiente. |
+| **Un código de inscripción equivocado descarta el secreto** | Es la letra del pedido: «si no, se descarta y se puede reintentar». | La cuenta que la persona ya agregó al teléfono queda con un secreto inútil, y hay que borrarla. El mensaje lo dice. La alternativa era conservar el secreto para reintentar. |
+
+#### Qué quedó de la colisión de PIN
+
+`colision-de-pin.ts` ahora compara solo el PIN normal. El secreto de TOTP no
+lo elige una persona, así que no hay «colisión de elección» que impedir.
+**Para el PIN normal la regla no cambió.** Las pruebas de §4.7 que miraban el
+remoto se reemplazaron por dos:
+
+- crear un usuario después de una inscripción no descifra ningún secreto;
+- el código del módulo no nombra nada de la autorización remota.
+
+#### Verificado en Vitest
+
+Resultado: 2306 pruebas en `npm run verify`.
+
+- **Vector de RFC 6238** de punta a punta: con el secreto del apéndice B y
+  `T = 59 s`, el servicio autoriza `287082` como `remoto`. Control: `94287082`
+  da `FORMATO_INVALIDO` y `287083` da `PIN_INCORRECTO`.
+- **±30 s** aceptado en las dos direcciones; **±60 s** rechazado y contado
+  como intento. Una prueba de control comprueba que los cinco códigos son
+  distintos.
+- **La inscripción:**
+  - exige el código;
+  - con un código equivocado, la huella de `usuarios`, `auditoria_log`,
+    `sync_cola` y los candados queda idéntica;
+  - vence a los 10 minutos;
+  - un usuario de venta o dado de baja no se inscribe;
+  - no se confirma la inscripción de otro.
+- **Las tres superficies** con el código dinámico, en el recorrido de
+  `ACEPTA_PIN_REMOTO` y en las pruebas de caja, venta, cierre y salida
+  controlada. Esas pruebas pasaron del hash fijo a un secreto sembrado con
+  `CifradoDePrueba`.
+- **`el-secreto-totp-no-sale-de-la-terminal.test.ts`**, al mismo nivel que la
+  contraseña de §4.23. Recorre inscripción descartada, inscripción buena, las
+  tres superficies, un código repetido, un secreto que no descifra y la
+  reinscripción. Después busca los tres secretos generados:
+  - en todos los archivos de la base (`.db`, `-wal` y `-shm`, antes y después
+    del checkpoint), en UTF-8, minúsculas, UTF-16 y como bytes crudos
+    decodificados;
+  - en todo payload de `sync_cola`;
+  - en todo asiento;
+  - en la bitácora técnica;
+  - en el grafo del servicio.
+
+  Hay control del buscador de archivos y del de objetos. También comprueba que
+  ninguna migración de `supabase/` ni la foto `esquema-nube.json` nombran TOTP.
+- **`CifradoDePrueba` NO es la identidad**: es AES-256-GCM con una llave en
+  memoria. Con un doble identidad, la búsqueda en el archivo pasaría en falso.
+
+**Falsificado**, una mutación a la vez, con el archivo restaurado y comparado
+byte a byte después de cada una:
+
+| Mutación | Qué cayó |
+|---|---|
+| Ventana de ±2 pasos | 5 pruebas: ±60 s en `totp.test.ts` y en el servicio, y el vector (el paso −1 revienta, ver abajo) |
+| No consumir el paso | 3: código repetido, código anterior y código de la confirmación |
+| Quitar `totp_secreto_cifrado` de `COLUMNAS_EXCLUIDAS` | 3: la búsqueda en `sync_cola`, la lista de exclusiones y el asiento encolado |
+| Guardar aunque el código de inscripción no coincida | 2: «no deja rastro» y «reintentar» |
+| Guardar el secreto en claro | 16 |
+| Anotar el secreto descifrado en la bitácora | 1: «en ninguna línea de la bitácora» |
+| Poner el secreto en el asiento | 3: archivos, `sync_cola` y asientos |
+| No limpiar la inscripción pendiente | 1: «en ningún campo del servicio» |
+| Tomar la primera coincidencia en vez de rechazar la ambigua | 1 |
+| Dejar inscribirse a un usuario de venta | 1 |
+| Teclado sin `largos` | 5: teclado y pantalla |
+
+**La primera versión de la mutación de bitácora NO mordía, y no era un
+defecto del código.** Anotaba `totpSecretoCifrado.toString('utf8')`, o sea el
+texto cifrado, que no es el secreto. Se rehízo anotando el secreto descifrado,
+y esa sí cae. **La mutación de colisión solo la atrapa la prueba sobre el
+código fuente**: el PIN remoto ya no existe como columna, así que no hay
+comportamiento que reintroducir.
+
+**Un defecto que destapó la falsificación.** Con el reloj en los primeros 30 s
+de 1970, el paso −1 hacía reventar `writeBigUInt64BE`. Ahora se salta, con
+prueba propia. Esa prueba falla quitando el arreglo.
+
+#### Verificado en la aplicación real (macOS, `npm run verify:pantallas:caja`, 57 de 57)
+
+El arnés calcula el código con su propio TOTP (`scripts/totp-de-arnes.cjs`),
+escrito aparte del de la aplicación. Contra los vectores del RFC da `287082` y
+`081804`. El QR se lee con CoreImage (`scripts/sonda-qr-macos.swift`), un lector
+ajeno a la librería que lo genera. Salida cruda (el secreto se oculta también
+en la salida del arnés):
+
+```
+base tras el código equivocado: {"usuario":{"tipo":"null","totp_ultimo_paso":null},"cola":53,"asientos":27,"inscritas":0} (antes: cola 53, asientos 27)
+OK    UN CÓDIGO EQUIVOCADO NO DEJA RASTRO: sin secreto, sin asiento, sin cola, y el QR se esconde
+QR leído por CoreImage (lector ajeno a la librería): otpauth://totp/pos-agricola:Jimmy%20de%20verificaci%C3%B3n?secret=<oculto>&issuer=pos-agricola&algorithm=SHA1&digits=6&period=30
+OK    EL QR SE LEE con un lector ajeno y codifica la URI otpauth:// con EXACTAMENTE el secreto que se muestra en texto
+columna guardada: tipo=blob; 51 bytes; primeros 3 en latin1="v10"; totp_ultimo_paso=59649942; ¿el secreto aparece en los bytes? false; ¿safeStorage real lo descifra al mismo secreto? true
+OK    NINGÚN payload de sync_cola lleva el secreto ni las columnas de TOTP
+archivos revisados bajo la carpeta de datos: 49 (pos-agricola.db, pos-agricola.db-shm, pos-agricola.db-wal entre ellos)
+OK    EL SECRETO NO ESTÁ EN CLARO en ningún archivo de la carpeta de datos (texto, UTF-16 ni minúsculas)
+esperando 14947 ms al siguiente paso de 30 s: el código de la inscripción ya se usó
+auditoria_log de la salida: [{"accion":"salida_controlada_autorizada","usuario_id":"9846b7d1-…","valor_nuevo":"{\"origen\":\"boton_de_interfaz\",\"detalle\":\"PIN correcto\",\"autorizadaVia\":\"remoto\"}"}]
+OK    la bitácora técnica no tiene el secreto
+OK    LA SALIDA CONTROLADA CON EL CÓDIGO DE LA APP cierra la aplicación, y el asiento dice «remoto» con el administrador real
+```
+
+`v10` es el prefijo de OSCrypt, el mismo que midió §4.23. **Falsificado en la
+app real**, guardando el secreto en claro: fallan con su nombre «EL CÓDIGO
+CORRECTO GUARDA EL SECRETO CIFRADO» (`contiene: true; descifra igual: false`) y
+«NO ESTÁ EN CLARO» (`real: pos-agricola.db-wal`), y el guion sale con código 1.
+
+Los otros arneses también pasan con el código dinámico:
+
+| Arnés | Resultado | Qué ejercita |
+|---|---|---|
+| `verify:pantallas:historial-de-cajas` | 17 de 17 | caso A por el canal remoto: `AUTORIZACION_VALIDADA`, luego `CIERRE_CORRECTO` |
+| `verify:pantallas` | 48 de 48 | un descuento excedente autorizado con el código |
+| `verify:pantallas:teclado` | 36 de 36 | — |
+
+`ensayo:restauracion` solo cambió el nombre de una columna en su consulta, y
+**no se corrió**: habla con la nube.
+
+#### 036 y 037 sobre una COPIA de la base de trabajo real
+
+La base de trabajo no se tocó: su sha256 es igual antes y después. Su
+administrador **tenía un PIN remoto fijo**, así que la 037 tuvo algo real que
+quitar. Salida cruda:
+
+```
+ANTES columnas usuarios: ["id","nombre","rol","pin_hash","activo","creado_en","actualizado_en","intentos_fallidos","bloqueado_hasta","pin_remoto_hash"]
+ANTES usuarios: [{"nombre":"jimmy","rol":"administrativo",…,"tenia_remoto":1,"actualizado_en":"2026-09-15T18:06:10.238Z"},{"nombre":"Caja","rol":"venta",…,"tenia_remoto":0,…}]
+ANTES conteos: [{"u":2,"v":4,"vd":10,"a":51,"sc":58,"cs":4,"p":6}]
+aplicadasAhora: ["036_totp_de_autorizacion_remota","037_quitar_pin_remoto_hash"] ultima: 037_quitar_pin_remoto_hash
+integrity_check: [{"integrity_check":"ok"}] foreign_key_check: []
+DESPUÉS columnas usuarios: ["id","nombre","rol","pin_hash","activo","creado_en","actualizado_en","intentos_fallidos","bloqueado_hasta","totp_secreto_cifrado","totp_ultimo_paso"]
+DESPUÉS usuarios: [{"nombre":"jimmy",…,"totp_secreto_cifrado":null,"totp_ultimo_paso":null,"actualizado_en":"2026-09-15T18:06:10.238Z"},…]
+DESPUÉS conteos: [{"u":2,"v":4,"vd":10,"a":51,"sc":58,"cs":4,"p":6}]
+payloads de usuarios en sync_cola idénticos: true filas: 2
+algún payload nombra pin_remoto_hash o totp: false
+```
+
+**No hay payload que reescribir.** `pin_remoto_hash` ya se excluía desde la
+fase 1.a, y hay prueba de eso con un payload como lo encolaba la versión
+anterior.
+
+**Del lado de la nube no hay nada que aplicar**: `pin_remoto_hash` no existe en
+Postgres desde la `0021`. El `0036` y el `0037` quedan reservados.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre, y en particular **`safeStorage` con DPAPI**. Lo
+  medido es el llavero de macOS.
+- **Que un teléfono real escanee el QR.** Lo medido es que un lector de QR
+  ajeno lo lee y codifica la URI correcta.
+- **Que Google o Microsoft Authenticator muestren el mismo número.** Lo medido
+  es que el código coincide con los vectores del RFC y con un TOTP escrito
+  aparte.
+- **El reloj de la tienda.** Un desfase de más de 30 s rechaza los códigos. El
+  aviso de reloj desfasado (§4.36) solo va a la bitácora técnica y solo mide
+  cuando hay nube configurada.
+- **El emisor**: en el instalador el QR dice «POS Jimmy Cano», que es
+  `app.getName()`, pero eso **no se midió en un instalador**. En desarrollo
+  dice «pos-agricola».
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -7728,6 +7969,14 @@ Hasta hoy eso estaba razonado, no medido.
 | **El PIN de salida se teclea con `TecladoNumerico`, el mismo patrón de todas las autorizaciones, sin tocar el proceso principal.** | Un `CampoDeTexto` oculto con disposición entera | Es un PIN que se confirma, igual que el ingreso y las autorizaciones, y `TecladoNumerico` no tiene ningún campo que un teclado de Windows pueda reclamar. El teclado físico se conserva escuchando el diálogo. El candado y las tres vías viven en `controlled-exit.ts`, que no cambió. §4.46. | Prompt 70 — 2026-09-15 |
 | **Las fechas conservan el control nativo y abren el calendario con `showPicker()` al tocar el campo.** | Escribir la fecha con el teclado en pantalla; un calendario propio | Elegir un día tocando es mejor que teclear `AAAA-MM-DD`, y un calendario propio sería mucho código para lo que Chromium ya trae. El riesgo es que no está medido en Windows táctil; si resulta incómodo, se cambia `CampoDeFecha` y la prueba estructural garantiza que es el único lugar. §4.46. | Prompt 70 — 2026-09-15 |
 | **CORREGIDO: el cierre del teclado por «tocar fuera» mira dónde EMPEZÓ el gesto, no solo dónde terminó el `click`.** | Cerrar solo en `click` según su destino, como desde §4.39 | Medido en la app real: el teclado aparece bajo el dedo en el `mousedown`, el `click` va al ancestro común y el teclado se cerraba en el mismo toque que lo abría, en todo campo de la franja baja. `pointerdown` no sirve como disparador de cierre (§4.39, mueve el botón); sirve como marca de dónde empezó el gesto. §4.46. | Prompt 70 — 2026-09-15 |
+| **La autorización remota es un código TOTP de seis dígitos (RFC 6238, HMAC-SHA1, 30 s, ±1 paso); el PIN remoto fijo se elimina (migración 037) sin conservar ninguno.** | Mantener el PIN fijo; un TOTP de 8 dígitos o de 60 s; conservar los PIN remotos existentes | Decisión de Julio. Un PIN fijo dictado una vez servía para siempre; un código TOTP sirve una vez y como mucho unos 90 s. Seis dígitos y 30 s son lo que muestran por omisión las apps de autenticación. El secreto nuevo no tiene nada que ver con el PIN viejo, así que conservarlo no era posible. §4.47. | Prompt 71 — 2026-09-15 |
+| **El secreto de TOTP se guarda cifrado con `safeStorage`, en `usuarios.totp_secreto_cifrado` (BLOB), NUNCA sube a la nube y no tiene espejo.** | Guardar un hash (imposible: TOTP necesita el secreto); guardarlo en claro; subirlo cifrado | Regla no negociable de Julio: el secreto calcula todos los códigos futuros. Mismo mecanismo que la credencial de §4.23, con la misma advertencia: queda atado al nombre del producto. El CHECK de la base rechaza texto, así que un secreto en claro no entra ni por error. Probado buscando el secreto en todo archivo, payload, asiento y bitácora. §4.47. | Prompt 71 — 2026-09-15 |
+| **Qué se tecleó lo decide el LARGO: 4 dígitos, PIN normal; 6 dígitos, código remoto, solo donde `ACEPTA_PIN_REMOTO` lo permite.** | Probar el código contra todo; preguntarle al cajero | Un mismo número ya no puede ser las dos cosas, así que desaparece la regla de «probar primero los normales». Seis dígitos donde el remoto no vale son `FORMATO_INVALIDO` y no consumen intento, igual que cualquier entrada que no es un PIN posible (§4.1). §4.47. | Prompt 71 — 2026-09-15 |
+| **A REVISAR — un código TOTP sirve UNA sola vez (`totp_ultimo_paso`, comparar-y-cambiar), incluido el de la inscripción.** | Aceptar el mismo código mientras siga en la ventana | RFC 6238 §5.2. Sin esto, quien escucha el código dictado lo reusa unos 90 s. Consecuencia operativa: dos autorizaciones por teléfono seguidas obligan a esperar el código siguiente, hasta 30 s. Decisión técnica tomada sin consultar; queda señalada. §4.47. | Prompt 71 — 2026-09-15 |
+| **Un código que coincide con dos administradores a la vez se rechaza (`CODIGO_AMBIGUO`) sin consumir intento ni paso.** | Atribuirlo al primero | Sería la atribución equivocada que §4.7 existe para impedir. Con secretos aleatorios de 160 bits la coincidencia es de uno en un millón por código, y el código siguiente la resuelve. §4.47. | Prompt 71 — 2026-09-15 |
+| **A REVISAR — un código de inscripción equivocado DESCARTA el secreto y hay que empezar de nuevo con un QR nuevo.** | Conservar el secreto pendiente para reintentar con el mismo QR | Es la letra del pedido. La contrapartida: la cuenta ya agregada en el teléfono queda inútil y hay que borrarla, cosa que el mensaje dice. §4.47. | Prompt 71 — 2026-09-15 |
+| **La colisión de PIN ya no mira la autorización remota; para el PIN normal no cambió.** | Comparar el PIN nuevo contra los códigos actuales de cada secreto | El secreto no lo elige una persona, así que no hay colisión de elección. Comparar contra el código de ahora exigiría descifrar todos los secretos en cada alta de usuario, sin proteger nada: el código cambia en 30 s. §4.47. | Prompt 71 — 2026-09-15 |
+| **El QR lo arma el proceso principal como matriz de booleanos (`qrcode-generator`, MIT, JavaScript puro) y la ventana lo dibuja con `<rect>` de SVG.** | Mandar un `data:` o SVG en texto e inyectarlo; una librería nativa; generarlo en el renderer | La ventana no recibe HTML ni una URL que tenga que inyectar, y la política de contenido no cambia. Se comprobó en el paquete que la librería no tiene dependencias, guiones de instalación ni binarios. Que el QR se lee se midió con CoreImage, un lector ajeno. §4.47. | Prompt 71 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -7772,6 +8021,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. La interpretación sobre los diálogos se cerró en el Prompt 59: tampoco lo muestran al rol venta (§4.40.3). |
 | 22 | **¿La transacción de negocio debe abrir `BEGIN IMMEDIATE`, como dice §4.3, o se corrige el texto?** | Hoy `enTransaccionDeNegocio` abre `BEGIN` a secas. Medido el 2026-09-15: si otra conexión escribe entre la lectura y el comparar-y-cambiar, la venta falla con `SQLITE_BUSY_SNAPSHOT` en el acto, la ventana ve «La operación no pudo completarse.» y no queda asiento de conflicto. Con `.immediate()` la otra conexión es la que espera y falla. Afecta a las ocho operaciones de negocio, no solo a la venta. Hoy la instancia única lo hace improbable; importa si se abre el punto 10. §4.3. | Abierto — decisión técnica de Julio |
 | 23 | ~~**¿Qué claves lleva `valor_nuevo` del asiento `conflicto_de_inventario`?**~~ | ~~La venta escribe `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo`, `comparacion` y `momento`. La anulación (§4.45) escribe `saldoLeido`, `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Es la misma acción con dos formas. Ningún código lee estos asientos, así que alinearlas no rompe nada, pero un auditor que filtre por la acción va a encontrar las dos. §4.3.~~ | **RESUELTO (2026-09-15, decisión de Julio): una sola forma y una sola puerta.** Nombres de la venta, sin `momento`, con `ventaId` (null en la venta) y `causaTecnica`. La escribe solo `conflicto-de-inventario.ts`, y una prueba estructural lo exige. No había ningún asiento escrito con ninguna de las dos formas (§4.3). |
+| 24 | **La autorización remota por TOTP no viaja entre terminales ni sobrevive a una restauración, a una terminal nueva ni a un cambio del nombre del producto.** | Por la regla no negociable (§4.47), el secreto vive solo cifrado en ESTA terminal. En cada uno de esos casos el administrador tiene que volver a inscribirse, **estando físicamente en la terminal**, porque la inscripción exige su sesión. Con más de una caja (punto 10), cada una necesita su propia inscripción y el teléfono muestra una cuenta por caja. Hay que decidir si eso es aceptable o si se diseña otra cosa. **No se decidió acá.** | Abierto |
+| 25 | **¿Qué pasa si Jimmy pierde el teléfono, o la instalación que ya tiene tenía un PIN remoto fijo?** | Perder el teléfono no se puede resolver a distancia: la reinscripción exige un administrador en la terminal. Mientras tanto, la vía remota de esa persona queda sin uso, y quien tenga el teléfono desbloqueado puede generar códigos hasta que se reinscriba. La instalación de prueba de Jimmy (`v1.0.0-prueba.1`) **tiene un PIN remoto fijo que deja de funcionar al instalar esta versión**: la 037 lo borra. Antes de actualizar hay que avisarle que se inscriba con la app, y decidir quién lo acompaña. | Abierto — **bloquea la entrega de esta versión a Jimmy** |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
