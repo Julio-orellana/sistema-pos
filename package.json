@@ -31,6 +31,7 @@
     "verify:pantallas": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-pantallas.cjs",
     "verify:pantallas:caja": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-caja-y-teclado.cjs",
     "verify:pantallas:impresora": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-impresora.cjs",
+    "verify:pantallas:historial-de-cajas": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-historial-de-cajas.cjs",
     "verify:paquete": "node scripts/verificacion-de-paquete.cjs",
     "seed:ejemplo": "npm run build && electron . --datos-de-ejemplo=sembrar",
     "seed:limpiar": "npm run build && electron . --datos-de-ejemplo=limpiar",
