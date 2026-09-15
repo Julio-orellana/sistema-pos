@@ -196,6 +196,13 @@ Recomiendo dos cambios:
   autorizado por un sello, y no solo cuando cambió el número contado;
 - que el mensaje diga que cambió el esperado cuando esa es la razón.
 
+> **ARREGLADO EL 2026-09-15**, en el cambio aparte que se hizo antes de
+> implementar la anulación (commits `cff3c41`, `473153e`, `8eadc24`). Las dos
+> recomendaciones se aplicaron tal cual. El escenario del sobrante y la venta y
+> el del esperado que baja quedaron como pruebas permanentes en
+> `servicio-de-caja.test.ts`, y el primero también en `verify:pantallas:caja`.
+> Evidencia y falsificación en CLAUDE.md §4.39.
+
 ---
 
 ## 1. Modelo de datos
@@ -511,7 +518,7 @@ el sistema no tiene cómo verlo.**
 | El efectivo del cajón | Quien anula le devuelve el dinero al cliente. Si no lo devuelve, el cajón queda con más de lo esperado y el cierre da **sobrante**, que exige autorización (§4.9). El control detecta que el dinero no salió. |
 | El resumen del turno | Las ventas en efectivo y su cantidad bajan. Solo lo ve un administrador (§4.40). |
 | Una autorización de cierre pendiente | **Deja de valer sola**: el flujo compara el esperado y contesta «El monto cambió después de autorizarse» (`cierre-de-caja.ts:182-194`). |
-| Los conteos sellados | Quedan como estaban, y un turno con un sello se sigue cerrando solo con autorización (§4.39). **Pero hoy, si el número final es el mismo del sello, esa autorización no queda registrada en ningún lado** (0.7). Se arregla antes de implementar. |
+| Los conteos sellados | Quedan como estaban, y un turno con un sello se sigue cerrando solo con autorización (§4.39). ~~Pero hoy, si el número final es el mismo del sello, esa autorización no queda registrada en ningún lado (0.7).~~ **Arreglado el 2026-09-15:** quien autoriza queda en `reconteo_de_cierre_autorizado`, con `cambioElEsperado: true` cuando la causa fue la anulación. |
 | El historial de cajas (§4.44) | No cambia: muestra el esperado que se guardó al cerrar, y ese ya incluye la anulación. |
 | Lo que ve el rol venta | Nada del teórico. La respuesta de la anulación nunca lo lleva (§4.40). |
 
@@ -1002,9 +1009,11 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 - el servicio de anulación no lee `auditoria_log`, y nada lee asientos
   `venta_anulada`.
 
-**Del arreglo previo (0.7):**
-- los dos escenarios medidos —un sobrante y después una venta; un faltante y
-  después una anulación— tienen que dejar el id de quien autorizó en un asiento.
+**Del arreglo previo (0.7), ya hecho:**
+- los dos escenarios medidos ya son pruebas permanentes (sobrante y venta;
+  esperado que baja). Con la anulación implementada, se agrega el faltante
+  cubierto por una anulación de verdad, en lugar de `anular()` del repositorio,
+  que este diseño elimina (1.3).
 
 **Falsificaciones planeadas**, una por vez, para ver que cada prueba muerde:
 - volver al saldo del asiento de la venta en vez de sumar;
@@ -1090,6 +1099,6 @@ fecha del robo.
 | 9 | ~~**Para Jimmy:** cómo anula hoy un cobro con tarjeta en la terminal del banco, y si hace falta guardar la referencia de esa anulación~~ | **RESUELTA el 2026-09-15:** se pide el voucher antes de la vista previa y se compara con `ventas.num_boleta` de esa venta; si no coincide se rechaza sin PIN. No hay tabla de vouchers; hay un reporte de solo lectura de cobros con tarjeta, Activo o Anulado (3.3, 3.5) |
 | 10 | Endurecer `sincronizar_venta` para que rechace una venta existente con otro contenido | Decidirlo por separado (0.2) |
 | 11 | El reporte de anulaciones por persona | Hacerlo después de esto (sección 11) |
-| 12 | El cierre que exige PIN por un sello y no registra quién lo autorizó (0.7) | **Arreglarlo antes de implementar la anulación**: registrar la autorización siempre que un sello la haya exigido |
+| 12 | El cierre que exige PIN por un sello y no registra quién lo autorizó (0.7) | ~~Arreglarlo antes de implementar la anulación~~ **ARREGLADO el 2026-09-15** (0.7) |
 | 13 | Si un voucher que no coincide deja asiento de auditoría | **No**, igual que la unidad cambiada: no se pidió autorización ni se escribió nada (3.3) |
 | 14 | El voucher sale impreso en el recibo, así que no prueba tener el comprobante del banco | **Dejarlo como está**: es un control contra anular la venta equivocada, y el PIN sigue siendo el control contra el fraude (3.3) |
