@@ -1463,10 +1463,13 @@ export interface VentasDeUnProductoIpc {
   readonly cantidadVendida: string;
   readonly montoGenerado: string;
   readonly vecesVendido: number;
-  /** Costo vigente con que se calculó el margen, o `null` si no tiene. */
-  readonly precioCompra: string | null;
-  /** Margen del período, o `null` = «sin dato». Nunca cero por falta de costo. */
+  /**
+   * Margen de las líneas con foto del costo (`costo_unitario_snap`), o `null`
+   * = «sin dato» si ninguna la tiene. Nunca cero por falta de costo.
+   */
   readonly margen: string | null;
+  /** Líneas del período sin foto del costo, fuera del margen. */
+  readonly lineasSinCosto: number;
 }
 
 /** El reporte de ventas por producto, ya ordenado por monto descendente. */
@@ -1476,9 +1479,9 @@ export interface ReporteDeVentasPorProductoIpc {
   readonly montoTotal: string;
   /** Suma de los márgenes con dato. */
   readonly margenTotal: string;
-  /** Productos vendidos sin costo cargado, que no entran en `margenTotal`. */
-  readonly productosSinCosto: number;
-  /** Lo que vendieron esos productos. */
+  /** Líneas del período sin foto del costo, que no entran en `margenTotal`. */
+  readonly lineasSinCosto: number;
+  /** Lo cobrado en esas líneas. */
   readonly montoSinCosto: string;
 }
 

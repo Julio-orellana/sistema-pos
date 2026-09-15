@@ -102,16 +102,14 @@ export interface VentasDeUnProducto {
   /** En cuántas ventas distintas apareció. */
   readonly vecesVendido: number;
   /**
-   * Costo con que se calculó el margen: el `precio_compra` VIGENTE del
-   * producto, o `null` si no tiene. Ver `ventasPorProducto`.
-   */
-  readonly precioCompra: string | null;
-  /**
-   * `montoGenerado − precio_compra × cantidad vendida`, o `null` —«sin
-   * dato»— si el producto no tiene costo cargado. NUNCA cero en ese caso:
-   * cero diría que el producto no deja ganancia, que es otra cosa.
+   * Margen de las líneas QUE TIENEN FOTO DEL COSTO: Σ (subtotal_impreso −
+   * costo_unitario_snap × cantidad). `null` —«sin dato»— si ninguna línea del
+   * período la tiene. NUNCA cero en ese caso: cero diría que el producto no
+   * deja ganancia, que es otra cosa (§4.40).
    */
   readonly margen: string | null;
+  /** Cuántas líneas del período no tienen costo y quedaron fuera del margen. */
+  readonly lineasSinCosto: number;
 }
 
 /** El reporte de ventas por producto, ya ordenado. */
@@ -125,12 +123,16 @@ export interface ReporteDeVentasPorProducto {
    * de la columna que se ve, así que cuadra con ella.
    */
   readonly margenTotal: string;
-  /** Cuántos productos vendidos no tienen costo y quedaron fuera del margen. */
-  readonly productosSinCosto: number;
   /**
-   * Cuánto vendieron esos productos. Hace falta para leer `margenTotal`: un
-   * margen total de Q300 sobre Q10 000 de ventas no dice lo mismo si Q6 000 de
-   * esas ventas no tienen costo.
+   * Cuántas LÍNEAS de venta del período no tienen foto del costo y quedaron
+   * fuera del margen: ventas anteriores a la migración 032, o de un producto
+   * que en ese momento no tenía costo.
+   */
+  readonly lineasSinCosto: number;
+  /**
+   * Cuánto se cobró en esas líneas. Hace falta para leer `margenTotal`: un
+   * margen de Q300 sobre Q10 000 de ventas no dice lo mismo si Q6 000 de esas
+   * ventas no tienen costo.
    */
   readonly montoSinCosto: string;
 }
@@ -264,6 +266,10 @@ export class ServicioDeReportes {
     interface Acumulado {
       readonly cantidades: Decimal[];
       readonly montos: Decimal[];
+      /** Por línea CON foto del costo: cobrado − costo × cantidad, sin redondear. */
+      readonly margenesExactos: Decimal[];
+      /** Lo cobrado en las líneas SIN foto del costo. */
+      readonly montosSinCosto: Decimal[];
       readonly ventas: Set<string>;
       unidad: string;
       nombreDeRespaldo: string;
@@ -274,12 +280,29 @@ export class ServicioDeReportes {
       const acumulado = porProducto.get(linea.productoId) ?? {
         cantidades: [],
         montos: [],
+        margenesExactos: [],
+        montosSinCosto: [],
         ventas: new Set<string>(),
         unidad: linea.unidadSnap,
         nombreDeRespaldo: linea.productoNombreSnap,
       };
       acumulado.cantidades.push(linea.cantidad);
       acumulado.montos.push(linea.subtotalImpreso);
+      /*
+        EL MARGEN SALE DE LA FOTO DEL COSTO DE CADA LÍNEA, no del catálogo de
+        hoy (migración 032, §4.40): corregir el costo de un producto no puede
+        cambiar el margen de ventas ya registradas. Una línea sin foto —venta
+        anterior a la 032, o producto sin costo en ese momento— NO entra al
+        margen y se cuenta aparte: tratarla como costo cero inventaría una
+        ganancia.
+      */
+      if (linea.costoUnitarioSnap === null) {
+        acumulado.montosSinCosto.push(linea.subtotalImpreso);
+      } else {
+        acumulado.margenesExactos.push(
+          restar(linea.subtotalImpreso, multiplicar(linea.costoUnitarioSnap, linea.cantidad)),
+        );
+      }
       acumulado.ventas.add(linea.ventaId);
       // La unidad y el nombre de respaldo quedan los de la línea MÁS RECIENTE
       // del período, que es la foto más parecida a la realidad de hoy.
@@ -293,22 +316,12 @@ export class ServicioDeReportes {
         const actual = this.productos.obtenerPorId(productoId);
         const cantidad = sumarLista(acumulado.cantidades);
         const monto = sumarLista(acumulado.montos);
-        /*
-          EL MARGEN: (precio de venta − precio de compra) × cantidad, sumado por
-          línea. Como el precio de venta de cada línea es lo que pagó el
-          cliente —`subtotal_impreso`, ya con precio especial y descuento—, esa
-          suma es exactamente `monto − costo × cantidad`, sin redondear nada en
-          el medio: se redondea UNA vez, al final (§5, política de redondeo).
-
-          USA EL COSTO DE HOY, no el del día de la venta. No existe una foto
-          del costo por venta (`venta_detalle` guarda el precio, no el costo),
-          así que si el costo cambió en el período el margen de las ventas
-          viejas se calcula contra el nuevo. Está dicho en la pantalla y en
-          §4.39.
-        */
-        const costo = actual?.precioCompra ?? null;
+        // Sumado exacto y redondeado UNA vez, por producto (§5, política de
+        // redondeo): redondear cada línea acumularía centavos sueltos.
         const margen =
-          costo === null ? null : montoACadena(restar(monto, multiplicar(costo, cantidad)));
+          acumulado.margenesExactos.length === 0
+            ? null
+            : montoACadena(sumarLista(acumulado.margenesExactos));
         return {
           productoId,
           // El nombre de hoy; el del comprobante solo si el producto ya no está.
@@ -317,8 +330,8 @@ export class ServicioDeReportes {
           cantidadVendida: cantidadLegible(cantidad),
           montoGenerado: montoACadena(monto),
           vecesVendido: acumulado.ventas.size,
-          precioCompra: costo === null ? null : montoACadena(costo),
           margen,
+          lineasSinCosto: acumulado.montosSinCosto.length,
         };
       },
     );
@@ -342,11 +355,10 @@ export class ServicioDeReportes {
       margenTotal: montoACadena(
         sumarLista(productos.flatMap((fila) => (fila.margen === null ? [] : [fila.margen]))),
       ),
-      productosSinCosto: productos.filter((fila) => fila.margen === null).length,
+      lineasSinCosto: productos.reduce((total, fila) => total + fila.lineasSinCosto, 0),
+      // Lo cobrado en esas líneas, sumado de los importes exactos de cada una.
       montoSinCosto: montoACadena(
-        sumarLista(
-          productos.flatMap((fila) => (fila.margen === null ? [fila.montoGenerado] : [])),
-        ),
+        sumarLista([...porProducto.values()].flatMap((acumulado) => acumulado.montosSinCosto)),
       ),
     };
   }

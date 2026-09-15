@@ -380,6 +380,12 @@ export interface VentaDetalle {
   readonly unidadSnap: string;
   readonly cantidad: Decimal;
   readonly precioUnitarioSnap: Decimal;
+  /**
+   * Foto de `productos.precio_compra` al momento de la venta. `null` es «no se
+   * sabía el costo»: venta anterior a la migración 032, o producto sin costo
+   * cargado en ese momento. NUNCA cero en esos casos (§4.40).
+   */
+  readonly costoUnitarioSnap: Decimal | null;
   /** Valor sin redondear, del que se deriva el total real. */
   readonly subtotalExacto: Decimal;
   /** Valor conciliado que aparece impreso en el recibo. */
@@ -397,6 +403,8 @@ export interface NuevaVentaDetalle {
   readonly unidadSnap: string;
   readonly cantidad: Decimal | string;
   readonly precioUnitarioSnap: Decimal | string;
+  /** Sin costo conocido si falta. */
+  readonly costoUnitarioSnap?: Decimal | string | null;
   readonly subtotalExacto: Decimal | string;
   readonly subtotalImpreso: Decimal | string;
   readonly ordenLinea: number;

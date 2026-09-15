@@ -704,6 +704,11 @@
         "nombre": "recibido_en",
         "nulable": false,
         "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "costo_unitario_snap",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
       }
     ],
     "ventas": [

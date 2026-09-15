@@ -13,6 +13,7 @@ interface FilaVentaDetalle {
   readonly unidad_snap: string;
   readonly cantidad: string;
   readonly precio_unitario_snap: string;
+  readonly costo_unitario_snap: string | null;
   readonly subtotal_exacto: string;
   readonly subtotal_impreso: string;
   readonly orden_linea: number;
@@ -31,6 +32,10 @@ function aEntidad(fila: FilaVentaDetalle): VentaDetalle {
       fila.precio_unitario_snap,
       'venta_detalle.precio_unitario_snap',
     ),
+    costoUnitarioSnap:
+      fila.costo_unitario_snap === null
+        ? null
+        : desdeColumnaDecimal(fila.costo_unitario_snap, 'venta_detalle.costo_unitario_snap'),
     subtotalExacto: desdeColumnaDecimal(fila.subtotal_exacto, 'venta_detalle.subtotal_exacto'),
     subtotalImpreso: desdeColumnaDecimal(fila.subtotal_impreso, 'venta_detalle.subtotal_impreso'),
     ordenLinea: fila.orden_linea,
@@ -55,10 +60,12 @@ export class RepositorioDeVentaDetalle extends RepositorioBase {
         .prepare(
           `INSERT INTO venta_detalle (
              id, venta_id, producto_id, producto_nombre_snap, unidad_snap, cantidad,
-             precio_unitario_snap, subtotal_exacto, subtotal_impreso, orden_linea, creado_en
+             precio_unitario_snap, costo_unitario_snap, subtotal_exacto, subtotal_impreso,
+             orden_linea, creado_en
            ) VALUES (
              @id, @venta_id, @producto_id, @producto_nombre_snap, @unidad_snap, @cantidad,
-             @precio_unitario_snap, @subtotal_exacto, @subtotal_impreso, @orden_linea, @creado_en
+             @precio_unitario_snap, @costo_unitario_snap, @subtotal_exacto, @subtotal_impreso,
+             @orden_linea, @creado_en
            )`,
         )
         .run({
@@ -69,6 +76,10 @@ export class RepositorioDeVentaDetalle extends RepositorioBase {
           unidad_snap: datos.unidadSnap,
           cantidad: aColumnaCantidad(datos.cantidad),
           precio_unitario_snap: aColumnaMonto(datos.precioUnitarioSnap),
+          costo_unitario_snap:
+            datos.costoUnitarioSnap === undefined || datos.costoUnitarioSnap === null
+              ? null
+              : aColumnaMonto(datos.costoUnitarioSnap),
           subtotal_exacto: aColumnaExacta(datos.subtotalExacto),
           subtotal_impreso: aColumnaMonto(datos.subtotalImpreso),
           orden_linea: datos.ordenLinea,

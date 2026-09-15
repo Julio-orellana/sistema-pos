@@ -433,6 +433,8 @@ const filaDetalle = (ventaId, productoId, nombre) => ({
   unidad_snap: 'lb',
   cantidad: '2.500',
   precio_unitario_snap: '7.00',
+  // Migración 032/0032 (§4.40): la batería exige la 0032 aplicada.
+  costo_unitario_snap: null,
   subtotal_exacto: '17.5',
   subtotal_impreso: '17.50',
   orden_linea: 0,

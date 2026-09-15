@@ -114,6 +114,7 @@ carpetas: el hueco es información, y renumerar la destruye.
 | `029_saltar_lote_de_sincronizacion` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja. **Ojo: el `0029` de este lado existe y es OTRA migración**; ver la nota sobre el 29 |
 | `030_recibos_pdf_path_relativo` | **(ninguno, a propósito)** | Cambia el VALOR de `recibos.pdf_path` en las filas locales (de absoluta a relativa), no el esquema: la columna de Postgres sigue igual y las filas ya subidas no se reescriben (la restauración las convierte al bajarlas). El `0030` queda reservado |
 | `031_productos_precio_compra` | `0031_productos_precio_compra.sql` | Costo del producto: dato de negocio que viaja en el payload de `productos`. **El 0031 NO está aplicado en ningún proyecto (2026-09-14)**: se aplica en el mismo momento en que se instala una versión que trae la 031, porque mientras las dos partes difieran la cola se detiene (ver la cabecera del archivo) |
+| `032_venta_detalle_costo_unitario_snap` | `0032_venta_detalle_costo_unitario_snap.sql` | Foto del costo en cada línea de venta: dato de negocio que viaja en el payload de `venta_detalle`. **El 0032 NO está aplicado en ningún proyecto ni probado contra Postgres (2026-09-14)**: mismo problema de forma de payload que el 0031 |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.

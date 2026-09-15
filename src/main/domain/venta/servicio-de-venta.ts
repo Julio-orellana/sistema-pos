@@ -307,6 +307,12 @@ export class ServicioDeVenta {
             unidadSnap: unidadDe(linea.producto),
             cantidad: linea.cantidad,
             precioUnitarioSnap: linea.precioUnitario,
+            // Y la FOTO DEL COSTO (migración 032), por la misma razón: si
+            // mañana se corrige el costo del producto, el margen de esta venta
+            // no cambia. Se lee del MISMO producto que se leyó dentro de esta
+            // transacción, así que es el costo vigente en el instante de vender.
+            // Sin costo cargado queda en null, nunca en cero.
+            costoUnitarioSnap: linea.producto.precioCompra,
             subtotalExacto: linea.subtotalExacto,
             subtotalImpreso: impreso,
             // El orden en que el cajero capturó las líneas: es el orden del

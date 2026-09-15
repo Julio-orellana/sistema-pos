@@ -42,6 +42,7 @@ import sqlLimitesIdDeterminista from './migrations/028_limites_descuento_id_dete
 import sqlSaltarLoteDeSincronizacion from './migrations/029_saltar_lote_de_sincronizacion.sql?raw';
 import sqlRecibosPdfPathRelativo from './migrations/030_recibos_pdf_path_relativo.sql?raw';
 import sqlProductosPrecioCompra from './migrations/031_productos_precio_compra.sql?raw';
+import sqlCostoUnitarioSnap from './migrations/032_venta_detalle_costo_unitario_snap.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -118,6 +119,13 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 31,
     nombre: '031_productos_precio_compra',
     sql: sqlProductosPrecioCompra,
+  },
+  // Con espejo en la nube (`0032_venta_detalle_costo_unitario_snap`): es parte
+  // del detalle de la venta, igual que las demás columnas `*_snap`.
+  {
+    orden: 32,
+    nombre: '032_venta_detalle_costo_unitario_snap',
+    sql: sqlCostoUnitarioSnap,
   },
 ];
 

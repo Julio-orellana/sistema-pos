@@ -575,72 +575,96 @@ describe('Tarea 3 — El estado de inventario', () => {
 
 // ===========================================================================
 /**
- * El margen por producto (§4.39): lo cobrado menos el precio de compra por la
- * cantidad vendida, sumado con Decimal y redondeado UNA vez.
+ * El margen por producto, calculado con la FOTO del costo de cada línea
+ * (`venta_detalle.costo_unitario_snap`, migración 032, §4.40), igual que el
+ * recibo usa la foto del precio. Corregir el costo hoy no puede cambiar el
+ * margen de una venta ya registrada.
  */
-describe('EL MARGEN POR PRODUCTO: «sin dato» cuando no hay costo, nunca cero', () => {
+describe('EL MARGEN USA LA FOTO DEL COSTO DE CADA VENTA, no el catálogo de hoy', () => {
   const fijarCosto = (productoId: string, costo: string | null): void => {
     base.prepare('UPDATE productos SET precio_compra = ? WHERE id = ?').run(costo, productoId);
   };
+  /** Simula una venta registrada ANTES de la 032: su línea no tiene foto del costo. */
+  const borrarFotoDelCosto = (productoId: string): void => {
+    base.prepare('UPDATE venta_detalle SET costo_unitario_snap = NULL WHERE producto_id = ?').run(productoId);
+  };
+  const filaDe = (productoId: string): ReturnType<ServicioDeReportes['ventasPorProducto']>['productos'][number] | undefined =>
+    reportes.ventasPorProducto({ clase: 'hoy' }).productos.find((f) => f.productoId === productoId);
+
+  it('UNA VENTA DE HOY CAPTURA EL COSTO VIGENTE en ese momento', () => {
+    fijarCosto(idMaiz, '4.50');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
+
+    const linea = base
+      .prepare('SELECT costo_unitario_snap FROM venta_detalle WHERE producto_id = ?')
+      .get(idMaiz) as { costo_unitario_snap: string | null };
+    expect(linea.costo_unitario_snap).toBe('4.50');
+  });
 
   it('margen = cobrado − costo × cantidad', () => {
     fijarCosto(idMaiz, '4.50');
     vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
     vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '3' }]);
 
-    const maiz = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find((f) => f.productoId === idMaiz);
     // 5 lb a Q6 = Q30; costo 5 × 4.50 = Q22.50.
-    expect(maiz?.montoGenerado).toBe('30.00');
-    expect(maiz?.precioCompra).toBe('4.50');
-    expect(maiz?.margen).toBe('7.50');
+    expect(filaDe(idMaiz)?.montoGenerado).toBe('30.00');
+    expect(filaDe(idMaiz)?.margen).toBe('7.50');
+    expect(filaDe(idMaiz)?.lineasSinCosto).toBe(0);
   });
 
-  it('SIN COSTO CARGADO el margen es null («sin dato»), NO 0.00', () => {
-    vender(HOY_TARDE, [{ productoId: idFrijol, cantidad: '1' }]);
+  it('SI EL COSTO CAMBIA DESPUÉS, el margen de la venta ya registrada NO cambia', () => {
+    fijarCosto(idMaiz, '4.50');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
+    expect(filaDe(idMaiz)?.margen).toBe('3.00');
 
-    const frijol = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find(
-      (f) => f.productoId === idFrijol,
-    );
+    fijarCosto(idMaiz, '5.90');
+    expect(filaDe(idMaiz)?.margen).toBe('3.00');
+    fijarCosto(idMaiz, null);
+    expect(filaDe(idMaiz)?.margen).toBe('3.00');
+  });
+
+  it('una venta NUEVA después del cambio usa el costo NUEVO, y cada una conserva el suyo', () => {
+    fijarCosto(idMaiz, '4.50');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
+    fijarCosto(idMaiz, '5.00');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
+
+    // (12 − 9) + (12 − 10) = 5.
+    expect(filaDe(idMaiz)?.margen).toBe('5.00');
+  });
+
+  it('UNA VENTA ANTERIOR A ESTE CAMBIO (sin foto del costo) queda fuera del margen, NO como margen cero', () => {
+    vender(HOY_TARDE, [{ productoId: idFrijol, cantidad: '1' }]);
+    borrarFotoDelCosto(idFrijol);
+    // Aunque HOY el frijol tenga costo: no se inventa retroactivamente.
+    fijarCosto(idFrijol, '7.00');
+
+    const frijol = filaDe(idFrijol);
     expect(frijol?.margen).toBeNull();
     expect(frijol?.margen).not.toBe('0.00');
+    expect(frijol?.lineasSinCosto).toBe(1);
   });
 
-  it('un costo IGUAL al precio sí da 0.00: no deja ganancia, que es distinto de no saberlo', () => {
-    fijarCosto(idFrijol, '9.00');
-    vender(HOY_TARDE, [{ productoId: idFrijol, cantidad: '2' }]);
-
-    const frijol = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find(
-      (f) => f.productoId === idFrijol,
-    );
-    expect(frijol?.margen).toBe('0.00');
-  });
-
-  it('vender por debajo del costo da un margen NEGATIVO, que se informa tal cual', () => {
-    fijarCosto(idAzucar, '8.00');
+  it('un producto que NO TENÍA costo al venderse tampoco entra, y se cuenta aparte', () => {
     vender(HOY_TARDE, [{ productoId: idAzucar, cantidad: '2' }]);
 
-    const azucar = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find(
-      (f) => f.productoId === idAzucar,
-    );
-    expect(azucar?.margen).toBe('-5.00');
+    const azucar = filaDe(idAzucar);
+    expect(azucar?.margen).toBeNull();
+    expect(azucar?.lineasSinCosto).toBe(1);
   });
 
-  it('SE REDONDEA UNA SOLA VEZ, al final: tres ventas de 0.333 lb no acumulan centavos', () => {
-    // Cada venta: 0.333 × 6.00 = 1.998 → cobrado Q2.00. Costo exacto de las
-    // tres: 0.999 × 4.55 = 4.54545. Margen = 6.00 − 4.54545 = 1.45455 → 1.45.
-    // Redondeando el costo por línea (1.52 × 3 = 4.56) daría 1.44: un centavo
-    // en contra de la tienda.
-    fijarCosto(idMaiz, '4.55');
-    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
-    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
-    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
+  it('en un mismo producto, las líneas con costo dan margen y las sin costo se cuentan aparte', () => {
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '1' }]);
+    fijarCosto(idMaiz, '4.00');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
 
-    const maiz = reportes.ventasPorProducto({ clase: 'hoy' }).productos.find((f) => f.productoId === idMaiz);
-    expect(maiz?.montoGenerado).toBe('6.00');
-    expect(maiz?.margen).toBe('1.45');
+    const maiz = filaDe(idMaiz);
+    // Solo la segunda venta: 12 − 8 = 4. La primera (Q6) no suma cero al margen.
+    expect(maiz?.margen).toBe('4.00');
+    expect(maiz?.lineasSinCosto).toBe(1);
   });
 
-  it('el margen total SOLO suma los productos con costo, y dice cuántos quedaron fuera y cuánto vendieron', () => {
+  it('EL REPORTE DICE CUÁNTAS LÍNEAS quedaron sin dato de costo en el período, y cuánto se cobró en ellas', () => {
     fijarCosto(idMaiz, '4.50');
     vender(HOY_TARDE, [
       { productoId: idMaiz, cantidad: '5' },
@@ -650,9 +674,35 @@ describe('EL MARGEN POR PRODUCTO: «sin dato» cuando no hay costo, nunca cero',
 
     const reporte = reportes.ventasPorProducto({ clase: 'hoy' });
     expect(reporte.margenTotal).toBe('7.50');
-    expect(reporte.productosSinCosto).toBe(2);
+    expect(reporte.lineasSinCosto).toBe(2);
     // Frijol Q9.00 + azúcar Q11.00.
     expect(reporte.montoSinCosto).toBe('20.00');
+  });
+
+  it('un costo IGUAL al precio da 0.00: no deja ganancia, que es distinto de no saberlo', () => {
+    fijarCosto(idFrijol, '9.00');
+    vender(HOY_TARDE, [{ productoId: idFrijol, cantidad: '2' }]);
+    expect(filaDe(idFrijol)?.margen).toBe('0.00');
+  });
+
+  it('vender por debajo del costo da un margen NEGATIVO, que se informa tal cual', () => {
+    fijarCosto(idAzucar, '8.00');
+    vender(HOY_TARDE, [{ productoId: idAzucar, cantidad: '2' }]);
+    expect(filaDe(idAzucar)?.margen).toBe('-5.00');
+  });
+
+  it('SE REDONDEA UNA SOLA VEZ, al final: tres ventas de 0.333 lb no acumulan centavos', () => {
+    // Cada venta: 0.333 × 6.00 = 1.998 → cobrado Q2.00. Costo exacto de las
+    // tres: 0.999 × 4.55 = 4.54545. Margen = 6.00 − 4.54545 = 1.45455 → 1.45.
+    // Redondeando cada línea (2.00 − 1.52 = 0.48, × 3 = 1.44) daría un
+    // centavo en contra de la tienda.
+    fijarCosto(idMaiz, '4.55');
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '0.333' }]);
+
+    expect(filaDe(idMaiz)?.montoGenerado).toBe('6.00');
+    expect(filaDe(idMaiz)?.margen).toBe('1.45');
   });
 
   it('el margen total cuadra con la suma de la columna que se ve', () => {

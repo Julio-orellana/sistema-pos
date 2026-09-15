@@ -350,8 +350,14 @@ describe('CLASES_DE_COLUMNA coincide, columna por columna, con los tipos que dec
     }
   });
 
-  it('las columnas numéricas de venta_detalle son las cuatro que hay que pedir con ::text', () => {
-    expect(columnasNumericasDe('venta_detalle')).toEqual(['cantidad', 'precio_unitario_snap', 'subtotal_exacto', 'subtotal_impreso']);
+  it('las columnas numéricas de venta_detalle son las cinco que hay que pedir con ::text (la quinta, la foto del costo de la 032)', () => {
+    expect(columnasNumericasDe('venta_detalle')).toEqual([
+      'cantidad',
+      'precio_unitario_snap',
+      'costo_unitario_snap',
+      'subtotal_exacto',
+      'subtotal_impreso',
+    ]);
     expect(columnasNumericasDe('usuarios')).toEqual([]);
   });
 });

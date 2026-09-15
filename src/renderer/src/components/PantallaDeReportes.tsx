@@ -331,6 +331,10 @@ function PorProducto({
                     data-prueba="margen-de-producto"
                   >
                     Margen: {fila.margen === null ? 'sin dato' : `Q${fila.margen}`}
+                    {/* Cuántas líneas quedaron fuera, TAMBIÉN cuando son todas:
+                        «sin dato» solo no dice si fue una venta o cien. */}
+                    {fila.lineasSinCosto > 0 &&
+                      ` (${String(fila.lineasSinCosto)} ${fila.lineasSinCosto === 1 ? 'línea' : 'líneas'} sin dato de costo)`}
                   </span>
                 </span>
               </li>
@@ -343,20 +347,23 @@ function PorProducto({
             </span>
           </div>
           <div className="dato">
-            <span className="dato__etiqueta">
-              Margen del período
-              {datos.productosSinCosto > 0 &&
-                ` (sin ${String(datos.productosSinCosto)} ${datos.productosSinCosto === 1 ? 'producto' : 'productos'} sin costo, que vendieron Q${datos.montoSinCosto})`}
-            </span>
+            <span className="dato__etiqueta">Margen del período</span>
             <span className="dato__valor" data-prueba="margen-total">
               Q{datos.margenTotal}
             </span>
           </div>
+          <div className="dato">
+            <span className="dato__etiqueta">Líneas sin dato de costo (fuera del margen)</span>
+            <span className="dato__valor" data-prueba="lineas-sin-costo">
+              {datos.lineasSinCosto} · Q{datos.montoSinCosto}
+            </span>
+          </div>
           <p className="nota">
-            El margen es lo cobrado menos el precio de compra por la cantidad vendida, y usa el
-            precio de compra cargado HOY: si cambió durante el período, las ventas anteriores se
-            calculan con el nuevo. Un producto sin precio de compra no entra en el margen del
-            período.
+            El margen es lo cobrado menos el costo por la cantidad, con el costo que tenía el
+            producto EL DÍA DE CADA VENTA: corregir el precio de compra hoy no cambia el margen de
+            ventas ya registradas. Una venta sin costo conocido —anterior a este registro, o de un
+            producto que entonces no tenía precio de compra— no entra en el margen y se cuenta
+            aparte, nunca como margen cero.
           </p>
           <p className="nota">
             La cantidad es la de ESTE período. No es el acumulado de toda la vida del producto,
