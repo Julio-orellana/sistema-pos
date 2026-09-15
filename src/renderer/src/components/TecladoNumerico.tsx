@@ -55,6 +55,14 @@ export interface TecladoNumericoProps {
   readonly decimales?: number;
   /** Texto bajo el número, en modo cantidad. Por ejemplo la unidad. */
   readonly leyenda?: string;
+  /**
+   * Solo en modo cantidad: ¿se puede confirmar un cero?
+   *
+   * En el ticket no —una línea de cero libras no es una venta—, y por eso el
+   * valor por omisión es `false`. Al CONTAR efectivo sí: una caja puede cerrar
+   * sin billetes de Q200, y un cajón vacío es un conteo tan válido como otro.
+   */
+  readonly admiteCero?: boolean;
 }
 
 export function TecladoNumerico({
@@ -65,6 +73,7 @@ export function TecladoNumerico({
   modo = 'pin',
   decimales = 0,
   leyenda,
+  admiteCero = false,
 }: TecladoNumericoProps): React.JSX.Element {
   const esPin = modo === 'pin';
   const admitePunto = !esPin && decimales > 0;
@@ -81,7 +90,7 @@ export function TecladoNumerico({
       return false;
     }
     const numero = Number(valor);
-    return Number.isFinite(numero) && numero > 0;
+    return Number.isFinite(numero) && (numero > 0 || (admiteCero && numero === 0));
   };
 
   const completo = esPin ? valor.length === LARGO_DEL_PIN : cantidadUtil();

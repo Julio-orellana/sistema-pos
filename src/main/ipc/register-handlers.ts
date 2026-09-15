@@ -26,6 +26,7 @@ import {
   type EstadoDeCaja,
   type EstadoDeSesion,
   type RespuestaIpc,
+  type ConteoSelladoIpc,
   type ResultadoDeCierreIpc,
   type TurnoAbierto,
   type ResultadoDeIngreso,
@@ -43,7 +44,11 @@ import { ErrorDeNegocio } from '@main/database/errores';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
-import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
+import type {
+  ConteoSellado,
+  ResultadoDeCierre,
+  ServicioDeCaja,
+} from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import type { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import type { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
@@ -377,9 +382,10 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           const quienAbrio =
             turno === null ? null : dependencias.usuarios.obtenerPorId(turno.usuarioId);
 
+          const resumen = turno === null ? null : dependencias.caja.resumenDelTurno(turno);
           const estado: EstadoDeCaja = {
             turnoAbierto:
-              turno === null
+              turno === null || resumen === null
                 ? null
                 : {
                     id: turno.id,
@@ -389,6 +395,12 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
                     abiertaPorNombre: quienAbrio?.nombre ?? '(usuario eliminado)',
                     esDeOtroUsuario:
                       enSesion !== null && turno.usuarioId !== enSesion.id,
+                    ventasEnEfectivo: montoACadena(resumen.ventasEnEfectivo),
+                    cantidadDeVentasEnEfectivo: resumen.cantidadDeVentasEnEfectivo,
+                    montoTeorico: montoACadena(resumen.montoTeorico),
+                    primerConteoSellado: aConteoIpc(
+                      dependencias.caja.conteosSelladosDe(turno.id)[0] ?? null,
+                    ),
                   },
             denominaciones: dependencias.caja.listarDenominaciones().map((d) => ({
               id: d.id,
@@ -423,6 +435,11 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             abiertaPorNombre: enSesion.nombre,
             // Recién abierto por quien está en sesión: nunca es de otro.
             esDeOtroUsuario: false,
+            // Recién abierto: todavía no hay ventas, el teórico es el inicial.
+            ventasEnEfectivo: '0.00',
+            cantidadDeVentasEnEfectivo: 0,
+            montoTeorico: montoACadena(turno.montoInicial),
+            primerConteoSellado: null,
           };
           return abierto;
         }),
@@ -448,6 +465,23 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             );
           }
 
+          const montoInicial = montoACadena(turno.montoInicial);
+          /** El resultado del servicio, sin la sesión de dominio y con el sello en forma de DTO. */
+          const aIpc = (
+            resultado: ResultadoDeCierre,
+            extras: Pick<ResultadoDeCierreIpc, 'autorizadaVia' | 'segundosParaReintentar'>,
+          ): ResultadoDeCierreIpc => ({
+            cerrada: resultado.cerrada,
+            codigo: resultado.codigo,
+            mensaje: resultado.mensaje,
+            diferencia: resultado.diferencia,
+            montoEsperado: resultado.montoEsperado,
+            montoReal: resultado.montoReal,
+            montoInicial,
+            primerConteo: aConteoIpc(resultado.primerConteo),
+            ...extras,
+          });
+
           // ---- Autorización 1: ¿la caja es de otra persona? ----------------
           // Se resuelve ANTES de contar el efectivo. Es una superficie propia,
           // con su propio candado, y NO acepta el PIN remoto: ese se pidió
@@ -459,7 +493,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
               const aviso = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
                 usuarioQueCierra: enSesion.id,
               });
-              return { ...aviso, autorizadaVia: null, segundosParaReintentar: null };
+              return aIpc(aviso, { autorizadaVia: null, segundosParaReintentar: null });
             }
 
             const permiso = dependencias.autenticacion.autorizarComoAdministrador(
@@ -476,6 +510,8 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
                 montoReal: '0.00',
                 autorizadaVia: null,
                 segundosParaReintentar: permiso.segundosParaReintentar,
+                montoInicial,
+                primerConteo: null,
               };
             }
             autorizacionDeCajaAjena = { autorizadaPor: permiso.usuario.id };
@@ -489,11 +525,7 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             autorizacionDeCajaAjena,
           });
           if (tentativo.cerrada || datos.pin === undefined) {
-            return {
-              ...tentativo,
-              autorizadaVia: null,
-              segundosParaReintentar: null,
-            };
+            return aIpc(tentativo, { autorizadaVia: null, segundosParaReintentar: null });
           }
 
           // Segundo paso: con PIN. Acepta el PIN normal (presencial) o el
@@ -513,6 +545,9 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
               montoReal: tentativo.montoReal,
               autorizadaVia: null,
               segundosParaReintentar: autorizacion.segundosParaReintentar,
+              montoInicial,
+              // Quien vuelve a teclear el PIN tiene que seguir viendo los dos conteos.
+              primerConteo: aConteoIpc(tentativo.primerConteo),
             };
           }
 
@@ -522,10 +557,22 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             autorizacionDeCajaAjena,
             autorizacion: { autorizadaPor: autorizacion.usuario.id, via },
           });
-          return { ...cerrado, autorizadaVia: via, segundosParaReintentar: null };
+          return aIpc(cerrado, { autorizadaVia: via, segundosParaReintentar: null });
         }),
       ),
   );
+}
+
+/** Un conteo sellado del dominio, en la forma que cruza hacia la ventana. */
+function aConteoIpc(conteo: ConteoSellado | null): ConteoSelladoIpc | null {
+  return conteo === null
+    ? null
+    : {
+        fecha: conteo.fecha,
+        montoEsperado: conteo.montoEsperado,
+        montoReal: conteo.montoReal,
+        diferencia: conteo.diferencia,
+      };
 }
 
 /** Quita los manejadores al cerrar, para no dejar canales colgados. */

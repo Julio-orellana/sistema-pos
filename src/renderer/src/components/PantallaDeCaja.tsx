@@ -19,6 +19,18 @@
  * cerrar una caja ajena (solo PIN normal de administrador) y cerrar con
  * diferencia (acepta también el PIN remoto). Un mismo cierre puede necesitar
  * las dos, y en ese orden.
+ *
+ * TRES AGREGADOS DEL 2026-09-14, de lo que Jimmy encontró probando en el
+ * equipo real (§4.39):
+ *
+ *   · Con la caja abierta se ve el EFECTIVO TEÓRICO en vivo —monto inicial más
+ *     las ventas en efectivo del turno—, recalculado cada pocos segundos.
+ *   · Un cierre exitoso termina en una CONFIRMACIÓN con los tres montos: el
+ *     inicial, el teórico y el contado, y la diferencia si la hubo.
+ *   · Un conteo confirmado con diferencia QUEDA SELLADO: si el cajero vuelve a
+ *     contar y cambia el número, cerrar exige el PIN de un administrador
+ *     aunque ahora cuadre. Lo decide el proceso principal, no esta pantalla:
+ *     acá solo se muestra.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -39,7 +51,27 @@ type Autorizacion =
   /** La caja la abrió otro: falta el PIN normal de un administrador. */
   | { readonly tipo: 'caja-ajena'; readonly resultado: ResultadoDeCierreIpc }
   /** La caja no cuadra: falta el código que autorice la diferencia. */
-  | { readonly tipo: 'diferencia'; readonly resultado: ResultadoDeCierreIpc };
+  | { readonly tipo: 'diferencia'; readonly resultado: ResultadoDeCierreIpc }
+  /** Cuadra, pero antes se confirmó otro conteo con diferencia. */
+  | { readonly tipo: 'reconteo'; readonly resultado: ResultadoDeCierreIpc };
+
+/**
+ * Cada cuánto se vuelve a pedir el estado mientras la caja está abierta.
+ *
+ * Diez segundos: las ventas se cobran en otra pantalla de la misma terminal,
+ * así que el teórico cambia recién cuando alguien vuelve acá. Consultar más
+ * seguido no mostraría nada nuevo y es una lectura de SQLite cada vez.
+ */
+const INTERVALO_DE_ACTUALIZACION_MS = 10_000;
+
+/** «faltante de Q20.00» / «sobrante de Q5.00» / «sin diferencia». */
+function diferenciaLegible(diferencia: string): string {
+  if (Number(diferencia) === 0) {
+    return 'sin diferencia';
+  }
+  const magnitud = formatearQuetzales(diferencia.replace('-', ''));
+  return diferencia.startsWith('-') ? `faltante de ${magnitud}` : `sobrante de ${magnitud}`;
+}
 
 /** Fecha y hora en el formato que se lee en el mostrador. */
 function momentoLegible(iso: string): string {
@@ -64,6 +96,10 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
   /** PIN ya verificado de la caja ajena, que hay que reenviar con el cierre. */
   const [pinDeCajaAjena, setPinDeCajaAjena] = useState<string | null>(null);
 
+  /** El cierre que acaba de terminar bien, para confirmarlo con sus montos. */
+  const [cierreConfirmado, setCierreConfirmado] = useState<ResultadoDeCierreIpc | null>(null);
+
+
   useEffect(() => {
     const control = new AbortController();
     void (async (): Promise<void> => {
@@ -83,6 +119,22 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
       control.abort();
     };
   }, [recarga]);
+
+  // Mientras la caja está abierta y nadie está autorizando nada, el teórico se
+  // vuelve a pedir cada tanto: así se ve en vivo lo que entró por ventas.
+  const cajaAbierta = turno !== null;
+  const enReposo = autorizacion.tipo === 'ninguna' && cierreConfirmado === null;
+  useEffect(() => {
+    if (!cajaAbierta || !enReposo) {
+      return undefined;
+    }
+    const temporizador = setInterval(() => {
+      setRecarga((anterior) => anterior + 1);
+    }, INTERVALO_DE_ACTUALIZACION_MS);
+    return (): void => {
+      clearInterval(temporizador);
+    };
+  }, [cajaAbierta, enReposo]);
 
   const abrir = useCallback((): void => {
     if (efectivo === null) {
@@ -128,11 +180,12 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
           return;
         }
         if (respuesta.datos.cerrada) {
-          setMensaje(respuesta.datos.mensaje);
+          setMensaje(null);
           setAutorizacion({ tipo: 'ninguna' });
           setPinDeCajaAjena(null);
           setEfectivo(null);
-          setRecarga((anterior) => anterior + 1);
+          // No se recarga todavía: primero se confirma el cierre con sus montos.
+          setCierreConfirmado(respuesta.datos);
           return;
         }
 
@@ -152,6 +205,14 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
           setMensaje(null);
           return;
         }
+        if (respuesta.datos.codigo === 'REQUIERE_AUTORIZACION_DE_RECONTEO') {
+          if (codigos.cajaAjena !== undefined) {
+            setPinDeCajaAjena(codigos.cajaAjena);
+          }
+          setAutorizacion({ tipo: 'reconteo', resultado: respuesta.datos });
+          setMensaje(null);
+          return;
+        }
 
         // Un intento de autorización que falló: se muestra el motivo y se
         // conserva el diálogo para reintentar.
@@ -163,6 +224,9 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
 
   const volverAContar = useCallback((): void => {
     setAutorizacion({ tipo: 'ninguna' });
+    // Se vuelve a pedir el estado: si el conteo quedó sellado, el aviso tiene
+    // que aparecer ya, y lo trae el proceso principal.
+    setRecarga((anterior) => anterior + 1);
     setPin('');
     setMensaje(null);
   }, []);
@@ -239,6 +303,14 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
         <div className="autorizacion" data-prueba="autorizacion-de-diferencia">
           <h2>La caja no cuadra</h2>
 
+          {resultado.primerConteo !== null && (
+            <p className="advertencia" data-prueba="primer-conteo-sellado">
+              Antes se confirmó otro conteo: {formatearQuetzales(resultado.primerConteo.montoReal)},
+              con {diferenciaLegible(resultado.primerConteo.diferencia)}. Los dos quedan
+              registrados.
+            </p>
+          )}
+
           <div className="autorizacion__resumen">
             <div className="dato">
               <span className="dato__etiqueta">Debería haber</span>
@@ -280,6 +352,132 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
     );
   }
 
+  if (autorizacion.tipo === 'reconteo') {
+    const resultado = autorizacion.resultado;
+    const primero = resultado.primerConteo;
+    return (
+      <div className="ingreso" data-prueba="pantalla-de-caja">
+        <h1>Cerrar caja</h1>
+
+        {mensaje !== null && (
+          <p className="alerta" data-prueba="mensaje-de-caja">
+            {mensaje}
+          </p>
+        )}
+
+        <div className="autorizacion" data-prueba="autorizacion-de-reconteo">
+          <h2>El conteo cambió después de mostrar una diferencia</h2>
+
+          {/* Quien autoriza ve los DOS números: el que primero no cuadró y el
+              de ahora. Autoriza la corrección, no solo el número final. */}
+          <div className="autorizacion__resumen">
+            <div className="dato">
+              <span className="dato__etiqueta">Primer conteo</span>
+              <span className="dato__valor" data-prueba="reconteo-primer-conteo">
+                {primero === null ? '—' : formatearQuetzales(primero.montoReal)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">Con</span>
+              <span className="dato__valor">
+                {primero === null ? '—' : diferenciaLegible(primero.diferencia)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">Conteo de ahora</span>
+              <span className="dato__valor" data-prueba="reconteo-conteo-actual">
+                {formatearQuetzales(resultado.montoReal)} ({diferenciaLegible(resultado.diferencia)})
+              </span>
+            </div>
+          </div>
+
+          <p className="subtitulo">
+            Corregir un conteo que ya mostró una diferencia necesita la autorización de un
+            administrador, aunque ahora cuadre. Puede autorizar en persona o dictando el PIN por
+            teléfono. Los dos conteos quedan registrados.
+          </p>
+
+          <TecladoNumerico
+            valor={pin}
+            alCambiar={setPin}
+            alConfirmar={() => {
+              cerrar({ diferencia: pin });
+            }}
+            deshabilitado={trabajando}
+          />
+
+          <button type="button" className="boton--secundario" onClick={volverAContar}>
+            Volver a contar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (cierreConfirmado !== null) {
+    const hubo = Number(cierreConfirmado.diferencia) !== 0;
+    return (
+      <div className="ingreso" data-prueba="pantalla-de-caja">
+        <div className="autorizacion" role="status" data-prueba="confirmacion-de-cierre">
+          <h1>Caja cerrada con éxito</h1>
+
+          <div className="autorizacion__resumen">
+            <div className="dato">
+              <span className="dato__etiqueta">Efectivo inicial</span>
+              <span className="dato__valor" data-prueba="cierre-efectivo-inicial">
+                {formatearQuetzales(cierreConfirmado.montoInicial)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">Efectivo teórico</span>
+              <span className="dato__valor" data-prueba="cierre-efectivo-teorico">
+                {formatearQuetzales(cierreConfirmado.montoEsperado)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">Efectivo final</span>
+              <span className="dato__valor" data-prueba="cierre-efectivo-final">
+                {formatearQuetzales(cierreConfirmado.montoReal)}
+              </span>
+            </div>
+            {hubo && (
+              <div className="dato">
+                <span className="dato__etiqueta">
+                  {cierreConfirmado.diferencia.startsWith('-') ? 'Faltante' : 'Sobrante'}
+                </span>
+                <span
+                  className="dato__valor autorizacion__diferencia"
+                  data-prueba="cierre-diferencia"
+                >
+                  {formatearQuetzales(cierreConfirmado.diferencia.replace('-', ''))}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <p className="subtitulo">
+            {hubo
+              ? `Se cerró con ${diferenciaLegible(cierreConfirmado.diferencia)}, autorizado por un administrador.`
+              : 'La caja cuadró exactamente.'}
+          </p>
+
+          <div className="pie">
+            <button
+              type="button"
+              data-prueba="aceptar-confirmacion-de-cierre"
+              onClick={() => {
+                setCierreConfirmado(null);
+                setRecarga((anterior) => anterior + 1);
+              }}
+            >
+              Aceptar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Los tres estados de la caja
   // -------------------------------------------------------------------------
@@ -293,6 +491,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
   }
 
   const hayCaja = turno !== null;
+  const conteoSelladoDelTurno = turno?.primerConteoSellado ?? null;
   const esAjena = turno?.esDeOtroUsuario === true;
 
   return (
@@ -326,7 +525,29 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
             <span className="dato__etiqueta">Monto inicial</span>
             <span className="dato__valor">{formatearQuetzales(turno.montoInicial)}</span>
           </div>
+          <div className="dato">
+            <span className="dato__etiqueta">
+              Ventas en efectivo ({turno.cantidadDeVentasEnEfectivo})
+            </span>
+            <span className="dato__valor" data-prueba="ventas-en-efectivo">
+              {formatearQuetzales(turno.ventasEnEfectivo)}
+            </span>
+          </div>
+          <div className="dato">
+            <span className="dato__etiqueta">Efectivo teórico ahora</span>
+            <span className="dato__valor" data-prueba="monto-teorico">
+              {formatearQuetzales(turno.montoTeorico)}
+            </span>
+          </div>
         </div>
+      )}
+
+      {conteoSelladoDelTurno !== null && (
+        <p className="advertencia" data-prueba="aviso-de-conteo-sellado">
+          Ya se confirmó un conteo de {formatearQuetzales(conteoSelladoDelTurno.montoReal)} con{' '}
+          {diferenciaLegible(conteoSelladoDelTurno.diferencia)}, y quedó registrado. Si cambiás el
+          número, cerrar va a necesitar la autorización de un administrador aunque cuadre.
+        </p>
       )}
 
       {turno !== null && esAjena && (
@@ -346,6 +567,13 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
         denominaciones={denominaciones}
         alCambiar={setEfectivo}
         deshabilitado={trabajando}
+        alConfirmar={() => {
+          if (hayCaja) {
+            cerrar();
+          } else {
+            abrir();
+          }
+        }}
       />
 
       <div className="pie">

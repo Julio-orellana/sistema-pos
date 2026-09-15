@@ -858,6 +858,43 @@ describe('monto_esperado del corte refleja las ventas en efectivo del turno', ()
     expect(montoACadena(caja.montoEsperadoDe(sesion))).toBe('550.00');
   });
 
+  it('EL TEÓRICO EN VIVO sube con cada venta en efectivo, y es el mismo número que el esperado del cierre', () => {
+    const maiz = producto('Maíz', '10.00', '100');
+    const sesionId = abrirCaja();
+    const leer = (): ReturnType<typeof caja.resumenDelTurno> => {
+      const sesion = repos.cajaSesiones.obtenerPorId(sesionId);
+      if (sesion === null) {
+        throw new Error('Se perdió la sesión de caja.');
+      }
+      return caja.resumenDelTurno(sesion);
+    };
+
+    // Recién abierta: el teórico es el fondo, y no hay ventas.
+    expect(montoACadena(leer().montoTeorico)).toBe('500.00');
+    expect(leer().cantidadDeVentasEnEfectivo).toBe(0);
+
+    venta.registrar(idCajera, 'venta', enEfectivo([{ productoId: maiz, cantidad: '3' }]));
+    expect(montoACadena(leer().ventasEnEfectivo)).toBe('30.00');
+    expect(montoACadena(leer().montoTeorico)).toBe('530.00');
+
+    // Una venta con tarjeta NO mueve el teórico: ese dinero no entra al cajón.
+    venta.registrar(idCajera, 'venta', {
+      lineas: [{ productoId: maiz, cantidad: '5' }],
+      descuento: null,
+      formaPago: 'tarjeta',
+      numBoleta: '004512',
+    });
+    expect(montoACadena(leer().montoTeorico)).toBe('530.00');
+    expect(leer().cantidadDeVentasEnEfectivo).toBe(1);
+
+    // Y al cerrar se compara contra exactamente ese número.
+    const cierre = caja.intentarCerrar(sesionId, { modo: 'simple', monto: '530' }, {
+      usuarioQueCierra: idCajera,
+    });
+    expect(cierre.montoEsperado).toBe('530.00');
+    expect(cierre.cerrada).toBe(true);
+  });
+
   it('el descuento ya viene aplicado: se suma el TOTAL, no el subtotal', () => {
     repos.limitesDescuento.fijar({
       rol: 'venta',

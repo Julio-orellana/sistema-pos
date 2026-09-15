@@ -21,6 +21,7 @@ import { formatearQuetzales } from '@shared/money';
 import { FormularioDeProducto } from './FormularioDeProducto';
 import { MiniaturaDeProducto } from './MiniaturaDeProducto';
 import { ModalDeAjusteDeInventario } from './ModalDeAjusteDeInventario';
+import { CampoDeTexto } from './TecladoEnPantalla';
 
 /** Valor del filtro que significa "todas las categorías". */
 const TODAS = '__todas__';
@@ -143,14 +144,12 @@ export function PantallaDeProductos({
         <div className="filtros">
           <label className="campo">
             <span className="campo__etiqueta">Buscar por nombre</span>
-            <input
-              type="search"
-              value={busqueda}
+            <CampoDeTexto
+              etiqueta="Buscar producto por nombre"
+              valor={busqueda}
               placeholder="Maíz, azúcar…"
               data-prueba="productos-buscador"
-              onChange={(evento) => {
-                setBusqueda(evento.target.value);
-              }}
+              alCambiar={setBusqueda}
             />
           </label>
 

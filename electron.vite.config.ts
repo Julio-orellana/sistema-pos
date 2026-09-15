@@ -21,6 +21,17 @@ import react from '@vitejs/plugin-react';
  * equivocado y no lo dice es exactamente la confusión que ya costó una vuelta.
  */
 function nubeParaIncrustar() {
+  /*
+    `POS_COMPILAR_SIN_NUBE=1` compila SIN proyecto aunque exista el archivo.
+    Lo usa `verify:pantallas`, que comprueba justamente las pantallas «sin
+    configurar»: con el archivo presente, desde §4.38 toda compilación quedaba
+    apuntando al proyecto de pruebas y esa verificación dejaba de medir lo que
+    dice medir. Se encontró el 2026-09-14 (§4.39). El empaquetado no lo usa.
+  */
+  if (process.env.POS_COMPILAR_SIN_NUBE === '1') {
+    console.info('[empaquetado] POS_COMPILAR_SIN_NUBE=1: se compila SIN proyecto de nube, aunque exista .env.empaquetado');
+    return null;
+  }
   const archivo = resolve(__dirname, '.env.empaquetado');
   if (!existsSync(archivo)) {
     console.info('[empaquetado] sin .env.empaquetado: se compila SIN proyecto de nube (las pantallas dirán «sin configurar»)');

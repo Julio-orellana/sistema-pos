@@ -26,6 +26,7 @@ import { PantallaDeConfiguracionInicial } from './components/PantallaDeConfigura
 import { PantallaDeIngreso } from './components/PantallaDeIngreso';
 import { PantallaDeRestauracion } from './components/PantallaDeRestauracion';
 import { PantallaDeSesion } from './components/PantallaDeSesion';
+import { ProveedorDeTeclado } from './components/TecladoEnPantalla';
 
 export function App(): React.JSX.Element {
   const [estado, setEstado] = useState<EstadoDeSesion | null>(null);
@@ -118,7 +119,9 @@ export function App(): React.JSX.Element {
       {/* Invisible hasta que se pide la salida controlada. */}
       <ModalDeSalida />
 
-      {contenido}
+      {/* Un solo teclado en pantalla para toda la aplicación: los campos de
+          texto lo abren al tocarlos (componente `CampoDeTexto`). */}
+      <ProveedorDeTeclado>{contenido}</ProveedorDeTeclado>
 
       <BarraDeEstado sesion={sesion} />
     </main>

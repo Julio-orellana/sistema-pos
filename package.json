@@ -28,7 +28,7 @@
     "rebuild": "electron-builder install-app-deps",
     "verify": "npm run lint && npm run typecheck && npm run test",
     "verify:arranque": "npm run build && POS_VERIFICACION_ARRANQUE=1 electron .",
-    "verify:pantallas": "npm run build && node scripts/verificacion-de-pantallas.cjs",
+    "verify:pantallas": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-pantallas.cjs",
     "verify:paquete": "node scripts/verificacion-de-paquete.cjs",
     "seed:ejemplo": "npm run build && electron . --datos-de-ejemplo=sembrar",
     "seed:limpiar": "npm run build && electron . --datos-de-ejemplo=limpiar",

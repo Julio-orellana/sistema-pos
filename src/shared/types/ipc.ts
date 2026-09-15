@@ -539,6 +539,27 @@ export interface TurnoAbierto {
    * exige el PIN, y calcularla dos veces es pedirle a las dos que coincidan.
    */
   readonly esDeOtroUsuario: boolean;
+  /**
+   * Suma de las ventas EN EFECTIVO y completadas de este turno, hasta ahora.
+   * Cadena canónica de dos decimales. La calcula el proceso principal con
+   * Decimal.js: la pantalla no suma.
+   */
+  readonly ventasEnEfectivo: string;
+  /** Cuántas ventas en efectivo lleva el turno. */
+  readonly cantidadDeVentasEnEfectivo: number;
+  /**
+   * `monto_inicial + ventasEnEfectivo`: lo que DEBERÍA haber en el cajón en
+   * este momento. Es el mismo cálculo que `monto_esperado` al cerrar
+   * (`ServicioDeCaja.montoEsperadoDe`), mostrado durante el turno (§4.39).
+   */
+  readonly montoTeorico: string;
+  /**
+   * El primer conteo de cierre sellado de este turno, si hubo alguno. Viene de
+   * `auditoria_log`, así que sigue ahí aunque se salga de la pantalla o se
+   * reinicie la aplicación: que el aviso se borrara al reiniciar invitaría a
+   * reiniciar para no verlo.
+   */
+  readonly primerConteoSellado: ConteoSelladoIpc | null;
 }
 
 /** Lo que la pantalla de caja necesita para dibujarse. */
@@ -548,12 +569,21 @@ export interface EstadoDeCaja {
   readonly denominaciones: readonly DenominacionParaContar[];
 }
 
+/** Un conteo de cierre confirmado con diferencia, que quedó sellado (§4.39). */
+export interface ConteoSelladoIpc {
+  readonly fecha: string;
+  readonly montoEsperado: string;
+  readonly montoReal: string;
+  readonly diferencia: string;
+}
+
 /**
  * Resultado de intentar cerrar un turno.
  *
  * `codigo` puede ser `CIERRE_CORRECTO`, `REQUIERE_AUTORIZACION` (hay
- * diferencia), `REQUIERE_AUTORIZACION_DE_CAJA_AJENA` (la abrió otro), o el
- * código de un intento de autorización fallido.
+ * diferencia), `REQUIERE_AUTORIZACION_DE_RECONTEO` (el conteo de ahora cuadra
+ * pero antes se confirmó otro con diferencia), `REQUIERE_AUTORIZACION_DE_CAJA_AJENA`
+ * (la abrió otro), o el código de un intento de autorización fallido.
  */
 export interface ResultadoDeCierreIpc {
   readonly cerrada: boolean;
@@ -567,6 +597,14 @@ export interface ResultadoDeCierreIpc {
   readonly autorizadaVia: 'presencial' | 'remoto' | null;
   /** Segundos para reintentar si el diálogo de autorización quedó bloqueado. */
   readonly segundosParaReintentar: number | null;
+  /** Con cuánto se abrió el turno. Para la confirmación del cierre. */
+  readonly montoInicial: string;
+  /**
+   * El primer conteo sellado del turno, si es distinto del de ahora. La
+   * pantalla lo muestra al pedir la autorización: quien autoriza tiene que ver
+   * los DOS números, no solo el último.
+   */
+  readonly primerConteo: ConteoSelladoIpc | null;
 }
 
 // ---------------------------------------------------------------------------

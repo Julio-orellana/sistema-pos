@@ -13,6 +13,7 @@
 import { useCallback, useState } from 'react';
 
 import type { ProductoIpc } from '@shared/types/ipc';
+import { CampoDeTexto } from './TecladoEnPantalla';
 
 export interface ModalDeAjusteDeInventarioProps {
   readonly producto: ProductoIpc;
@@ -51,7 +52,7 @@ export function ModalDeAjusteDeInventario({
   }, [producto.id, cantidad, motivo, alTerminar]);
 
   return (
-    <div className="capa-modal">
+    <div className="capa-modal capa-modal--arriba">
       <section className="modal" data-prueba="modal-de-ajuste">
         <h2>Ajustar inventario</h2>
         <p className="modal__texto">
@@ -62,29 +63,25 @@ export function ModalDeAjusteDeInventario({
 
         <label className="campo">
           <span className="campo__etiqueta">Cantidad recibida ({unidad})</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={cantidad}
+          <CampoDeTexto
+            etiqueta={`Cantidad recibida (${unidad})`}
+            disposicion={producto.tipoMedida === 'peso' ? 'decimal' : 'entero'}
+            valor={cantidad}
             autoFocus
             data-prueba="ajuste-cantidad"
-            onChange={(evento) => {
-              setCantidad(evento.target.value);
-            }}
+            alCambiar={setCantidad}
           />
         </label>
 
         <label className="campo">
           <span className="campo__etiqueta">Motivo (opcional)</span>
-          <input
-            type="text"
-            value={motivo}
+          <CampoDeTexto
+            etiqueta="Motivo del ajuste"
+            valor={motivo}
             maxLength={200}
             placeholder="Compra a proveedor…"
             data-prueba="ajuste-motivo"
-            onChange={(evento) => {
-              setMotivo(evento.target.value);
-            }}
+            alCambiar={setMotivo}
           />
         </label>
 

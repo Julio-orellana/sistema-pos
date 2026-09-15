@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { CategoriaIpc } from '@shared/types/ipc';
+import { CampoDeTexto } from './TecladoEnPantalla';
 
 /** Estado del formulario, tanto para crear como para editar. */
 interface Borrador {
@@ -122,26 +123,26 @@ export function PantallaDeCategorias({
 
         <label className="campo">
           <span className="campo__etiqueta">Nombre</span>
-          <input
-            type="text"
-            value={borrador.nombre}
+          <CampoDeTexto
+            etiqueta="Nombre de la categoría"
+            valor={borrador.nombre}
             maxLength={60}
             data-prueba="categoria-nombre"
-            onChange={(evento) => {
-              setBorrador((anterior) => ({ ...anterior, nombre: evento.target.value }));
+            alCambiar={(nombre) => {
+              setBorrador((anterior) => ({ ...anterior, nombre }));
             }}
           />
         </label>
 
         <label className="campo">
           <span className="campo__etiqueta">Orden (menor número, más arriba)</span>
-          <input
-            type="number"
-            min={0}
-            value={borrador.orden}
+          <CampoDeTexto
+            etiqueta="Orden de la categoría"
+            disposicion="entero"
+            valor={borrador.orden}
             data-prueba="categoria-orden"
-            onChange={(evento) => {
-              setBorrador((anterior) => ({ ...anterior, orden: evento.target.value }));
+            alCambiar={(orden) => {
+              setBorrador((anterior) => ({ ...anterior, orden }));
             }}
           />
         </label>

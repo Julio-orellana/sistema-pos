@@ -22,6 +22,7 @@ import type {
   UnidadPesoIpc,
 } from '@shared/types/ipc';
 import { MiniaturaDeProducto } from './MiniaturaDeProducto';
+import { CampoDeTexto } from './TecladoEnPantalla';
 
 /** Lo que el formulario tiene en pantalla. Todo texto: se valida al guardar. */
 interface Borrador {
@@ -201,13 +202,13 @@ export function FormularioDeProducto({
 
       <label className="campo">
         <span className="campo__etiqueta">Nombre</span>
-        <input
-          type="text"
-          value={borrador.nombre}
+        <CampoDeTexto
+          etiqueta="Nombre del producto"
+          valor={borrador.nombre}
           maxLength={80}
           data-prueba="producto-nombre"
-          onChange={(evento) => {
-            setBorrador((anterior) => ({ ...anterior, nombre: evento.target.value }));
+          alCambiar={(nombre) => {
+            setBorrador((anterior) => ({ ...anterior, nombre }));
           }}
         />
       </label>
@@ -286,29 +287,26 @@ export function FormularioDeProducto({
         <span className="campo__etiqueta">
           Cantidad que agrega el ícono ({borrador.tipoMedida === 'peso' ? 'peso' : 'unidades'})
         </span>
-        <input
-          type="text"
-          inputMode="decimal"
-          value={borrador.cantidadPredefinidaIcono}
+        <CampoDeTexto
+          etiqueta="Cantidad que agrega el ícono"
+          disposicion={borrador.tipoMedida === 'peso' ? 'decimal' : 'entero'}
+          valor={borrador.cantidadPredefinidaIcono}
           data-prueba="producto-cantidad-icono"
-          onChange={(evento) => {
-            setBorrador((anterior) => ({
-              ...anterior,
-              cantidadPredefinidaIcono: evento.target.value,
-            }));
+          alCambiar={(cantidadPredefinidaIcono) => {
+            setBorrador((anterior) => ({ ...anterior, cantidadPredefinidaIcono }));
           }}
         />
       </label>
 
       <label className="campo">
         <span className="campo__etiqueta">Precio en quetzales</span>
-        <input
-          type="text"
-          inputMode="decimal"
-          value={borrador.precioBase}
+        <CampoDeTexto
+          etiqueta="Precio en quetzales"
+          disposicion="decimal"
+          valor={borrador.precioBase}
           data-prueba="producto-precio"
-          onChange={(evento) => {
-            setBorrador((anterior) => ({ ...anterior, precioBase: evento.target.value }));
+          alCambiar={(precioBase) => {
+            setBorrador((anterior) => ({ ...anterior, precioBase }));
           }}
         />
       </label>
@@ -316,16 +314,13 @@ export function FormularioDeProducto({
       {esNuevo ? (
         <label className="campo">
           <span className="campo__etiqueta">Inventario inicial (puede ser 0)</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={borrador.inventarioInicial}
+          <CampoDeTexto
+            etiqueta="Inventario inicial"
+            disposicion={borrador.tipoMedida === 'peso' ? 'decimal' : 'entero'}
+            valor={borrador.inventarioInicial}
             data-prueba="producto-inventario-inicial"
-            onChange={(evento) => {
-              setBorrador((anterior) => ({
-                ...anterior,
-                inventarioInicial: evento.target.value,
-              }));
+            alCambiar={(inventarioInicial) => {
+              setBorrador((anterior) => ({ ...anterior, inventarioInicial }));
             }}
           />
         </label>

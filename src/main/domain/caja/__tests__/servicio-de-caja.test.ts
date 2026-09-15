@@ -409,6 +409,228 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
 });
 
 // ===========================================================================
+/**
+ * EL HUECO DEL RECUENTO, que encontró Jimmy en el equipo real (§4.39).
+ *
+ * Antes: el cajero contaba de menos, el sistema le mostraba la diferencia, y
+ * él volvía atrás y probaba otro número hasta que «cuadrara». No quedaba
+ * rastro del primero, y la autorización de diferencias no servía para nada.
+ *
+ * Ahora: un conteo CONFIRMADO con diferencia queda sellado en la bitácora, y
+ * el turno solo cierra con autorización, aunque el número final cuadre.
+ */
+describe('EL CONTEO CONFIRMADO CON DIFERENCIA QUEDA SELLADO', () => {
+  /** Abre el turno de Q500 de la cajera. */
+  function turnoDeQuinientos(): string {
+    return caja.abrir(idCajera, { modo: 'simple', monto: '500' }).id;
+  }
+
+  const simple = (monto: string): EfectivoDeclarado => ({ modo: 'simple', monto });
+
+  /** Los asientos de sello de un turno, tal como quedaron escritos. */
+  function sellos(sesionId: string): { montoReal: string; diferencia: string }[] {
+    return (
+      base
+        .prepare(
+          "SELECT valor_nuevo FROM auditoria_log WHERE accion = 'conteo_de_cierre_sellado' AND entidad_id = ? ORDER BY rowid",
+        )
+        .all(sesionId) as { valor_nuevo: string }[]
+    ).map((fila) => JSON.parse(fila.valor_nuevo) as { montoReal: string; diferencia: string });
+  }
+
+  it('EL CASO COMÚN NO SE VUELVE TEDIOSO: contar bien a la primera cierra sin PIN y sin ningún sello', () => {
+    const sesionId = turnoDeQuinientos();
+    const resultado = caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
+
+    expect(resultado.cerrada).toBe(true);
+    expect(resultado.codigo).toBe('CIERRE_CORRECTO');
+    expect(resultado.primerConteo).toBeNull();
+    expect(sellos(sesionId)).toEqual([]);
+    expect(accionesDeAuditoria()).not.toContain('reconteo_de_cierre_autorizado');
+  });
+
+  it('AJUSTAR EL NÚMERO ANTES DE CONFIRMAR NO REGISTRA NADA: lo único que cuenta es lo que llega a confirmarse', () => {
+    // La pantalla no le manda nada al proceso principal mientras el cajero
+    // escribe: la única entrada del servicio es la confirmación. Así que
+    // antes de la primera, la bitácora solo tiene la apertura.
+    const sesionId = turnoDeQuinientos();
+    expect(sellos(sesionId)).toEqual([]);
+    expect(accionesDeAuditoria()).toEqual(['caja_abierta']);
+  });
+
+  it('confirmar un conteo con diferencia lo SELLA en la bitácora, con su diferencia', () => {
+    const sesionId = turnoDeQuinientos();
+    const resultado = caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+
+    expect(resultado.codigo).toBe('REQUIERE_AUTORIZACION');
+    expect(sellos(sesionId)).toEqual([
+      expect.objectContaining({ montoReal: '480.00', diferencia: '-20.00', montoEsperado: '500.00' }),
+    ]);
+  });
+
+  it('volver a confirmar el MISMO número no duplica el sello (reintentar un PIN no llena la bitácora)', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+    caja.intentarCerrar(sesionId, simple('480.00'), { usuarioQueCierra: idCajera });
+
+    expect(sellos(sesionId)).toHaveLength(1);
+  });
+
+  it('EL ESCENARIO DE JIMMY: contar de menos, ver la diferencia y corregir a un número que CUADRA exige autorización', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+
+    const corregido = caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
+
+    expect(corregido.cerrada).toBe(false);
+    expect(corregido.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');
+    expect(corregido.diferencia).toBe('0.00');
+    // Quien autoriza ve el primer número, no solo el que cuadra.
+    expect(corregido.primerConteo).toEqual(
+      expect.objectContaining({ montoReal: '480.00', diferencia: '-20.00' }),
+    );
+    expect(corregido.mensaje).toContain('480.00');
+    expect(repos.cajaSesiones.obtenerPorId(sesionId)?.estado).toBe('abierta');
+  });
+
+  it('con la autorización, cierra, y en la bitácora quedan LOS DOS conteos y quién autorizó la corrección', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+
+    const permiso = autenticacion.autorizarComoAdministrador(PIN_REMOTO_DE_JIMMY, 'cierre_con_diferencia');
+    expect(permiso.autenticado).toBe(true);
+    const cerrado = caja.intentarCerrar(sesionId, simple('500'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'remoto' },
+    });
+
+    expect(cerrado.cerrada).toBe(true);
+    // El primero, con su diferencia, en su propio asiento.
+    expect(sellos(sesionId)).toEqual([expect.objectContaining({ montoReal: '480.00', diferencia: '-20.00' })]);
+
+    // El final, con quién autorizó y por qué vía, junto a los sellados.
+    const reconteo = base
+      .prepare(
+        "SELECT usuario_id, valor_anterior, valor_nuevo FROM auditoria_log WHERE accion = 'reconteo_de_cierre_autorizado'",
+      )
+      .get() as { usuario_id: string; valor_anterior: string; valor_nuevo: string };
+    expect(reconteo.usuario_id).toBe(idCajera);
+    expect(JSON.parse(reconteo.valor_anterior)).toEqual({
+      conteosSellados: [expect.objectContaining({ montoReal: '480.00', diferencia: '-20.00' })],
+    });
+    expect(JSON.parse(reconteo.valor_nuevo)).toEqual(
+      expect.objectContaining({
+        montoReal: '500.00',
+        diferencia: '0.00',
+        autorizadaPor: idJimmy,
+        autorizadaVia: 'remoto',
+      }),
+    );
+
+    // La fila de la caja NO guarda autorizante: cuadró, y el CHECK de la 008
+    // exige esas columnas vacías. La constancia es el asiento de arriba.
+    const sesion = repos.cajaSesiones.obtenerPorId(sesionId);
+    expect(sesion?.diferencia && montoACadena(sesion.diferencia)).toBe('0.00');
+    expect(sesion?.diferenciaAutorizadaPor).toBeNull();
+
+    const cierre = base
+      .prepare("SELECT valor_nuevo FROM auditoria_log WHERE accion = 'caja_cerrada'")
+      .get() as { valor_nuevo: string };
+    expect(JSON.parse(cierre.valor_nuevo)).toEqual(
+      expect.objectContaining({ conteosSellados: 1, huboReconteo: true }),
+    );
+  });
+
+  it('corregir a OTRO número que tampoco cuadra sella también el segundo, y los dos quedan', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+    const segundo = caja.intentarCerrar(sesionId, simple('495'), { usuarioQueCierra: idCajera });
+
+    expect(segundo.codigo).toBe('REQUIERE_AUTORIZACION');
+    expect(segundo.primerConteo).toEqual(expect.objectContaining({ montoReal: '480.00' }));
+    expect(sellos(sesionId).map((sello) => sello.montoReal)).toEqual(['480.00', '495.00']);
+  });
+
+  it('volver al PRIMER número después de un segundo sello sigue exigiendo autorización (no hay un número «bueno» al que volver)', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+    caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
+    const deNuevo = caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+
+    expect(deNuevo.cerrada).toBe(false);
+    expect(repos.cajaSesiones.obtenerPorId(sesionId)?.estado).toBe('abierta');
+  });
+
+  it('EL SELLO SOBREVIVE A REINICIAR LA APLICACIÓN: vive en la base, no en memoria', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+
+    // Un servicio nuevo sobre la misma base es lo que queda después de matar
+    // el proceso y volver a abrir.
+    const otraCaja = new ServicioDeCaja({
+      base,
+      cajaSesiones: repos.cajaSesiones,
+      denominaciones: repos.denominaciones,
+      desglose: repos.desgloseDeCaja,
+      ventas: repos.ventas,
+      auditoria: repos.auditoria,
+    });
+    const corregido = otraCaja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
+
+    expect(corregido.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');
+  });
+
+  it('el sello y el reconteo se ENCOLAN para la nube, como todo hecho del negocio', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+    caja.intentarCerrar(sesionId, simple('500'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'presencial' },
+    });
+
+    const encolados = (
+      base
+        .prepare(
+          `SELECT a.accion FROM sync_cola c JOIN auditoria_log a ON a.id = c.entidad_id
+            WHERE c.entidad_tipo = 'auditoria_log' ORDER BY c.rowid`,
+        )
+        .all() as { accion: string }[]
+    ).map((fila) => fila.accion);
+    expect(encolados).toEqual([
+      'caja_abierta',
+      'conteo_de_cierre_sellado',
+      'caja_cerrada',
+      'reconteo_de_cierre_autorizado',
+    ]);
+  });
+
+  it('también en MODO DETALLADO: corregir el desglose después de una diferencia exige autorización', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, desglose({ '200.00': 2 }), { usuarioQueCierra: idCajera });
+    const corregido = caja.intentarCerrar(sesionId, desglose({ '200.00': 2, '100.00': 1 }), {
+      usuarioQueCierra: idCajera,
+    });
+
+    expect(corregido.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');
+    expect(sellos(sesionId)).toEqual([expect.objectContaining({ montoReal: '400.00', modo: 'detallado' })]);
+  });
+
+  it('un turno NUEVO empieza sin sellos: el sello es del turno, no de la caja', () => {
+    const primero = turnoDeQuinientos();
+    caja.intentarCerrar(primero, simple('480'), { usuarioQueCierra: idCajera });
+    caja.intentarCerrar(primero, simple('480'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'presencial' },
+    });
+
+    const segundo = turnoDeQuinientos();
+    expect(caja.intentarCerrar(segundo, simple('500'), { usuarioQueCierra: idCajera }).cerrada).toBe(true);
+  });
+
+});
+
+// ===========================================================================
 describe('monto_esperado = monto inicial + ventas en efectivo del turno', () => {
   it('un turno SIN ventas espera exactamente el fondo con que se abrió', () => {
     const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '750.25' });

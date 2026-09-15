@@ -83,6 +83,23 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
 
           const estado = caja.estadoParaVender(enSesion.id);
 
+          /** Lo vendido en efectivo en el turno, con el mismo cálculo del cierre. */
+          const resumenDe = (
+            turno: Parameters<typeof caja.resumenDelTurno>[0],
+          ): Pick<
+            TurnoAbierto,
+            'ventasEnEfectivo' | 'cantidadDeVentasEnEfectivo' | 'montoTeorico' | 'primerConteoSellado'
+          > => {
+            const resumen = caja.resumenDelTurno(turno);
+            return {
+              ventasEnEfectivo: montoACadena(resumen.ventasEnEfectivo),
+              cantidadDeVentasEnEfectivo: resumen.cantidadDeVentasEnEfectivo,
+              montoTeorico: montoACadena(resumen.montoTeorico),
+              // La pantalla de venta no lo muestra: no es un dato de mostrador.
+              primerConteoSellado: null,
+            };
+          };
+
           /** El turno del sistema, con quién lo abrió ya resuelto. */
           const turnoAbierto: TurnoAbierto | null = estado.puede
             ? {
@@ -92,6 +109,7 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
                 abiertaPorId: estado.turno.usuarioId,
                 abiertaPorNombre: enSesion.nombre,
                 esDeOtroUsuario: false,
+                ...resumenDe(estado.turno),
               }
             : estado.motivo === 'CAJA_DE_OTRO_USUARIO'
               ? {
@@ -103,6 +121,7 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
                     usuarios.obtenerPorId(estado.turno.usuarioId)?.nombre ??
                     '(usuario eliminado)',
                   esDeOtroUsuario: true,
+                  ...resumenDe(estado.turno),
                 }
               : null;
 

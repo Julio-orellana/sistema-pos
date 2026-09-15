@@ -232,3 +232,24 @@ describe('Freno a los errores de tecleo', () => {
     expect(tecla('9')?.disabled).toBe(true);
   });
 });
+
+describe('Modo cantidad que ADMITE CERO: contar efectivo', () => {
+  it('sin admiteCero, un 0 no se puede confirmar (el ticket no vende cero libras)', () => {
+    montar({ modo: 'cantidad', decimales: 2 });
+    pulsar('0');
+    expect(tecla('confirmar')?.disabled).toBe(true);
+  });
+
+  it('con admiteCero, un 0 sí se confirma: un cajón sin billetes de Q200 es un conteo válido', () => {
+    montar({ modo: 'cantidad', decimales: 0, admiteCero: true });
+    pulsar('0');
+    expect(tecla('confirmar')?.disabled).toBe(false);
+  });
+
+  it('con dos decimales escribe un monto en quetzales y centavos, y no deja un tercero', () => {
+    montar({ modo: 'cantidad', decimales: 2, admiteCero: true });
+    pulsar('4', '8', '0', 'punto', '5', '0');
+    expect(valorActual).toBe('480.50');
+    expect(tecla('5')?.disabled).toBe(true);
+  });
+});

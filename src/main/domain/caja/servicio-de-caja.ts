@@ -11,6 +11,15 @@
  *
  * Nunca se aceptan los dos a la vez. La suma del modo detallado se hace con
  * Decimal.js, como todo el dinero del proyecto.
+ *
+ * EL CONTEO CONFIRMADO CON DIFERENCIA QUEDA SELLADO (2026-09-14). Jimmy lo
+ * encontró probando en el equipo real: si al cerrar el sistema mostraba una
+ * diferencia, el cajero podía volver atrás y probar otro número hasta que
+ * «cuadrara», sin que quedara rastro del primero. Eso anulaba el propósito de
+ * exigir autorización ante una diferencia. Ahora, en cuanto un conteo se
+ * CONFIRMA y da diferencia, queda escrito en `auditoria_log`, y desde ese
+ * momento la caja solo se cierra con el PIN de un administrador, AUNQUE el
+ * número final cuadre. Ver `intentarCerrar` y CLAUDE.md §4.39.
  */
 
 import type { Database } from 'better-sqlite3';
@@ -40,7 +49,26 @@ import type {
 export const ACCIONES_DE_CAJA = {
   aperturaDeCaja: 'caja_abierta',
   cierreDeCaja: 'caja_cerrada',
+  /** Un conteo de cierre CONFIRMADO que dio diferencia. Es el sello. */
+  conteoSellado: 'conteo_de_cierre_sellado',
+  /** Se cerró con un conteo distinto de uno ya sellado, con autorización. */
+  reconteoAutorizado: 'reconteo_de_cierre_autorizado',
 } as const;
+
+/**
+ * Un conteo de cierre ya sellado, tal como quedó en la bitácora.
+ *
+ * Los tres montos van como cadena canónica de dos decimales: son los mismos
+ * textos que la pantalla le mostró al cajero en ese momento.
+ */
+export interface ConteoSellado {
+  readonly asientoId: string;
+  readonly fecha: string;
+  readonly montoEsperado: string;
+  readonly montoReal: string;
+  readonly diferencia: string;
+  readonly modo: ModoDeCaptura;
+}
 
 /** Cómo se capturó el efectivo. */
 export type ModoDeCaptura = 'simple' | 'detallado';
@@ -62,6 +90,12 @@ export interface ResultadoDeCierre {
     | 'CIERRE_CORRECTO'
     /** Hay diferencia y falta el código que la autorice. */
     | 'REQUIERE_AUTORIZACION'
+    /**
+     * El conteo de ahora CUADRA, pero antes se confirmó otro que no cuadraba.
+     * Cambiar el resultado después de ver un problema es justamente lo que
+     * hay que autorizar (§4.39).
+     */
+    | 'REQUIERE_AUTORIZACION_DE_RECONTEO'
     /** La abrió otra persona y falta el PIN del administrador. */
     | 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA';
   readonly mensaje: string;
@@ -70,6 +104,12 @@ export interface ResultadoDeCierre {
   readonly diferencia: string;
   readonly montoEsperado: string;
   readonly montoReal: string;
+  /**
+   * El PRIMER conteo sellado de este turno, si el conteo de ahora es otro.
+   * `null` cuando no hubo ningún sello, o cuando el de ahora es el mismo
+   * número: ahí no hay nada distinto que mostrar.
+   */
+  readonly primerConteo: ConteoSellado | null;
 }
 
 /**
@@ -344,6 +384,27 @@ export class ServicioDeCaja {
    * aplicado en el total, que es lo que el cliente pagó y lo que entró al
    * cajón.
    */
+  /**
+   * El turno EN CURSO, con lo vendido en efectivo hasta ahora.
+   *
+   * Es `montoEsperadoDe` desglosado para mostrarlo mientras la caja está
+   * abierta, no una fórmula aparte: el teórico que se ve durante el turno y el
+   * esperado contra el que se compara al cerrar tienen que salir del mismo
+   * cálculo, o un día dirían dos números distintos.
+   */
+  public resumenDelTurno(sesion: CajaSesion): {
+    readonly ventasEnEfectivo: Decimal;
+    readonly cantidadDeVentasEnEfectivo: number;
+    readonly montoTeorico: Decimal;
+  } {
+    const enEfectivo = this.ventas.totalesEnEfectivoDeSesion(sesion.id);
+    return {
+      ventasEnEfectivo: enEfectivo.length === 0 ? CERO : sumarLista(enEfectivo),
+      cantidadDeVentasEnEfectivo: enEfectivo.length,
+      montoTeorico: this.montoEsperadoDe(sesion),
+    };
+  }
+
   public montoEsperadoDe(sesion: CajaSesion): Decimal {
     const enEfectivo = this.ventas.totalesEnEfectivoDeSesion(sesion.id);
     return sumar(sesion.montoInicial, sumarLista(enEfectivo));
@@ -381,6 +442,7 @@ export class ServicioDeCaja {
         diferencia: '0.00',
         montoEsperado: montoACadena(this.montoEsperadoDe(sesion)),
         montoReal: '0.00',
+        primerConteo: null,
       };
     }
 
@@ -395,18 +457,79 @@ export class ServicioDeCaja {
     // (migración 008), así que la aplicación y la base no pueden discrepar
     // nunca: si para una la caja cuadra, para la otra también.
     const hayDiferencia = !this.cuadra(diferencia);
+    const montoEsperadoTexto = montoACadena(montoEsperado);
+    const montoRealTexto = montoACadena(montoReal);
 
-    if (hayDiferencia && autorizacion === undefined) {
-      return {
-        cerrada: false,
-        codigo: 'REQUIERE_AUTORIZACION',
-        mensaje: this.describirDiferencia(diferencia),
-        sesion: null,
-        diferencia: diferenciaTexto,
-        montoEsperado: montoACadena(montoEsperado),
-        montoReal: montoACadena(montoReal),
-      };
+    /*
+      EL SELLO DEL CONTEO. Cada llamada a este método ES una confirmación del
+      cajero: lo que escribe mientras ajusta el número nunca sale de la
+      pantalla, así que antes de confirmar es libre y no deja ningún registro.
+
+      La regla, que parece de dos casos y en realidad es uno solo:
+
+        UN TURNO CON ALGÚN CONTEO SELLADO SOLO SE CIERRA CON AUTORIZACIÓN.
+
+      Porque o bien el conteo final es uno de los sellados —y esos, por
+      definición, tenían diferencia, que ya exige PIN—, o bien es otro distinto,
+      y cambiar el resultado después de haber visto un problema es exactamente
+      la señal que hay que autorizar, cuadre o no el número final. No hay un
+      tercer caso: por eso no hace falta decidir si se compara contra el primer
+      sello o contra el último.
+
+      Los sellos se leen de `auditoria_log` y no de la memoria, por la misma
+      razón por la que los candados de intentos viven en la base (§4.8): esta
+      aplicación deja matar el proceso a propósito (§4.5), y un sello en memoria
+      se borraría cerrando y volviendo a abrir la aplicación.
+    */
+    const sellados = this.conteosSelladosDe(sesion.id);
+
+    if (autorizacion === undefined) {
+      if (hayDiferencia) {
+        const ultimo = sellados.at(-1);
+        // Volver a confirmar el MISMO número no es un conteo nuevo: se sella
+        // una vez. Si no, reintentar un PIN equivocado llenaría la bitácora.
+        const esNuevo =
+          ultimo?.montoReal !== montoRealTexto || ultimo.montoEsperado !== montoEsperadoTexto;
+        if (esNuevo) {
+          this.sellarConteo(sesion, contexto.usuarioQueCierra, {
+            montoEsperado: montoEsperadoTexto,
+            montoReal: montoRealTexto,
+            diferencia: diferenciaTexto,
+            modo: efectivo.modo,
+          });
+        }
+        return {
+          cerrada: false,
+          codigo: 'REQUIERE_AUTORIZACION',
+          mensaje: this.describirDiferencia(diferencia),
+          sesion: null,
+          diferencia: diferenciaTexto,
+          montoEsperado: montoEsperadoTexto,
+          montoReal: montoRealTexto,
+          primerConteo: this.primerConteoDistinto(sellados, montoRealTexto),
+        };
+      }
+
+      const primero = sellados[0];
+      if (primero !== undefined) {
+        return {
+          cerrada: false,
+          codigo: 'REQUIERE_AUTORIZACION_DE_RECONTEO',
+          mensaje:
+            `Antes se confirmó un conteo de Q${primero.montoReal} con ` +
+            `${this.describirDiferencia(new Decimal(primero.diferencia))}. ` +
+            'Corregir un conteo que mostraba una diferencia exige la autorización de un administrador, aunque ahora cuadre.',
+          sesion: null,
+          diferencia: diferenciaTexto,
+          montoEsperado: montoEsperadoTexto,
+          montoReal: montoRealTexto,
+          primerConteo: primero,
+        };
+      }
     }
+
+    /** ¿Algún conteo sellado es distinto del que se está cerrando? */
+    const huboReconteo = sellados.some((sellado) => sellado.montoReal !== montoRealTexto);
 
     /*
       Igual que en `abrir`: las tres escrituras del cierre —el desglose, la
@@ -455,9 +578,48 @@ export class ServicioDeCaja {
               : null,
             autorizadaPor: hayDiferencia ? (autorizacion?.autorizadaPor ?? null) : null,
             autorizadaVia: hayDiferencia ? (autorizacion?.via ?? null) : null,
+            // Cuántos conteos con diferencia se confirmaron antes de este, y si
+            // el cierre fue con uno distinto (§4.39).
+            conteosSellados: sellados.length,
+            huboReconteo,
           },
           fecha: new Date(this.ahora()).toISOString(),
         });
+
+        /*
+          EL RECONTEO AUTORIZADO VA EN SU PROPIO ASIENTO, y no solo como dato del
+          cierre: si el número final cuadra, `caja_sesiones` NO PUEDE guardar
+          quién autorizó —el CHECK de la migración 008 exige esas columnas
+          vacías cuando la diferencia es '0.00'—, así que la única constancia de
+          esa autorización es este asiento. Lleva los DOS lados: cada conteo
+          sellado, con su diferencia, y el final.
+        */
+        const asientoDeReconteo = huboReconteo
+          ? this.auditoria.registrar({
+              usuarioId: contexto.usuarioQueCierra,
+              accion: ACCIONES_DE_CAJA.reconteoAutorizado,
+              entidadTipo: 'caja_sesiones',
+              entidadId: sesion.id,
+              valorAnterior: {
+                conteosSellados: sellados.map((sellado) => ({
+                  fecha: sellado.fecha,
+                  montoEsperado: sellado.montoEsperado,
+                  montoReal: sellado.montoReal,
+                  diferencia: sellado.diferencia,
+                  modo: sellado.modo,
+                })),
+              },
+              valorNuevo: {
+                montoEsperado: montoEsperadoTexto,
+                montoReal: montoRealTexto,
+                diferencia: diferenciaTexto,
+                modo: efectivo.modo,
+                autorizadaPor: autorizacion?.autorizadaPor ?? null,
+                autorizadaVia: autorizacion?.via ?? null,
+              },
+              fecha: new Date(this.ahora()).toISOString(),
+            })
+          : null;
 
         // La sesión va como `actualizar`: el cierre no la creó, la cerró.
         const entradas: EntradaDelLote[] = [
@@ -468,6 +630,9 @@ export class ServicioDeCaja {
             'insertar',
           ),
           { tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' },
+          ...(asientoDeReconteo === null
+            ? []
+            : [{ tabla: 'auditoria_log' as const, id: asientoDeReconteo.id, operacion: 'insertar' as const }]),
         ];
         encolarLote(this.base, entradas);
 
@@ -484,9 +649,73 @@ export class ServicioDeCaja {
         : 'Turno cerrado. La caja cuadra exactamente.',
       sesion: cerrada,
       diferencia: diferenciaTexto,
-      montoEsperado: montoACadena(montoEsperado),
-      montoReal: montoACadena(montoReal),
+      montoEsperado: montoEsperadoTexto,
+      montoReal: montoRealTexto,
+      primerConteo: this.primerConteoDistinto(sellados, montoRealTexto),
     };
+  }
+
+  /**
+   * Los conteos de cierre sellados de un turno, del más viejo al más nuevo.
+   *
+   * Salen de `auditoria_log`, que es inmutable por trigger: un sello no se
+   * puede borrar ni editar, ni siquiera con una consulta a mano.
+   */
+  public conteosSelladosDe(cajaSesionId: string): readonly ConteoSellado[] {
+    return this.auditoria
+      .listarPorEntidadYAccion('caja_sesiones', cajaSesionId, ACCIONES_DE_CAJA.conteoSellado)
+      .map((asiento): ConteoSellado => {
+        const datos = JSON.parse(asiento.valorNuevo ?? '{}') as {
+          readonly montoEsperado: string;
+          readonly montoReal: string;
+          readonly diferencia: string;
+          readonly modo: ModoDeCaptura;
+        };
+        return {
+          asientoId: asiento.id,
+          fecha: asiento.fecha,
+          montoEsperado: datos.montoEsperado,
+          montoReal: datos.montoReal,
+          diferencia: datos.diferencia,
+          modo: datos.modo,
+        };
+      });
+  }
+
+  /** El primer sello, solo si su número es distinto del conteo de ahora. */
+  private primerConteoDistinto(
+    sellados: readonly ConteoSellado[],
+    montoRealTexto: string,
+  ): ConteoSellado | null {
+    const primero = sellados[0];
+    return primero !== undefined && primero.montoReal !== montoRealTexto ? primero : null;
+  }
+
+  /**
+   * Escribe el sello de un conteo confirmado con diferencia.
+   *
+   * En su PROPIA transacción, y se confirma aunque el cierre no llegue a
+   * ocurrir: es justamente el rastro que tiene que quedar si el cajero se
+   * arrepiente y prueba otro número. Va a la bandeja de salida como cualquier
+   * hecho del negocio (§4.26), en un lote de un solo asiento que sube por
+   * `sincronizar_asiento`.
+   */
+  private sellarConteo(
+    sesion: CajaSesion,
+    usuarioId: string,
+    conteo: Omit<ConteoSellado, 'asientoId' | 'fecha'>,
+  ): void {
+    enTransaccionDeNegocio(this.base, (): void => {
+      const asiento = this.auditoria.registrar({
+        usuarioId,
+        accion: ACCIONES_DE_CAJA.conteoSellado,
+        entidadTipo: 'caja_sesiones',
+        entidadId: sesion.id,
+        valorNuevo: conteo,
+        fecha: new Date(this.ahora()).toISOString(),
+      });
+      encolarLote(this.base, [{ tabla: 'auditoria_log', id: asiento.id, operacion: 'insertar' }]);
+    });
   }
 
   /**

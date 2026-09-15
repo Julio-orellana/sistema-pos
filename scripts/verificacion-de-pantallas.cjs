@@ -298,7 +298,11 @@ async function main() {
     await prueba('ir-a-caja-desde-venta').click();
     await prueba('pantalla-de-caja').waitFor({ timeout: ESPERA_CORTA });
     await prueba('modo-simple').click();
-    await prueba('campo-monto').fill('500');
+    // Desde el 2026-09-14 el total se escribe con el teclado numérico en
+    // pantalla: en la tienda no hay teclado físico (§4.39).
+    for (const digito of '500') {
+      await prueba(`tecla-${digito}`).click();
+    }
     await prueba('confirmar-caja').click();
     // `estado-caja-propia` es el bloque que aparece cuando el turno abierto es
     // de quien está en sesión: la señal de que la apertura funcionó.

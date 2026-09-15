@@ -32,6 +32,10 @@ const TURNO_DE_ROSA: TurnoAbierto = {
   abiertaPorId: 'usuario-rosa',
   abiertaPorNombre: 'Rosa',
   esDeOtroUsuario: true,
+  ventasEnEfectivo: '0.00',
+  cantidadDeVentasEnEfectivo: 0,
+  montoTeorico: '500.00',
+  primerConteoSellado: null,
 };
 
 /** El mismo turno, pero abierto por quien está en sesión. */
@@ -194,5 +198,149 @@ describe('Estado 3: hay una caja abierta y la abrió OTRA persona', () => {
   it('tampoco ofrece abrir otra caja', async () => {
     await montar();
     expect(porPrueba('estado-sin-caja')).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Lo que agregó el 2026-09-14 (§4.39): teórico en vivo, confirmación del
+// cierre con sus tres montos, y el reconteo que muestra los dos conteos.
+// ===========================================================================
+
+/** Instala una API cuyo `cerrar` contesta lo que se le pase, en orden. */
+function instalarApiConCierres(turno: TurnoAbierto, respuestas: readonly unknown[]): void {
+  instalarApi(turno);
+  const pendientes = [...respuestas];
+  const api = (window as unknown as { pos: { caja: Record<string, unknown> } }).pos;
+  api.caja.cerrar = async (): Promise<unknown> =>
+    Promise.resolve({ ok: true as const, datos: pendientes.shift() });
+}
+
+/** Cuenta un billete de Q100 y confirma el cierre. */
+async function contarYConfirmar(): Promise<void> {
+  const mas = contenedor.querySelector<HTMLButtonElement>(
+    'button[aria-label="Agregar una pieza de 100.00"]',
+  );
+  if (mas === null) {
+    throw new Error('No está el botón para contar Q100.');
+  }
+  act(() => {
+    mas.click();
+  });
+  await act(async () => {
+    porPrueba('confirmar-caja')?.click();
+    await Promise.resolve();
+  });
+}
+
+const RESPUESTA_BASE = {
+  mensaje: '',
+  autorizadaVia: null,
+  segundosParaReintentar: null,
+  montoInicial: '500.00',
+  primerConteo: null,
+};
+
+describe('EL EFECTIVO TEÓRICO se ve mientras la caja está abierta', () => {
+  it('muestra las ventas en efectivo y el teórico que manda el proceso principal', async () => {
+    instalarApi({
+      ...TURNO_PROPIO,
+      ventasEnEfectivo: '130.50',
+      cantidadDeVentasEnEfectivo: 4,
+      montoTeorico: '630.50',
+    });
+    await montar();
+
+    expect(porPrueba('monto-teorico')?.textContent).toContain('630.50');
+    expect(porPrueba('ventas-en-efectivo')?.textContent).toContain('130.50');
+    expect(texto()).toContain('Ventas en efectivo (4)');
+  });
+
+  it('si el turno ya tiene un conteo sellado, lo avisa aunque se haya salido de la pantalla', async () => {
+    instalarApi({
+      ...TURNO_PROPIO,
+      primerConteoSellado: {
+        fecha: '2026-09-14T20:00:00.000Z',
+        montoEsperado: '500.00',
+        montoReal: '480.00',
+        diferencia: '-20.00',
+      },
+    });
+    await montar();
+
+    const aviso = porPrueba('aviso-de-conteo-sellado');
+    expect(aviso?.textContent).toContain('480.00');
+    expect(aviso?.textContent).toContain('autorización');
+  });
+});
+
+describe('LA CONFIRMACIÓN DEL CIERRE muestra los tres montos', () => {
+  it('cuadrada: inicial, teórico y final, sin renglón de diferencia', async () => {
+    instalarApiConCierres(TURNO_PROPIO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: true,
+        codigo: 'CIERRE_CORRECTO',
+        diferencia: '0.00',
+        montoEsperado: '630.50',
+        montoReal: '630.50',
+      },
+    ]);
+    await montar();
+    await contarYConfirmar();
+
+    expect(porPrueba('confirmacion-de-cierre')?.textContent).toContain('Caja cerrada con éxito');
+    expect(porPrueba('cierre-efectivo-inicial')?.textContent).toContain('500.00');
+    expect(porPrueba('cierre-efectivo-teorico')?.textContent).toContain('630.50');
+    expect(porPrueba('cierre-efectivo-final')?.textContent).toContain('630.50');
+    expect(porPrueba('cierre-diferencia')).toBeNull();
+  });
+
+  it('con diferencia autorizada: la muestra, con su signo en palabras', async () => {
+    instalarApiConCierres(TURNO_PROPIO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: true,
+        codigo: 'CIERRE_CORRECTO',
+        diferencia: '-20.00',
+        montoEsperado: '500.00',
+        montoReal: '480.00',
+        autorizadaVia: 'presencial',
+      },
+    ]);
+    await montar();
+    await contarYConfirmar();
+
+    expect(porPrueba('cierre-diferencia')?.textContent).toContain('20.00');
+    expect(porPrueba('confirmacion-de-cierre')?.textContent).toContain('Faltante');
+  });
+});
+
+describe('EL RECONTEO: quien autoriza ve LOS DOS conteos', () => {
+  it('pide autorización mostrando el primer conteo y el de ahora', async () => {
+    instalarApiConCierres(TURNO_PROPIO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: false,
+        codigo: 'REQUIERE_AUTORIZACION_DE_RECONTEO',
+        diferencia: '0.00',
+        montoEsperado: '500.00',
+        montoReal: '500.00',
+        primerConteo: {
+          fecha: '2026-09-14T20:00:00.000Z',
+          montoEsperado: '500.00',
+          montoReal: '480.00',
+          diferencia: '-20.00',
+        },
+      },
+    ]);
+    await montar();
+    await contarYConfirmar();
+
+    expect(porPrueba('autorizacion-de-reconteo')).not.toBeNull();
+    expect(porPrueba('reconteo-primer-conteo')?.textContent).toContain('480.00');
+    expect(porPrueba('reconteo-conteo-actual')?.textContent).toContain('500.00');
+    expect(porPrueba('autorizacion-de-reconteo')?.textContent).toContain('aunque ahora cuadre');
+    // Y NO se cerró: no hay confirmación.
+    expect(porPrueba('confirmacion-de-cierre')).toBeNull();
   });
 });

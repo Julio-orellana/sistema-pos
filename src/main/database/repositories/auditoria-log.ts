@@ -97,4 +97,26 @@ export class RepositorioDeAuditoria extends RepositorioBase {
       .all(entidadTipo, entidadId) as FilaAuditoria[];
     return filas.map(aEntidad);
   }
+
+  /**
+   * Los asientos de UNA acción sobre una entidad, del más VIEJO al más nuevo.
+   *
+   * Desempata por `rowid`, que en esta tabla crece con cada inserción: dos
+   * asientos escritos en el mismo milisegundo tienen la misma `fecha`, y sin
+   * desempate el «primero» dependería del orden que devuelva el motor.
+   */
+  public listarPorEntidadYAccion(
+    entidadTipo: string,
+    entidadId: string,
+    accion: string,
+  ): AsientoAuditoria[] {
+    const filas = this.base
+      .prepare(
+        `SELECT * FROM auditoria_log
+          WHERE entidad_tipo = ? AND entidad_id = ? AND accion = ?
+          ORDER BY fecha ASC, rowid ASC`,
+      )
+      .all(entidadTipo, entidadId, accion) as FilaAuditoria[];
+    return filas.map(aEntidad);
+  }
 }
