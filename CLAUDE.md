@@ -5998,7 +5998,8 @@ ninguna protección se apoya en una variable de desarrollo.
 
 El asistente deja elegir la carpeta, instala para todos los usuarios de la
 máquina (`perMachine`, una elevación al instalar) y crea acceso directo en el
-escritorio y en el menú de inicio. `deleteAppDataOnUninstall: false`:
+escritorio y en el menú de inicio. *(Desde §4.48 el del escritorio es
+opcional, con una casilla, y antes aparece la pantalla de licencia.)* `deleteAppDataOnUninstall: false`:
 desinstalar **no borra la base de datos de la tienda**.
 
 **Sin firmar, a propósito**: Windows va a mostrar «Windows protegió tu PC» la
@@ -7712,6 +7713,9 @@ archivo de licencia en la raíz. El publicador dice `"author": "Julio Orellana"`
 (`electron-builder.yml`). Por eso esta constante es, hoy, **el único lugar del
 repositorio que nombra la marca**. Si la marca se establece en otros lugares,
 conviene que lean esta misma constante o que una prueba compare los textos.
+**ACTUALIZADO EL MISMO DÍA (§4.48):** el instalador ya lleva la marca como
+publicador y en la licencia, y `instalador-marca-y-licencia.test.ts` exige que
+el publicador sea igual a esta constante.
 
 **Qué NO cambia.** El emisor no entra en el cálculo del código. Los secretos
 guardados siguen valiendo. Las cuentas ya agregadas a un teléfono conservan el
@@ -7734,6 +7738,156 @@ marca comercial como emisor» (`autorizacion-remota-guard.test.ts`).
 
 **No verificado:** que Google o Microsoft Authenticator muestren «Vixo POS» en
 un teléfono real.
+
+### 4.48 El instalador lleva la marca «Vixo POS» y la licencia (2026-09-15)
+
+**Qué se pidió.** Que el instalador de Windows muestre la licencia de uso, que
+«Vixo POS» figure como publicador, que el acceso directo del escritorio sea
+opcional y, si se podía sin riesgo, que el título del asistente diga «Vixo
+POS». **`productName` («POS Jimmy Cano») no se tocó**: de él salen la carpeta
+de datos y la llave de `safeStorage` (§4.23, §4.37).
+
+Se había diseñado en una conversación y nunca se implementó: `git grep -in vixo
+HEAD` no daba nada fuera de CLAUDE.md y de la constante del emisor TOTP (§4.47).
+
+#### Cómo lo hace electron-builder, leído en la versión instalada (26.15.3)
+
+No se decidió de memoria. Se leyeron `node_modules/app-builder-lib/out` y
+`templates/nsis`:
+
+| Pregunta | Qué dice el código | Consecuencia |
+|---|---|---|
+| ¿Cómo es la pantalla de licencia? | Con un `.txt` en `nsis.license`, `nsisLicense.js` inserta `!insertmacro MUI_PAGE_LICENSE` **sin** `MUI_LICENSEPAGE_CHECKBOX` | Es la página clásica: el texto y el botón **«Acepto»**. No hay casilla. Sin pulsarlo no se avanza; la otra salida es «Cancelar» |
+| ¿Qué dice el botón? | `SpanishInternational.nlf` del NSIS 3.0.4.1 en caché: `^AgreeBtn` = `&Acepto`; `MUI_INNERTEXT_LICENSE_BOTTOM` = «Si acepta todas las condiciones del acuerdo, seleccione Acepto para continuar…» | Coincide con «Al hacer clic en "Acepto"» del texto |
+| ¿Qué idioma usa? | Sin `installerLanguages`, `LangConfigurator` carga TODOS y NSIS elige el de Windows | En un Windows en inglés diría «I Agree». Se fijó `installerLanguages: [es_ES]` |
+| ¿La licencia nombrada lleva BOM? | `convertFileToUtf8WithBOMSync` se aplica solo a las localizadas (`license_xx`) | Se escribió el BOM en el archivo. **Sin BOM también salió bien** (falsificado abajo): no está medido que haga falta |
+| ¿Hay casilla para el acceso directo? | No. `createDesktopShortcut` es `true`/`false`/`"always"`, sin página | Página propia con `customPageAfterChangeDir` (`assistedInstaller.nsh`) |
+| ¿Por qué no `createDesktopShortcut: false`? | Con `false` se define `DO_NOT_CREATE_DESKTOP_SHORTCUT`, y `uninstaller.nsh` deja de borrar el acceso directo | Queda en `true`; `customInstall`, que corre DESPUÉS de `addDesktopLink`, lo quita si la persona desmarcó |
+| ¿De dónde sale el publicador? | `appInfo.companyName` = `metadata.author.name`; va a `CompanyName` del `.exe` (`winPackager.js`), del instalador (`computeVersionKey`) y a `Publisher` del registro (`installer.nsh`) | `extraMetadata.author: {name: Vixo POS}`, solo en el paquete |
+| ¿`author` cambia algo de identidad? | La carpeta de instalación sale de `productFilename`; la clave de desinstalación, del GUID de `appId`; `app.getName()`, de `productName` | No. Una versión con este cambio actualiza la instalación anterior |
+| ¿Cómo se cambia el título? | `common.nsh` fija `Name "${PRODUCT_NAME}"` y `BrandingText`, pero no `Caption`; el empaquetado corre con `-WX` | `Caption` en el script propio, dentro de `!ifndef BUILD_UNINSTALLER` |
+
+#### Los archivos
+
+| Archivo | Qué es |
+|---|---|
+| `build/licencia.txt` | El texto aprobado, en UTF-8 con BOM y CRLF. 1901 bytes |
+| `build/instalador.nsh` | `Caption "Instalación de Vixo POS"`, la página con la casilla y `customInstall` |
+| `electron-builder.yml` | `copyright`, `extraMetadata.author`, `nsis.license`, `nsis.include`, `installerLanguages`, `language: '3082'` |
+| `src/main/__tests__/instalador-marca-y-licencia.test.ts` | 16 pruebas |
+
+**Las pantallas del asistente, en orden** (leído de `assistedInstaller.nsh` con
+esta configuración): (1) **Acuerdo de licencia**, con «Acepto»; (2)
+**Carpeta de destino**; (3) **Acceso directo**, con la casilla «Crear un
+acceso directo en el escritorio», marcada; (4) instalación; (5) fin, con la
+casilla de abrir el programa. No hay página de bienvenida ni de modo de
+instalación (`perMachine`). En silencioso (`/S`) no hay páginas y el acceso
+directo se crea, como antes.
+
+**Lo que sigue diciendo «POS Jimmy Cano»**, porque sale de `productName`,
+`shortcutName` o `uninstallDisplayName`:
+
+- los accesos directos del escritorio y del menú Inicio;
+- el ejecutable;
+- «Programas y características»;
+- el texto al pie del asistente (`BrandingText`, «POS Jimmy Cano 1.0.0»);
+- los textos de las páginas: por ejemplo, «Por favor revise el acuerdo de
+  licencia antes de instalar POS Jimmy Cano» (`$(^NameDA)`);
+- la ventana del desinstalador: «Desinstalación de POS Jimmy Cano».
+
+Solo la barra de título del instalador dice «Instalación de Vixo POS».
+
+#### Verificado inspeccionando el paquete armado (macOS)
+
+Se armó en el scratchpad (`-c.directories.output=`) para no pisar
+`release/1.0.0`. Empaquetado con `-WX`: salida 0. Las lecturas se hicieron con
+`@electron/asar`, `resedit` (el mismo que usa electron-builder para escribir
+las propiedades) y un lector propio del header NSIS (zlib, no sólido). El
+«ANTES» es el instalador de `release/1.0.0` (2026-09-14):
+
+```
+DESPUÉS package.json DENTRO del asar: {"name":"pos-agricola","productName":"POS Jimmy Cano","author":{"name":"Vixo POS"},"version":"1.0.0"}
+DESPUÉS POS Jimmy Cano.exe [lang=1033]: {"CompanyName":"Vixo POS","FileDescription":"POS Jimmy Cano","InternalName":"POS Jimmy Cano","LegalCopyright":"Copyright (c) 2026 Julio Orellana (Vixo POS)","ProductName":"POS Jimmy Cano",…}
+DESPUÉS POS-Jimmy-Cano-Setup-1.0.0.exe [lang=3082]: {"CompanyName":"Vixo POS",…,"LegalCopyright":"Copyright (c) 2026 Julio Orellana (Vixo POS)","ProductName":"POS Jimmy Cano",…}
+ANTES   package.json DENTRO del asar: {"name":"pos-agricola","productName":"POS Jimmy Cano","author":"Julio Orellana","version":"1.0.0"}
+ANTES   POS Jimmy Cano.exe [lang=1033]: {"CompanyName":"Julio Orellana",…,"LegalCopyright":"Copyright (c) 2026 Julio Orellana","ProductName":"POS Jimmy Cano",…}
+
+header del instalador (UTF-16LE), cadenas encontradas:
+"Publisher"  "Vixo POS"
+"Instalación de Vixo POS"
+"&Acepto"
+"Acuerdo de licencia"
+"Si acepta todas las condiciones del acuerdo, seleccione Acepto para continuar. Debe aceptar el acuerdo para instalar <1>胑."
+"Crear un acceso directo en el escritorio"
+"<2>ᤐ\\POS Jimmy Cano.lnk"
+desinstalador incluido: "Desinstalación de <1>肂"   (sin «Vixo POS»: la guarda funcionó)
+control, instalador 1.0.0: «CONTRATO DE LICENCIA…», «Instalación de Vixo POS», «Crear un acceso directo…», «Vixo POS» -> NO APARECE
+
+licencia dentro del header:
+prefijo del bloque: 0x0011
+caracteres extraídos: 1875 | esperados (archivo sin BOM): 1875
+IDÉNTICO al archivo, carácter por carácter: True
+sha256 del texto extraído (LF): 8c6bf039d701e96bc141c4b01beab29c798753d6d736d2b306b00043add1daff
+menciona penalidad/multa/indemnización? False
+```
+
+`0x0011` se interpreta como `SF_TEXT | SF_UNICODE` de RichEdit. Es inferencia
+por los valores de esas constantes, no está documentado en NSIS.
+
+`verify:paquete` (como `afterPack` y a mano): 751 entradas, 0 hallazgos, salida
+0, «APUNTA A: ztidrshifrblhfraiowg (proyecto de pruebas)».
+
+**Revisión adicional, fuera de lo que mira `verify:paquete`.** Esa revisión
+lee el asar, no `app.asar.unpacked`. En el `app-64.7z` del instalador, la
+búsqueda de `.env`, `/src/` y `nube-pruebas|nube-real` encontró 25 rutas. Todas
+son `resources/app.asar.unpacked/node_modules/better-sqlite3/src/…`: los
+fuentes C++ públicos de la librería (npm), que viajan porque `asarUnpack`
+desempaqueta el módulo entero. No hay credenciales ni código del proyecto. La
+lista es **idéntica** en el instalador 1.0.0 (`diff` vacío): no la introdujo
+este cambio.
+
+#### Falsificado
+
+| Mutación | Qué cayó |
+|---|---|
+| `productName` arriba → «Vixo POS» | «productName sigue siendo «POS Jimmy Cano»…» (`expected 'Vixo POS' to be 'POS Jimmy Cano'`) |
+| `extraMetadata.productName` → «Vixo POS» | la misma |
+| `author` del paquete → «Vixo POS S.A.» | «el publicador del paquete es la misma marca que el emisor del código remoto» |
+| Agregar una penalidad a la licencia | la huella y «NO lleva la cláusula de penalidad» |
+| Un espacio de más en la licencia | la huella |
+| Licencia sin BOM | «UTF-8 con BOM y con CRLF» |
+| Redefinir `Name` en el `.nsh` | «no redefine Name ni ningún identificador…» |
+| Quitar siempre el acceso directo | «se quita SOLO si la persona desmarcó la casilla» |
+| Quitar `installerLanguages` | «…el instalador solo carga el español…» |
+
+La primera corrida de la mutación de `productName` **no se aplicó**: el
+reemplazo no encontró el texto porque ahora hay un comentario en el medio.
+Pasaron 16 de 16 sobre un archivo sin cambios. Se repitió comprobando que el
+archivo cambió, y cayó.
+
+**La razón del BOM NO se sostuvo midiendo.** Armado sin BOM, el texto llegó al
+header igual, con sus tildes (`'Implementación: POS Jimmy Cano\nVersión:
+1.1.0'`). El BOM se deja porque es la forma que electron-builder usa para sus
+propias licencias, así no depende de la detección del `makensis` de la máquina
+que arme. El comentario de `electron-builder.yml` lo dice así.
+
+#### Lo que NO se verificó, y solo se ve instalando en Windows
+
+- **Que la página de licencia se vea bien**: el control RichEdit, los CRLF, las
+  tildes en pantalla y el desplazamiento. Lo medido es que el texto viaja
+  idéntico dentro del instalador.
+- **Que «Acepto» sea obligatorio en la práctica.** Es el comportamiento de
+  `MUI_PAGE_LICENSE` y no se ejecutó.
+- **La página de la casilla**: su diseño con nsDialogs, que desmarcada quite
+  el acceso directo y que volver atrás conserve la elección.
+- **Que «Programas y características» muestre «Vixo POS» como editor** y las
+  propiedades del `.exe` en el Explorador. Lo medido son los recursos y la
+  cadena `Publisher` del script.
+- **Actualizar sobre la instalación 1.0.0 de Jimmy**: que no quede duplicada y
+  que la carpeta de datos y la credencial sigan legibles. Por lo leído debería
+  pasar (misma `appId`, mismo `productName`), pero no se midió.
+- **Windows SmartScreen** con el publicador nuevo: el instalador sigue sin
+  firmar, así que Windows no muestra «Vixo POS» como editor verificado.
 
 ## 5. Registro de decisiones técnicas
 
@@ -8021,6 +8175,11 @@ un teléfono real.
 | **La colisión de PIN ya no mira la autorización remota; para el PIN normal no cambió.** | Comparar el PIN nuevo contra los códigos actuales de cada secreto | El secreto no lo elige una persona, así que no hay colisión de elección. Comparar contra el código de ahora exigiría descifrar todos los secretos en cada alta de usuario, sin proteger nada: el código cambia en 30 s. §4.47. | Prompt 71 — 2026-09-15 |
 | **El QR lo arma el proceso principal como matriz de booleanos (`qrcode-generator`, MIT, JavaScript puro) y la ventana lo dibuja con `<rect>` de SVG.** | Mandar un `data:` o SVG en texto e inyectarlo; una librería nativa; generarlo en el renderer | La ventana no recibe HTML ni una URL que tenga que inyectar, y la política de contenido no cambia. Se comprobó en el paquete que la librería no tiene dependencias, guiones de instalación ni binarios. Que el QR se lee se midió con CoreImage, un lector ajeno. §4.47. | Prompt 71 — 2026-09-15 |
 | **El emisor del `otpauth://` es la constante `EMISOR_DEL_CODIGO_REMOTO = 'Vixo POS'`, no `app.getName()`.** | Seguir con `app.getName()`; leer la marca de `package.json` | Pedido de Julio: la app de autenticación de Jimmy mostraba el nombre interno del repositorio. `app.getName()` cambia entre desarrollo y el instalador, y ninguno de los dos es la marca. `package.json` no tiene la marca en ningún campo. La premisa de que la marca ya estaba en la licencia y el publicador no se confirmó: hoy esta constante es el único lugar que la nombra. §4.47. | Prompt 72 — 2026-09-15 |
+| **El instalador muestra la licencia (`build/licencia.txt`, texto fijado por su huella y sin cláusula de penalidad) y solo carga el español.** | `license_es.txt` localizado; RTF o HTML; dejar todos los idiomas | Pedido de Julio. Un `.txt` da la página con el botón «Acepto», el mismo que nombra el texto. Con todos los idiomas, un Windows en inglés diría «I Agree». La penalidad va solo en el contrato de servicios. §4.48. | Prompt 73 — 2026-09-15 |
+| **«Vixo POS» es el publicador por `extraMetadata.author`, solo en el paquete; `productName`, `appId`, `shortcutName` y `uninstallDisplayName` no cambian.** | Cambiar `author` del package.json del repositorio; cambiar `productName` | Leído en app-builder-lib: el publicador sale de `author.name`, y la carpeta de datos, la clave de desinstalación y `app.getName()` salen de otros campos. Medido en el paquete: `CompanyName` y `Publisher` dicen «Vixo POS» y `productName` sigue igual. §4.48. | Prompt 73 — 2026-09-15 |
+| **A REVISAR — el copyright queda «Copyright (c) 2026 Julio Orellana (Vixo POS)».** | «Copyright (c) 2026 Vixo POS» | El pedido dice agregar la marca al copyright. Poner solo la marca como titular es una decisión legal: la licencia dice que el software es «propiedad del desarrollador», y no consta que «Vixo POS» sea una persona jurídica. Se agregó sin quitar al titular. §4.48. | Prompt 73 — 2026-09-15 |
+| **El acceso directo del escritorio es opcional con una página propia (`customPageAfterChangeDir`); electron-builder lo sigue creando y `customInstall` lo quita si se desmarcó.** | `createDesktopShortcut: false` y crearlo a mano; una casilla en la página final | Con `false`, el desinstalador de electron-builder deja de borrarlo. En la página final la elección llegaría después de instalar. En silencioso se crea, como antes. §4.48. | Prompt 73 — 2026-09-15 |
+| **El título del asistente es `Caption "Instalación de Vixo POS"`, solo en el instalador; no se cambia `Name`.** | Cambiar `Name` para que todos los textos digan «Vixo POS»; no cambiar nada | `Caption` es solo de la ventana del instalador y electron-builder no lo fija. `Name` lo fija `common.nsh`: repetirlo es una advertencia y el empaquetado corre con `-WX`. Los textos de las páginas siguen diciendo «POS Jimmy Cano». §4.48. | Prompt 73 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -8067,6 +8226,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 23 | ~~**¿Qué claves lleva `valor_nuevo` del asiento `conflicto_de_inventario`?**~~ | ~~La venta escribe `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo`, `comparacion` y `momento`. La anulación (§4.45) escribe `saldoLeido`, `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Es la misma acción con dos formas. Ningún código lee estos asientos, así que alinearlas no rompe nada, pero un auditor que filtre por la acción va a encontrar las dos. §4.3.~~ | **RESUELTO (2026-09-15, decisión de Julio): una sola forma y una sola puerta.** Nombres de la venta, sin `momento`, con `ventaId` (null en la venta) y `causaTecnica`. La escribe solo `conflicto-de-inventario.ts`, y una prueba estructural lo exige. No había ningún asiento escrito con ninguna de las dos formas (§4.3). |
 | 24 | **La autorización remota por TOTP no viaja entre terminales ni sobrevive a una restauración, a una terminal nueva ni a un cambio del nombre del producto.** | Por la regla no negociable (§4.47), el secreto vive solo cifrado en ESTA terminal. En cada uno de esos casos el administrador tiene que volver a inscribirse, **estando físicamente en la terminal**, porque la inscripción exige su sesión. Con más de una caja (punto 10), cada una necesita su propia inscripción y el teléfono muestra una cuenta por caja. Hay que decidir si eso es aceptable o si se diseña otra cosa. **No se decidió acá.** | Abierto |
 | 25 | **¿Qué pasa si Jimmy pierde el teléfono, o la instalación que ya tiene tenía un PIN remoto fijo?** | Perder el teléfono no se puede resolver a distancia: la reinscripción exige un administrador en la terminal. Mientras tanto, la vía remota de esa persona queda sin uso, y quien tenga el teléfono desbloqueado puede generar códigos hasta que se reinscriba. La instalación de prueba de Jimmy (`v1.0.0-prueba.1`) **tiene un PIN remoto fijo que deja de funcionar al instalar esta versión**: la 037 lo borra. Antes de actualizar hay que avisarle que se inscriba con la app, y decidir quién lo acompaña. | Abierto — **bloquea la entrega de esta versión a Jimmy** |
+| 26 | **La licencia dice «Versión: 1.1.0» y el package.json dice 1.0.0.** | El instalador de verificación salió como `POS-Jimmy-Cano-Setup-1.0.0.exe` con una licencia de la 1.1.0. Subir la versión es parte del release, y no se hizo acá. Si la licencia va a cambiar de número en cada versión, hay que decidir si se reescribe el texto aprobado cada vez o si deja de nombrar la versión. | Abierto — **antes de armar la 1.1.0** |
+| 27 | **¿Quién figura como titular en el copyright del instalador?** | Hoy «Julio Orellana (Vixo POS)» (§4.48). Poner solo «Vixo POS» depende de que la marca tenga una persona jurídica detrás o de cómo se inscriba ante el Registro de la Propiedad Intelectual. Es legal, no técnico. | Abierto — decisión de Julio |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
