@@ -21,7 +21,7 @@ export const MENSAJE_SIN_RESPUESTA =
 export const LIMITE_DE_RESPUESTA_MS = 15_000;
 
 /**
- * Llama a un canal de caja y convierte en respuesta fallida tanto un RECHAZO
+ * Llama a un canal y convierte en respuesta fallida tanto un RECHAZO
  * como una llamada que NUNCA contesta.
  *
  * Existe por lo que bloqueó a Jimmy el 2026-09-15 en `v1.0.0-prueba.1`: al
@@ -32,15 +32,17 @@ export const LIMITE_DE_RESPUESTA_MS = 15_000;
  * `catch`: hace falta el límite de tiempo. Un fallo así tiene que VERSE.
  *
  * El mensaje no afirma que no pasó nada: si el proceso principal llegó a
- * escribir y lo que falló fue la respuesta, la caja pudo cambiar.
+ * escribir y lo que falló fue la respuesta, la caja pudo cambiar. Otra pantalla
+ * pasa su propio `mensaje`, que nombre esa pantalla y no la caja.
  */
 export async function llamarAlProcesoPrincipal<T>(
   llamada: () => Promise<RespuestaIpc<T>>,
   limiteMs: number = LIMITE_DE_RESPUESTA_MS,
+  mensaje: string = MENSAJE_SIN_RESPUESTA,
 ): Promise<RespuestaIpc<T>> {
   const sinRespuesta: RespuestaIpc<T> = {
     ok: false,
-    error: { codigo: CODIGO_SIN_RESPUESTA, mensaje: MENSAJE_SIN_RESPUESTA },
+    error: { codigo: CODIGO_SIN_RESPUESTA, mensaje },
   };
   let temporizador: ReturnType<typeof setTimeout> | undefined;
   const vencida = new Promise<RespuestaIpc<T>>((resolver) => {

@@ -19,6 +19,7 @@ import { PantallaDeRecibos } from './PantallaDeRecibos';
 import { PantallaDeReportes } from './PantallaDeReportes';
 import { PantallaDeLimites } from './PantallaDeLimites';
 import { PantallaDeNube } from './PantallaDeNube';
+import { PantallaDeImpresora } from './PantallaDeImpresora';
 import { PantallaDeSincronizacion } from './PantallaDeSincronizacion';
 import { PantallaDeVenta } from './PantallaDeVenta';
 
@@ -41,6 +42,7 @@ type Vista =
   | 'reportes'
   | 'limites'
   | 'nube'
+  | 'impresora'
   | 'sincronizacion';
 
 /**
@@ -155,6 +157,9 @@ export function PantallaDeSesion({
   if (vista === 'nube') {
     return <PantallaDeNube alVolver={() => { setVista('menu'); }} />;
   }
+  if (vista === 'impresora') {
+    return <PantallaDeImpresora alVolver={() => { setVista('menu'); }} />;
+  }
   if (vista === 'sincronizacion') {
     return <PantallaDeSincronizacion alVolver={() => { setVista('menu'); }} />;
   }
@@ -237,6 +242,13 @@ export function PantallaDeSesion({
               onClick={() => { setVista('negocio'); }}
             >
               Datos del negocio
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-impresora"
+              onClick={() => { setVista('impresora'); }}
+            >
+              Impresora de recibos
             </button>
             <button
               type="button"
