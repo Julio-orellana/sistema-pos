@@ -8,7 +8,7 @@
  * cierres. La pantalla de caja ya tiene su propio arnés (§4.39 a §4.42); acá lo
  * que se maneja con clics es el HISTORIAL.
  *
- *   A. Ana abre 500, cuenta 480 y Jimmy autoriza la diferencia con su PIN REMOTO.
+ *   A. Ana abre 500, cuenta 480 y Jimmy autoriza la diferencia con el CÓDIGO de su app (TOTP).
  *   B. Ana abre y cierra por denominación, exacto.
  *   C. Rosa abre 300 y Jimmy la cierra con su PIN (caja ajena).
  *   D. Ana abre 500, cuenta 480, corrige a 500 y Jimmy autoriza la corrección.
@@ -29,10 +29,10 @@ const { join } = require('node:path');
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
+const { codigoTotp, esperarAlSiguientePaso } = require('./totp-de-arnes.cjs');
 
 const PROYECTO = join(__dirname, '..');
 const PIN_JIMMY = '2468';
-const PIN_REMOTO_JIMMY = '9753';
 const PIN_ANA = '1357';
 const PIN_ROSA = '8642';
 const ESPERA_LARGA = 25000;
@@ -107,6 +107,18 @@ async function main() {
     await teclearPin(PIN_JIMMY);
     await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
 
+    // ---- Jimmy se inscribe en la autorización remota por los canales reales ---
+    // El código lo calcula el arnés con su propio TOTP, como el teléfono. La
+    // confirmación consume el paso actual, así que se espera al siguiente.
+    const inscripcion = await pos(async () => window.pos.sesion.iniciarAutorizacionRemota());
+    if (!inscripcion.ok) throw new Error(`iniciar inscripción: ${inscripcion.error.mensaje}`);
+    const secretoDeJimmy = inscripcion.datos.secreto;
+    const confirmada = await pos((codigo) => window.pos.sesion.confirmarAutorizacionRemota(codigo), codigoTotp(secretoDeJimmy, Date.now()));
+    anotar(`inscripción remota de Jimmy: ${JSON.stringify(confirmada)}`);
+    if (!confirmada.ok) throw new Error(`confirmar inscripción: ${confirmada.error.mensaje}`);
+    anotar(`esperados ${String(await esperarAlSiguientePaso())} ms al siguiente paso de 30 s`);
+    const CODIGO_REMOTO_JIMMY = codigoTotp(secretoDeJimmy, Date.now());
+
     // ---- Armar los cinco casos por los canales reales ------------------------
     const armado = await pos(
       async (p) => {
@@ -116,7 +128,6 @@ async function main() {
         };
         const pasos = [];
         const anotarPaso = (paso, datos) => pasos.push(`${paso}: ${JSON.stringify(datos === undefined ? null : { codigo: datos.codigo, cerrada: datos.cerrada })}`);
-        exigir(await window.pos.sesion.configurarPinRemoto(p.remoto), 'PIN remoto');
         const ana = exigir(await window.pos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pin: p.ana }), 'crear Ana');
         const rosa = exigir(await window.pos.usuarios.crear({ nombre: 'Rosa', rol: 'venta', pin: p.rosa }), 'crear Rosa');
         const jimmy = exigir(await window.pos.sesion.estado(), 'estado').sesion.id;
@@ -131,7 +142,7 @@ async function main() {
         await entrar(ana.id, p.ana);
         exigir(await window.pos.caja.abrir(simple('500')), 'A abrir');
         let r = exigir(await window.pos.caja.cerrar(simple('480')), 'A contar 480'); anotarPaso('A contar 480', r);
-        r = exigir(await window.pos.caja.cerrar(simple('480'), p.remoto), 'A PIN remoto'); anotarPaso('A PIN remoto', r);
+        r = exigir(await window.pos.caja.cerrar(simple('480'), p.remoto), 'A código remoto'); anotarPaso('A código remoto', r);
         r = exigir(await window.pos.caja.confirmarCierreAutorizado(simple('480')), 'A confirmar'); anotarPaso('A confirmar', r);
 
         // B
@@ -164,7 +175,7 @@ async function main() {
 
         return { pasos, ana: ana.id, rosa: rosa.id, jimmy };
       },
-      { remoto: PIN_REMOTO_JIMMY, ana: PIN_ANA, rosa: PIN_ROSA, jimmy: PIN_JIMMY },
+      { remoto: CODIGO_REMOTO_JIMMY, ana: PIN_ANA, rosa: PIN_ROSA, jimmy: PIN_JIMMY },
     );
     for (const paso of armado.pasos) anotar(`armado ${paso}`);
 
@@ -218,9 +229,9 @@ async function main() {
     comprobar('LA LISTA trae las cinco sesiones, de la apertura más reciente a la más vieja', '5, E primero (abierta)', `${String(filas.length)}, primera ${e?.estado}`, filas.length === 5 && e?.estado === 'abierta');
     comprobar(
       'A · DIFERENCIA AUTORIZADA: faltante de Q20.00, autorizada por Jimmy por teléfono',
-      'faltante de Q20.00 + «Diferencia autorizada por Jimmy, por teléfono (PIN remoto)»',
+      'faltante de Q20.00 + «Diferencia autorizada por Jimmy, por teléfono (autorización remota)»',
       a?.texto,
-      Boolean(a?.bajo.includes('abrió ana') && a.bajo.includes('faltante de q20.00') && a.bajo.includes('diferencia autorizada por jimmy, por teléfono (pin remoto)') && !a.bajo.includes('recuento corregido')),
+      Boolean(a?.bajo.includes('abrió ana') && a.bajo.includes('faltante de q20.00') && a.bajo.includes('diferencia autorizada por jimmy, por teléfono (autorización remota)') && !a.bajo.includes('recuento corregido')),
     );
     comprobar(
       'B · SIN DIFERENCIA: cuadra, sin autorización ni etiquetas',

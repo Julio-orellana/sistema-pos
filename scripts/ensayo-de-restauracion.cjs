@@ -344,7 +344,7 @@ function leerBaseRestaurada(datos) {
     const denominaciones = conexion.prepare('SELECT count(*) AS n FROM denominaciones').get().n;
     const configuracion = conexion.prepare('SELECT id, nombre_comercial, direccion, telefono, nit, actualizado_en FROM configuracion_negocio').get();
     const usuarios = conexion
-      .prepare('SELECT nombre, rol, activo, pin_hash = ? AS sin_pin, pin_remoto_hash IS NULL AS sin_pin_remoto, intentos_fallidos, bloqueado_hasta FROM usuarios ORDER BY nombre')
+      .prepare('SELECT nombre, rol, activo, pin_hash = ? AS sin_pin, totp_secreto_cifrado IS NULL AS sin_pin_remoto, intentos_fallidos, bloqueado_hasta FROM usuarios ORDER BY nombre')
       .all(HASH_SIN_PIN);
     const cola = conexion
       .prepare('SELECT entidad_tipo, operacion, sincronizado_en IS NULL AS pendiente, count(*) AS n FROM sync_cola GROUP BY 1, 2, 3 ORDER BY 1, 2, 3')
@@ -696,8 +696,8 @@ async function main() {
       base.denominaciones === DENOMINACIONES_DEL_QUETZAL,
     );
     comprobar(
-      'en la base, todo usuario restaurado tiene el centinela «sin PIN» y ningún PIN remoto',
-      'todos con pin_hash = sin-pin y pin_remoto_hash NULL',
+      'en la base, todo usuario restaurado tiene el centinela «sin PIN» y ningún secreto de autorización remota',
+      'todos con pin_hash = sin-pin y totp_secreto_cifrado NULL',
       base.usuarios.length === 0 ? 'sin usuarios' : base.usuarios.map((u) => `${u.nombre}: sin_pin=${String(u.sin_pin)} sin_remoto=${String(u.sin_pin_remoto)}`).join('; '),
       base.usuarios.every((u) => u.sin_pin === 1 && u.sin_pin_remoto === 1),
     );

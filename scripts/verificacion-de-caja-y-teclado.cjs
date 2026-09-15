@@ -28,8 +28,12 @@
  *      esperado; al recontar el número exacto ve el mismo diálogo.
  *  10. LA CAJA AJENA (2026-09-15): la abre la cajera, la cierra un
  *      administrador distinto; el aviso lo dice y el botón abre el diálogo.
- *  11. La salida controlada acepta el PIN REMOTO de un administrador, y el
- *      asiento lo registra como «remoto». Va al final: cierra la aplicación.
+ *  11. La autorización remota por TOTP (migración 036): el administrador se
+ *      inscribe desde la pantalla —un código equivocado no deja rastro, el
+ *      correcto guarda el secreto CIFRADO con el safeStorage real—, el secreto
+ *      no aparece en claro en ningún archivo de la carpeta de datos, y la salida
+ *      controlada acepta el código de la app y el asiento dice «remoto». Va al
+ *      final: cierra la aplicación.
  *
  * Por qué es un guion aparte y no más pasos de `verify:pantallas`: aquel
  * recorre la tienda entera y tarda; este existe para mostrar, con capturas y
@@ -42,13 +46,15 @@
  * Salida: cada comprobación con lo esperado y lo real, y código 1 si alguna falla.
  */
 
-const { mkdtempSync, mkdirSync, rmSync } = require('node:fs');
+const { lstatSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } = require('node:fs');
+const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
+const { codigoTotp } = require('./totp-de-arnes.cjs');
 const rutaDeElectron = require('electron');
 
 const PROYECTO = join(__dirname, '..');
@@ -66,6 +72,22 @@ function comprobar(nombre, esperado, real, paso) {
     console.info(`           esperado: ${String(esperado)}`);
     console.info(`           real    : ${String(real)}`);
   }
+}
+
+/** Todos los archivos bajo una carpeta, recursivamente. */
+function archivosBajo(carpeta) {
+  const lista = [];
+  for (const nombre of readdirSync(carpeta)) {
+    const ruta = join(carpeta, nombre);
+    // lstat y no stat: Chromium deja enlaces simbólicos colgantes (SingletonCookie).
+    const info = lstatSync(ruta);
+    if (info.isDirectory()) {
+      lista.push(...archivosBajo(ruta));
+    } else if (info.isFile()) {
+      lista.push(ruta);
+    }
+  }
+  return lista;
 }
 
 /** Anota un hecho medido que no es una comprobación: la salida cruda. */
@@ -1070,8 +1092,7 @@ async function main() {
     // PROMPT #2 — LA SALIDA CONTROLADA CON EL PIN REMOTO (ampliada el
     // 2026-09-15). Va AL FINAL: si funciona, la aplicación se cierra sola.
     // =======================================================================
-    anotar('--- salida controlada con el PIN REMOTO de un administrador ---');
-    const PIN_REMOTO = '8642';
+    anotar('--- autorización remota por TOTP: inscripción desde la pantalla ---');
     await prueba('aceptar-confirmacion-de-cierre').click();
     await volver();
     await ventana.getByRole('button', { name: 'Cerrar sesión' }).click();
@@ -1079,12 +1100,135 @@ async function main() {
     await prueba('usuario-para-ingreso').filter({ hasText: 'Jimmy de verificación' }).click();
     await teclearPin(PIN);
     await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
-    await prueba('ir-a-pin-remoto').click();
-    await prueba('pantalla-de-pin-remoto').waitFor({ timeout: ESPERA_CORTA });
-    await teclearPin(PIN_REMOTO);
-    await teclearPin(PIN_REMOTO);
-    await prueba('pin-remoto-guardado').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('ir-a-autorizacion-remota').click();
+    await prueba('pantalla-de-autorizacion-remota').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('qr-de-inscripcion').waitFor({ timeout: ESPERA_CORTA });
+    const secretoDescartado = (await texto('secreto-de-inscripcion')).replace(/\s/g, '');
+    const colaAntes = leerBase('SELECT COUNT(*) AS n FROM sync_cola')[0].n;
+    const asientosAntes = leerBase('SELECT COUNT(*) AS n FROM auditoria_log')[0].n;
+
+    // 1. Un código EQUIVOCADO: no se guarda nada y la pantalla ofrece empezar de nuevo.
+    const correctoDelDescartado = codigoTotp(secretoDescartado, Date.now());
+    const equivocado = correctoDelDescartado === '000000' ? '111111' : '000000';
+    await teclearPin(equivocado);
+    await prueba('empezar-de-nuevo').waitFor({ timeout: ESPERA_CORTA });
+    const mensajeDelEquivocado = await texto('mensaje-autorizacion-remota');
+    anotar(`mensaje tras el código equivocado: ${JSON.stringify(mensajeDelEquivocado)}`);
+    const trasEquivocado = {
+      usuario: leerBase('SELECT typeof(totp_secreto_cifrado) AS tipo, totp_ultimo_paso FROM usuarios WHERE id = ?', idAdministrador)[0],
+      cola: leerBase('SELECT COUNT(*) AS n FROM sync_cola')[0].n,
+      asientos: leerBase('SELECT COUNT(*) AS n FROM auditoria_log')[0].n,
+      inscritas: leerBase("SELECT COUNT(*) AS n FROM auditoria_log WHERE accion = 'autorizacion_remota_inscrita'")[0].n,
+    };
+    anotar(`base tras el código equivocado: ${JSON.stringify(trasEquivocado)} (antes: cola ${String(colaAntes)}, asientos ${String(asientosAntes)})`);
+    comprobar(
+      'UN CÓDIGO EQUIVOCADO NO DEJA RASTRO: sin secreto, sin asiento, sin cola, y el QR se esconde',
+      `tipo null; cola ${String(colaAntes)}; asientos ${String(asientosAntes)}; sin QR`,
+      `tipo ${trasEquivocado.usuario.tipo}; cola ${String(trasEquivocado.cola)}; asientos ${String(trasEquivocado.asientos)}; QR visible: ${String(await prueba('qr-de-inscripcion').count())}`,
+      trasEquivocado.usuario.tipo === 'null' &&
+        trasEquivocado.cola === colaAntes &&
+        trasEquivocado.asientos === asientosAntes &&
+        trasEquivocado.inscritas === 0 &&
+        (await prueba('qr-de-inscripcion').count()) === 0 &&
+        mensajeDelEquivocado.includes('no se guardó nada'),
+    );
+
+    // 2. Empezar de nuevo: OTRO secreto. Se guarda el QR como imagen para decodificarlo aparte.
+    await prueba('empezar-de-nuevo').click();
+    await prueba('qr-de-inscripcion').waitFor({ timeout: ESPERA_CORTA });
+    const secreto = (await texto('secreto-de-inscripcion')).replace(/\s/g, '');
+    const rutaDelQr = join(capturas, '9-qr-de-inscripcion.png');
+    await prueba('qr-de-inscripcion').screenshot({ path: rutaDelQr });
+    anotar(`QR guardado para decodificar: ${rutaDelQr}`);
+    await capturar('9-inscripcion-remota');
+    if (process.platform === 'darwin') {
+      let lectura;
+      try {
+        lectura = execFileSync('swift', [join(PROYECTO, 'scripts', 'sonda-qr-macos.swift'), rutaDelQr], { encoding: 'utf8' }).trim();
+      } catch (error) {
+        lectura = `ERROR: ${String(error.stdout ?? error.message)}`;
+      }
+      // Se anota sin el secreto: la salida del arnés también es un lugar donde no tiene que quedar.
+      anotar(`QR leído por CoreImage (lector ajeno a la librería): ${lectura.replace(/secret=[A-Z2-7]+/, 'secret=<oculto>')}`);
+      const uriEsperada = `otpauth://totp/pos-agricola:Jimmy%20de%20verificaci%C3%B3n?secret=${secreto}&issuer=pos-agricola&algorithm=SHA1&digits=6&period=30`;
+      comprobar(
+        'EL QR SE LEE con un lector ajeno y codifica la URI otpauth:// con EXACTAMENTE el secreto que se muestra en texto',
+        'otpauth://totp/pos-agricola:Jimmy%20de%20verificaci%C3%B3n?secret=<el del texto>&issuer=pos-agricola&algorithm=SHA1&digits=6&period=30',
+        lectura === uriEsperada ? 'idéntica' : lectura.replace(/secret=[A-Z2-7]+/, 'secret=<otro>'),
+        lectura === uriEsperada,
+      );
+    }
+    comprobar(
+      'EMPEZAR DE NUEVO muestra OTRO secreto de 32 caracteres Base32',
+      'distinto del descartado, /^[A-Z2-7]{32}$/',
+      `${secreto.slice(0, 4)}… (descartado ${secretoDescartado.slice(0, 4)}…)`,
+      secreto !== secretoDescartado && /^[A-Z2-7]{32}$/.test(secreto),
+    );
+
+    // 3. El código correcto, calculado por el arnés con su propio TOTP.
+    await teclearPin(codigoTotp(secreto, Date.now()));
+    await prueba('autorizacion-remota-guardada').waitFor({ timeout: ESPERA_CORTA });
+    const guardado = leerBase(
+      'SELECT typeof(totp_secreto_cifrado) AS tipo, hex(totp_secreto_cifrado) AS hex, totp_ultimo_paso FROM usuarios WHERE id = ?',
+      idAdministrador,
+    )[0];
+    const bytesGuardados = Buffer.from(guardado.hex, 'hex');
+    // Si no descifra, se anota el error y la comprobación falla CON SU NOMBRE, en vez de cortar el recorrido.
+    const descifradoPorLaApp = await app.evaluate(({ safeStorage }, hex) => {
+      try {
+        return safeStorage.decryptString(Buffer.from(hex, 'hex'));
+      } catch (error) {
+        return `NO DESCIFRA: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }, guardado.hex);
+    anotar(
+      `columna guardada: tipo=${guardado.tipo}; ${String(bytesGuardados.length)} bytes; primeros 3 en latin1=${JSON.stringify(bytesGuardados.subarray(0, 3).toString('latin1'))}; totp_ultimo_paso=${String(guardado.totp_ultimo_paso)}; ` +
+        `¿el secreto aparece en los bytes? ${String(bytesGuardados.includes(Buffer.from(secreto)))}; ¿safeStorage real lo descifra al mismo secreto? ${String(descifradoPorLaApp === secreto)}`,
+    );
+    comprobar(
+      'EL CÓDIGO CORRECTO GUARDA EL SECRETO CIFRADO con el safeStorage REAL: bytes, sin el secreto adentro, y descifran al mismo',
+      'blob; no contiene el secreto; decryptString === secreto; la pantalla ya no lo muestra',
+      `${guardado.tipo}; contiene: ${String(bytesGuardados.includes(Buffer.from(secreto)))}; descifra igual: ${String(descifradoPorLaApp === secreto)}; secreto en pantalla: ${String(await prueba('secreto-de-inscripcion').count())}`,
+      guardado.tipo === 'blob' &&
+        !bytesGuardados.includes(Buffer.from(secreto)) &&
+        descifradoPorLaApp === secreto &&
+        (await prueba('secreto-de-inscripcion').count()) === 0,
+    );
+
+    const colaDeUsuarios = leerBase("SELECT entidad_tipo, payload FROM sync_cola ORDER BY rowid DESC LIMIT 2");
+    anotar(`las dos últimas filas de sync_cola: ${JSON.stringify(colaDeUsuarios.map((f) => ({ tipo: f.entidad_tipo, claves: Object.keys(JSON.parse(f.payload)) })))}`);
+    const todasLasFilas = leerBase('SELECT payload FROM sync_cola');
+    comprobar(
+      'NINGÚN payload de sync_cola lleva el secreto ni las columnas de TOTP',
+      `0 de ${String(todasLasFilas.length)}`,
+      String(todasLasFilas.filter((f) => f.payload.includes(secreto) || f.payload.includes(secretoDescartado) || f.payload.includes('totp_')).length),
+      todasLasFilas.every((f) => !f.payload.includes(secreto) && !f.payload.includes(secretoDescartado) && !f.payload.includes('totp_')),
+    );
+
+    // 4. El secreto en claro en NINGÚN archivo de la carpeta de datos: la base, el WAL, la bitácora, las cachés de Chromium.
+    const formas = [secreto, secretoDescartado].flatMap((s) => [Buffer.from(s, 'utf8'), Buffer.from(s, 'utf16le'), Buffer.from(s.toLowerCase(), 'utf8')]);
+    const archivos = archivosBajo(datos).filter((ruta) => !ruta.startsWith(capturas));
+    const conSecreto = archivos.filter((ruta) => {
+      const bytes = readFileSync(ruta);
+      return formas.some((forma) => bytes.includes(forma));
+    });
+    anotar(`archivos revisados bajo la carpeta de datos: ${String(archivos.length)} (${archivos.filter((r) => r.includes('pos-agricola.db')).map((r) => r.slice(datos.length + 1)).join(', ')} entre ellos)`);
+    comprobar(
+      'EL SECRETO NO ESTÁ EN CLARO en ningún archivo de la carpeta de datos (texto, UTF-16 ni minúsculas)',
+      '0 archivos',
+      conSecreto.length === 0 ? '0 archivos' : conSecreto.map((r) => r.slice(datos.length + 1)).join(', '),
+      conSecreto.length === 0 && archivos.length > 0,
+    );
+
     await volver();
+
+    // 5. La salida controlada con el código de la app. La inscripción CONSUMIÓ
+    //    el paso actual, así que se espera al siguiente, como esperaría Jimmy.
+    anotar('--- salida controlada con el CÓDIGO REMOTO de un administrador ---');
+    const esperaAlSiguientePaso = 30000 - (Date.now() % 30000) + 500;
+    anotar(`esperando ${String(esperaAlSiguientePaso)} ms al siguiente paso de 30 s: el código de la inscripción ya se usó`);
+    await ventana.waitForTimeout(esperaAlSiguientePaso);
+    const CODIGO_REMOTO = codigoTotp(secreto, Date.now());
     // El botón de salida está en todas las pantallas, también en el ingreso.
     // Se cierra la sesión del administrador para salir desde ahí, como al final
     // del día sin ningún administrador presente.
@@ -1097,10 +1241,10 @@ async function main() {
     anotar(`texto del diálogo de salida: ${JSON.stringify(textoDelDialogoDeSalida)}`);
     // Desde el 2026-09-15 el PIN de salida se toca en el teclado numérico del
     // diálogo: ya no hay ningún campo nativo que llenar (§4.46).
-    for (const digito of PIN_REMOTO) {
+    for (const digito of CODIGO_REMOTO) {
       await prueba('dialogo-salida').locator(`[data-prueba="tecla-${digito}"]`).click();
     }
-    await capturar('8-salida-con-pin-remoto');
+    await capturar('8-salida-con-codigo-remoto');
     const procesoTerminado = new Promise((resolver) => {
       app.process().once('exit', (codigo) => {
         resolver(codigo);
@@ -1122,10 +1266,23 @@ async function main() {
         WHERE accion IN ('salida_controlada_autorizada', 'salida_controlada_rechazada') ORDER BY fecha, rowid`,
     );
     anotar(`auditoria_log de la salida: ${JSON.stringify(asientoDeSalida)}`);
+    const bitacoraTecnica = (() => {
+      try {
+        return readFileSync(join(datos, 'log-tecnico.log'), 'utf8');
+      } catch {
+        return '';
+      }
+    })();
+    comprobar(
+      'la bitácora técnica no tiene el secreto',
+      'no lo contiene',
+      bitacoraTecnica.includes(secreto) ? 'LO CONTIENE' : `no lo contiene (${String(bitacoraTecnica.length)} caracteres)`,
+      !bitacoraTecnica.includes(secreto),
+    );
     const autorizada = asientoDeSalida.find((f) => f.accion === 'salida_controlada_autorizada');
     const datosDeLaSalida = autorizada ? JSON.parse(autorizada.valor_nuevo) : null;
     comprobar(
-      'LA SALIDA CONTROLADA CON EL PIN REMOTO cierra la aplicación, y el asiento dice «remoto» con el administrador real',
+      'LA SALIDA CONTROLADA CON EL CÓDIGO DE LA APP cierra la aplicación, y el asiento dice «remoto» con el administrador real',
       `el proceso termina; salida_controlada_autorizada; boton_de_interfaz; remoto; usuario ${idAdministrador}`,
       `proceso: ${String(codigoDeSalida)}; ${autorizada ? autorizada.accion : 'SIN ASIENTO'}; ` +
         `${String(datosDeLaSalida?.origen)}; ${String(datosDeLaSalida?.autorizadaVia)}; usuario ${String(autorizada?.usuario_id)}`,

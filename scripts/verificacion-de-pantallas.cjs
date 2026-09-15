@@ -42,6 +42,7 @@ const { join } = require('node:path');
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
+const { codigoTotp, esperarAlSiguientePaso } = require('./totp-de-arnes.cjs');
 
 /** Raíz del proyecto: este guion vive en scripts/. */
 const PROYECTO = join(__dirname, '..');
@@ -50,7 +51,6 @@ const PROYECTO = join(__dirname, '..');
 const MARCA_INFORME = 'INFORME_DE_PANTALLAS';
 
 /** PIN del administrador de prueba. Solo vive en la base temporal. */
-const PIN_REMOTO = '8642';
 const PIN = '2468';
 
 /** Milisegundos de espera para que la ventana aparezca. */
@@ -558,7 +558,7 @@ async function main() {
     );
 
     // =======================================================================
-    // 8. Autorizar un descuento excedente CON EL PIN REMOTO, de punta a punta.
+    // 8. Autorizar un descuento excedente CON EL CÓDIGO REMOTO (TOTP), de punta a punta.
     // =======================================================================
     /*
       Es la comprobación que da sentido al cambio: que un descuento que pasa el
@@ -568,12 +568,15 @@ async function main() {
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor();
 
-    // El administrador se configura un PIN remoto, que se teclea dos veces.
-    await prueba('ir-a-pin-remoto').click();
-    await prueba('pantalla-de-pin-remoto').waitFor({ timeout: ESPERA_CORTA });
-    await teclearPin(PIN_REMOTO);
-    await teclearPin(PIN_REMOTO);
-    await prueba('pin-remoto-guardado').waitFor({ timeout: ESPERA_CORTA });
+    // El administrador se inscribe en la autorización remota: lee el secreto de
+    // la pantalla (como lo cargaría a mano en el teléfono) y confirma con el
+    // código que calcula el arnés con su propio TOTP.
+    await prueba('ir-a-autorizacion-remota').click();
+    await prueba('pantalla-de-autorizacion-remota').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('secreto-de-inscripcion').waitFor({ timeout: ESPERA_CORTA });
+    const secretoRemoto = ((await prueba('secreto-de-inscripcion').textContent()) ?? '').replace(/\s/g, '');
+    await teclearPin(codigoTotp(secretoRemoto, Date.now()));
+    await prueba('autorizacion-remota-guardada').waitFor({ timeout: ESPERA_CORTA });
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor();
 
@@ -618,11 +621,13 @@ async function main() {
       !/no se puede dar\s+por tel[eé]fono/i.test(textoDeAutorizacion),
     );
 
-    // Y se autoriza con el PIN REMOTO, que antes de este cambio habría fallado.
-    await teclearPin(PIN_REMOTO);
+    // Y se autoriza con el código de la app. El de la inscripción ya se usó:
+    // se espera al siguiente paso de 30 s, como esperaría Jimmy.
+    await esperarAlSiguientePaso();
+    await teclearPin(codigoTotp(secretoRemoto, Date.now()));
     await prueba('cobro-listo').waitFor({ timeout: ESPERA_LARGA });
     comprobar(
-      'EL PIN REMOTO AUTORIZA el descuento excedente y la venta se cobra',
+      'EL CÓDIGO REMOTO AUTORIZA el descuento excedente y la venta se cobra',
       'la venta llega a la confirmación',
       'se cobró',
       true,
