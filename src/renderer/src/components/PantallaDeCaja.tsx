@@ -31,6 +31,16 @@
  *     contar y cambia el número, cerrar exige el PIN de un administrador
  *     aunque ahora cuadre. Lo decide el proceso principal, no esta pantalla:
  *     acá solo se muestra.
+ *
+ * Y UNA RESTRICCIÓN DEL MISMO DÍA (§4.40): cerrar la caja son DOS PASOS.
+ *
+ *   · RESUMEN — quién la abrió, desde cuándo, y el teórico en vivo SI el
+ *     proceso principal lo mandó, que es solo para un administrativo. Para
+ *     consultarlo durante el día.
+ *   · CONTEO — donde se teclea el efectivo del cierre. Acá el teórico NO se
+ *     dibuja PARA NADIE, administrador incluido: si quien cuenta ve el número
+ *     que el sistema espera, puede copiarlo en vez de contar el cajón. Se
+ *     revela recién en la confirmación, cuando el conteo ya quedó registrado.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -44,6 +54,15 @@ import type {
 import { formatearQuetzales } from '@shared/money';
 import { CapturaDeEfectivo } from './CapturaDeEfectivo';
 import { TecladoNumerico } from './TecladoNumerico';
+
+/**
+ * Con la caja abierta, en qué paso del cierre está la pantalla.
+ *
+ * Son dos pasos y no uno con un dato escondido, para que el teórico NO ESTÉ
+ * en el árbol de la pantalla mientras se cuenta: una fila con `hidden` sigue
+ * ahí para quien inspeccione la ventana.
+ */
+type PasoDelCierre = 'resumen' | 'contando';
 
 /** Qué está esperando la pantalla ahora mismo. */
 type Autorizacion =
@@ -63,6 +82,11 @@ type Autorizacion =
  * seguido no mostraría nada nuevo y es una lectura de SQLite cada vez.
  */
 const INTERVALO_DE_ACTUALIZACION_MS = 10_000;
+
+/** Un monto que puede no haber viajado: sin él se escribe una raya. */
+function montoOSinDato(monto: string | null): string {
+  return monto === null ? '—' : formatearQuetzales(monto);
+}
 
 /** «faltante de Q20.00» / «sobrante de Q5.00» / «sin diferencia». */
 function diferenciaLegible(diferencia: string): string {
@@ -99,6 +123,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
   /** El cierre que acaba de terminar bien, para confirmarlo con sus montos. */
   const [cierreConfirmado, setCierreConfirmado] = useState<ResultadoDeCierreIpc | null>(null);
 
+  const [paso, setPaso] = useState<PasoDelCierre>('resumen');
 
   useEffect(() => {
     const control = new AbortController();
@@ -120,10 +145,12 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
     };
   }, [recarga]);
 
-  // Mientras la caja está abierta y nadie está autorizando nada, el teórico se
+  // Mientras la caja está abierta y se está mirando el RESUMEN, el teórico se
   // vuelve a pedir cada tanto: así se ve en vivo lo que entró por ventas.
+  // Mientras se cuenta no: ahí no se dibuja, y no hay nada que refrescar.
   const cajaAbierta = turno !== null;
-  const enReposo = autorizacion.tipo === 'ninguna' && cierreConfirmado === null;
+  const enReposo =
+    autorizacion.tipo === 'ninguna' && cierreConfirmado === null && paso === 'resumen';
   useEffect(() => {
     if (!cajaAbierta || !enReposo) {
       return undefined;
@@ -224,6 +251,9 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
 
   const volverAContar = useCallback((): void => {
     setAutorizacion({ tipo: 'ninguna' });
+    // Vuelve al paso de CONTEO, no al resumen: es lo que se pidió, y ahí el
+    // teórico no se dibuja.
+    setPaso('contando');
     // Se vuelve a pedir el estado: si el conteo quedó sellado, el aviso tiene
     // que aparecer ya, y lo trae el proceso principal.
     setRecarga((anterior) => anterior + 1);
@@ -314,7 +344,9 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
           <div className="autorizacion__resumen">
             <div className="dato">
               <span className="dato__etiqueta">Debería haber</span>
-              <span className="dato__valor">{formatearQuetzales(resultado.montoEsperado)}</span>
+              {/* Acá sí: el conteo ya se confirmó y quedó registrado, y quien
+                  autoriza tiene que ver qué está aprobando (§4.9, §4.40). */}
+              <span className="dato__valor">{montoOSinDato(resultado.montoEsperado)}</span>
             </div>
             <div className="dato">
               <span className="dato__etiqueta">Se contó</span>
@@ -431,7 +463,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
             <div className="dato">
               <span className="dato__etiqueta">Efectivo teórico</span>
               <span className="dato__valor" data-prueba="cierre-efectivo-teorico">
-                {formatearQuetzales(cierreConfirmado.montoEsperado)}
+                {montoOSinDato(cierreConfirmado.montoEsperado)}
               </span>
             </div>
             <div className="dato">
@@ -467,6 +499,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
               data-prueba="aceptar-confirmacion-de-cierre"
               onClick={() => {
                 setCierreConfirmado(null);
+                setPaso('resumen');
                 setRecarga((anterior) => anterior + 1);
               }}
             >
@@ -490,23 +523,74 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
     );
   }
 
-  const hayCaja = turno !== null;
   const conteoSelladoDelTurno = turno?.primerConteoSellado ?? null;
   const esAjena = turno?.esDeOtroUsuario === true;
 
-  return (
-    <div className="ingreso" data-prueba="pantalla-de-caja">
-      <h1>{hayCaja ? 'Cerrar caja' : 'Abrir caja'}</h1>
-
-      {/* Estado 1: no hay ninguna caja abierta en todo el sistema. */}
-      {!hayCaja && (
-        <p className="subtitulo" data-prueba="estado-sin-caja">
-          No hay ninguna caja abierta. Contá el fondo con el que arranca el turno.
+  const avisos = (
+    <>
+      {turno !== null && esAjena && (
+        <p className="advertencia" data-prueba="aviso-de-caja-ajena">
+          Esta caja la abrió {turno.abiertaPorNombre}. Para cerrarla hace falta la
+          autorización de un administrador.
         </p>
       )}
 
-      {/* Estados 2 y 3: hay una caja abierta. Se muestra siempre el resumen. */}
-      {turno !== null && (
+      {mensaje !== null && (
+        <p className="alerta" data-prueba="mensaje-de-caja">
+          {mensaje}
+        </p>
+      )}
+    </>
+  );
+
+  // Estado 1: no hay ninguna caja abierta en todo el sistema. Se cuenta el
+  // fondo de apertura; no hay teórico que mostrar ni que esconder.
+  if (turno === null) {
+    return (
+      <div className="ingreso" data-prueba="pantalla-de-caja">
+        <h1>Abrir caja</h1>
+        <p className="subtitulo" data-prueba="estado-sin-caja">
+          No hay ninguna caja abierta. Contá el fondo con el que arranca el turno.
+        </p>
+
+        {avisos}
+
+        <CapturaDeEfectivo
+          denominaciones={denominaciones}
+          alCambiar={setEfectivo}
+          deshabilitado={trabajando}
+          alConfirmar={abrir}
+        />
+
+        <div className="pie">
+          <button
+            type="button"
+            data-prueba="confirmar-caja"
+            disabled={efectivo === null || trabajando}
+            onClick={abrir}
+          >
+            Abrir turno
+          </button>
+          <button type="button" className="boton--secundario" onClick={alVolver}>
+            Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Estados 2 y 3, paso de CONTEO. NI el teórico NI las ventas en efectivo se
+  // dibujan acá, para NINGÚN rol: aunque el proceso principal se los haya
+  // mandado a un administrativo, este paso no los lee.
+  if (paso === 'contando') {
+    return (
+      <div className="ingreso" data-prueba="pantalla-de-caja">
+        <h1>Cerrar caja</h1>
+        <p className="subtitulo" data-prueba="paso-de-conteo">
+          Contá el efectivo que hay en el cajón. El monto que el sistema espera se muestra
+          después de confirmar el conteo.
+        </p>
+
         <div
           className="autorizacion__resumen"
           data-prueba={esAjena ? 'estado-caja-ajena' : 'estado-caja-propia'}
@@ -521,77 +605,129 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
             <span className="dato__etiqueta">Desde</span>
             <span className="dato__valor">{momentoLegible(turno.abiertaEn)}</span>
           </div>
-          <div className="dato">
-            <span className="dato__etiqueta">Monto inicial</span>
-            <span className="dato__valor">{formatearQuetzales(turno.montoInicial)}</span>
-          </div>
-          <div className="dato">
-            <span className="dato__etiqueta">
-              Ventas en efectivo ({turno.cantidadDeVentasEnEfectivo})
-            </span>
-            <span className="dato__valor" data-prueba="ventas-en-efectivo">
-              {formatearQuetzales(turno.ventasEnEfectivo)}
-            </span>
-          </div>
-          <div className="dato">
-            <span className="dato__etiqueta">Efectivo teórico ahora</span>
-            <span className="dato__valor" data-prueba="monto-teorico">
-              {formatearQuetzales(turno.montoTeorico)}
-            </span>
-          </div>
         </div>
+
+        {conteoSelladoDelTurno !== null && (
+          <p className="advertencia" data-prueba="aviso-de-conteo-sellado">
+            A las {momentoLegible(conteoSelladoDelTurno.fecha)} se confirmó un conteo de{' '}
+            {formatearQuetzales(conteoSelladoDelTurno.montoReal)}, y quedó registrado. Si ahora
+            contás otro número, cerrar va a necesitar la autorización de un administrador
+            aunque cuadre.
+          </p>
+        )}
+
+        {avisos}
+
+        <CapturaDeEfectivo
+          denominaciones={denominaciones}
+          alCambiar={setEfectivo}
+          deshabilitado={trabajando}
+          alConfirmar={() => {
+            cerrar();
+          }}
+        />
+
+        <div className="pie">
+          <button
+            type="button"
+            data-prueba="confirmar-caja"
+            disabled={efectivo === null || trabajando}
+            onClick={() => {
+              cerrar();
+            }}
+          >
+            {esAjena ? 'Cerrar turno (requiere autorización)' : 'Cerrar turno'}
+          </button>
+          <button
+            type="button"
+            className="boton--secundario"
+            data-prueba="volver-al-resumen"
+            onClick={() => {
+              setPaso('resumen');
+              setEfectivo(null);
+              setMensaje(null);
+              setRecarga((anterior) => anterior + 1);
+            }}
+          >
+            Volver
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Estados 2 y 3, paso de RESUMEN. El teórico se dibuja solo si viajó, y
+  // viaja solo para un administrativo: la pantalla no decide el rol.
+  const hayTeorico = turno.montoTeorico !== null;
+
+  return (
+    <div className="ingreso" data-prueba="pantalla-de-caja">
+      <h1>Caja abierta</h1>
+
+      <div
+        className="autorizacion__resumen"
+        data-prueba={esAjena ? 'estado-caja-ajena' : 'estado-caja-propia'}
+      >
+        <div className="dato">
+          <span className="dato__etiqueta">La abrió</span>
+          <span className="dato__valor" data-prueba="abierta-por">
+            {esAjena ? turno.abiertaPorNombre : 'Vos'}
+          </span>
+        </div>
+        <div className="dato">
+          <span className="dato__etiqueta">Desde</span>
+          <span className="dato__valor">{momentoLegible(turno.abiertaEn)}</span>
+        </div>
+        <div className="dato">
+          <span className="dato__etiqueta">Monto inicial</span>
+          <span className="dato__valor">{formatearQuetzales(turno.montoInicial)}</span>
+        </div>
+        {hayTeorico && (
+          <>
+            <div className="dato">
+              <span className="dato__etiqueta">
+                Ventas en efectivo ({turno.cantidadDeVentasEnEfectivo ?? 0})
+              </span>
+              <span className="dato__valor" data-prueba="ventas-en-efectivo">
+                {montoOSinDato(turno.ventasEnEfectivo)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">Efectivo teórico ahora</span>
+              <span className="dato__valor" data-prueba="monto-teorico">
+                {montoOSinDato(turno.montoTeorico)}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {hayTeorico && (
+        <p className="subtitulo" data-prueba="nota-del-teorico">
+          El teórico es para consultar durante el día. Al contar para cerrar no se muestra.
+        </p>
       )}
 
       {conteoSelladoDelTurno !== null && (
         <p className="advertencia" data-prueba="aviso-de-conteo-sellado">
-          Ya se confirmó un conteo de {formatearQuetzales(conteoSelladoDelTurno.montoReal)} con{' '}
-          {diferenciaLegible(conteoSelladoDelTurno.diferencia)}, y quedó registrado. Si cambiás el
-          número, cerrar va a necesitar la autorización de un administrador aunque cuadre.
+          A las {momentoLegible(conteoSelladoDelTurno.fecha)} se confirmó un conteo de{' '}
+          {formatearQuetzales(conteoSelladoDelTurno.montoReal)}, y quedó registrado.
         </p>
       )}
 
-      {turno !== null && esAjena && (
-        <p className="advertencia" data-prueba="aviso-de-caja-ajena">
-          Esta caja la abrió {turno.abiertaPorNombre}. Para cerrarla hace falta la
-          autorización de un administrador.
-        </p>
-      )}
-
-      {mensaje !== null && (
-        <p className="alerta" data-prueba="mensaje-de-caja">
-          {mensaje}
-        </p>
-      )}
-
-      <CapturaDeEfectivo
-        denominaciones={denominaciones}
-        alCambiar={setEfectivo}
-        deshabilitado={trabajando}
-        alConfirmar={() => {
-          if (hayCaja) {
-            cerrar();
-          } else {
-            abrir();
-          }
-        }}
-      />
+      {avisos}
 
       <div className="pie">
         <button
           type="button"
-          data-prueba="confirmar-caja"
-          disabled={efectivo === null || trabajando}
+          data-prueba="ir-a-contar"
           onClick={() => {
-            if (hayCaja) {
-              cerrar();
-            } else {
-              abrir();
-            }
+            setMensaje(null);
+            setEfectivo(null);
+            setPaso('contando');
           }}
         >
-          {!hayCaja && 'Abrir turno'}
-          {hayCaja && !esAjena && 'Cerrar turno'}
-          {hayCaja && esAjena && 'Cerrar turno (requiere autorización)'}
+          Contar para cerrar
         </button>
         <button type="button" className="boton--secundario" onClick={alVolver}>
           Volver

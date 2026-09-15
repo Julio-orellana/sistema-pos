@@ -85,6 +85,17 @@ async function montar(): Promise<void> {
   });
 }
 
+/** Pasa del resumen de la caja abierta al paso donde se cuenta para cerrar. */
+function irAContar(): void {
+  const boton = contenedor.querySelector<HTMLButtonElement>('[data-prueba="ir-a-contar"]');
+  if (boton === null) {
+    throw new Error('No está el botón para pasar a contar.');
+  }
+  act(() => {
+    boton.click();
+  });
+}
+
 function porPrueba(nombre: string): HTMLElement | null {
   return contenedor.querySelector<HTMLElement>(`[data-prueba="${nombre}"]`);
 }
@@ -154,6 +165,7 @@ describe('Estado 2: hay una caja abierta y la abrió quien está en sesión', ()
 
   it('ofrece cerrar SIN avisar de ninguna autorización', async () => {
     await montar();
+    irAContar();
 
     expect(porPrueba('confirmar-caja')?.textContent).toBe('Cerrar turno');
     expect(porPrueba('aviso-de-caja-ajena')).toBeNull();
@@ -190,6 +202,7 @@ describe('Estado 3: hay una caja abierta y la abrió OTRA persona', () => {
 
   it('el botón de cerrar lo dice también', async () => {
     await montar();
+    irAContar();
     expect(porPrueba('confirmar-caja')?.textContent).toBe(
       'Cerrar turno (requiere autorización)',
     );
@@ -232,6 +245,12 @@ async function contarYConfirmar(): Promise<void> {
   });
 }
 
+/** Desde el resumen: pasa a contar, cuenta un billete y confirma. */
+async function irAContarYConfirmar(): Promise<void> {
+  irAContar();
+  await contarYConfirmar();
+}
+
 const RESPUESTA_BASE = {
   mensaje: '',
   autorizadaVia: null,
@@ -240,14 +259,25 @@ const RESPUESTA_BASE = {
   primerConteo: null,
 };
 
-describe('EL EFECTIVO TEÓRICO se ve mientras la caja está abierta', () => {
-  it('muestra las ventas en efectivo y el teórico que manda el proceso principal', async () => {
-    instalarApi({
-      ...TURNO_PROPIO,
-      ventasEnEfectivo: '130.50',
-      cantidadDeVentasEnEfectivo: 4,
-      montoTeorico: '630.50',
-    });
+/** El turno como lo manda el proceso principal a un ADMINISTRATIVO. */
+const TURNO_PROPIO_CON_TEORICO: TurnoAbierto = {
+  ...TURNO_PROPIO,
+  ventasEnEfectivo: '130.50',
+  cantidadDeVentasEnEfectivo: 4,
+  montoTeorico: '630.50',
+};
+
+/** El mismo turno como lo manda a un usuario de VENTA: sin el teórico (§4.40). */
+const TURNO_PROPIO_SIN_TEORICO: TurnoAbierto = {
+  ...TURNO_PROPIO,
+  ventasEnEfectivo: null,
+  cantidadDeVentasEnEfectivo: null,
+  montoTeorico: null,
+};
+
+describe('EL EFECTIVO TEÓRICO en el RESUMEN: solo si el proceso principal lo mandó', () => {
+  it('a un administrativo le muestra las ventas en efectivo y el teórico', async () => {
+    instalarApi(TURNO_PROPIO_CON_TEORICO);
     await montar();
 
     expect(porPrueba('monto-teorico')?.textContent).toContain('630.50');
@@ -255,27 +285,92 @@ describe('EL EFECTIVO TEÓRICO se ve mientras la caja está abierta', () => {
     expect(texto()).toContain('Ventas en efectivo (4)');
   });
 
-  it('si el turno ya tiene un conteo sellado, lo avisa aunque se haya salido de la pantalla', async () => {
+  it('a un usuario de venta (le llega en null) NO le dibuja ni el teórico ni las ventas en efectivo', async () => {
+    instalarApi(TURNO_PROPIO_SIN_TEORICO);
+    await montar();
+
+    expect(porPrueba('estado-caja-propia')).not.toBeNull();
+    expect(porPrueba('monto-teorico')).toBeNull();
+    expect(porPrueba('ventas-en-efectivo')).toBeNull();
+    expect(texto().toLowerCase()).not.toContain('teórico');
+    expect(texto().toLowerCase()).not.toContain('ventas en efectivo');
+  });
+
+  it('si el turno ya tiene un conteo sellado, avisa cuánto se contó y NADA del esperado ni de la diferencia', async () => {
     instalarApi({
-      ...TURNO_PROPIO,
-      primerConteoSellado: {
-        fecha: '2026-09-14T20:00:00.000Z',
-        montoEsperado: '500.00',
-        montoReal: '480.00',
-        diferencia: '-20.00',
-      },
+      ...TURNO_PROPIO_SIN_TEORICO,
+      primerConteoSellado: { fecha: '2026-09-14T20:00:00.000Z', montoReal: '480.00' },
     });
     await montar();
 
     const aviso = porPrueba('aviso-de-conteo-sellado');
     expect(aviso?.textContent).toContain('480.00');
-    expect(aviso?.textContent).toContain('autorización');
+    expect((aviso?.textContent ?? '').toLowerCase()).not.toContain('faltante');
+    expect((aviso?.textContent ?? '').toLowerCase()).not.toContain('sobrante');
   });
 });
 
-describe('LA CONFIRMACIÓN DEL CIERRE muestra los tres montos', () => {
+describe('EL PASO DE CONTEO no muestra el teórico A NADIE, administrador incluido', () => {
+  it('un ADMINISTRATIVO lo ve en el resumen, y al pasar a contar desaparece de la pantalla', async () => {
+    instalarApi(TURNO_PROPIO_CON_TEORICO);
+    await montar();
+    // Control: en el resumen SÍ está. Sin esto, la aserción de abajo pasaría
+    // igual con un turno que nunca trajo el teórico.
+    expect(porPrueba('monto-teorico')?.textContent).toContain('630.50');
+
+    irAContar();
+
+    expect(porPrueba('paso-de-conteo')).not.toBeNull();
+    expect(porPrueba('confirmar-caja')).not.toBeNull();
+    expect(porPrueba('monto-teorico')).toBeNull();
+    expect(porPrueba('ventas-en-efectivo')).toBeNull();
+    expect(texto()).not.toContain('630.50');
+    expect(texto()).not.toContain('130.50');
+    expect(texto().toLowerCase()).not.toContain('teórico');
+  });
+
+  it('un usuario de VENTA tampoco lo ve al contar', async () => {
+    instalarApi(TURNO_PROPIO_SIN_TEORICO);
+    await montar();
+    irAContar();
+
+    expect(porPrueba('paso-de-conteo')).not.toBeNull();
+    expect(porPrueba('monto-teorico')).toBeNull();
+    expect(texto().toLowerCase()).not.toContain('teórico');
+  });
+
+  it('el conteo sellado se avisa también al contar, sin el esperado', async () => {
+    instalarApi({
+      ...TURNO_PROPIO_CON_TEORICO,
+      primerConteoSellado: { fecha: '2026-09-14T20:00:00.000Z', montoReal: '480.00' },
+    });
+    await montar();
+    irAContar();
+
+    const aviso = porPrueba('aviso-de-conteo-sellado');
+    expect(aviso?.textContent).toContain('480.00');
+    expect(aviso?.textContent).toContain('autorización');
+    expect(texto()).not.toContain('630.50');
+  });
+
+  it('«Volver» desde el conteo regresa al resumen, donde el administrativo vuelve a ver el teórico', async () => {
+    instalarApi(TURNO_PROPIO_CON_TEORICO);
+    await montar();
+    irAContar();
+    expect(porPrueba('monto-teorico')).toBeNull();
+
+    await act(async () => {
+      porPrueba('volver-al-resumen')?.click();
+      await Promise.resolve();
+    });
+
+    expect(porPrueba('monto-teorico')?.textContent).toContain('630.50');
+  });
+});
+
+describe('LA CONFIRMACIÓN DEL CIERRE muestra los tres montos, a cualquier rol', () => {
   it('cuadrada: inicial, teórico y final, sin renglón de diferencia', async () => {
-    instalarApiConCierres(TURNO_PROPIO, [
+    instalarApiConCierres(TURNO_PROPIO_CON_TEORICO, [
       {
         ...RESPUESTA_BASE,
         cerrada: true,
@@ -286,13 +381,31 @@ describe('LA CONFIRMACIÓN DEL CIERRE muestra los tres montos', () => {
       },
     ]);
     await montar();
-    await contarYConfirmar();
+    await irAContarYConfirmar();
 
     expect(porPrueba('confirmacion-de-cierre')?.textContent).toContain('Caja cerrada con éxito');
     expect(porPrueba('cierre-efectivo-inicial')?.textContent).toContain('500.00');
     expect(porPrueba('cierre-efectivo-teorico')?.textContent).toContain('630.50');
     expect(porPrueba('cierre-efectivo-final')?.textContent).toContain('630.50');
     expect(porPrueba('cierre-diferencia')).toBeNull();
+  });
+
+  it('a un usuario de VENTA, que no vio el teórico ni en el resumen ni al contar, se lo muestra al confirmar', async () => {
+    instalarApiConCierres(TURNO_PROPIO_SIN_TEORICO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: true,
+        codigo: 'CIERRE_CORRECTO',
+        diferencia: '0.00',
+        montoEsperado: '630.50',
+        montoReal: '630.50',
+      },
+    ]);
+    await montar();
+    expect(texto()).not.toContain('630.50');
+    await irAContarYConfirmar();
+
+    expect(porPrueba('cierre-efectivo-teorico')?.textContent).toContain('630.50');
   });
 
   it('con diferencia autorizada: la muestra, con su signo en palabras', async () => {
@@ -308,7 +421,7 @@ describe('LA CONFIRMACIÓN DEL CIERRE muestra los tres montos', () => {
       },
     ]);
     await montar();
-    await contarYConfirmar();
+    await irAContarYConfirmar();
 
     expect(porPrueba('cierre-diferencia')?.textContent).toContain('20.00');
     expect(porPrueba('confirmacion-de-cierre')?.textContent).toContain('Faltante');
@@ -334,7 +447,7 @@ describe('EL RECONTEO: quien autoriza ve LOS DOS conteos', () => {
       },
     ]);
     await montar();
-    await contarYConfirmar();
+    await irAContarYConfirmar();
 
     expect(porPrueba('autorizacion-de-reconteo')).not.toBeNull();
     expect(porPrueba('reconteo-primer-conteo')?.textContent).toContain('480.00');

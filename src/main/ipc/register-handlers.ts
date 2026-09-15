@@ -44,6 +44,7 @@ import { ErrorDeNegocio } from '@main/database/errores';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
+import { turnoParaLaVentana } from './turno-para-la-ventana';
 import type {
   ConteoSellado,
   ResultadoDeCierre,
@@ -382,26 +383,17 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           const quienAbrio =
             turno === null ? null : dependencias.usuarios.obtenerPorId(turno.usuarioId);
 
-          const resumen = turno === null ? null : dependencias.caja.resumenDelTurno(turno);
+          // Quién mira decide qué viaja: el teórico, solo a un administrativo
+          // (§4.40). La regla vive en `turnoParaLaVentana`, no acá.
           const estado: EstadoDeCaja = {
             turnoAbierto:
-              turno === null || resumen === null
+              turno === null
                 ? null
-                : {
-                    id: turno.id,
-                    montoInicial: montoACadena(turno.montoInicial),
-                    abiertaEn: turno.abiertaEn,
-                    abiertaPorId: turno.usuarioId,
-                    abiertaPorNombre: quienAbrio?.nombre ?? '(usuario eliminado)',
-                    esDeOtroUsuario:
-                      enSesion !== null && turno.usuarioId !== enSesion.id,
-                    ventasEnEfectivo: montoACadena(resumen.ventasEnEfectivo),
-                    cantidadDeVentasEnEfectivo: resumen.cantidadDeVentasEnEfectivo,
-                    montoTeorico: montoACadena(resumen.montoTeorico),
-                    primerConteoSellado: aConteoIpc(
-                      dependencias.caja.conteosSelladosDe(turno.id)[0] ?? null,
-                    ),
-                  },
+                : turnoParaLaVentana(turno, {
+                    quienMira: enSesion,
+                    nombreDeQuienAbrio: quienAbrio?.nombre ?? '(usuario eliminado)',
+                    caja: dependencias.caja,
+                  }),
             denominaciones: dependencias.caja.listarDenominaciones().map((d) => ({
               id: d.id,
               valor: montoACadena(d.valor),
@@ -427,20 +419,11 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             throw new Error('No hay sesión iniciada.');
           }
           const turno = dependencias.caja.abrir(enSesion.id, datos.efectivo);
-          const abierto: TurnoAbierto = {
-            id: turno.id,
-            montoInicial: montoACadena(turno.montoInicial),
-            abiertaEn: turno.abiertaEn,
-            abiertaPorId: turno.usuarioId,
-            abiertaPorNombre: enSesion.nombre,
-            // Recién abierto por quien está en sesión: nunca es de otro.
-            esDeOtroUsuario: false,
-            // Recién abierto: todavía no hay ventas, el teórico es el inicial.
-            ventasEnEfectivo: '0.00',
-            cantidadDeVentasEnEfectivo: 0,
-            montoTeorico: montoACadena(turno.montoInicial),
-            primerConteoSellado: null,
-          };
+          const abierto: TurnoAbierto = turnoParaLaVentana(turno, {
+            quienMira: enSesion,
+            nombreDeQuienAbrio: enSesion.nombre,
+            caja: dependencias.caja,
+          });
           return abierto;
         }),
       ),
@@ -475,7 +458,10 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             codigo: resultado.codigo,
             mensaje: resultado.mensaje,
             diferencia: resultado.diferencia,
-            montoEsperado: resultado.montoEsperado,
+            // Antes de contar —el pedido de autorización de una caja ajena— el
+            // esperado NO viaja (§4.40).
+            montoEsperado:
+              resultado.codigo === 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA' ? null : resultado.montoEsperado,
             montoReal: resultado.montoReal,
             montoInicial,
             primerConteo: aConteoIpc(resultado.primerConteo),
@@ -506,7 +492,8 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
                 codigo: permiso.codigo,
                 mensaje: permiso.mensaje,
                 diferencia: '0.00',
-                montoEsperado: montoACadena(turno.montoInicial),
+                // Todavía no se contó nada: el esperado no viaja (§4.40).
+                montoEsperado: null,
                 montoReal: '0.00',
                 autorizadaVia: null,
                 segundosParaReintentar: permiso.segundosParaReintentar,
@@ -563,7 +550,13 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   );
 }
 
-/** Un conteo sellado del dominio, en la forma que cruza hacia la ventana. */
+/**
+ * Un conteo sellado del dominio, en la forma que cruza hacia la ventana en el
+ * RESULTADO DE UN CIERRE. Acá sí viajan el esperado y la diferencia: quien lo
+ * recibe acaba de confirmar un conteo y está por autorizar una corrección, que
+ * tiene que ver entera (§4.9). Mientras se vuelve a contar, el turno manda
+ * otra forma sin esos dos datos (`turnoParaLaVentana`).
+ */
 function aConteoIpc(conteo: ConteoSellado | null): ConteoSelladoIpc | null {
   return conteo === null
     ? null

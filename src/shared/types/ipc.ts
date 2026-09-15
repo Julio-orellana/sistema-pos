@@ -543,23 +543,39 @@ export interface TurnoAbierto {
    * Suma de las ventas EN EFECTIVO y completadas de este turno, hasta ahora.
    * Cadena canónica de dos decimales. La calcula el proceso principal con
    * Decimal.js: la pantalla no suma.
+   *
+   * `null` PARA TODO USUARIO QUE NO SEA ADMINISTRATIVO (§4.40): inicial más
+   * ventas en efectivo ES el teórico, así que viaja o no viaja junto con él.
    */
-  readonly ventasEnEfectivo: string;
-  /** Cuántas ventas en efectivo lleva el turno. */
-  readonly cantidadDeVentasEnEfectivo: number;
+  readonly ventasEnEfectivo: string | null;
+  /** Cuántas ventas en efectivo lleva el turno. `null` con la misma regla. */
+  readonly cantidadDeVentasEnEfectivo: number | null;
   /**
    * `monto_inicial + ventasEnEfectivo`: lo que DEBERÍA haber en el cajón en
    * este momento. Es el mismo cálculo que `monto_esperado` al cerrar
    * (`ServicioDeCaja.montoEsperadoDe`), mostrado durante el turno (§4.39).
+   *
+   * `null` PARA TODO USUARIO QUE NO SEA ADMINISTRATIVO (§4.40). Lo decide
+   * `turnoParaLaVentana` en el proceso principal: lo que no cruza el puente no
+   * se puede leer desde la consola.
    */
-  readonly montoTeorico: string;
+  readonly montoTeorico: string | null;
   /**
    * El primer conteo de cierre sellado de este turno, si hubo alguno. Viene de
    * `auditoria_log`, así que sigue ahí aunque se salga de la pantalla o se
    * reinicie la aplicación: que el aviso se borrara al reiniciar invitaría a
    * reiniciar para no verlo.
+   *
+   * SIN el esperado ni la diferencia (§4.40): se muestra mientras se vuelve a
+   * contar, y esos dos datos dirían qué número poner.
    */
-  readonly primerConteoSellado: ConteoSelladoIpc | null;
+  readonly primerConteoSellado: ConteoConfirmadoIpc | null;
+}
+
+/** Un conteo de cierre ya confirmado, sin nada que revele el esperado. */
+export interface ConteoConfirmadoIpc {
+  readonly fecha: string;
+  readonly montoReal: string;
 }
 
 /** Lo que la pantalla de caja necesita para dibujarse. */
@@ -591,7 +607,14 @@ export interface ResultadoDeCierreIpc {
   readonly mensaje: string;
   /** Diferencia como cadena canónica, con signo. Negativa es faltante. */
   readonly diferencia: string;
-  readonly montoEsperado: string;
+  /**
+   * Lo que el sistema espera. `null` MIENTRAS NO SE HAYA CONFIRMADO NINGÚN
+   * CONTEO (§4.40): el pedido de autorización de una caja ajena ocurre antes
+   * de contar, y mandarlo ahí le diría a quien va a contar qué número poner.
+   * Con un conteo confirmado sí viaja: ya no se puede copiar, y quien
+   * autoriza una diferencia tiene que ver qué está aprobando (§4.9).
+   */
+  readonly montoEsperado: string | null;
   readonly montoReal: string;
   /** Con cuál PIN se autorizó, si hubo autorización. */
   readonly autorizadaVia: 'presencial' | 'remoto' | null;

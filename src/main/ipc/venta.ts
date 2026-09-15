@@ -83,21 +83,20 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
 
           const estado = caja.estadoParaVender(enSesion.id);
 
-          /** Lo vendido en efectivo en el turno, con el mismo cálculo del cierre. */
-          const resumenDe = (
-            turno: Parameters<typeof caja.resumenDelTurno>[0],
-          ): Pick<
+          /**
+           * La pantalla de venta no muestra el teórico, y este canal lo usan
+           * los dos roles: no lo manda NUNCA (§4.40). Si lo mandara para un
+           * administrativo, un cajero podría leerlo de la consola mientras
+           * vende con la sesión de otro abierta, y no hay nada que ganar.
+           */
+          const sinTeorico: Pick<
             TurnoAbierto,
             'ventasEnEfectivo' | 'cantidadDeVentasEnEfectivo' | 'montoTeorico' | 'primerConteoSellado'
-          > => {
-            const resumen = caja.resumenDelTurno(turno);
-            return {
-              ventasEnEfectivo: montoACadena(resumen.ventasEnEfectivo),
-              cantidadDeVentasEnEfectivo: resumen.cantidadDeVentasEnEfectivo,
-              montoTeorico: montoACadena(resumen.montoTeorico),
-              // La pantalla de venta no lo muestra: no es un dato de mostrador.
-              primerConteoSellado: null,
-            };
+          > = {
+            ventasEnEfectivo: null,
+            cantidadDeVentasEnEfectivo: null,
+            montoTeorico: null,
+            primerConteoSellado: null,
           };
 
           /** El turno del sistema, con quién lo abrió ya resuelto. */
@@ -109,7 +108,7 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
                 abiertaPorId: estado.turno.usuarioId,
                 abiertaPorNombre: enSesion.nombre,
                 esDeOtroUsuario: false,
-                ...resumenDe(estado.turno),
+                ...sinTeorico,
               }
             : estado.motivo === 'CAJA_DE_OTRO_USUARIO'
               ? {
@@ -121,7 +120,7 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
                     usuarios.obtenerPorId(estado.turno.usuarioId)?.nombre ??
                     '(usuario eliminado)',
                   esDeOtroUsuario: true,
-                  ...resumenDe(estado.turno),
+                  ...sinTeorico,
                 }
               : null;
 
