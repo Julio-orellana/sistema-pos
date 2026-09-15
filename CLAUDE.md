@@ -1145,6 +1145,7 @@ validación que vive en la interfaz se salta llamando al canal directamente.
 | `descuento_excedente` | **Sí**, desde el 2026-09-11 | Decisión explícita de Julio. Ver §4.13. |
 | `salida_controlada` | **Sí**, desde el 2026-09-15 — **ampliada por decisión explícita el 2026-09-15** | Hasta ese día **No**, con esta razón, que no estaba equivocada: el PIN remoto se pidió para una sola cosa, autorizar diferencias de caja por teléfono, y dárselo además a cerrar la aplicación lo ampliaba más allá de lo pedido. Julio decidió ampliarlo: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. **Se evaluó separar el PIN remoto por superficie y se decidió NO hacerlo** (Julio, 2026-09-15): cambiar el PIN remoto desde «PIN de autorización remota» ya es el control real si cambia a quién se le dicta, y un PIN por superficie duplicaría ese mecanismo. Ver §4.41. |
 | `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
+| `anulacion_de_venta` | **No**, desde que existe (2026-09-15) | El fraude que este PIN frena —cobrar en efectivo, anular y quedarse con el dinero— es el que un teléfono no puede verificar. Ver `docs/ANULACION-DE-VENTA.md` §4.2 y §4.45. |
 
 **LA POLÍTICA VIVE EN LA TABLA, NO EN QUIEN LLAMA.** Antes era un parámetro
 (`aceptaPinRemoto`) que cada uno de los cuatro lugares de autorización escribía
@@ -1225,7 +1226,7 @@ Qué queda fuera, y por qué:
 | Se excluye | Razón |
 |---|---|
 | **Las ventas con tarjeta** | Ese dinero nunca entró al cajón: entra por el banco, con su propia liquidación. Sumarlas haría que toda caja con ventas con tarjeta apareciera faltante por exactamente ese monto, y el cajero tendría que pedir una autorización de descuadre por un dinero que nadie perdió. |
-| **Las ventas anuladas** | Hoy nada las produce —anular una venta registrada todavía no existe—, pero el filtro va desde ahora para que el día que exista no haya que acordarse de agregarlo. |
+| **Las ventas anuladas** | **Se excluyen por su fila en `anulaciones_de_venta`, no por `ventas.estado`** (§4.45). Hasta el 2026-09-15 nada las producía y el filtro era por `estado = 'completada'`. |
 | **Las ventas de otros turnos** | Se filtra por `caja_sesion_id`, no por fecha: un turno es un turno, aunque cruce la medianoche. |
 
 **Suma los TOTALES, no los subtotales**: el descuento discrecional ya está
@@ -6945,6 +6946,156 @@ Ahora se compara sin distinguir mayúsculas.
 - **La presentación.** No se pidió pulido: el detalle usa listas de definición
   sin estilo propio.
 
+### 4.45 La anulación de una venta: el núcleo local (2026-09-15)
+
+**Diseño aprobado entero:** `docs/ANULACION-DE-VENTA.md`. Este prompt construyó
+solo el núcleo local, que se usa de punta a punta por el canal
+`venta:anular`.
+
+| Qué | Estado |
+|---|---|
+| Migración 033: `anulaciones_de_venta` y sus dos disparadores (§1.1) | **Hecho** |
+| Migración 034: superficie `anulacion_de_venta` (§4.1) | **Hecho** |
+| Servicio: los ocho pasos de §2.2, la unidad (§2.3) y el voucher (§3.3) antes del PIN | **Hecho** |
+| PIN: superficie propia, sin remoto, con `autorizarComoAdministrador` tal como estaba | **Hecho** |
+| Efectivo esperado y reportes: la anulada se excluye por su fila (§3.1, §1.3) | **Hecho** |
+| Los cuatro asientos de §6.1, con el contenido de §6.2 | **Hecho** |
+| Canal `venta:anular`, en la prueba de clonado de todos los canales (§4.42) | **Hecho** |
+| Sincronización a la nube (§7): la `0033`, la `0035`, el enrutador, el contrato | **No**. Prompt aparte |
+| Restauración (§8), el recibo marcado (§5), el reporte de cobros con tarjeta (§3.5), la pantalla | **No**. Prompts aparte |
+
+> **UNA VERSIÓN CON ESTE NÚCLEO NO SE INSTALA EN UNA TERMINAL CONECTADA A LA
+> NUBE.** El lote de la anulación se encola dentro de la transacción (§2.2,
+> paso 8), pero su puerta en la nube no existe todavía. El enrutador lo mandaría
+> a `sincronizar_lote_simple`, que lo rechaza por nombre, y la cola se detendría
+> (§7.5 del diseño). Sin pantalla nadie anula por accidente, pero el canal se
+> puede llamar desde la consola. `deriva-de-esquema.test.ts` anota la tabla en
+> `TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA`, y falla el día que llegue su espejo
+> hasta que se la saque.
+
+#### La regla, y lo que cambió en consultas que ya existían
+
+**Una venta está anulada si y solo si existe su fila en `anulaciones_de_venta`.**
+`ventas.estado` queda en `'completada'` también en las anuladas.
+
+- Las cuatro consultas de §0.3 del diseño filtran con un solo fragmento,
+  `VENTA_SIN_ANULACION` (`repositories/ventas.ts`). Dos se renombraron para no
+  mentir: `listarCompletadasEnRango` pasó a `listarNoAnuladasEnRango`, y su par
+  de `venta_detalle` también.
+- `RepositorioDeVentas.anular()` **se eliminó**: era el camino descartado.
+- Sus tres usos en pruebas insertan ahora la fila de anulación.
+
+**El comentario de la migración 015 dice que `cantidad_vendida` «nunca baja».**
+Desde hoy baja al anular (§2.4 del diseño), con `anularVentaDeProducto`, que es
+el espejo de `registrarVentaDeProducto`. El comentario no se corrige porque una
+migración aplicada no se edita (§4.2): esta nota es la aclaración.
+
+#### Los dos pasos del canal
+
+Es el patrón del descuento excedente: **un solo canal que se llama dos veces**,
+como dice §4.3 del diseño. No son dos canales.
+
+1. **Con `pin` en `null`.** Valida en este orden:
+   1. la venta existe;
+   2. su caja está abierta;
+   3. no tiene anulación;
+   4. el voucher coincide, si fue con tarjeta;
+   5. ninguna unidad cambió;
+   6. los contadores alcanzan;
+   7. el motivo es válido.
+
+   Si algo falla, contesta `ok: false` con el código, y no se pide el PIN. Si
+   no, contesta `REQUIERE_AUTORIZACION` con la vista previa.
+2. **Con el PIN.** Primero **vuelve a validar todo**: una caja cerrada mientras
+   tanto no consume un intento del candado. Después pide el PIN, y con el PIN
+   aceptado corre la transacción, que valida otra vez adentro.
+
+La coreografía vive en `FlujoDeAnulacionDeVenta` (`ipc/anulacion-de-venta.ts`)
+y se prueba contra SQLite real, igual que `FlujoDeCierreDeCaja`.
+
+| Código nuevo (`errores.ts`) | Cuándo |
+|---|---|
+| `VENTA_YA_ANULADA` | Segunda anulación. También traduce el UNIQUE de la 033 |
+| `CAJA_DE_LA_VENTA_CERRADA` | La caja de la venta ya se cerró |
+| `VOUCHER_NO_COINCIDE` | «El voucher no coincide con el de la venta original.» |
+| `UNIDAD_CAMBIADA` | Cambió `tipo_medida` o `unidad_peso` desde la venta |
+| `CONTADORES_INCONSISTENTES` | `cantidad_vendida` quedaría negativa o `contador_ventas` bajaría de cero |
+| `ANULACION_INMUTABLE` | Traduce los disparadores de la 033. Va ANTES que `AUDITORIA_INMUTABLE` |
+
+`CONFLICTO_DE_INVENTARIO` se reusa con otro texto: «…cambió mientras se
+anulaba. La venta no se anuló.»
+
+#### Cuatro interpretaciones del diseño, dichas para que Julio las confirme
+
+1. **Cada rechazo de autorización deja `anulacion_de_venta_rechazada` con su
+   código**: `PIN_INCORRECTO`, pero también el tercer intento
+   (`AUTORIZACION_BLOQUEADA`) o un PIN mal formado. §6.1 dice «cada PIN bien
+   formado pero equivocado» y cita a la salida controlada como modelo, y la
+   salida registra todo rechazo. Se hizo como la salida. El PIN no va en el
+   asiento.
+2. **La validación de contadores también corre antes del PIN**, no solo en la
+   transacción. §4.3 no la nombra entre las previas; pedir un PIN para después
+   rechazar por datos inconsistentes no tenía sentido.
+3. **`contador_ventas` baja por la cantidad de líneas del producto** (`veces`), no
+   por un 1 fijo. Hoy es 1 siempre, porque la venta rechaza el mismo producto
+   dos veces; el esquema no lo impide.
+4. **El motivo se guarda recortado** de espacios en los extremos.
+
+#### Evidencia
+
+**Vitest** (`npm run verify`): 90 archivos y 2155 pruebas, código de salida 0. Se
+sumaron 53 pruebas de servicio y flujo (`servicio-de-anulacion.test.ts`) y 12
+estructurales (`anulacion-estructural.test.ts`), cada detector con su control.
+
+**En la app real, por `window.pos.venta.anular`** (macOS; sonda temporal que no
+quedó en el repositorio):
+
+```
+typeof window.pos.venta.anular en la ventana: function
+productos antes: [{"inventario_disponible":"97.000","contador_ventas":2,"cantidad_vendida":"3.000"}]
+[efectivo, sin PIN] -> {"ok":true,"datos":{"anulada":false,"codigo":"REQUIERE_AUTORIZACION",…,"avisoDeDevolucion":"Hay que devolverle Q8.50 al cliente."},…}
+[efectivo, PIN equivocado] -> {"ok":true,"datos":{"anulada":false,"codigo":"PIN_INCORRECTO",…}}   candado: [{"intentos_fallidos":1}]
+[efectivo, PIN de Jimmy] -> {"ok":true,"datos":{"anulada":true,"codigo":"ANULACION_CORRECTA",…,"saldoAnterior":"97.000","saldoNuevo":"99.000"}]}}}
+[efectivo, otra vez] -> {"ok":false,"error":{"codigo":"VENTA_YA_ANULADA","mensaje":"Esa venta ya estaba anulada.",…}}
+[tarjeta, voucher equivocado con el PIN correcto] -> {"ok":false,"error":{"codigo":"VOUCHER_NO_COINCIDE","mensaje":"El voucher no coincide con el de la venta original.",…}}   candado: [{"intentos_fallidos":0}]
+[tarjeta, voucher correcto, PIN de Jimmy] -> {"ok":true,"datos":{"anulada":true,…,"efectivoQueDejaDeContar":"0.00",…}}
+productos después: [{"inventario_disponible":"100.000","contador_ventas":0,"cantidad_vendida":"0.000"}]
+ventas: [{…,"forma_pago":"efectivo","total":"8.50","estado":"completada"},{…,"forma_pago":"tarjeta","num_boleta":"004512","total":"4.25","estado":"completada"}]
+caja.estado() con la sesión de Ana: {…,"ventasEnEfectivo":null,"cantidadDeVentasEnEfectivo":null,"montoTeorico":null,…}
+sync_cola: lote 1bc4ed03 #0 anulaciones_de_venta insertar · #1 productos actualizar · #2 auditoria_log insertar
+errores en la consola de la ventana: []
+```
+
+**Falsificado**, una mutación por vez; se revirtió con `git checkout` y
+`git status` quedó limpio después de cada una:
+
+| Mutación | Qué cae |
+|---|---|
+| Volver al saldo del asiento de la venta en vez de sumar (planeada) | 3: queda 100 en vez de 147, el asiento de §6.2, y la estructural de §6.3 |
+| No bajar los contadores (planeada) | 2 |
+| Dejar el filtro por `estado` (planeada) | 6: el esperado, el reporte, la estructural y el cierre de caja |
+| Aceptar el PIN remoto (planeada) | 2 |
+| Encolar la fila de `ventas` (planeada) | 1: la forma del lote |
+| Comparar el voucher contra cualquier venta con tarjeta (planeada) | 1 |
+| Quitar la validación de unidad | 2 |
+| Mirar el PIN antes de validar | 10 |
+| Que el servicio lea la bitácora | 1: la estructural de §6.3 |
+| No dejar el asiento del conflicto | 2 |
+| Un disparador que no impide editar | 1 |
+
+La séptima falsificación planeada, «que el reporte lea `ventas.estado`», es
+del reporte de §3.5, que no se construyó en este prompt.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **Nada contra la nube.** El lote se encola y nadie lo sube a una puerta que
+  exista.
+- **Un conflicto real del comparar-y-cambiar.** Con una sola conexión síncrona no
+  puede pasar; se forzó envolviendo el método del repositorio.
+- **La cantidad de líneas de un mismo producto mayor que 1.** La venta no lo
+  permite y no se sembró a mano.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -7213,6 +7364,9 @@ Ahora se compara sin distinguir mayúsculas.
 | **El historial de cajas lee lo guardado y NO recalcula el corte; la corrección de un recuento sellado sale del asiento `reconteo_de_cierre_autorizado`.** | Recalcular teórico y diferencia; agregar columnas a `caja_sesiones` para el reconteo | Recalcular haría que una regla nueva cambiara un corte viejo. Una columna exigiría migración en las dos nubes, y si el conteo final cuadra el CHECK de la 008 obliga a dejar la autorización vacía: el asiento es la única constancia. Un asiento ilegible se muestra como aviso, no se esconde. §4.44. | Prompt 67 — 2026-09-15 |
 | **El asiento `reconteo_de_cierre_autorizado` se escribe siempre que un cierre con sellos CUADRA, no solo cuando cambió lo contado; y el mensaje distingue «cambió lo contado» de «cambió lo esperado».** | Seguir condicionándolo a `huboReconteo`; guardar el autorizante en `caja_cerrada.autorizadaPor` | Medido: con un sello, una venta en efectivo en el medio y el mismo número reconfirmado, el cierre exigía PIN y no dejaba escrito quién lo tecleó. `caja_cerrada.autorizadaPor` refleja las columnas de la diferencia de `caja_sesiones` y cambiarle el significado confundiría a quien ya la lee; el asiento de reconteo es donde §4.39 dice que está. Las dos causas son distintas y se registran por separado. §4.39. | Prompt 68 — 2026-09-15 |
 | **Los filtros del historial son por día de APERTURA en hora de Guatemala y por quien ABRIÓ.** | Filtrar por día de cierre; filtrar por quien abrió o cerró | Una caja se identifica por su apertura, que existe también en las abiertas. Contar a quien cerró mezclaría en el filtro de Jimmy las cajas ajenas que solo cerró. Se reutiliza `resolverPeriodo`, para que un día signifique lo mismo que en los reportes (§4.15). §4.44. | Prompt 67 — 2026-09-15 |
+| **La anulación de una venta usa UN canal, `venta:anular`, llamado dos veces: sin PIN valida y devuelve la vista previa; con PIN vuelve a validar, autoriza y ejecuta.** | Dos canales, uno para pedir y otro para confirmar; una autorización pendiente como la del cierre de caja | Es lo que dice §4.3 del diseño y el patrón del descuento excedente. Acá no hay ningún monto oculto que revelar después del PIN, así que la autorización pendiente del cierre (§4.40.5) no agrega nada. Volver a validar antes de mirar el PIN hace que una caja cerrada o una venta anulada mientras tanto no consuman un intento. §4.45. | Prompt 69 — 2026-09-15 |
+| **`RepositorioDeVentas.anular()` se elimina y las consultas filtran con `VENTA_SIN_ANULACION`; dos se renombran a «NoAnuladas».** | Dejar `anular()` sin uso; dejar los nombres «Completadas» | Es el camino que el diseño descarta (§1.3), y dejarlo invita a usarlo. «Completadas» afirmaría que filtra por `estado`, que dice 'completada' también en las anuladas. Dos pruebas estructurales lo fijan. §4.45. | Prompt 69 — 2026-09-15 |
+| **El lote de la anulación se encola desde el núcleo local aunque su puerta en la nube no exista todavía; y una versión con este núcleo no se instala en una terminal conectada.** | No encolar hasta el prompt de sincronización; encolar y cablear el enrutador ya | Encolar es el paso 8 de la transacción (§2.2), y no hacerlo dejaría anulaciones que nunca subirían sin que nada fallara. Cablear el enrutador sin la función de la nube no evita que la cola se detenga. La deriva anota la tabla en una lista que obliga a sacarla cuando llegue su espejo. §4.45. | Prompt 69 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -7305,13 +7459,12 @@ negocio:
   sigue existiendo para entornos de desarrollo nuevos, pero **ya no es la única
   forma de cambiarlos**. Lo que falta es el número real que quiera Jimmy: punto
   15 de la sección 6.2.
-- **No existe todavía**: **anular una venta ya registrada**. `RepositorioDeVentas.anular`
-  existe como operación de datos y los reportes ya filtran por
-  `estado = 'completada'` para el día que exista, pero no hay servicio, canal ni
-  pantalla que la use, ni reglas de autorización, ni devolución de inventario.
-  **El diseño está escrito y PENDIENTE DE APROBACIÓN** en
-  `docs/ANULACION-DE-VENTA.md` (2026-09-15), sin código ni migraciones: no usa
-  ese método ni ese filtro, y dice por qué.
+- **Sí existe el NÚCLEO LOCAL de la anulación de una venta** (§4.45): las
+  migraciones 033 y 034, el servicio con la reposición, el voucher y el PIN, los
+  asientos y el canal `venta:anular`. **No existen todavía** su sincronización a
+  la nube, la restauración, el recibo marcado, el reporte de cobros con tarjeta
+  ni la pantalla. **Una versión con este núcleo no se instala en una terminal
+  conectada a la nube** hasta que exista la sincronización.
 - **No existen las alertas de stock mínimo, los gráficos ni la exportación de
   reportes a un archivo.** El umbral de cada producto es una definición de
   negocio que falta: punto 18 de la sección 6.2.
@@ -7530,7 +7683,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     usuarios/   autenticación, bloqueo por intentos, sesión, permisos y gestión de usuarios
     caja/       apertura y cierre del turno, arqueo por denominaciones e historial de cajas
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
-    venta/      precio efectivo, descuento, topes por rol y la transacción de la venta
+    venta/      precio efectivo, descuento, topes por rol, la transacción de la venta y su anulación
     reportes/   los tres reportes y el período en hora de Guatemala. NUNCA agrega en SQL
     negocio/    los datos de la tienda que encabezan el recibo
     recibo/     modelo, plantilla, ESC/POS y emisión del comprobante
@@ -7565,7 +7718,7 @@ supabase/       espejo del esquema en Postgres (migraciones para la nube)
   esquema-nube.json  la FOTO del catálogo de la nube que coteja la prueba de deriva
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
   SINCRONIZACION.md  diseño de la sincronización. APROBADO; fases 1.a, 1.b, 2.a y 2.b construidas
-  ANULACION-DE-VENTA.md  diseño de la anulación de una venta. PROPUESTA, sin código
+  ANULACION-DE-VENTA.md  diseño de la anulación de una venta. APROBADO; núcleo local construido (§4.45)
 ```
 
 ## 10. Antes de cerrar cualquier sesión de trabajo

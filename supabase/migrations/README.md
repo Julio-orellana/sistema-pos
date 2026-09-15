@@ -64,7 +64,7 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
-| **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018, 0029 (la local; ver la nota sobre el 29), 0030 |
+| **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018, 0029 (la local; ver la nota sobre el 29), 0030, 0034 |
 | **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027, 0029 (la de la nube; ver la nota sobre el 29) |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
@@ -115,15 +115,17 @@ carpetas: el hueco es información, y renumerar la destruye.
 | `030_recibos_pdf_path_relativo` | **(ninguno, a propósito)** | Cambia el VALOR de `recibos.pdf_path` en las filas locales (de absoluta a relativa), no el esquema: la columna de Postgres sigue igual y las filas ya subidas no se reescriben (la restauración las convierte al bajarlas). El `0030` queda reservado |
 | `031_productos_precio_compra` | `0031_productos_precio_compra.sql` | Costo del producto: dato de negocio que viaja en el payload de `productos`. **Aplicado en `pos-pruebas-descartable` el 2026-09-15; NO en `pos-jimmy-cano`.** Mientras terminal y nube difieran la cola se detiene (ver la cabecera del archivo) |
 | `032_venta_detalle_costo_unitario_snap` | `0032_venta_detalle_costo_unitario_snap.sql` | Foto del costo en cada línea de venta: dato de negocio que viaja en el payload de `venta_detalle`. **Aplicado en `pos-pruebas-descartable` el 2026-09-15; NO en `pos-jimmy-cano`.** Mismo problema de forma de payload que el 0031 |
+| `033_anulaciones_de_venta` | **`0033_anulaciones_de_venta.sql`, TODAVÍA NO ESCRITO** | La anulación de una venta: dato de negocio (`docs/ANULACION-DE-VENTA.md` §1). El espejo, la función `0035` y el enrutador son del prompt de sincronización. Hasta entonces, **una terminal con la 033 no se conecta a la nube**: el lote de una anulación detendría la cola |
+| `034_superficie_anulacion_de_venta` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja. El `0034` queda reservado |
 
 Cada migración local que sea dato de negocio se espeja con su mismo número. **No renumerar** para "tapar" los
 que faltan: el hueco es información.
 
-Son **ocho números** omitidos pero **cuatro casos**: el 0003, el 0006, el 0011,
-el 0013 y el 0029 son la misma tabla, `bloqueos_de_autorizacion` —la 006, la
-011, la 013 y la 029 solo le amplían el CHECK de superficies—, así que si la
+Son **nueve números** omitidos pero **cuatro casos**: el 0003, el 0006, el 0011,
+el 0013, el 0029 y el 0034 son la misma tabla, `bloqueos_de_autorizacion` —la
+006, la 011, la 013, la 029 y la 034 solo le amplían el CHECK de superficies—, así que si la
 tabla no se espeja, ninguna migración que la toque se espeja tampoco. Ese es
-todo el motivo de esos cinco huecos: no hay ninguna razón adicional, ni nada
+todo el motivo de esos seis huecos: no hay ninguna razón adicional, ni nada
 pendiente de decidir sobre ellos. **El 0030 es el cuarto caso**: cambia el
 VALOR de `recibos.pdf_path` en las filas locales —de absoluta a relativa— sin
 tocar el esquema de la nube, así que no hay nada que espejar. El 0002 es el suyo propio. **Y el 0018 es el tercer caso**: le

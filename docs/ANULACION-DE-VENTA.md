@@ -1,6 +1,9 @@
 # Anulación de una venta — documento de diseño
 
-> **Estado: PROPUESTA PARA APROBAR. No hay código ni migraciones escritas.**
+> **Estado: APROBADO entero el 2026-09-15. El NÚCLEO LOCAL está construido**
+> (secciones 1, 2, 3.1 a 3.4, 4 y 6; migraciones locales 033 y 034; ver
+> CLAUDE.md §4.45). **Falta:** la sincronización (7), la restauración (8), el
+> recibo (5), el reporte de cobros con tarjeta (3.5) y la pantalla.
 > Escrito el 2026-09-15. Ninguna migración de este documento se aplica a ningún
 > proyecto de Supabase —tampoco a `pos-pruebas-descartable`— sin que Julio vea
 > el SQL completo primero.
