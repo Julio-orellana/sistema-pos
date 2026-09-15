@@ -15,6 +15,16 @@
  *   5. El margen del reporte por producto: con costo, el número; sin costo,
  *      «sin dato».
  *
+ * Y lo que se agregó el mismo día (§4.40):
+ *
+ *   6. EL ESCENARIO DEL ADMINISTRATIVO: ve el teórico en el resumen de la caja,
+ *      pero al pasar a CONTAR para cerrar el teórico no está en la pantalla.
+ *   7. Un usuario de VENTA no ve el teórico ni en la pantalla ni llamando al
+ *      canal desde la consola (`window.pos.caja.estado()`,
+ *      `window.pos.venta.estado()`), y lo ve recién en la confirmación.
+ *   8. El margen usa la FOTO del costo de cada venta: cambiar el precio de
+ *      compra después no mueve el margen de una venta ya hecha.
+ *
  * Por qué es un guion aparte y no más pasos de `verify:pantallas`: aquel
  * recorre la tienda entera y tarda; este existe para mostrar, con capturas y
  * con la base leída al final, el escenario puntual que se pidió ver.
@@ -325,6 +335,43 @@ async function main() {
     await capturar('2-teorico-en-vivo');
 
     // =======================================================================
+    // §4.40 — EL ESCENARIO DEL ADMINISTRATIVO: el teórico está en el resumen,
+    // y al pasar a contar para cerrar NO está.
+    // =======================================================================
+    anotar('--- escenario del administrativo: resumen con teórico → pantalla de conteo sin teórico ---');
+    const estadoParaElAdmin = await ventana.evaluate(async () => window.pos.caja.estado());
+    anotar(`window.pos.caja.estado() con la sesión del ADMINISTRATIVO: ${JSON.stringify(estadoParaElAdmin.datos.turnoAbierto)}`);
+    comprobar(
+      'al administrativo el canal SÍ le manda el teórico, para consultarlo durante el día',
+      'montoTeorico 527.50, ventasEnEfectivo 27.50',
+      `montoTeorico ${String(estadoParaElAdmin.datos.turnoAbierto.montoTeorico)}, ventasEnEfectivo ${String(estadoParaElAdmin.datos.turnoAbierto.ventasEnEfectivo)}`,
+      estadoParaElAdmin.datos.turnoAbierto.montoTeorico === '527.50' &&
+        estadoParaElAdmin.datos.turnoAbierto.ventasEnEfectivo === '27.50',
+    );
+    const filasEnElResumen = await prueba('monto-teorico').count();
+    await prueba('ir-a-contar').click();
+    await prueba('paso-de-conteo').waitFor({ timeout: ESPERA_CORTA });
+    const cuerpoAlContar = await ventana.locator('body').innerText();
+    const filasAlContar = {
+      teorico: await prueba('monto-teorico').count(),
+      ventas: await prueba('ventas-en-efectivo').count(),
+    };
+    anotar(`texto visible de la pantalla de conteo del administrativo: ${JSON.stringify(cuerpoAlContar)}`);
+    comprobar(
+      'EL ADMINISTRATIVO, EN LA PANTALLA DE CONTEO: ni la fila del teórico ni la de ventas, y ni «527.50» ni «teórico» en todo el texto visible',
+      'resumen: 1 fila de teórico; conteo: 0 filas, sin 527.50, sin 27.50, sin «teórico»',
+      `resumen: ${String(filasEnElResumen)} fila de teórico; conteo: ${String(filasAlContar.teorico)} de teórico y ${String(filasAlContar.ventas)} de ventas; ` +
+        `527.50 ${cuerpoAlContar.includes('527.50') ? 'PRESENTE' : 'ausente'}, 27.50 ${cuerpoAlContar.includes('27.50') ? 'PRESENTE' : 'ausente'}, «teórico» ${/teórico/i.test(cuerpoAlContar) ? 'PRESENTE' : 'ausente'}`,
+      filasEnElResumen === 1 &&
+        filasAlContar.teorico === 0 &&
+        filasAlContar.ventas === 0 &&
+        !cuerpoAlContar.includes('527.50') &&
+        !cuerpoAlContar.includes('27.50') &&
+        !/teórico/i.test(cuerpoAlContar),
+    );
+    await capturar('6-administrativo-contando-sin-teorico');
+
+    // =======================================================================
     // TAREA 1d — El teclado numérico en el conteo POR DENOMINACIÓN
     // =======================================================================
     await prueba('modo-detallado').click();
@@ -385,12 +432,19 @@ async function main() {
     await ventana.getByRole('button', { name: 'Volver a contar' }).click();
     await prueba('aviso-de-conteo-sellado').waitFor({ timeout: ESPERA_CORTA });
     const avisoDeSello = await texto('aviso-de-conteo-sellado');
+    const cuerpoAlRecontar = await ventana.locator('body').innerText();
     comprobar(
-      'al volver a contar, la pantalla avisa que el conteo quedó registrado y que cambiarlo pide autorización',
-      'menciona Q500.00 y autorización',
-      avisoDeSello,
-      avisoDeSello.includes('500.00') && /autorizaci/.test(avisoDeSello),
+      'al volver a contar, la pantalla avisa que el conteo quedó registrado y que cambiarlo pide autorización, SIN el teórico ni la diferencia',
+      'menciona Q500.00 y autorización; sin 527.50, sin 27.50, sin «faltante»; en el paso de conteo',
+      `«${avisoDeSello}»; paso de conteo: ${String(await prueba('paso-de-conteo').count())}`,
+      avisoDeSello.includes('500.00') &&
+        /autorizaci/.test(avisoDeSello) &&
+        !cuerpoAlRecontar.includes('527.50') &&
+        !cuerpoAlRecontar.includes('27.50') &&
+        !/faltante/i.test(cuerpoAlRecontar) &&
+        (await prueba('paso-de-conteo').count()) === 1,
     );
+    await capturar('4a2-volver-a-contar-sin-teorico');
 
     await prueba('modo-simple').click();
     for (const tecla of ['5', '2', '7', 'punto', '5', '0']) {
@@ -500,6 +554,7 @@ async function main() {
     }
     await prueba('confirmar-caja').click();
     await prueba('estado-caja-propia').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('ir-a-contar').click();
     await prueba('modo-simple').click();
     for (const digito of '100') {
       await prueba(`tecla-${digito}`).click();
@@ -518,6 +573,33 @@ async function main() {
     await volver();
 
     // =======================================================================
+    // §4.40 TAREA 3 — El costo de la venta es una FOTO. Se cambia el precio de
+    // compra del maíz DESPUÉS de haberlo vendido, desde la pantalla.
+    // =======================================================================
+    await prueba('ir-a-productos').click();
+    await prueba('lista-de-productos').waitFor({ timeout: ESPERA_CORTA });
+    await ventana.locator('.lista__fila', { hasText: 'Maíz blanco' }).getByRole('button', { name: 'Editar' }).click();
+    await prueba('producto-precio-compra').fill('5.00');
+    await prueba('producto-guardar').click();
+    await prueba('lista-de-productos').waitFor({ timeout: ESPERA_CORTA });
+    const costoDespues = leerBase("SELECT precio_compra FROM productos WHERE nombre = 'Maíz blanco'")[0].precio_compra;
+    const lineas = leerBase(
+      `SELECT d.producto_nombre_snap, d.cantidad, d.subtotal_impreso, d.costo_unitario_snap
+         FROM venta_detalle d ORDER BY d.producto_nombre_snap`,
+    );
+    anotar(`productos.precio_compra del maíz tras editarlo: ${String(costoDespues)}`);
+    anotar(`venta_detalle en la base: ${JSON.stringify(lineas)}`);
+    const lineaMaiz = lineas.find((l) => l.producto_nombre_snap === 'Maíz blanco');
+    const lineaFrijol = lineas.find((l) => l.producto_nombre_snap === 'Frijol negro');
+    comprobar(
+      'la venta guardó la FOTO del costo: el maíz sigue con 3.00 aunque hoy cueste 5.00; el frijol, sin costo, con NULL',
+      'catálogo 5.00; snap del maíz 3.00; snap del frijol null',
+      `catálogo ${String(costoDespues)}; snap del maíz ${String(lineaMaiz?.costo_unitario_snap)}; snap del frijol ${String(lineaFrijol?.costo_unitario_snap)}`,
+      costoDespues === '5.00' && lineaMaiz?.costo_unitario_snap === '3.00' && lineaFrijol?.costo_unitario_snap === null,
+    );
+    await volver();
+
+    // =======================================================================
     // TAREA 5 — El margen en el reporte por producto
     // =======================================================================
     await prueba('ir-a-reportes').click();
@@ -528,20 +610,140 @@ async function main() {
     const filaMaiz = filas.find((f) => f.includes('Maíz blanco')) ?? '';
     const filaFrijol = filas.find((f) => f.includes('Frijol negro')) ?? '';
     comprobar(
-      'con precio de compra, el margen es (4.25 − 3.00) × 2 = Q2.50',
+      'con precio de compra, el margen es (4.25 − 3.00) × 2 = Q2.50 — con el costo de la VENTA, no con los 5.00 de hoy (que darían −Q1.50)',
       'Margen: Q2.50',
       filaMaiz,
       filaMaiz.includes('Margen: Q2.50'),
     );
     comprobar(
-      'SIN precio de compra, el margen dice «sin dato», no Q0.00',
-      'Margen: sin dato',
+      'SIN precio de compra, el margen dice «sin dato», no Q0.00, y cuenta la línea sin costo',
+      'Margen: sin dato (1 línea sin dato de costo)',
       filaFrijol,
-      filaFrijol.includes('Margen: sin dato') && !filaFrijol.includes('Margen: Q0.00'),
+      filaFrijol.includes('Margen: sin dato') &&
+        filaFrijol.includes('1 línea sin dato de costo') &&
+        !filaFrijol.includes('Margen: Q0.00'),
     );
     const margenTotal = await texto('margen-total');
     comprobar('el margen del período suma solo lo que tiene costo', 'Q2.50', margenTotal, margenTotal.includes('2.50'));
+    const sinCosto = await texto('lineas-sin-costo');
+    comprobar(
+      'el reporte dice cuántas líneas quedaron fuera del margen por no tener costo, y cuánto se cobró en ellas',
+      '1 · Q9.00',
+      sinCosto,
+      sinCosto.includes('1') && sinCosto.includes('9.00'),
+    );
     await capturar('5-margen-por-producto');
+    await volver();
+
+    // =======================================================================
+    // §4.40 — UN USUARIO DE VENTA no ve el teórico: ni en pantalla, ni por el
+    // canal, ni al contar. Lo ve recién en la confirmación.
+    // =======================================================================
+    anotar('--- escenario del usuario de venta ---');
+    await prueba('ir-a-usuarios').click();
+    await prueba('lista-de-usuarios').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('usuario-nombre').fill('Cajera de verificación');
+    await prueba('usuario-rol').selectOption('venta');
+    await prueba('usuario-pin').fill('1357');
+    await prueba('usuario-guardar').click();
+    await prueba('usuarios-aviso').waitFor({ timeout: ESPERA_CORTA });
+    await volver();
+    await ventana.getByRole('button', { name: 'Cerrar sesión' }).click();
+    await prueba('pantalla-de-ingreso').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('usuario-para-ingreso').filter({ hasText: 'Cajera de verificación' }).click();
+    await teclearPin('1357');
+    await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
+    anotar(`en sesión: ${await texto('usuario-en-sesion')}`);
+
+    // Abre SU caja con Q200 y vende un maíz en efectivo (Q4.25): teórico Q204.25.
+    await prueba('ir-a-caja').click();
+    await prueba('estado-sin-caja').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('modo-simple').click();
+    for (const digito of '200') {
+      await prueba(`tecla-${digito}`).click();
+    }
+    await prueba('confirmar-caja').click();
+    await prueba('estado-caja-propia').waitFor({ timeout: ESPERA_CORTA });
+    await volver();
+    await prueba('ir-a-venta').click();
+    await prueba('cuadricula-de-productos').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('icono-producto').filter({ hasText: 'Maíz blanco' }).click();
+    await prueba('cobrar').click();
+    await prueba('dialogo-de-cobro').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('cobro-continuar').click();
+    await prueba('cobro-confirmar').click();
+    await prueba('cobro-listo').waitFor({ timeout: ESPERA_CORTA });
+    anotar(`venta de la cajera cobrada: ${await texto('cobro-total-cobrado')}`);
+
+    // Por el canal, desde la consola de la ventana, con la sesión de la cajera.
+    const estadoDeVentaCajera = await ventana.evaluate(async () => window.pos.venta.estado());
+    await prueba('cobro-siguiente-venta').click();
+    await volver();
+
+    await prueba('ir-a-caja').click();
+    await prueba('estado-caja-propia').waitFor({ timeout: ESPERA_CORTA });
+    const estadoDeCajaCajera = await ventana.evaluate(async () => window.pos.caja.estado());
+    anotar(`window.pos.caja.estado() con la sesión de la CAJERA: ${JSON.stringify(estadoDeCajaCajera.datos.turnoAbierto)}`);
+    anotar(`window.pos.venta.estado().turnoAbierto con la sesión de la CAJERA: ${JSON.stringify(estadoDeVentaCajera.datos.turnoAbierto)}`);
+    const turnoCajera = estadoDeCajaCajera.datos.turnoAbierto;
+    const turnoVentaCajera = estadoDeVentaCajera.datos.turnoAbierto;
+    comprobar(
+      'POR EL CANAL: a la cajera `window.pos.caja.estado()` y `window.pos.venta.estado()` le devuelven el teórico, las ventas y su cantidad en null, y ni 204.25 ni 4.25 en toda la respuesta',
+      'caja: null/null/null; venta: null/null/null; sin 204.25 ni 4.25',
+      `caja: ${String(turnoCajera.montoTeorico)}/${String(turnoCajera.ventasEnEfectivo)}/${String(turnoCajera.cantidadDeVentasEnEfectivo)}; ` +
+        `venta: ${String(turnoVentaCajera.montoTeorico)}/${String(turnoVentaCajera.ventasEnEfectivo)}/${String(turnoVentaCajera.cantidadDeVentasEnEfectivo)}; ` +
+        `204.25 ${JSON.stringify([estadoDeCajaCajera, turnoVentaCajera]).includes('204.25') ? 'PRESENTE' : 'ausente'}`,
+      turnoCajera.montoTeorico === null &&
+        turnoCajera.ventasEnEfectivo === null &&
+        turnoCajera.cantidadDeVentasEnEfectivo === null &&
+        turnoVentaCajera.montoTeorico === null &&
+        turnoVentaCajera.ventasEnEfectivo === null &&
+        turnoVentaCajera.cantidadDeVentasEnEfectivo === null &&
+        !JSON.stringify(turnoCajera).includes('204.25') &&
+        !JSON.stringify(turnoVentaCajera).includes('204.25'),
+    );
+
+    const cuerpoResumenCajera = await ventana.locator('body').innerText();
+    anotar(`texto visible del resumen de caja de la CAJERA: ${JSON.stringify(cuerpoResumenCajera)}`);
+    comprobar(
+      'EN PANTALLA: el resumen de caja de la cajera no tiene la fila del teórico ni la de ventas, ni «teórico», ni 204.25',
+      '0 filas; sin «teórico»; sin 204.25',
+      `${String(await prueba('monto-teorico').count())} de teórico, ${String(await prueba('ventas-en-efectivo').count())} de ventas; ` +
+        `«teórico» ${/teórico/i.test(cuerpoResumenCajera) ? 'PRESENTE' : 'ausente'}; 204.25 ${cuerpoResumenCajera.includes('204.25') ? 'PRESENTE' : 'ausente'}`,
+      (await prueba('monto-teorico').count()) === 0 &&
+        (await prueba('ventas-en-efectivo').count()) === 0 &&
+        !/teórico/i.test(cuerpoResumenCajera) &&
+        !cuerpoResumenCajera.includes('204.25'),
+    );
+    await capturar('7a-cajera-resumen-sin-teorico');
+
+    await prueba('ir-a-contar').click();
+    await prueba('paso-de-conteo').waitFor({ timeout: ESPERA_CORTA });
+    const cuerpoConteoCajera = await ventana.locator('body').innerText();
+    comprobar(
+      'la cajera tampoco lo ve al contar',
+      '0 filas; sin «teórico»; sin 204.25',
+      `${String(await prueba('monto-teorico').count())} de teórico; «teórico» ${/teórico/i.test(cuerpoConteoCajera) ? 'PRESENTE' : 'ausente'}; 204.25 ${cuerpoConteoCajera.includes('204.25') ? 'PRESENTE' : 'ausente'}`,
+      (await prueba('monto-teorico').count()) === 0 &&
+        !/teórico/i.test(cuerpoConteoCajera) &&
+        !cuerpoConteoCajera.includes('204.25'),
+    );
+    await capturar('7b-cajera-contando-sin-teorico');
+
+    await prueba('modo-simple').click();
+    for (const tecla of ['2', '0', '4', 'punto', '2', '5']) {
+      await prueba(`tecla-${tecla}`).click();
+    }
+    await prueba('confirmar-caja').click();
+    await prueba('confirmacion-de-cierre').waitFor({ timeout: ESPERA_CORTA });
+    const teoricoParaLaCajera = await texto('cierre-efectivo-teorico');
+    comprobar(
+      'LA CONFIRMACIÓN SÍ le muestra el teórico a la cajera, una vez registrado el conteo',
+      'Q204.25',
+      teoricoParaLaCajera,
+      teoricoParaLaCajera.includes('204.25'),
+    );
+    await capturar('7c-cajera-confirmacion-con-teorico');
   } catch (error) {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);
     await ventana.screenshot({ path: join(capturas, 'error.png') }).catch(() => undefined);
