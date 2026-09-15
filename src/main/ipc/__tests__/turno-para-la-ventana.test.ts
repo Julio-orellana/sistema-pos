@@ -170,6 +170,7 @@ describe('El conteo sellado viaja SIN el esperado y SIN la diferencia, para todo
 const IPC = join(__dirname, '..');
 const REGISTRO = readFileSync(join(IPC, 'register-handlers.ts'), 'utf8');
 const VENTA = readFileSync(join(IPC, 'venta.ts'), 'utf8');
+const FLUJO = readFileSync(join(IPC, 'cierre-de-caja.ts'), 'utf8');
 
 describe('Ningún canal arma el turno a mano con el teórico', () => {
   it('el estado de caja y la apertura lo arman con `turnoParaLaVentana`', () => {
@@ -190,7 +191,7 @@ describe('Ningún canal arma el turno a mano con el teórico', () => {
   });
 
   it('antes de contar —el pedido de PIN de una caja ajena— el esperado viaja en null', () => {
-    expect(REGISTRO).toMatch(
+    expect(FLUJO).toMatch(
       /resultado\.codigo === 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA' \? null : resultado\.montoEsperado/,
     );
   });
@@ -298,6 +299,18 @@ describe('A un ADMINISTRATIVO le llega entero: es quien autoriza y tiene que ver
   });
 });
 
+describe('Una autorización VALIDADA por PIN de administrador viaja entera, aunque la sesión sea de la cajera', () => {
+  it('AUTORIZACION_VALIDADA conserva esperado y diferencia para la cajera', () => {
+    const validada: ResultadoDeCierreIpc = {
+      ...PIDE_AUTORIZACION,
+      codigo: 'AUTORIZACION_VALIDADA',
+      mensaje: 'Jimmy autorizó en persona. Revisá el monto y confirmá el cierre.',
+      autorizadaVia: 'presencial',
+    };
+    expect(resultadoDeCierreParaLaVentana(validada, CAJERA)).toEqual(validada);
+  });
+});
+
 describe('Una caja YA CERRADA viaja entera a cualquier rol: la confirmación muestra el teórico', () => {
   it('la cajera recibe esperado y diferencia en la confirmación', () => {
     const cerrada: ResultadoDeCierreIpc = {
@@ -311,24 +324,26 @@ describe('Una caja YA CERRADA viaja entera a cualquier rol: la confirmación mue
 });
 
 describe('El canal de cierre no devuelve nada sin pasar por el filtro', () => {
-  const inicio = REGISTRO.indexOf('CANALES_IPC.cerrarCaja');
-  const fin = REGISTRO.indexOf('function aConteoIpc');
-  const bloque = REGISTRO.slice(inicio, fin);
+  const inicio = REGISTRO.indexOf('CANALES_IPC.cerrarCaja,');
+  const bloque = REGISTRO.slice(inicio, REGISTRO.indexOf('CANALES_IPC.cancelarAutorizacionDeCierre,'));
 
-  it('el manejador termina devolviendo `resultadoDeCierreParaLaVentana(intentar(), enSesion)`', () => {
+  it('el manejador IPC solo delega en el flujo: no arma ningún resultado por su cuenta', () => {
     expect(inicio).toBeGreaterThan(0);
-    expect(bloque).toContain('return resultadoDeCierreParaLaVentana(intentar(), enSesion);');
+    expect(bloque).toContain('flujoDeCierre.confirmarAutorizacion(datos.efectivo, enSesion)');
+    expect(bloque).toContain('flujoDeCierre.intentar(datos, enSesion)');
+    expect(bloque).not.toContain('intentarCerrar');
+    expect(bloque).not.toContain('montoEsperado');
   });
 
-  it('todos los `return` con resultado quedan DENTRO de `intentar`, que es lo único que se filtra', () => {
-    const cuerpoDeIntentar = bloque.slice(
-      bloque.indexOf('const intentar = (): ResultadoDeCierreIpc => {'),
-      bloque.indexOf('return resultadoDeCierreParaLaVentana(intentar(), enSesion);'),
+  it('en el flujo, cada `return` de los dos métodos públicos pasa por `resultadoDeCierreParaLaVentana`', () => {
+    const publico = FLUJO.slice(
+      FLUJO.indexOf('  public intentar('),
+      FLUJO.indexOf('  public cancelarAutorizacion('),
     );
-    const returnsEnElBloque = (bloque.match(/\breturn\b/g) ?? []).length;
-    const returnsEnIntentar = (cuerpoDeIntentar.match(/\breturn\b/g) ?? []).length;
-    // El único `return` fuera de `intentar` es el del filtro.
-    expect(returnsEnIntentar).toBeGreaterThan(0);
-    expect(returnsEnElBloque - returnsEnIntentar).toBe(1);
+    const returns = publico.match(/\breturn\b[^;]*/g) ?? [];
+    expect(returns.length).toBeGreaterThan(2);
+    for (const sentencia of returns) {
+      expect(sentencia).toMatch(/^return resultadoDeCierreParaLaVentana\(/);
+    }
   });
 });

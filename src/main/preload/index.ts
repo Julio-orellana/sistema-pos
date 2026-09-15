@@ -127,6 +127,19 @@ const apiPos: ApiPos = {
       ipcRenderer.invoke(CANALES_IPC.cerrarCaja, { efectivo, pin, pinCajaAjena }) as Promise<
         RespuestaIpc<ResultadoDeCierreIpc>
       >,
+
+    /** Segundo paso: confirma el cierre que un PIN correcto dejó autorizado. */
+    confirmarCierreAutorizado: (
+      efectivo: EfectivoDeclaradoIpc,
+    ): Promise<RespuestaIpc<ResultadoDeCierreIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.cerrarCaja, {
+        efectivo,
+        confirmarAutorizacion: true,
+      }) as Promise<RespuestaIpc<ResultadoDeCierreIpc>>,
+
+    /** Descarta esa autorización en el proceso principal. La caja sigue abierta. */
+    cancelarAutorizacionDeCierre: (): Promise<RespuestaIpc<boolean>> =>
+      ipcRenderer.invoke(CANALES_IPC.cancelarAutorizacionDeCierre) as Promise<RespuestaIpc<boolean>>,
   },
 
   catalogo: {

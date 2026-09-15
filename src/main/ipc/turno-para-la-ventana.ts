@@ -72,6 +72,13 @@ export function turnoParaLaVentana(turno: CajaSesion, contexto: ContextoDelTurno
 }
 
 /**
+ * El PIN de un administrador ya se validó para ESTE cierre: se revela lo que se
+ * está autorizando (§4.40.5). Lo produce `FlujoDeCierreDeCaja` y solo después
+ * de que `autorizarComoAdministrador` dio correcto.
+ */
+export const CODIGO_AUTORIZACION_VALIDADA = 'AUTORIZACION_VALIDADA';
+
+/**
  * Lo que ve un usuario sin rol administrativo cuando un cierre pide autorización.
  *
  * Tiene que ser VERDAD en los dos casos que presenta igual: un conteo con
@@ -102,14 +109,22 @@ export const MENSAJE_DE_CIERRE_SIN_TEORICO =
  * así que unificarlos no cambia el flujo de la pantalla.
  *
  * Un administrativo lo recibe entero: es quien autoriza y tiene que ver qué
- * aprueba (§4.9). Una caja YA cerrada también viaja entera, a cualquier rol: la
+ * aprueba (§4.9). Y a CUALQUIER rol le llega entero el resultado
+ * `AUTORIZACION_VALIDADA`: ahí el PIN ya probó que hay un administrador mirando. Una caja YA cerrada también viaja entera, a cualquier rol: la
  * confirmación muestra el teórico cuando el conteo ya quedó registrado.
  */
 export function resultadoDeCierreParaLaVentana(
   resultado: ResultadoDeCierreIpc,
   quienMira: UsuarioEnSesion | null,
 ): ResultadoDeCierreIpc {
-  if (resultado.cerrada || puedeVerElTeorico(quienMira)) {
+  // Tres casos viajan enteros: la caja ya cerrada; quien mira es administrativo;
+  // y la autorización que un PIN de administrador acaba de validar, porque el
+  // monto se revela justamente para que ese administrador vea qué aprueba.
+  if (
+    resultado.cerrada ||
+    resultado.codigo === CODIGO_AUTORIZACION_VALIDADA ||
+    puedeVerElTeorico(quienMira)
+  ) {
     return resultado;
   }
   const pideAutorizacion =

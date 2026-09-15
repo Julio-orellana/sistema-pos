@@ -61,6 +61,12 @@ export const CANALES_IPC = {
   abrirCaja: 'caja:abrir',
   /** Intenta cerrar el turno; con diferencia, exige PIN de autorización. */
   cerrarCaja: 'caja:cerrar',
+  /**
+   * Descarta la autorización de un cierre ya validada con PIN y todavía no
+   * confirmada. Vive en el proceso principal: cancelar solo en la pantalla la
+   * dejaría usable desde la consola (§4.40).
+   */
+  cancelarAutorizacionDeCierre: 'caja:cancelar-autorizacion-de-cierre',
 
   // --- Catálogo: categorías ------------------------------------------------
   /** Todas las categorías, activas e inactivas, con su conteo de productos. */
@@ -504,6 +510,11 @@ export const esquemaCierreDeCaja = z.object({
   efectivo: esquemaEfectivoDeclarado,
   pin: z.string().length(LARGO_DEL_PIN_IPC).optional(),
   pinCajaAjena: z.string().length(LARGO_DEL_PIN_IPC).optional(),
+  /**
+   * Segundo paso del cierre autorizado: confirma la autorización que un PIN
+   * correcto dejó pendiente. Sin PIN: el PIN ya se validó y no se reenvía.
+   */
+  confirmarAutorizacion: z.literal(true).optional(),
 });
 
 /** Payload de configuración del PIN remoto. */
@@ -1626,14 +1637,19 @@ export interface ApiPos {
     abrir(efectivo: EfectivoDeclaradoIpc): Promise<RespuestaIpc<TurnoAbierto>>;
     /**
      * Intenta cerrar. Sin `pin`, si hay diferencia devuelve
-     * `REQUIERE_AUTORIZACION` con el monto exacto para mostrarlo antes de
-     * pedir el código.
+     * `REQUIERE_AUTORIZACION` (sin montos para quien no es administrativo).
+     * Con el PIN correcto NO cierra: devuelve `AUTORIZACION_VALIDADA` con los
+     * montos y deja la autorización pendiente en el proceso principal (§4.40).
      */
     cerrar(
       efectivo: EfectivoDeclaradoIpc,
       pin?: string,
       pinCajaAjena?: string,
     ): Promise<RespuestaIpc<ResultadoDeCierreIpc>>;
+    /** Segunda confirmación: cierra con la autorización pendiente, si sigue valiendo. */
+    confirmarCierreAutorizado(efectivo: EfectivoDeclaradoIpc): Promise<RespuestaIpc<ResultadoDeCierreIpc>>;
+    /** Descarta la autorización pendiente. La caja sigue abierta. */
+    cancelarAutorizacionDeCierre(): Promise<RespuestaIpc<boolean>>;
   };
 
   /**

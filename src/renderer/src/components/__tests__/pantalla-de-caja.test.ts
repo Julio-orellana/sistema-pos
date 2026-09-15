@@ -528,3 +528,190 @@ describe('EL DIÁLOGO DE DIFERENCIA: la cajera ve que hay que autorizar, NO cuá
     expect(porPrueba('diferencia-sin-monto')).toBeNull();
   });
 });
+
+// ===========================================================================
+// §4.40.5 — EL PIN PRIMERO, EL MONTO DESPUÉS, LA CONFIRMACIÓN AL FINAL
+// ===========================================================================
+
+/** Lo que registra la API falsa de los dos métodos del segundo paso. */
+interface LlamadasDelSegundoPaso {
+  cerrar: number;
+  confirmar: number;
+  cancelar: number;
+}
+
+/**
+ * Instala una API donde `cerrar` contesta en orden lo que se le pase, y
+ * `confirmarCierreAutorizado` contesta `alConfirmar`. Cuenta las llamadas.
+ */
+function instalarApiDeDosPasos(
+  turno: TurnoAbierto,
+  respuestasDeCerrar: readonly unknown[],
+  alConfirmar: unknown,
+): LlamadasDelSegundoPaso {
+  instalarApi(turno);
+  const llamadas: LlamadasDelSegundoPaso = { cerrar: 0, confirmar: 0, cancelar: 0 };
+  const pendientes = [...respuestasDeCerrar];
+  const api = (window as unknown as { pos: { caja: Record<string, unknown> } }).pos;
+  api.caja.cerrar = async (): Promise<unknown> => {
+    llamadas.cerrar += 1;
+    return Promise.resolve({ ok: true as const, datos: pendientes.shift() });
+  };
+  api.caja.confirmarCierreAutorizado = async (): Promise<unknown> => {
+    llamadas.confirmar += 1;
+    return Promise.resolve({ ok: true as const, datos: alConfirmar });
+  };
+  api.caja.cancelarAutorizacionDeCierre = async (): Promise<unknown> => {
+    llamadas.cancelar += 1;
+    return Promise.resolve({ ok: true as const, datos: true });
+  };
+  return llamadas;
+}
+
+/** Teclea un PIN de cuatro dígitos en el teclado del diálogo y lo confirma. */
+async function teclearPin(pin: string): Promise<void> {
+  for (const digito of pin) {
+    act(() => {
+      porPrueba(`tecla-${digito}`)?.click();
+    });
+  }
+  await act(async () => {
+    porPrueba('tecla-confirmar')?.click();
+    await Promise.resolve();
+  });
+}
+
+async function pulsar(nombre: string): Promise<void> {
+  await act(async () => {
+    porPrueba(nombre)?.click();
+    await Promise.resolve();
+  });
+}
+
+/** Lo que el proceso principal le manda a una cajera: sin montos. */
+const PIDE_PIN_A_LA_CAJERA = {
+  ...RESPUESTA_BASE,
+  cerrada: false,
+  codigo: 'REQUIERE_AUTORIZACION',
+  mensaje: 'Este cierre tiene una diferencia registrada. Un administrador tiene que autorizarlo.',
+  diferencia: null,
+  montoEsperado: null,
+  montoReal: '100.00',
+};
+
+/** El PIN de un administrador fue correcto: llegan los montos, nada se cerró. */
+const AUTORIZACION_VALIDADA = {
+  ...RESPUESTA_BASE,
+  cerrada: false,
+  codigo: 'AUTORIZACION_VALIDADA',
+  mensaje: 'Jimmy autorizó por teléfono. Revisá el monto y confirmá el cierre.',
+  diferencia: '-530.50',
+  montoEsperado: '630.50',
+  montoReal: '100.00',
+  autorizadaVia: 'remoto',
+};
+
+const CIERRE_HECHO = {
+  ...RESPUESTA_BASE,
+  cerrada: true,
+  codigo: 'CIERRE_CORRECTO',
+  diferencia: '-530.50',
+  montoEsperado: '630.50',
+  montoReal: '100.00',
+  autorizadaVia: 'remoto',
+};
+
+describe('UN PIN CORRECTO NO CIERRA LA CAJA: muestra el monto y espera una segunda confirmación', () => {
+  it('después del PIN correcto aparece «esto es lo que se está autorizando» con el esperado y el faltante, y NO la confirmación del cierre', async () => {
+    const llamadas = instalarApiDeDosPasos(
+      TURNO_PROPIO_SIN_TEORICO,
+      [PIDE_PIN_A_LA_CAJERA, AUTORIZACION_VALIDADA],
+      CIERRE_HECHO,
+    );
+    await montar();
+    await irAContarYConfirmar();
+    expect(texto()).not.toContain('630.50');
+
+    await teclearPin('9753');
+
+    expect(porPrueba('revelacion-de-autorizacion')).not.toBeNull();
+    expect(porPrueba('revelacion-esperado')?.textContent).toContain('630.50');
+    expect(porPrueba('revelacion-diferencia')?.textContent).toContain('530.50');
+    expect(texto()).toContain('FALTANTE');
+    expect(porPrueba('revelacion-quien-autoriza')?.textContent).toContain('por teléfono');
+    expect(porPrueba('revelacion-caja-abierta')?.textContent).toContain('NO se cerró');
+    expect(porPrueba('confirmacion-de-cierre')).toBeNull();
+    expect(llamadas.confirmar).toBe(0);
+  });
+
+  it('recién «Sí, cerrar la caja» llama a la confirmación y muestra el cierre', async () => {
+    const llamadas = instalarApiDeDosPasos(
+      TURNO_PROPIO_SIN_TEORICO,
+      [PIDE_PIN_A_LA_CAJERA, AUTORIZACION_VALIDADA],
+      CIERRE_HECHO,
+    );
+    await montar();
+    await irAContarYConfirmar();
+    await teclearPin('9753');
+    await pulsar('confirmar-cierre-autorizado');
+
+    expect(llamadas.confirmar).toBe(1);
+    expect(porPrueba('confirmacion-de-cierre')).not.toBeNull();
+    expect(porPrueba('revelacion-de-autorizacion')).toBeNull();
+  });
+
+  it('«Cancelar» retira la autorización en el proceso principal y vuelve al diálogo del PIN, sin monto y sin cerrar', async () => {
+    const llamadas = instalarApiDeDosPasos(
+      TURNO_PROPIO_SIN_TEORICO,
+      [PIDE_PIN_A_LA_CAJERA, AUTORIZACION_VALIDADA],
+      CIERRE_HECHO,
+    );
+    await montar();
+    await irAContarYConfirmar();
+    await teclearPin('9753');
+    await pulsar('cancelar-cierre-autorizado');
+
+    expect(llamadas.cancelar).toBe(1);
+    expect(llamadas.confirmar).toBe(0);
+    expect(porPrueba('revelacion-de-autorizacion')).toBeNull();
+    expect(porPrueba('confirmacion-de-cierre')).toBeNull();
+    expect(porPrueba('autorizacion-de-diferencia')).not.toBeNull();
+    expect(porPrueba('mensaje-de-caja')?.textContent).toContain('sigue abierta');
+    expect(texto()).not.toContain('630.50');
+  });
+
+  it('si la autorización ya no vale al confirmar, vuelve al diálogo del PIN y no muestra el cierre', async () => {
+    instalarApiDeDosPasos(TURNO_PROPIO_SIN_TEORICO, [PIDE_PIN_A_LA_CAJERA, AUTORIZACION_VALIDADA], {
+      ...PIDE_PIN_A_LA_CAJERA,
+      codigo: 'AUTORIZACION_NO_VIGENTE',
+      mensaje: 'La autorización venció. Tecleá el PIN de un administrador otra vez.',
+    });
+    await montar();
+    await irAContarYConfirmar();
+    await teclearPin('9753');
+    await pulsar('confirmar-cierre-autorizado');
+
+    expect(porPrueba('confirmacion-de-cierre')).toBeNull();
+    expect(porPrueba('autorizacion-de-diferencia')).not.toBeNull();
+    expect(porPrueba('mensaje-de-caja')?.textContent).toContain('venció');
+  });
+});
+
+describe('UN PIN INCORRECTO NUNCA LLEGA A MOSTRAR NINGÚN MONTO', () => {
+  it('se queda en el diálogo con el aviso del PIN, sin pantalla de revelación ni esperado', async () => {
+    const llamadas = instalarApiDeDosPasos(
+      TURNO_PROPIO_SIN_TEORICO,
+      [PIDE_PIN_A_LA_CAJERA, { ...PIDE_PIN_A_LA_CAJERA, codigo: 'PIN_INCORRECTO', mensaje: 'PIN incorrecto.' }],
+      CIERRE_HECHO,
+    );
+    await montar();
+    await irAContarYConfirmar();
+    await teclearPin('1111');
+
+    expect(porPrueba('revelacion-de-autorizacion')).toBeNull();
+    expect(porPrueba('mensaje-de-caja')?.textContent).toContain('PIN incorrecto');
+    expect(texto()).not.toContain('630.50');
+    expect(texto()).not.toContain('Debería haber');
+    expect(llamadas.confirmar).toBe(0);
+  });
+});

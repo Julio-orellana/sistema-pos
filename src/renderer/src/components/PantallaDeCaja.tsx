@@ -72,7 +72,26 @@ type Autorizacion =
   /** La caja no cuadra: falta el código que autorice la diferencia. */
   | { readonly tipo: 'diferencia'; readonly resultado: ResultadoDeCierreIpc }
   /** Cuadra, pero antes se confirmó otro conteo con diferencia. */
-  | { readonly tipo: 'reconteo'; readonly resultado: ResultadoDeCierreIpc };
+  | { readonly tipo: 'reconteo'; readonly resultado: ResultadoDeCierreIpc }
+  /**
+   * El PIN de un administrador ya se validó y el proceso principal reveló lo
+   * que se autoriza. La caja SIGUE ABIERTA hasta la segunda confirmación
+   * (§4.40.5). `anterior` es el diálogo al que se vuelve si se cancela.
+   */
+  | {
+      readonly tipo: 'revelada';
+      readonly resultado: ResultadoDeCierreIpc;
+      readonly anterior: DialogoConPin | null;
+    };
+
+/** Los dos diálogos que piden el PIN de la diferencia. */
+interface DialogoConPin {
+  readonly tipo: 'diferencia' | 'reconteo';
+  readonly resultado: ResultadoDeCierreIpc;
+}
+
+/** El PIN fue correcto: el proceso principal revela el monto y espera. */
+const CODIGO_AUTORIZACION_VALIDADA = 'AUTORIZACION_VALIDADA';
 
 /**
  * Cada cuánto se vuelve a pedir el estado mientras la caja está abierta.
@@ -216,6 +235,19 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
           return;
         }
 
+        if (respuesta.datos.codigo === CODIGO_AUTORIZACION_VALIDADA) {
+          // El PIN fue correcto y NO se cerró nada: se muestra lo que se está
+          // autorizando y se espera la confirmación explícita.
+          const validada = respuesta.datos;
+          setAutorizacion((previa) => ({
+            tipo: 'revelada',
+            resultado: validada,
+            anterior: previa.tipo === 'diferencia' || previa.tipo === 'reconteo' ? previa : null,
+          }));
+          setMensaje(null);
+          return;
+        }
+
         if (respuesta.datos.codigo === 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA') {
           setAutorizacion({ tipo: 'caja-ajena', resultado: respuesta.datos });
           setMensaje(null);
@@ -247,6 +279,66 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
       })();
     },
     [efectivo, pinDeCajaAjena],
+  );
+
+  /** Vuelve al diálogo del PIN, con un aviso. La caja sigue abierta. */
+  const volverAlDialogo = useCallback((anterior: DialogoConPin | null, aviso: string): void => {
+    setAutorizacion(anterior ?? { tipo: 'ninguna' });
+    if (anterior === null) {
+      setPaso('contando');
+    }
+    setPin('');
+    setMensaje(aviso);
+  }, []);
+
+  /** Segunda confirmación: recién acá se cierra. */
+  const confirmarCierreAutorizado = useCallback(
+    (anterior: DialogoConPin | null): void => {
+      if (efectivo === null) {
+        return;
+      }
+      setTrabajando(true);
+      void (async (): Promise<void> => {
+        const respuesta = await window.pos.caja.confirmarCierreAutorizado(efectivo);
+        setTrabajando(false);
+        if (!respuesta.ok) {
+          setMensaje(respuesta.error.mensaje);
+          return;
+        }
+        if (respuesta.datos.cerrada) {
+          setMensaje(null);
+          setAutorizacion({ tipo: 'ninguna' });
+          setPinDeCajaAjena(null);
+          setEfectivo(null);
+          setCierreConfirmado(respuesta.datos);
+          return;
+        }
+        // La autorización ya no valía (venció, cambió el conteo o el monto):
+        // se vuelve a pedir el PIN.
+        volverAlDialogo(anterior, respuesta.datos.mensaje);
+      })();
+    },
+    [efectivo, volverAlDialogo],
+  );
+
+  /**
+   * Cancelar retira la autorización EN EL PROCESO PRINCIPAL. Solo cerrar el
+   * cuadro la dejaría usable desde la consola durante dos minutos.
+   */
+  const cancelarCierreAutorizado = useCallback(
+    (anterior: DialogoConPin | null): void => {
+      setTrabajando(true);
+      void (async (): Promise<void> => {
+        const respuesta = await window.pos.caja.cancelarAutorizacionDeCierre();
+        setTrabajando(false);
+        if (!respuesta.ok) {
+          setMensaje(respuesta.error.mensaje);
+          return;
+        }
+        volverAlDialogo(anterior, 'Se canceló la autorización. La caja sigue abierta.');
+      })();
+    },
+    [volverAlDialogo],
   );
 
   const volverAContar = useCallback((): void => {
@@ -464,6 +556,96 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
           <button type="button" className="boton--secundario" onClick={volverAContar}>
             Volver a contar
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (autorizacion.tipo === 'revelada') {
+    const resultado = autorizacion.resultado;
+    const diferencia = resultado.diferencia ?? '0.00';
+    const cuadraAhora = Number(diferencia) === 0;
+    const anterior = autorizacion.anterior;
+    return (
+      <div className="ingreso" data-prueba="pantalla-de-caja">
+        <h1>Cerrar caja</h1>
+
+        {mensaje !== null && (
+          <p className="alerta" data-prueba="mensaje-de-caja">
+            {mensaje}
+          </p>
+        )}
+
+        {/* El mismo patrón de «esto es lo que estás autorizando» del descuento
+            excedente y de la diferencia, con el orden invertido: el PIN ya
+            probó que quien mira es un administrador, y recién ahora se ve el
+            monto. Nada se cerró todavía (§4.40.5). */}
+        <div className="autorizacion" data-prueba="revelacion-de-autorizacion">
+          <h2>Esto es lo que se está autorizando</h2>
+          <p className="subtitulo" data-prueba="revelacion-quien-autoriza">
+            {resultado.mensaje}
+          </p>
+
+          {resultado.primerConteo !== null && (
+            <p className="advertencia" data-prueba="revelacion-primer-conteo">
+              Antes se confirmó otro conteo: {formatearQuetzales(resultado.primerConteo.montoReal)}
+              {resultado.primerConteo.diferencia !== null &&
+                `, con ${diferenciaLegible(resultado.primerConteo.diferencia)}`}
+              . Los dos quedan registrados.
+            </p>
+          )}
+
+          <div className="autorizacion__resumen">
+            <div className="dato">
+              <span className="dato__etiqueta">Debería haber</span>
+              <span className="dato__valor" data-prueba="revelacion-esperado">
+                {montoOSinDato(resultado.montoEsperado)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">Se contó</span>
+              <span className="dato__valor">{formatearQuetzales(resultado.montoReal)}</span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">
+                {cuadraAhora ? 'Diferencia' : diferencia.startsWith('-') ? 'FALTANTE' : 'SOBRANTE'}
+              </span>
+              <span
+                className={cuadraAhora ? 'dato__valor' : 'dato__valor autorizacion__diferencia'}
+                data-prueba="revelacion-diferencia"
+              >
+                {cuadraAhora ? 'sin diferencia' : formatearQuetzales(diferencia.replace('-', ''))}
+              </span>
+            </div>
+          </div>
+
+          <p className="advertencia" data-prueba="revelacion-caja-abierta">
+            La caja todavía NO se cerró. Se cierra recién al confirmar.
+          </p>
+
+          <div className="pie">
+            <button
+              type="button"
+              data-prueba="confirmar-cierre-autorizado"
+              disabled={trabajando}
+              onClick={() => {
+                confirmarCierreAutorizado(anterior);
+              }}
+            >
+              Sí, cerrar la caja
+            </button>
+            <button
+              type="button"
+              className="boton--secundario"
+              data-prueba="cancelar-cierre-autorizado"
+              disabled={trabajando}
+              onClick={() => {
+                cancelarCierreAutorizado(anterior);
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
         </div>
       </div>
     );

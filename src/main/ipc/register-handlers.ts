@@ -26,7 +26,6 @@ import {
   type EstadoDeCaja,
   type EstadoDeSesion,
   type RespuestaIpc,
-  type ConteoSelladoIpc,
   type ResultadoDeCierreIpc,
   type TurnoAbierto,
   type ResultadoDeIngreso,
@@ -40,16 +39,12 @@ import {
   leerConfiguracionAdaptadoresDelEntorno,
 } from '@shared/adapters';
 import { ejecutarDiagnostico } from '@main/database/connection';
-import { ErrorDeNegocio } from '@main/database/errores';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
-import { resultadoDeCierreParaLaVentana, turnoParaLaVentana } from './turno-para-la-ventana';
-import type {
-  ConteoSellado,
-  ResultadoDeCierre,
-  ServicioDeCaja,
-} from '@main/domain/caja/servicio-de-caja';
+import { turnoParaLaVentana } from './turno-para-la-ventana';
+import { FlujoDeCierreDeCaja } from './cierre-de-caja';
+import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import type { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import type { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
@@ -429,6 +424,14 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
       ),
   );
 
+  // El cierre y sus dos pasos de autorización viven en `FlujoDeCierreDeCaja`,
+  // que se prueba contra SQLite real. Acá solo se valida y se delega: la
+  // autorización pendiente vive en ESE objeto, en el proceso principal.
+  const flujoDeCierre = new FlujoDeCierreDeCaja({
+    caja: dependencias.caja,
+    autenticacion: dependencias.autenticacion,
+  });
+
   ipcMain.handle(
     CANALES_IPC.cerrarCaja,
     async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeCierreIpc>> =>
@@ -439,139 +442,23 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           if (enSesion === null) {
             throw new Error('No hay sesión iniciada.');
           }
-
-          // Todo resultado sale por `resultadoDeCierreParaLaVentana`: lo que el
-          // rol de quien cierra no puede ver no cruza el puente (§4.40).
-          const intentar = (): ResultadoDeCierreIpc => {
-          const turno = dependencias.caja.sesionAbierta();
-          if (turno === null) {
-            throw new ErrorDeNegocio(
-              'DATO_INVALIDO',
-              'No hay ninguna caja abierta en el sistema.',
-              'Se intentó cerrar sin ninguna sesión de caja abierta.',
-            );
-          }
-
-          const montoInicial = montoACadena(turno.montoInicial);
-          /** El resultado del servicio, sin la sesión de dominio y con el sello en forma de DTO. */
-          const aIpc = (
-            resultado: ResultadoDeCierre,
-            extras: Pick<ResultadoDeCierreIpc, 'autorizadaVia' | 'segundosParaReintentar'>,
-          ): ResultadoDeCierreIpc => ({
-            cerrada: resultado.cerrada,
-            codigo: resultado.codigo,
-            mensaje: resultado.mensaje,
-            diferencia: resultado.diferencia,
-            // Antes de contar —el pedido de autorización de una caja ajena— el
-            // esperado NO viaja (§4.40).
-            montoEsperado:
-              resultado.codigo === 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA' ? null : resultado.montoEsperado,
-            montoReal: resultado.montoReal,
-            montoInicial,
-            primerConteo: aConteoIpc(resultado.primerConteo),
-            ...extras,
-          });
-
-          // ---- Autorización 1: ¿la caja es de otra persona? ----------------
-          // Se resuelve ANTES de contar el efectivo. Es una superficie propia,
-          // con su propio candado, y NO acepta el PIN remoto: ese se pidió
-          // para autorizar diferencias por teléfono y nada más (CLAUDE.md §4.9).
-          let autorizacionDeCajaAjena: { readonly autorizadaPor: string } | undefined;
-
-          if (dependencias.caja.requiereAutorizacionDeCajaAjena(turno, enSesion.id)) {
-            if (datos.pinCajaAjena === undefined) {
-              const aviso = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
-                usuarioQueCierra: enSesion.id,
-              });
-              return aIpc(aviso, { autorizadaVia: null, segundosParaReintentar: null });
-            }
-
-            const permiso = dependencias.autenticacion.autorizarComoAdministrador(
-              datos.pinCajaAjena,
-              'cierre_de_caja_ajena',
-);
-            if (!permiso.autenticado || permiso.usuario === null) {
-              return {
-                cerrada: false,
-                codigo: permiso.codigo,
-                mensaje: permiso.mensaje,
-                diferencia: '0.00',
-                // Todavía no se contó nada: el esperado no viaja (§4.40).
-                montoEsperado: null,
-                montoReal: '0.00',
-                autorizadaVia: null,
-                segundosParaReintentar: permiso.segundosParaReintentar,
-                montoInicial,
-                primerConteo: null,
-              };
-            }
-            autorizacionDeCajaAjena = { autorizadaPor: permiso.usuario.id };
-          }
-
-          // ---- Autorización 2: ¿la caja cuadra? ----------------------------
-          // Sin PIN, solo se calcula. Si hay diferencia, no cierra y devuelve
-          // el monto para que la interfaz lo muestre antes de pedir el código.
-          const tentativo = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
-            usuarioQueCierra: enSesion.id,
-            autorizacionDeCajaAjena,
-          });
-          if (tentativo.cerrada || datos.pin === undefined) {
-            return aIpc(tentativo, { autorizadaVia: null, segundosParaReintentar: null });
-          }
-
-          // Segundo paso: con PIN. Acepta el PIN normal (presencial) o el
-          // remoto (por teléfono), y el sistema determina cuál fue.
-          const autorizacion = dependencias.autenticacion.autorizarComoAdministrador(
-            datos.pin,
-            'cierre_con_diferencia',
-);
-
-          if (!autorizacion.autenticado || autorizacion.usuario === null) {
-            return {
-              cerrada: false,
-              codigo: autorizacion.codigo,
-              mensaje: autorizacion.mensaje,
-              diferencia: tentativo.diferencia,
-              montoEsperado: tentativo.montoEsperado,
-              montoReal: tentativo.montoReal,
-              autorizadaVia: null,
-              segundosParaReintentar: autorizacion.segundosParaReintentar,
-              montoInicial,
-              // Quien vuelve a teclear el PIN tiene que seguir viendo los dos conteos.
-              primerConteo: aConteoIpc(tentativo.primerConteo),
-            };
-          }
-
-          const via = autorizacion.viaDeAutorizacion ?? 'presencial';
-          const cerrado = dependencias.caja.intentarCerrar(turno.id, datos.efectivo, {
-            usuarioQueCierra: enSesion.id,
-            autorizacionDeCajaAjena,
-            autorizacion: { autorizadaPor: autorizacion.usuario.id, via },
-          });
-          return aIpc(cerrado, { autorizadaVia: via, segundosParaReintentar: null });
-          };
-          return resultadoDeCierreParaLaVentana(intentar(), enSesion);
+          return datos.confirmarAutorizacion === true
+            ? flujoDeCierre.confirmarAutorizacion(datos.efectivo, enSesion)
+            : flujoDeCierre.intentar(datos, enSesion);
         }),
       ),
   );
-}
 
-/**
- * Un conteo sellado del dominio, en la forma que cruza hacia la ventana en el
- * RESULTADO DE UN CIERRE. Acá sí viajan el esperado y la diferencia: quien lo
- * recibe acaba de confirmar un conteo y está por autorizar una corrección, que
- * tiene que ver entera (§4.9). Mientras se vuelve a contar, el turno manda
- * otra forma sin esos dos datos (`turnoParaLaVentana`).
- */
-function aConteoIpc(conteo: ConteoSellado | null): ConteoSelladoIpc | null {
-  return conteo === null
-    ? null
-    : {
-        fecha: conteo.fecha,
-        montoEsperado: conteo.montoEsperado,
-        montoReal: conteo.montoReal,
-        diferencia: conteo.diferencia,
-      };
+  ipcMain.handle(
+    CANALES_IPC.cancelarAutorizacionDeCierre,
+    async (): Promise<RespuestaIpc<boolean>> =>
+      ejecutarConRespuesta('CIERRE_DE_CAJA_FALLIDO', () =>
+        requiereSesion(dependencias.sesion, () => {
+          flujoDeCierre.cancelarAutorizacion();
+          return true;
+        }),
+      ),
+  );
 }
 
 /** Quita los manejadores al cerrar, para no dejar canales colgados. */
