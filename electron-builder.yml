@@ -271,7 +271,12 @@ nsis:
   # con `false`, el desinstalador de electron-builder deja de borrarlo.
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: POS Jimmy Cano
+  # «Vixo POS» en los accesos directos y en «Programas y características».
+  # Los dos son solo nombres visibles: el `.lnk` se llama así, pero apunta a
+  # `POS Jimmy Cano.exe` (executableName, que no cambia), y la clave de
+  # desinstalación del registro es el GUID de `appId`. Ninguno forma la
+  # carpeta de datos ni la llave de safeStorage (§4.49 de CLAUDE.md).
+  shortcutName: Vixo POS
   # Para todos los usuarios de la máquina, no solo para quien instala: la
   # terminal de la tienda puede tener una cuenta distinta a la de quien la
   # configura. Pide elevación una vez, al instalar.
@@ -280,7 +285,7 @@ nsis:
   # El instalador que se le manda a Jimmy, sin espacios: viaja por correo o por
   # un pendrive, y un nombre sin espacios no se rompe en ninguna de las dos.
   artifactName: POS-Jimmy-Cano-Setup-${version}.${ext}
-  uninstallDisplayName: POS Jimmy Cano
+  uninstallDisplayName: Vixo POS
   deleteAppDataOnUninstall: false
 
 mac:

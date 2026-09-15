@@ -33,6 +33,27 @@
 ; usar (otra advertencia, otro error con -WX).
 ; ===========================================================================
 
+; ---------------------------------------------------------------------------
+; EL NOMBRE QUE MUESTRAN EL INSTALADOR Y EL DESINSTALADOR
+; ---------------------------------------------------------------------------
+; electron-builder pasa `-DPRODUCT_NAME=POS Jimmy Cano` y este archivo se
+; incluye ANTES de common.nsh, que lo usa para `Name` y `BrandingText`. Se
+; redefine acá, para el instalador y el desinstalador, y así todos los textos
+; del asistente dicen «Vixo POS».
+;
+; ES SEGURO PORQUE PRODUCT_NAME NO FORMA NINGUNA RUTA. Leído en
+; templates/nsis de app-builder-lib 26.15.3: PRODUCT_NAME aparece solo en
+; `BrandingText`, `Name` (common.nsh) y dos `DetailPrint`. Las rutas usan
+; PRODUCT_FILENAME y APP_FILENAME: la carpeta de instalación, el `.exe`, el
+; desinstalador y `$APPDATA\${APP_FILENAME}`. Esos NO se redefinen, y la
+; carpeta de datos y la llave de safeStorage salen de `productName` del asar,
+; que el instalador no toca. La prueba `instalador-marca-y-licencia.test.ts`
+; exige que este archivo no redefina ninguno de esos identificadores.
+!ifdef PRODUCT_NAME
+  !undef PRODUCT_NAME
+!endif
+!define PRODUCT_NAME "Vixo POS"
+
 !ifndef BUILD_UNINSTALLER
 
   !include nsDialogs.nsh

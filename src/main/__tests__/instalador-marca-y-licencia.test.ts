@@ -80,10 +80,8 @@ describe('LA IDENTIDAD DE LA APLICACIÓN NO CAMBIA con la marca', () => {
     expect(config.appId).toBe('gt.posagricola.desktop');
   });
 
-  it('el ejecutable, los accesos directos y «Programas y características» siguen diciendo «POS Jimmy Cano»', () => {
+  it('el ejecutable sigue llamándose «POS Jimmy Cano»: de su nombre dependen la carpeta de instalación y los accesos directos que apuntan a él', () => {
     expect(config.win.executableName).toBe('POS Jimmy Cano');
-    expect(config.nsis.shortcutName).toBe('POS Jimmy Cano');
-    expect(config.nsis.uninstallDisplayName).toBe('POS Jimmy Cano');
   });
 
   it('el package.json del repositorio no tiene productName y su autor sigue siendo Julio Orellana', () => {
@@ -96,6 +94,11 @@ describe('La marca «Vixo POS» en los metadatos', () => {
   it('el publicador del paquete es la misma marca que el emisor del código remoto', () => {
     expect(config.extraMetadata.author.name).toBe('Vixo POS');
     expect(config.extraMetadata.author.name).toBe(EMISOR_DEL_CODIGO_REMOTO);
+  });
+
+  it('los accesos directos y «Programas y características» dicen «Vixo POS» (son solo nombres visibles)', () => {
+    expect(config.nsis.shortcutName).toBe('Vixo POS');
+    expect(config.nsis.uninstallDisplayName).toBe('Vixo POS');
   });
 
   it('el copyright nombra la marca', () => {
@@ -179,9 +182,15 @@ describe('El título del asistente dice «Vixo POS» sin tocar nada más', () =>
     expect(sinComentarios.indexOf('Caption')).toBeGreaterThan(inicioGuarda);
   });
 
-  it('no redefine Name ni ningún identificador que electron-builder use para rutas, registro o accesos directos', () => {
+  it('el nombre visible del asistente es «Vixo POS», redefinido ANTES de que common.nsh lo use, para instalador y desinstalador', () => {
+    expect(sinComentarios).toMatch(/!undef PRODUCT_NAME\s+!endif\s+!define PRODUCT_NAME "Vixo POS"/);
+    expect(sinComentarios.indexOf('!define PRODUCT_NAME')).toBeLessThan(sinComentarios.indexOf('!ifndef BUILD_UNINSTALLER'));
+  });
+
+  it('no redefine Name ni ningún identificador que electron-builder use para rutas, registro o el ejecutable', () => {
     expect(sinComentarios).not.toMatch(/^\s*Name\s/m);
-    expect(sinComentarios).not.toMatch(/!define\s+(PRODUCT_NAME|PRODUCT_FILENAME|APP_FILENAME|APP_ID|APP_GUID|SHORTCUT_NAME|UNINSTALL_DISPLAY_NAME|INSTALL_REGISTRY_KEY)/);
-    expect(sinComentarios).not.toMatch(/APPDATA|userData|productName/i);
+    expect(sinComentarios).not.toMatch(/!(define|undef)\s+(PRODUCT_FILENAME|APP_FILENAME|APP_PRODUCT_FILENAME|APP_EXECUTABLE_FILENAME|UNINSTALL_FILENAME|APP_ID|APP_GUID|UNINSTALL_APP_KEY|INSTALL_REGISTRY_KEY|UNINSTALL_REGISTRY_KEY)\b/);
+    expect(sinComentarios).not.toMatch(/userData|productName/i);
+    expect(sinComentarios).not.toMatch(/\$APPDATA/);
   });
 });

@@ -32,11 +32,25 @@ function nubeParaIncrustar() {
     console.info('[empaquetado] POS_COMPILAR_SIN_NUBE=1: se compila SIN proyecto de nube, aunque exista .env.empaquetado');
     return null;
   }
-  const archivo = resolve(__dirname, '.env.empaquetado');
+  /*
+    `POS_ARCHIVO_NUBE_EMPAQUETADO=<ruta>` lee OTRO archivo, con el mismo formato,
+    solo para esa compilación. Existe para armar el instalador de producción
+    (pos-jimmy-cano) sin pisar `.env.empaquetado`: si una compilación con el
+    archivo pisado se cortara, todo `npm run dev` posterior quedaría apuntando
+    al proyecto real, que es justo lo que §9.5 del diseño prohíbe. Sin la
+    variable, nada cambia. §4.49 de CLAUDE.md.
+  */
+  const archivo = process.env.POS_ARCHIVO_NUBE_EMPAQUETADO
+    ? resolve(process.env.POS_ARCHIVO_NUBE_EMPAQUETADO)
+    : resolve(__dirname, '.env.empaquetado');
   if (!existsSync(archivo)) {
+    if (process.env.POS_ARCHIVO_NUBE_EMPAQUETADO) {
+      throw new Error(`POS_ARCHIVO_NUBE_EMPAQUETADO apunta a ${archivo}, que no existe: no se compila sin nube en silencio.`);
+    }
     console.info('[empaquetado] sin .env.empaquetado: se compila SIN proyecto de nube (las pantallas dirán «sin configurar»)');
     return null;
   }
+  console.info(`[empaquetado] configuración de nube leída de ${archivo}`);
   const valores: Record<string, string> = {};
   for (const linea of readFileSync(archivo, 'utf8').split('\n')) {
     const limpia = linea.trim();
