@@ -358,7 +358,7 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**DESDE EL 2026-09-14 HAY DOS MIGRACIONES ESCRITAS Y SIN APLICAR EN NINGÚN PROYECTO: la `0031_productos_precio_compra`** (§4.39) **y la `0032_venta_detalle_costo_unitario_snap`** (§4.40, que además NO se probó todavía contra Postgres). Las dos esperan que Julio vea el SQL y lo apruebe, también para `pos-pruebas-descartable`. La 0031, en particular, No es aditiva para el contrato: cambia la forma del payload de `productos`, así que se aplica en el mismo momento en que se instala la versión que trae la 031 local, primero en el proyecto de pruebas y después en el real con aprobación. Lo que sigue de este párrafo describe el estado ANTERIOR a ella.
+**LA `0031_productos_precio_compra` Y LA `0032_venta_detalle_costo_unitario_snap` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-15 A LAS 05:09 UTC, Y NO EN `pos-jimmy-cano`** (§4.39, §4.40). Las aprobó Julio después de ver el SQL; el real espera a que se decida junto con el plan de entrega. **Consecuencia medida en el diseño, no en la tienda:** la instalación de Jimmy (`v1.0.0-prueba.1`, sin la 031 ni la 032) sube a ese proyecto, así que su próximo lote de productos o de venta va a ser rechazado por «le faltan columnas» y su cola se va a detener, visible, hasta que instale una versión con las dos migraciones locales, que reescriben los payloads pendientes; ahí «Reintentar ahora» sube todo. Evidencia en §4.40. Lo que sigue de este párrafo describe el estado ANTERIOR a ellas.
 
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE EN `pos-jimmy-cano`: la `0029`
 (`restauracion_ventas_por_mes`, fase 4.b, §4.35) se aplicó el 2026-09-14**, con
@@ -6228,6 +6228,89 @@ venta. Se aplica con la aprobación de Julio y en el mismo momento que se instal
 la versión que la trae; la 032 local ya agrega la clave a los payloads que
 esperaban en la cola.
 
+#### 3. Los diálogos de autorización tampoco le muestran el esperado a la cajera
+
+Julio cerró la interpretación que §4.40.1 dejaba abierta: después de confirmar
+un conteo, los diálogos de diferencia y de reconteo **no muestran el esperado al
+rol venta**. Un administrativo lo sigue viendo: es quien autoriza.
+
+Lo hace el proceso principal, con `resultadoDeCierreParaLaVentana`, que filtra
+TODO lo que devuelve el canal de cierre mientras la caja no se cerró. A quien no
+es administrativo le llega:
+
+| Campo | Qué llega | Por qué |
+|---|---|---|
+| `montoEsperado` | `null` | Es el dato que se oculta |
+| `diferencia` | `null` | Con lo contado, la diferencia ES el esperado |
+| `mensaje` | «Este cierre tiene una diferencia registrada. Un administrador tiene que autorizarlo.» | El del servicio dice «un FALTANTE de Q…» |
+| `codigo` | `REQUIERE_AUTORIZACION_DE_RECONTEO` se presenta como `REQUIERE_AUTORIZACION` | El servicio devuelve «reconteo» SOLO cuando el conteo nuevo cuadra: distinguirlos le diría a la cajera que acertó |
+| `primerConteo` | fecha y lo contado, sin esperado ni diferencia | Lo contado lo escribió ella |
+
+El PIN que se pide es el mismo en los dos códigos, así que unificarlos no cambia
+el flujo. La caja YA cerrada viaja entera a cualquier rol. El mensaje se eligió
+para ser VERDAD en los dos casos que se presentan igual: «este conteo tiene una
+diferencia» sería falso en un reconteo que cuadra, y la primera versión lo decía;
+se vio en la salida cruda de la app real y se corrigió.
+
+Verificado en la aplicación real (`verify:pantallas:caja`, 40 de 40, macOS):
+
+```
+texto visible del diálogo de diferencia de la CAJERA: "Cerrar caja\nEl conteo necesita autorización\nSe contó\nQ200.00\n\nEste cierre tiene una diferencia registrada. Un administrador tiene que autorizarlo.\n…"
+window.pos.caja.cerrar(Q200.00) con la sesión de la CAJERA: {"ok":true,"datos":{"cerrada":false,"codigo":"REQUIERE_AUTORIZACION","mensaje":"Este cierre tiene una diferencia registrada. Un administrador tiene que autorizarlo.","diferencia":null,"montoEsperado":null,"montoReal":"200.00",…}}
+auditoria_log, sellos: […,"{\"montoEsperado\":\"204.25\",\"montoReal\":\"200.00\",\"diferencia\":\"-4.25\",\"modo\":\"simple\"}"]
+window.pos.caja.cerrar(Q204.25) con la sesión de la CAJERA: {"ok":true,"datos":{"cerrada":false,"codigo":"REQUIERE_AUTORIZACION",…,"diferencia":null,"montoEsperado":null,"montoReal":"204.25",…,"primerConteo":{"fecha":"…","montoReal":"200.00","montoEsperado":null,"diferencia":null},…}}
+OK  AL ACERTAR EL ESPERADO, la cajera ve el MISMO diálogo que con diferencia: nada dice que ahora cuadra
+```
+
+La bitácora SÍ guarda el esperado: lo
+que se oculta es la ventana, no el registro.
+
+Falsificado: si el filtro deja pasar todo caen 5 pruebas; si el manejador
+devuelve sin filtrar caen las 2 estructurales.
+
+> **UNA CONSECUENCIA QUE HAY QUE DECIDIR.** El filtro mira a quien tiene la
+> SESIÓN, no a quien teclea el PIN. Si la cajera cierra y un administrador se
+> acerca a autorizar en esa misma pantalla, o lo autoriza por teléfono con el
+> PIN remoto, **aprueba sin ver el monto**: §4.9 pedía que quien autoriza viera
+> qué aprueba. Lo ve recién en la confirmación, ya cerrado, y queda en la
+> bitácora. Las salidas son dejarlo así, o mostrar el monto después de que el
+> PIN correcto se teclea y antes de cerrar (un paso más). Es de Julio.
+
+#### 4. La 0031 y la 0032 en `pos-pruebas-descartable`, con evidencia del catálogo
+
+Aplicadas el 2026-09-15 con la aprobación de Julio, primero la local verificada
+y después el espejo. **`pos-jimmy-cano` no se tocó.**
+
+Local, sobre una copia fresca de la base de trabajo:
+
+```
+2026-09-15T05:08:27.160Z aplicadasAhora: ["031_productos_precio_compra","032_venta_detalle_costo_unitario_snap"]
+integrity_check: [{"integrity_check":"ok"}]
+productos.precio_compra: [{"name":"precio_compra","type":"TEXT","notnull":0}]
+venta_detalle.costo_unitario_snap: [{"name":"costo_unitario_snap","type":"TEXT","notnull":0}]
+filas: [{"productos":6,"productos_con_costo":0,"venta_detalle":2,"lineas_con_snap":0,"auditoria":23}]
+```
+
+Nube, leído antes (05:08:03 UTC): 24 migraciones, columnas en 0 y 0, última
+recepción 02:01:51 UTC, 0 sesiones activas. Después, de `information_schema`,
+`pg_constraint` y `schema_migrations`:
+
+| Qué | `productos.precio_compra` | `venta_detalle.costo_unitario_snap` |
+|---|---|---|
+| Tipo | `numeric(14,2)` | `numeric(14,2)` |
+| Nulable / default | `YES` / `null` | `YES` / `null` |
+| CHECK | `((precio_compra IS NULL) OR (precio_compra >= (0)::numeric))`, `convalidated=true` | `((costo_unitario_snap IS NULL) OR (costo_unitario_snap >= (0)::numeric))`, `convalidated=true` |
+| COMMENT | el del archivo | el del archivo |
+| Filas con valor | 0 de 1 | 0 de 4 |
+| md5 del registro = md5 del archivo | `4047297d084524c39c8870dade62b1e0` | `110a8b1f31d11e440f8625c5c05b9de6` |
+| Versión registrada | `20260915050916` | (siguiente) |
+
+Después: 26 migraciones; usuarios 2, productos 1, ventas 4, venta_detalle 4,
+caja_sesiones 3, auditoria 29, igual que antes. `npm run verify:nube`: «lo que
+la nube declara coincide con supabase/esquema-nube.json», 0 diferencias. El
+linter: los mismos 7 avisos de antes, ninguno nuevo.
+
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -6480,6 +6563,8 @@ esperaban en la cola.
 | **Cerrar la caja son dos pasos, y el de conteo no muestra el teórico A NADIE, administrador incluido.** | Ocultarlo solo al rol venta; ocultarlo con CSS en la misma pantalla | El administrativo lo necesita para consultar durante el día, pero cuando cuenta es un cajero más. Con dos pasos la fila no está en el árbol mientras se cuenta. Se revela en la confirmación. Resuelve el punto 21 de §6.2. | Prompt 58 — 2026-09-14 |
 | **INTERPRETACIÓN a confirmar: los diálogos posteriores a CONFIRMAR un conteo (diferencia y reconteo) siguen mostrando el esperado.** | Ocultarlo también ahí al rol venta | El conteo ya está sellado en `auditoria_log` y toda corrección exige PIN; quien autoriza tiene que ver qué aprueba (§4.9). Queda señalado en §4.40. | Prompt 58 — 2026-09-14 |
 | **`venta_detalle.costo_unitario_snap` guarda el costo al vender; el margen usa esa foto, y una línea sin foto se cuenta aparte, nunca como cero.** Migraciones 032 / 0032. **SUPERA la fila del Prompt 57 que decía «el margen usa el costo vigente».** | Seguir con el costo vigente; rellenar las ventas viejas con el costo de hoy | Con el costo vigente, corregir un precio de compra hoy cambiaría el margen de ventas ya hechas. Rellenar el pasado con el costo de hoy sería inventarlo. Es el mismo criterio de `precio_unitario_snap` (§4.13). | Prompt 58 — 2026-09-14 |
+| **A quien no es administrativo, el canal de cierre le manda esperado y diferencia en null, un mensaje sin montos, y el reconteo presentado como una autorización común** (`resultadoDeCierreParaLaVentana`). | Ocultarlo solo en la pantalla; dejar la diferencia visible; dejar los dos códigos distintos | Pedido de Julio. La diferencia con lo contado revela el esperado, y el código de reconteo solo aparece cuando el conteo nuevo cuadra, así que distinguirlo le diría a la cajera que acertó. El filtro envuelve todo el manejador y hay pruebas estructurales. **Cierra la interpretación de §4.40.1 y abre otra**: el administrador que autoriza en la sesión de la cajera no ve el monto. §4.40.3. | Prompt 59 — 2026-09-15 |
+| **La 0031 y la 0032 se aplican a `pos-pruebas-descartable` y NO al real.** | Aplicarlas a los dos; esperar al instalador nuevo | Decisión de Julio. El real no sincroniza activamente hoy y su momento se decide con el plan de entrega. Se asume que la cola de la instalación de prueba de Jimmy se detiene hasta que instale una versión con la 031 y la 032. §4.40.4. | Prompt 59 — 2026-09-15 |
 | **`POS_COMPILAR_SIN_NUBE=1` compila sin la nube incrustada; lo usan los arneses de pantalla.** | Borrar `.env.empaquetado` antes de verificar; incrustar solo en `dist` | Desde §4.38 toda compilación apuntaba al proyecto de pruebas y `verify:pantallas` medía otra cosa. La variable no cambia el empaquetado. Mover la incrustación solo a `dist` sería lo más limpio y cambia cómo compila `npm run dev`: queda para decidir. | Prompt 57 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
@@ -6522,7 +6607,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
-| 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. Queda a confirmar una interpretación: los diálogos posteriores a confirmar un conteo sí muestran el esperado. |
+| 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. La interpretación sobre los diálogos se cerró en el Prompt 59: tampoco lo muestran al rol venta (§4.40.3). |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
