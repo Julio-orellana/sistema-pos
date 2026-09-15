@@ -6082,6 +6082,15 @@ hay que autorizar. No hay tercer caso.
 | ¿Viaja a la nube? | Sí, los dos asientos se encolan y suben por `sincronizar_asiento`. |
 | ¿Qué ve quien autoriza? | El primer conteo con su diferencia y el conteo de ahora. La pantalla de caja avisa del sello aunque se salga y se vuelva. |
 
+> **CORREGIDO EL 2026-09-15: la fila «¿Dónde queda quién autorizó?» no se
+> cumple en un caso, medido.** Si el esperado cambia entre el sello y el conteo
+> final —por ejemplo, un sobrante y después una venta en efectivo por el mismo
+> monto— y se confirma el mismo número, el cierre exige el PIN y cierra. Pero el
+> asiento de reconteo solo se escribe si cambió el número contado
+> (`huboReconteo`), así que el id de quien autorizó no queda en ningún asiento
+> ni en `caja_sesiones`. Salida cruda y propuesta en
+> `docs/ANULACION-DE-VENTA.md` §0.7. **Sin arreglar todavía.**
+
 Salida cruda del escenario de Jimmy en la aplicación real (teórico Q527.50,
 cuenta Q500, corrige a Q527.50):
 

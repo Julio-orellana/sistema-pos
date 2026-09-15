@@ -40,7 +40,7 @@ Se leyó CLAUDE.md completo y el código que una anulación toca: los dos
 esquemas, `ServicioDeVenta`, los repositorios de ventas y productos, el
 servicio y el flujo de cierre de caja, las funciones de la `0023` y de la
 `0027`, el proveedor de Supabase, el enrutador de lotes, la restauración y el
-recibo. Seis cosas condicionan lo que sigue.
+recibo. Siete cosas condicionan lo que sigue.
 
 ### 0.1 Dos números de prompt, para no confundirlos
 
@@ -134,6 +134,63 @@ El punto 6 terminaba en «quién vendió originalmente, quién anuló, quién».
 completó con quién autorizó y el motivo. Las secciones 7 a 12 son lo que el
 alcance decidido obliga a resolver. Si el pedido tenía puntos después del 6, no
 llegaron.
+
+### 0.7 El cierre de caja decide leyendo la bitácora, y en un caso cierra sin dejar constancia de quién autorizó
+
+Agregado el 2026-09-15, al contestar si algún código usa `auditoria_log` como
+fuente de verdad.
+
+**`valor_anterior` no lo usa ningún código para decidir ni para calcular.** Su
+único lector es el historial de cajas (`historial-de-cajas.ts:305`), que lo
+muestra en pantalla.
+
+**`valor_nuevo` sí.** `ServicioDeCaja.conteosSelladosDe`
+(`servicio-de-caja.ts:664-683`) lee los asientos `conteo_de_cierre_sellado`, e
+`intentarCerrar` decide con ellos tres cosas:
+
+- si hay que escribir un sello nuevo (`:486-499`);
+- si un cierre que cuadra exige PIN (`:511-527`);
+- si hubo reconteo (`:532`), comparando **solo el monto contado**.
+
+El asiento `reconteo_de_cierre_autorizado` es la única constancia de quién
+autorizó un cierre que cuadra, porque la 008 obliga a dejar vacías esas columnas
+de `caja_sesiones`. Y se escribe **solo si hubo reconteo** (`:597`).
+
+**La consecuencia, medida** con una prueba temporal sobre SQLite real, que se
+borró y no está en el repositorio. Si el esperado cambia entre el sello y el
+conteo final, y el número contado es el mismo:
+
+- el cierre exige el PIN;
+- se cierra con el PIN;
+- y **el id de quien autorizó no queda en ningún asiento ni en
+  `caja_sesiones`**.
+
+Pasa hoy, con un sobrante y después una venta en efectivo por el mismo monto.
+Con la anulación pasaría en el caso del fraude más común: falta dinero, y se
+anula una venta por ese monto.
+
+```
+[anulacion] 1) venta de Q27.50; cuenta Q500 con esperado 527.50 -> REQUIERE_AUTORIZACION, diferencia -27.50
+[anulacion] 2) se anula esa venta; confirma otra vez Q500 -> REQUIERE_AUTORIZACION_DE_RECONTEO, esperado 500.00, diferencia 0.00
+[anulacion]    mensaje que ve quien autoriza: Antes se confirmó un conteo de Q500.00 con un FALTANTE de Q27.50. Corregir un conteo que mostraba una diferencia exige la autorización de un administrador, aunque ahora cuadre.
+[anulacion] 3) PIN de Jimmy -> autenticado=true
+[anulacion] 4) cierre con esa autorización -> cerrada=true CIERRE_CORRECTO
+[anulacion] asiento caja_cerrada usuario=Cajera … "autorizadaPor":null,"autorizadaVia":null,"conteosSellados":1,"huboReconteo":false}
+[anulacion] caja_sesiones: {… "diferencia_autorizada_por":null,"diferencia_autorizada_via":null,"cerrada_por":null}
+[anulacion] el id de Jimmy (quien tecleó el PIN) aparece en 0 asiento(s) y en 0 fila(s) de caja_sesiones
+```
+
+La anulación de ese ensayo se simuló con `RepositorioDeVentas.anular()`, que ya
+existe. Tiene sobre el esperado el mismo efecto que la anulación de este
+documento. El mensaje, además, habla de «corregir un conteo» cuando el número
+contado no cambió: lo que cambió fue el esperado.
+
+**Hay que arreglarlo antes de implementar la anulación** (decisión 12).
+Recomiendo dos cambios:
+
+- escribir el asiento de la autorización siempre que el cierre se haya
+  autorizado por un sello, y no solo cuando cambió el número contado;
+- que el mensaje diga que cambió el esperado cuando esa es la razón.
 
 ---
 
@@ -413,7 +470,7 @@ migraciones y un cambio de forma del lote.
 | El efectivo del cajón | Quien anula le devuelve el dinero al cliente. Si no lo devuelve, el cajón queda con más de lo esperado y el cierre da **sobrante**, que exige autorización (§4.9). El control detecta que el dinero no salió. |
 | El resumen del turno | Las ventas en efectivo y su cantidad bajan. Solo lo ve un administrador (§4.40). |
 | Una autorización de cierre pendiente | **Deja de valer sola**: el flujo compara el esperado y contesta «El monto cambió después de autorizarse» (`cierre-de-caja.ts:182-194`). |
-| Los conteos sellados | Quedan como estaban. Un turno con un sello se sigue cerrando solo con autorización (§4.39), y el reconteo guarda los dos lados. |
+| Los conteos sellados | Quedan como estaban, y un turno con un sello se sigue cerrando solo con autorización (§4.39). **Pero hoy, si el número final es el mismo del sello, esa autorización no queda registrada en ningún lado** (0.7). Se arregla antes de implementar. |
 | El historial de cajas (§4.44) | No cambia: muestra el esperado que se guardó al cerrar, y ese ya incluye la anulación. |
 | Lo que ve el rol venta | Nada del teórico. La respuesta de la anulación nunca lo lleva (§4.40). |
 
@@ -616,6 +673,23 @@ lo que movió:
 - `numeroRecibo` va `null` si la venta no llegó a tener recibo, porque la
   aplicación se cayó entre las dos cosas (§4.14).
 
+### 6.3 Ningún código lee estos asientos
+
+Los asientos de la anulación son **fotografías para una persona**, igual que los
+`*_snap` de `venta_detalle`. Por eso copiar el total o quién vendió en
+`valor_anterior` no contradice la regla de 1.1: esa regla es para datos que otro
+código lee.
+
+- Nada decide ni calcula con ellos. Si una anulación existe se sabe por
+  `anulaciones_de_venta`; la reposición lee `productos`; el efectivo esperado
+  lee `ventas`.
+- Una prueba estructural lo fija: el servicio de anulación no llama a ninguna
+  lectura del repositorio de auditoría, y ningún archivo de producción lee
+  asientos `venta_anulada`.
+
+**No es la regla de todo el sistema, y no hay que creer que lo es:** el cierre
+de caja sí decide con los sellos que lee de la bitácora (0.7).
+
 ---
 
 ## 7. Sincronización
@@ -805,6 +879,14 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 - mezclado con otra tabla decisiva, se rechaza;
 - la deriva conoce la tabla y la función.
 
+**Estructural de la auditoría (6.3):**
+- el servicio de anulación no lee `auditoria_log`, y nada lee asientos
+  `venta_anulada`.
+
+**Del arreglo previo (0.7):**
+- los dos escenarios medidos —un sobrante y después una venta; un faltante y
+  después una anulación— tienen que dejar el id de quien autorizó en un asiento.
+
 **Falsificaciones planeadas**, una por vez, para ver que cada prueba muerde:
 - volver al saldo del asiento de la venta en vez de sumar;
 - no bajar los contadores;
@@ -874,3 +956,4 @@ fecha del robo.
 | 9 | **Para Jimmy:** cómo anula hoy un cobro con tarjeta en la terminal del banco, y si hace falta guardar la referencia de esa anulación | Preguntarlo **antes de implementar** (3.3) |
 | 10 | Endurecer `sincronizar_venta` para que rechace una venta existente con otro contenido | Decidirlo por separado (0.2) |
 | 11 | El reporte de anulaciones por persona | Hacerlo después de esto (sección 11) |
+| 12 | El cierre que exige PIN por un sello y no registra quién lo autorizó (0.7) | **Arreglarlo antes de implementar la anulación**: registrar la autorización siempre que un sello la haya exigido |
