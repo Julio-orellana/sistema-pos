@@ -26,7 +26,9 @@
  *      compra después no mueve el margen de una venta ya hecha.
  *   9. La cajera que cuenta de menos ve que hace falta autorización, y NO el
  *      esperado; al recontar el número exacto ve el mismo diálogo.
- *  10. La salida controlada acepta el PIN REMOTO de un administrador, y el
+ *  10. LA CAJA AJENA (2026-09-15): la abre la cajera, la cierra un
+ *      administrador distinto; el aviso lo dice y el botón abre el diálogo.
+ *  11. La salida controlada acepta el PIN REMOTO de un administrador, y el
  *      asiento lo registra como «remoto». Va al final: cierra la aplicación.
  *
  * Por qué es un guion aparte y no más pasos de `verify:pantallas`: aquel
@@ -898,6 +900,79 @@ async function main() {
       teoricoParaLaCajera.includes('204.25'),
     );
     await capturar('7c-cajera-confirmacion-con-teorico');
+
+    // =======================================================================
+    // 2026-09-15 — LA CAJA QUE ABRIÓ OTRA PERSONA, cerrada por un administrador
+    // DISTINTO. Jimmy no encontró cómo hacerlo en `v1.0.0-prueba.1`: el botón
+    // «Cerrar turno (requiere autorización)» no hacía nada, porque la respuesta
+    // del proceso principal no se podía clonar y la llamada quedaba pendiente
+    // para siempre. Ningún recorrido de la app real pasaba por acá.
+    // =======================================================================
+    anotar('--- caja ajena: la abre la cajera y la cierra el administrador ---');
+    await prueba('aceptar-confirmacion-de-cierre').click();
+    await prueba('estado-sin-caja').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('modo-simple').click();
+    for (const digito of '150') {
+      await prueba(`tecla-${digito}`).click();
+    }
+    await prueba('confirmar-caja').click();
+    await prueba('estado-caja-propia').waitFor({ timeout: ESPERA_CORTA });
+    const [filaDelTurnoAjeno] = leerBase("SELECT id FROM caja_sesiones WHERE estado = 'abierta'");
+    await volver();
+    await ventana.getByRole('button', { name: 'Cerrar sesión' }).click();
+    await prueba('pantalla-de-ingreso').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('usuario-para-ingreso').filter({ hasText: 'Jimmy de verificación' }).click();
+    await teclearPin(PIN);
+    await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('ir-a-caja').click();
+    await prueba('estado-caja-ajena').waitFor({ timeout: ESPERA_CORTA });
+    const avisoDeCajaAjena = await texto('aviso-de-caja-ajena');
+    anotar(`aviso de caja ajena: ${JSON.stringify(avisoDeCajaAjena)}`);
+    comprobar(
+      'EL ADMINISTRADOR ve, sin ambigüedad, quién abrió la caja y que va a necesitar PIN de administrador',
+      'Esta caja la abrió Cajera de verificación. Vas a necesitar el PIN de un administrador para cerrarla.',
+      avisoDeCajaAjena,
+      avisoDeCajaAjena.includes('Esta caja la abrió Cajera de verificación.') &&
+        avisoDeCajaAjena.includes('Vas a necesitar el PIN de un administrador para cerrarla.') &&
+        avisoDeCajaAjena.includes('Primero contás el efectivo'),
+    );
+    await capturar('7d-administrador-frente-a-caja-ajena');
+    await prueba('ir-a-contar').click();
+    await prueba('modo-simple').click();
+    for (const digito of '150') {
+      await prueba(`tecla-${digito}`).click();
+    }
+    const antesDelClic = Date.now();
+    await prueba('confirmar-caja').click();
+    const aparecioElDialogo = await prueba('autorizacion-de-caja-ajena')
+      .waitFor({ timeout: ESPERA_CORTA })
+      .then(() => true, () => false);
+    comprobar(
+      'TOCAR «Cerrar turno (requiere autorización)» abre el diálogo del PIN (en v1.0.0-prueba.1 no pasaba nada)',
+      'diálogo visible',
+      aparecioElDialogo ? `diálogo visible a los ${Date.now() - antesDelClic} ms` : `sin diálogo; mensaje: ${await prueba('mensaje-de-caja').count() ? await texto('mensaje-de-caja') : '(ninguno)'}`,
+      aparecioElDialogo,
+    );
+    if (!aparecioElDialogo) {
+      throw new Error('El diálogo de caja ajena no apareció.');
+    }
+    await capturar('7e-dialogo-de-caja-ajena');
+    await teclearPin(PIN);
+    await prueba('confirmacion-de-cierre').waitFor({ timeout: ESPERA_CORTA });
+    const [cierreAjeno] = leerBase(
+      'SELECT estado, usuario_id, cerrada_por, monto_real FROM caja_sesiones WHERE id = ?',
+      filaDelTurnoAjeno.id,
+    );
+    anotar(`caja_sesiones del turno ajeno: ${JSON.stringify(cierreAjeno)}`);
+    comprobar(
+      'con el PIN la caja ajena queda CERRADA en la base, con el administrador como quien cerró',
+      `cerrada; cerrada_por=${idAdministrador}; Q150.00`,
+      `${cierreAjeno.estado}; cerrada_por=${cierreAjeno.cerrada_por}; Q${cierreAjeno.monto_real}`,
+      cierreAjeno.estado === 'cerrada' &&
+        cierreAjeno.cerrada_por === idAdministrador &&
+        cierreAjeno.usuario_id !== idAdministrador &&
+        cierreAjeno.monto_real === '150.00',
+    );
 
     // =======================================================================
     // PROMPT #2 — LA SALIDA CONTROLADA CON EL PIN REMOTO (ampliada el
