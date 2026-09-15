@@ -457,3 +457,74 @@ describe('EL RECONTEO: quien autoriza ve LOS DOS conteos', () => {
     expect(porPrueba('confirmacion-de-cierre')).toBeNull();
   });
 });
+
+describe('EL DIÁLOGO DE DIFERENCIA: la cajera ve que hay que autorizar, NO cuánto se esperaba', () => {
+  it('con esperado y diferencia en null (lo que manda el proceso principal a una cajera), no aparece ningún monto esperado ni el signo', async () => {
+    instalarApiConCierres(TURNO_PROPIO_SIN_TEORICO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: false,
+        codigo: 'REQUIERE_AUTORIZACION',
+        mensaje: 'Este cierre tiene una diferencia registrada. Un administrador tiene que autorizarlo.',
+        diferencia: null,
+        montoEsperado: null,
+        montoReal: '100.00',
+      },
+    ]);
+    await montar();
+    await irAContarYConfirmar();
+
+    const dialogo = porPrueba('autorizacion-de-diferencia');
+    expect(dialogo).not.toBeNull();
+    const visible = texto();
+    expect(porPrueba('diferencia-sin-monto')?.textContent).toContain('autorizar');
+    expect(porPrueba('diferencia')).toBeNull();
+    expect(visible).not.toContain('Debería haber');
+    expect(visible).not.toContain('500.00');
+    expect(visible.toLowerCase()).not.toContain('faltante');
+    expect(visible.toLowerCase()).not.toContain('sobrante');
+    expect(visible.toLowerCase()).not.toContain('no cuadra');
+    // Lo que ella contó sí se ve.
+    expect(visible).toContain('100.00');
+  });
+
+  it('si antes selló otro conteo, dice cuánto contó entonces y nada de su diferencia', async () => {
+    instalarApiConCierres(TURNO_PROPIO_SIN_TEORICO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: false,
+        codigo: 'REQUIERE_AUTORIZACION',
+        mensaje: 'Este cierre tiene una diferencia registrada. Un administrador tiene que autorizarlo.',
+        diferencia: null,
+        montoEsperado: null,
+        montoReal: '100.00',
+        primerConteo: { fecha: '2026-09-14T20:00:00.000Z', montoEsperado: null, montoReal: '90.00', diferencia: null },
+      },
+    ]);
+    await montar();
+    await irAContarYConfirmar();
+
+    expect(porPrueba('primer-conteo-sellado')?.textContent).toContain('90.00');
+    expect((porPrueba('primer-conteo-sellado')?.textContent ?? '').toLowerCase()).not.toContain('faltante');
+  });
+
+  it('CONTROL: con los montos (lo que recibe un administrativo) el diálogo sí muestra «Debería haber» y el faltante', async () => {
+    instalarApiConCierres(TURNO_PROPIO_CON_TEORICO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: false,
+        codigo: 'REQUIERE_AUTORIZACION',
+        diferencia: '-530.50',
+        montoEsperado: '630.50',
+        montoReal: '100.00',
+      },
+    ]);
+    await montar();
+    await irAContarYConfirmar();
+
+    expect(texto()).toContain('Debería haber');
+    expect(texto()).toContain('630.50');
+    expect(porPrueba('diferencia')?.textContent).toContain('530.50');
+    expect(porPrueba('diferencia-sin-monto')).toBeNull();
+  });
+});

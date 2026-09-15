@@ -44,7 +44,7 @@ import { ErrorDeNegocio } from '@main/database/errores';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
-import { turnoParaLaVentana } from './turno-para-la-ventana';
+import { resultadoDeCierreParaLaVentana, turnoParaLaVentana } from './turno-para-la-ventana';
 import type {
   ConteoSellado,
   ResultadoDeCierre,
@@ -439,6 +439,10 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           if (enSesion === null) {
             throw new Error('No hay sesión iniciada.');
           }
+
+          // Todo resultado sale por `resultadoDeCierreParaLaVentana`: lo que el
+          // rol de quien cierra no puede ver no cruza el puente (§4.40).
+          const intentar = (): ResultadoDeCierreIpc => {
           const turno = dependencias.caja.sesionAbierta();
           if (turno === null) {
             throw new ErrorDeNegocio(
@@ -545,6 +549,8 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
             autorizacion: { autorizadaPor: autorizacion.usuario.id, via },
           });
           return aIpc(cerrado, { autorizadaVia: via, segundosParaReintentar: null });
+          };
+          return resultadoDeCierreParaLaVentana(intentar(), enSesion);
         }),
       ),
   );

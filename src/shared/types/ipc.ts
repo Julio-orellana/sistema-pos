@@ -588,9 +588,11 @@ export interface EstadoDeCaja {
 /** Un conteo de cierre confirmado con diferencia, que quedó sellado (§4.39). */
 export interface ConteoSelladoIpc {
   readonly fecha: string;
-  readonly montoEsperado: string;
+  /** `null` para quien no es administrativo (§4.40): ver `resultadoDeCierreParaLaVentana`. */
+  readonly montoEsperado: string | null;
   readonly montoReal: string;
-  readonly diferencia: string;
+  /** `null` con la misma regla: lo contado menos la diferencia es el esperado. */
+  readonly diferencia: string | null;
 }
 
 /**
@@ -605,14 +607,20 @@ export interface ResultadoDeCierreIpc {
   readonly cerrada: boolean;
   readonly codigo: string;
   readonly mensaje: string;
-  /** Diferencia como cadena canónica, con signo. Negativa es faltante. */
-  readonly diferencia: string;
+  /**
+   * Diferencia como cadena canónica, con signo. Negativa es faltante.
+   *
+   * `null` para quien no es administrativo mientras la caja no se cerró
+   * (§4.40): con lo contado, la diferencia revela el esperado.
+   */
+  readonly diferencia: string | null;
   /**
    * Lo que el sistema espera. `null` MIENTRAS NO SE HAYA CONFIRMADO NINGÚN
    * CONTEO (§4.40): el pedido de autorización de una caja ajena ocurre antes
    * de contar, y mandarlo ahí le diría a quien va a contar qué número poner.
-   * Con un conteo confirmado sí viaja: ya no se puede copiar, y quien
-   * autoriza una diferencia tiene que ver qué está aprobando (§4.9).
+   * Con un conteo confirmado viaja SOLO a un administrativo, que es quien
+   * autoriza y tiene que ver qué aprueba (§4.9). A cualquier otro rol le llega
+   * `null` hasta que la caja se cierra (`resultadoDeCierreParaLaVentana`).
    */
   readonly montoEsperado: string | null;
   readonly montoReal: string;

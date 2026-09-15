@@ -21,7 +21,14 @@ import Decimal from 'decimal.js';
 import type { CajaSesion } from '@main/database/repositories/entidades';
 import type { ConteoSellado } from '@main/domain/caja/servicio-de-caja';
 import type { UsuarioEnSesion } from '@main/domain/usuarios/sesion';
-import { puedeVerElTeorico, turnoParaLaVentana, type ContextoDelTurno } from '../turno-para-la-ventana';
+import type { ResultadoDeCierreIpc } from '@shared/types/ipc';
+import {
+  MENSAJE_DE_CIERRE_SIN_TEORICO,
+  puedeVerElTeorico,
+  resultadoDeCierreParaLaVentana,
+  turnoParaLaVentana,
+  type ContextoDelTurno,
+} from '../turno-para-la-ventana';
 
 const TURNO: CajaSesion = {
   id: 'turno-1',
@@ -186,5 +193,142 @@ describe('Ningún canal arma el turno a mano con el teórico', () => {
     expect(REGISTRO).toMatch(
       /resultado\.codigo === 'REQUIERE_AUTORIZACION_DE_CAJA_AJENA' \? null : resultado\.montoEsperado/,
     );
+  });
+});
+
+// ===========================================================================
+// El RESULTADO de intentar cerrar, después de confirmar un conteo (§4.40).
+// Esperado Q527.50; la cajera contó Q500.00 (faltante Q27.50).
+// ===========================================================================
+
+const PIDE_AUTORIZACION: ResultadoDeCierreIpc = {
+  cerrada: false,
+  codigo: 'REQUIERE_AUTORIZACION',
+  mensaje: 'La caja no cuadra: hay un FALTANTE de Q27.50.',
+  diferencia: '-27.50',
+  montoEsperado: '527.50',
+  montoReal: '500.00',
+  autorizadaVia: null,
+  segundosParaReintentar: null,
+  montoInicial: '500.00',
+  primerConteo: null,
+};
+
+/** Recontó Q527.50, que cuadra, después de haber sellado Q500.00. */
+const PIDE_RECONTEO: ResultadoDeCierreIpc = {
+  ...PIDE_AUTORIZACION,
+  codigo: 'REQUIERE_AUTORIZACION_DE_RECONTEO',
+  mensaje:
+    'Antes se confirmó un conteo de Q500.00 con un FALTANTE de Q27.50. Corregir un conteo que mostraba una diferencia exige la autorización de un administrador, aunque ahora cuadre.',
+  diferencia: '0.00',
+  montoReal: '527.50',
+  primerConteo: {
+    fecha: '2026-09-14T20:00:00.000Z',
+    montoEsperado: '527.50',
+    montoReal: '500.00',
+    diferencia: '-27.50',
+  },
+};
+
+describe('A una CAJERA, el diálogo de autorización no le trae nada que revele el esperado', () => {
+  it('diferencia: esperado y diferencia en null, y el mensaje con monto se reemplaza por uno sin monto', () => {
+    const visto = resultadoDeCierreParaLaVentana(PIDE_AUTORIZACION, CAJERA);
+
+    expect(visto.montoEsperado).toBeNull();
+    expect(visto.diferencia).toBeNull();
+    expect(visto.mensaje).toBe(MENSAJE_DE_CIERRE_SIN_TEORICO);
+    expect(visto.codigo).toBe('REQUIERE_AUTORIZACION');
+  });
+
+  it('en NINGÚN campo aparece el esperado ni la diferencia, ni con signo ni sin él', () => {
+    const serializado = JSON.stringify(resultadoDeCierreParaLaVentana(PIDE_AUTORIZACION, CAJERA));
+
+    // Control: lo que ella contó SÍ viaja, así que el buscador funciona.
+    expect(serializado).toContain('500.00');
+    expect(serializado).not.toContain('527.50');
+    expect(serializado).not.toContain('27.50');
+    expect(serializado.toLowerCase()).not.toContain('faltante');
+  });
+
+  it('reconteo: se presenta como un pedido de autorización COMÚN, porque el código propio diría que ahora cuadra', () => {
+    const visto = resultadoDeCierreParaLaVentana(PIDE_RECONTEO, CAJERA);
+    const serializado = JSON.stringify(visto);
+
+    expect(visto.codigo).toBe('REQUIERE_AUTORIZACION');
+    expect(visto.mensaje).toBe(MENSAJE_DE_CIERRE_SIN_TEORICO);
+    expect(visto.primerConteo).toEqual({
+      fecha: '2026-09-14T20:00:00.000Z',
+      montoEsperado: null,
+      montoReal: '500.00',
+      diferencia: null,
+    });
+    expect(serializado.toLowerCase()).not.toContain('cuadra');
+    // Lo contado AHORA es 527.50 y lo tecleó ella, así que «27.50» aparece
+    // adentro de su propio número: lo que no puede aparecer es la diferencia.
+    expect(serializado).not.toContain('"-27.50"');
+    expect(serializado).not.toContain('"0.00"');
+    expect(visto.montoEsperado).toBeNull();
+    expect(visto.diferencia).toBeNull();
+  });
+
+  it('un PIN equivocado en el diálogo sigue sin traer el esperado, y conserva su propio mensaje', () => {
+    const pinMalo: ResultadoDeCierreIpc = {
+      ...PIDE_AUTORIZACION,
+      codigo: 'PIN_INCORRECTO',
+      mensaje: 'PIN incorrecto.',
+    };
+    const visto = resultadoDeCierreParaLaVentana(pinMalo, CAJERA);
+
+    expect(visto.montoEsperado).toBeNull();
+    expect(visto.diferencia).toBeNull();
+    expect(visto.mensaje).toBe('PIN incorrecto.');
+  });
+
+  it('sin sesión, igual que una cajera', () => {
+    expect(resultadoDeCierreParaLaVentana(PIDE_AUTORIZACION, null).montoEsperado).toBeNull();
+  });
+});
+
+describe('A un ADMINISTRATIVO le llega entero: es quien autoriza y tiene que ver qué aprueba', () => {
+  it.each([
+    ['diferencia', PIDE_AUTORIZACION],
+    ['reconteo', PIDE_RECONTEO],
+  ])('%s: el resultado no cambia', (_caso, resultado) => {
+    expect(resultadoDeCierreParaLaVentana(resultado, ADMINISTRADOR)).toEqual(resultado);
+  });
+});
+
+describe('Una caja YA CERRADA viaja entera a cualquier rol: la confirmación muestra el teórico', () => {
+  it('la cajera recibe esperado y diferencia en la confirmación', () => {
+    const cerrada: ResultadoDeCierreIpc = {
+      ...PIDE_AUTORIZACION,
+      cerrada: true,
+      codigo: 'CIERRE_CORRECTO',
+      mensaje: 'Caja cerrada.',
+    };
+    expect(resultadoDeCierreParaLaVentana(cerrada, CAJERA)).toEqual(cerrada);
+  });
+});
+
+describe('El canal de cierre no devuelve nada sin pasar por el filtro', () => {
+  const inicio = REGISTRO.indexOf('CANALES_IPC.cerrarCaja');
+  const fin = REGISTRO.indexOf('function aConteoIpc');
+  const bloque = REGISTRO.slice(inicio, fin);
+
+  it('el manejador termina devolviendo `resultadoDeCierreParaLaVentana(intentar(), enSesion)`', () => {
+    expect(inicio).toBeGreaterThan(0);
+    expect(bloque).toContain('return resultadoDeCierreParaLaVentana(intentar(), enSesion);');
+  });
+
+  it('todos los `return` con resultado quedan DENTRO de `intentar`, que es lo único que se filtra', () => {
+    const cuerpoDeIntentar = bloque.slice(
+      bloque.indexOf('const intentar = (): ResultadoDeCierreIpc => {'),
+      bloque.indexOf('return resultadoDeCierreParaLaVentana(intentar(), enSesion);'),
+    );
+    const returnsEnElBloque = (bloque.match(/\breturn\b/g) ?? []).length;
+    const returnsEnIntentar = (cuerpoDeIntentar.match(/\breturn\b/g) ?? []).length;
+    // El único `return` fuera de `intentar` es el del filtro.
+    expect(returnsEnIntentar).toBeGreaterThan(0);
+    expect(returnsEnElBloque - returnsEnIntentar).toBe(1);
   });
 });

@@ -320,6 +320,11 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
 
   if (autorizacion.tipo === 'diferencia') {
     const resultado = autorizacion.resultado;
+    // A quien no es administrativo el proceso principal le manda el esperado y
+    // la diferencia en null (§4.40): con lo contado, cualquiera de los dos
+    // revela el otro. La pantalla no decide por rol: dibuja lo que le llegó.
+    const diferencia = resultado.diferencia;
+    const conMontos = diferencia !== null && resultado.montoEsperado !== null;
     return (
       <div className="ingreso" data-prueba="pantalla-de-caja">
         <h1>Cerrar caja</h1>
@@ -331,36 +336,52 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
         )}
 
         <div className="autorizacion" data-prueba="autorizacion-de-diferencia">
-          <h2>La caja no cuadra</h2>
+          <h2>{conMontos ? 'La caja no cuadra' : 'El conteo necesita autorización'}</h2>
 
           {resultado.primerConteo !== null && (
             <p className="advertencia" data-prueba="primer-conteo-sellado">
-              Antes se confirmó otro conteo: {formatearQuetzales(resultado.primerConteo.montoReal)},
-              con {diferenciaLegible(resultado.primerConteo.diferencia)}. Los dos quedan
-              registrados.
+              Antes se confirmó otro conteo: {formatearQuetzales(resultado.primerConteo.montoReal)}
+              {resultado.primerConteo.diferencia !== null &&
+                `, con ${diferenciaLegible(resultado.primerConteo.diferencia)}`}
+              . Los dos quedan registrados.
             </p>
           )}
 
-          <div className="autorizacion__resumen">
-            <div className="dato">
-              <span className="dato__etiqueta">Debería haber</span>
-              {/* Acá sí: el conteo ya se confirmó y quedó registrado, y quien
-                  autoriza tiene que ver qué está aprobando (§4.9, §4.40). */}
-              <span className="dato__valor">{montoOSinDato(resultado.montoEsperado)}</span>
+          {conMontos ? (
+            <div className="autorizacion__resumen">
+              <div className="dato">
+                <span className="dato__etiqueta">Debería haber</span>
+                {/* Solo le llega a un administrativo: es quien autoriza y tiene
+                    que ver qué está aprobando (§4.9, §4.40). */}
+                <span className="dato__valor">{montoOSinDato(resultado.montoEsperado)}</span>
+              </div>
+              <div className="dato">
+                <span className="dato__etiqueta">Se contó</span>
+                <span className="dato__valor">{formatearQuetzales(resultado.montoReal)}</span>
+              </div>
+              <div className="dato">
+                <span className="dato__etiqueta">
+                  {diferencia.startsWith('-') ? 'FALTANTE' : 'SOBRANTE'}
+                </span>
+                <span className="dato__valor autorizacion__diferencia" data-prueba="diferencia">
+                  {formatearQuetzales(diferencia.replace('-', ''))}
+                </span>
+              </div>
             </div>
-            <div className="dato">
-              <span className="dato__etiqueta">Se contó</span>
-              <span className="dato__valor">{formatearQuetzales(resultado.montoReal)}</span>
-            </div>
-            <div className="dato">
-              <span className="dato__etiqueta">
-                {resultado.diferencia.startsWith('-') ? 'FALTANTE' : 'SOBRANTE'}
-              </span>
-              <span className="dato__valor autorizacion__diferencia" data-prueba="diferencia">
-                {formatearQuetzales(resultado.diferencia.replace('-', ''))}
-              </span>
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="autorizacion__resumen">
+                <div className="dato">
+                  <span className="dato__etiqueta">Se contó</span>
+                  <span className="dato__valor">{formatearQuetzales(resultado.montoReal)}</span>
+                </div>
+              </div>
+              <p className="advertencia" data-prueba="diferencia-sin-monto">
+                Este cierre tiene una diferencia registrada. Un administrador tiene que
+                autorizarlo.
+              </p>
+            </>
+          )}
 
           <p className="subtitulo">
             Un administrador debe autorizar el cierre con su PIN, en persona o dictándolo
@@ -387,6 +408,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
   if (autorizacion.tipo === 'reconteo') {
     const resultado = autorizacion.resultado;
     const primero = resultado.primerConteo;
+    const diferenciaDelPrimero = primero?.diferencia ?? null;
     return (
       <div className="ingreso" data-prueba="pantalla-de-caja">
         <h1>Cerrar caja</h1>
@@ -412,13 +434,14 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
             <div className="dato">
               <span className="dato__etiqueta">Con</span>
               <span className="dato__valor">
-                {primero === null ? '—' : diferenciaLegible(primero.diferencia)}
+                {diferenciaDelPrimero === null ? '—' : diferenciaLegible(diferenciaDelPrimero)}
               </span>
             </div>
             <div className="dato">
               <span className="dato__etiqueta">Conteo de ahora</span>
               <span className="dato__valor" data-prueba="reconteo-conteo-actual">
-                {formatearQuetzales(resultado.montoReal)} ({diferenciaLegible(resultado.diferencia)})
+                {formatearQuetzales(resultado.montoReal)}
+                {resultado.diferencia !== null && ` (${diferenciaLegible(resultado.diferencia)})`}
               </span>
             </div>
           </div>
@@ -447,7 +470,10 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
   }
 
   if (cierreConfirmado !== null) {
-    const hubo = Number(cierreConfirmado.diferencia) !== 0;
+    // Una caja cerrada viaja entera a cualquier rol (§4.40); el null solo se
+    // contempla para no afirmar que cuadró sin tener el dato.
+    const diferenciaDelCierre = cierreConfirmado.diferencia ?? '0.00';
+    const hubo = Number(diferenciaDelCierre) !== 0;
     return (
       <div className="ingreso" data-prueba="pantalla-de-caja">
         <div className="autorizacion" role="status" data-prueba="confirmacion-de-cierre">
@@ -475,13 +501,13 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
             {hubo && (
               <div className="dato">
                 <span className="dato__etiqueta">
-                  {cierreConfirmado.diferencia.startsWith('-') ? 'Faltante' : 'Sobrante'}
+                  {diferenciaDelCierre.startsWith('-') ? 'Faltante' : 'Sobrante'}
                 </span>
                 <span
                   className="dato__valor autorizacion__diferencia"
                   data-prueba="cierre-diferencia"
                 >
-                  {formatearQuetzales(cierreConfirmado.diferencia.replace('-', ''))}
+                  {formatearQuetzales(diferenciaDelCierre.replace('-', ''))}
                 </span>
               </div>
             )}
@@ -489,7 +515,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
 
           <p className="subtitulo">
             {hubo
-              ? `Se cerró con ${diferenciaLegible(cierreConfirmado.diferencia)}, autorizado por un administrador.`
+              ? `Se cerró con ${diferenciaLegible(diferenciaDelCierre)}, autorizado por un administrador.`
               : 'La caja cuadró exactamente.'}
           </p>
 

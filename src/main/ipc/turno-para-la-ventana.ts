@@ -33,7 +33,7 @@
  */
 
 import { montoACadena } from '@shared/money';
-import type { TurnoAbierto } from '@shared/types/ipc';
+import type { ResultadoDeCierreIpc, TurnoAbierto } from '@shared/types/ipc';
 import type { ConteoSellado, ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { CajaSesion } from '@main/database/repositories/entidades';
 import type { UsuarioEnSesion } from '@main/domain/usuarios/sesion';
@@ -68,5 +68,67 @@ export function turnoParaLaVentana(turno: CajaSesion, contexto: ContextoDelTurno
     montoTeorico: resumen === null ? null : montoACadena(resumen.montoTeorico),
     primerConteoSellado:
       primerSello === undefined ? null : { fecha: primerSello.fecha, montoReal: primerSello.montoReal },
+  };
+}
+
+/**
+ * Lo que ve un usuario sin rol administrativo cuando un cierre pide autorización.
+ *
+ * Tiene que ser VERDAD en los dos casos que presenta igual: un conteo con
+ * diferencia, y un reconteo que cuadra después de un conteo sellado. «Este
+ * conteo tiene una diferencia» sería falso en el segundo; «este cierre tiene
+ * una diferencia registrada» es cierto en los dos, porque el sello queda.
+ */
+export const MENSAJE_DE_CIERRE_SIN_TEORICO =
+  'Este cierre tiene una diferencia registrada. Un administrador tiene que autorizarlo.';
+
+/**
+ * El resultado de intentar cerrar, tal como puede verlo QUIEN ESTÁ CERRANDO.
+ *
+ * Mismo criterio que el turno (§4.40), aplicado a los diálogos que aparecen
+ * DESPUÉS de confirmar un conteo. A un usuario que no es administrativo, mientras
+ * la caja no se cerró, no le llega nada de lo que permitiría deducir el esperado:
+ *
+ *   · `montoEsperado` y `diferencia` en `null`. La diferencia sola alcanza:
+ *     esperado = contado − diferencia, y el contado lo escribió esa persona.
+ *   · El mensaje del servicio se reemplaza: dice «un FALTANTE de Q…».
+ *   · `REQUIERE_AUTORIZACION_DE_RECONTEO` se presenta como
+ *     `REQUIERE_AUTORIZACION`. El servicio devuelve el primero SOLO cuando el
+ *     conteo de ahora cuadra, así que distinguirlos le diría a la cajera que el
+ *     número que tecleó ES el esperado.
+ *   · Del primer conteo sellado viaja lo contado, sin esperado ni diferencia.
+ *
+ * El PIN que se pide es el mismo en los dos códigos (`cierre_con_diferencia`),
+ * así que unificarlos no cambia el flujo de la pantalla.
+ *
+ * Un administrativo lo recibe entero: es quien autoriza y tiene que ver qué
+ * aprueba (§4.9). Una caja YA cerrada también viaja entera, a cualquier rol: la
+ * confirmación muestra el teórico cuando el conteo ya quedó registrado.
+ */
+export function resultadoDeCierreParaLaVentana(
+  resultado: ResultadoDeCierreIpc,
+  quienMira: UsuarioEnSesion | null,
+): ResultadoDeCierreIpc {
+  if (resultado.cerrada || puedeVerElTeorico(quienMira)) {
+    return resultado;
+  }
+  const pideAutorizacion =
+    resultado.codigo === 'REQUIERE_AUTORIZACION' ||
+    resultado.codigo === 'REQUIERE_AUTORIZACION_DE_RECONTEO';
+  return {
+    ...resultado,
+    codigo: resultado.codigo === 'REQUIERE_AUTORIZACION_DE_RECONTEO' ? 'REQUIERE_AUTORIZACION' : resultado.codigo,
+    mensaje: pideAutorizacion ? MENSAJE_DE_CIERRE_SIN_TEORICO : resultado.mensaje,
+    montoEsperado: null,
+    diferencia: null,
+    primerConteo:
+      resultado.primerConteo === null
+        ? null
+        : {
+            fecha: resultado.primerConteo.fecha,
+            montoReal: resultado.primerConteo.montoReal,
+            montoEsperado: null,
+            diferencia: null,
+          },
   };
 }
