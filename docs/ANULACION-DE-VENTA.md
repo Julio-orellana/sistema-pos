@@ -122,6 +122,13 @@ aparece en `errores.ts` y en ese servicio.
 La anulación sí lo registra (sección 2.5). El hueco de la venta queda señalado
 para arreglarlo por separado.
 
+> **ARREGLADO EL 2026-09-15.** La venta escribe el asiento `conflicto_de_inventario`
+> después de revertir, en su propio lote, con `operacion: 'venta'` (CLAUDE.md
+> §4.3). Dos cosas quedaron abiertas: sus claves no coinciden con las de la
+> anulación (punto 23 de §6.2 de CLAUDE.md), y un segundo escritor en otra
+> conexión no llega a ningún asiento, porque la transacción abre `BEGIN` y no
+> `BEGIN IMMEDIATE` (punto 22).
+
 ### 0.5 El comentario de la migración 015 dice que `cantidad_vendida` «nunca baja»
 
 ```sql
@@ -726,6 +733,12 @@ frenar. Es lo que ya hace la salida controlada.
 no como otra acción. Así, cuando se corrija el hueco de la venta (0.4), la
 venta usa la misma acción con `operacion: 'venta'`. Es el criterio de §4.1: el
 origen es un dato del asiento.
+
+> **Desde el 2026-09-15 la venta ya lo usa**, con `valor_nuevo`
+> `{ operacion, productoId, nombre, comparacion, saldoQueSeLeyo,
+> cantidadVendidaQueSeLeyo, momento }`. La anulación escribe `saldoLeido`,
+> `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Alinearlas está
+> pendiente (punto 23 de §6.2 de CLAUDE.md).
 
 Los tres asientos sueltos son **exactamente el caso para el que existe
 `sincronizar_asiento`**: hechos del negocio sin fila principal (0027).
