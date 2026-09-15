@@ -595,6 +595,98 @@ async function main() {
       pidioPin === 0,
     );
     await prueba('aceptar-confirmacion-de-cierre').click();
+
+    // =======================================================================
+    // CORREGIDO EL 2026-09-15 — CAMBIA EL ESPERADO, NO LO CONTADO.
+    // Sobrante sellado (Q520 contra Q500), una venta en efectivo de Q20 entra
+    // en el medio, y se confirma OTRA VEZ Q520, que ahora cuadra. Antes del
+    // arreglo el cierre pedía el PIN y cerraba sin dejar escrito quién autorizó.
+    // =======================================================================
+    anotar('--- cambia el esperado: sobrante Q520 contra Q500, venta de Q20 en el medio, se reconfirma Q520 ---');
+    await prueba('estado-sin-caja').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('modo-simple').click();
+    for (const digito of '500') {
+      await prueba(`tecla-${digito}`).click();
+    }
+    await prueba('confirmar-caja').click();
+    await prueba('estado-caja-propia').waitFor({ timeout: ESPERA_CORTA });
+    const [turnoDelEsperado] = leerBase("SELECT id FROM caja_sesiones WHERE estado = 'abierta'");
+    await prueba('ir-a-contar').click();
+    await prueba('modo-simple').click();
+    for (const digito of '520') {
+      await prueba(`tecla-${digito}`).click();
+    }
+    await prueba('confirmar-caja').click();
+    await prueba('autorizacion-de-diferencia').waitFor({ timeout: ESPERA_CORTA });
+    anotar(`primer conteo: diferencia mostrada ${await texto('diferencia')}`);
+
+    const conexionDelEsperado = new DatabaseConstructor(rutaDeLaBase);
+    const momentoDelEsperado = new Date().toISOString();
+    try {
+      conexionDelEsperado
+        .prepare(
+          `INSERT INTO ventas (id, caja_sesion_id, usuario_id, fecha, subtotal, total, forma_pago,
+                               estado, creado_en, actualizado_en)
+           VALUES (?, ?, ?, ?, '20.00', '20.00', 'efectivo', 'completada', ?, ?)`,
+        )
+        .run(randomUUID(), turnoDelEsperado.id, idAdministrador, momentoDelEsperado, momentoDelEsperado, momentoDelEsperado);
+    } finally {
+      conexionDelEsperado.close();
+    }
+    anotar('se insertó en la base una venta en efectivo de Q20.00 en ese turno, entre el sello y la reconfirmación');
+
+    await ventana.getByRole('button', { name: 'Volver a contar' }).click();
+    await prueba('paso-de-conteo').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('modo-simple').click();
+    for (const digito of '520') {
+      await prueba(`tecla-${digito}`).click();
+    }
+    await prueba('confirmar-caja').click();
+    await prueba('autorizacion-de-reconteo').waitFor({ timeout: ESPERA_CORTA });
+    const dialogoDelEsperado = await texto('autorizacion-de-reconteo');
+    const motivoDelEsperado = await texto('reconteo-motivo');
+    anotar(`texto del diálogo de reconteo: ${JSON.stringify(dialogoDelEsperado)}`);
+    comprobar(
+      'EL DIÁLOGO DICE QUE CAMBIÓ LO ESPERADO, no que se corrigió el conteo: esperado entonces Q500.00, ahora Q520.00',
+      '«Lo contado no cambió… era Q500.00 y ahora es Q520.00»; sin «El conteo cambió» ni «Corregir un conteo»',
+      `motivo «${motivoDelEsperado}»; esperado entonces ${await texto('reconteo-esperado-entonces')}; ahora ${await texto('reconteo-esperado-ahora')}`,
+      motivoDelEsperado.includes('Lo contado no cambió') &&
+        motivoDelEsperado.includes('era Q500.00 y ahora es Q520.00') &&
+        (await texto('reconteo-esperado-entonces')).includes('500.00') &&
+        (await texto('reconteo-esperado-ahora')).includes('520.00') &&
+        !dialogoDelEsperado.includes('El conteo cambió') &&
+        !dialogoDelEsperado.includes('Corregir un conteo'),
+    );
+    await capturar('4d-cambio-el-esperado-pide-pin');
+    await teclearPin(PIN);
+    await prueba('revelacion-de-autorizacion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('confirmar-cierre-autorizado').click();
+    await prueba('confirmacion-de-cierre').waitFor({ timeout: ESPERA_CORTA });
+
+    const bitacoraDelEsperado = leerBase(
+      `SELECT accion, usuario_id, valor_anterior, valor_nuevo FROM auditoria_log
+        WHERE entidad_tipo = 'caja_sesiones' AND entidad_id = ? ORDER BY fecha, rowid`,
+      turnoDelEsperado.id,
+    );
+    for (const asiento of bitacoraDelEsperado) {
+      anotar(`auditoria_log: ${asiento.accion} | anterior=${String(asiento.valor_anterior)} | nuevo=${String(asiento.valor_nuevo)}`);
+    }
+    anotar(`caja_sesiones: ${JSON.stringify(leerBase('SELECT estado, monto_esperado, monto_real, diferencia, diferencia_autorizada_por, diferencia_autorizada_via FROM caja_sesiones WHERE id = ?', turnoDelEsperado.id)[0])}`);
+    const reconteoDelEsperado = bitacoraDelEsperado.find((a) => a.accion === 'reconteo_de_cierre_autorizado');
+    const nuevoDelEsperado = reconteoDelEsperado ? JSON.parse(reconteoDelEsperado.valor_nuevo) : null;
+    comprobar(
+      'QUIÉN AUTORIZÓ QUEDA ESCRITO aunque el número contado sea el mismo que el sellado',
+      `reconteo con autorizadaPor ${idAdministrador}, presencial, cambioElConteo false, cambioElEsperado true`,
+      nuevoDelEsperado
+        ? `reconteo con autorizadaPor ${String(nuevoDelEsperado.autorizadaPor)}, ${String(nuevoDelEsperado.autorizadaVia)}, cambioElConteo ${String(nuevoDelEsperado.cambioElConteo)}, cambioElEsperado ${String(nuevoDelEsperado.cambioElEsperado)}`
+        : 'NO HAY ASIENTO DE RECONTEO (el defecto)',
+      nuevoDelEsperado !== null &&
+        nuevoDelEsperado.autorizadaPor === idAdministrador &&
+        nuevoDelEsperado.autorizadaVia === 'presencial' &&
+        nuevoDelEsperado.cambioElConteo === false &&
+        nuevoDelEsperado.cambioElEsperado === true,
+    );
+    await prueba('aceptar-confirmacion-de-cierre').click();
     await volver();
 
     // =======================================================================
