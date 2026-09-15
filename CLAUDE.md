@@ -7252,6 +7252,9 @@ negocio:
   existe como operación de datos y los reportes ya filtran por
   `estado = 'completada'` para el día que exista, pero no hay servicio, canal ni
   pantalla que la use, ni reglas de autorización, ni devolución de inventario.
+  **El diseño está escrito y PENDIENTE DE APROBACIÓN** en
+  `docs/ANULACION-DE-VENTA.md` (2026-09-15), sin código ni migraciones: no usa
+  ese método ni ese filtro, y dice por qué.
 - **No existen las alertas de stock mínimo, los gráficos ni la exportación de
   reportes a un archivo.** El umbral de cada producto es una definición de
   negocio que falta: punto 18 de la sección 6.2.
@@ -7505,6 +7508,7 @@ supabase/       espejo del esquema en Postgres (migraciones para la nube)
   esquema-nube.json  la FOTO del catálogo de la nube que coteja la prueba de deriva
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
   SINCRONIZACION.md  diseño de la sincronización. APROBADO; fases 1.a, 1.b, 2.a y 2.b construidas
+  ANULACION-DE-VENTA.md  diseño de la anulación de una venta. PROPUESTA, sin código
 ```
 
 ## 10. Antes de cerrar cualquier sesión de trabajo
