@@ -631,6 +631,215 @@ describe('EL CONTEO CONFIRMADO CON DIFERENCIA QUEDA SELLADO', () => {
 });
 
 // ===========================================================================
+/**
+ * EL AUTORIZANTE NO SE PIERDE CUANDO CAMBIA EL ESPERADO (corregido el 2026-09-15).
+ *
+ * El defecto, medido antes del arreglo: un conteo con diferencia queda sellado,
+ * después cambia lo que el sistema espera (una venta en efectivo registrada en el
+ * medio) y se confirma OTRA VEZ el mismo número, que ahora cuadra. El cierre
+ * exigía el PIN y cerraba, pero el asiento de la autorización solo se escribía
+ * si había cambiado el número CONTADO, así que quien tecleó el PIN no quedaba en
+ * ningún asiento ni en `caja_sesiones`.
+ */
+describe('EL AUTORIZANTE DE UN CONTEO SELLADO QUEDA REGISTRADO, cambie lo contado o lo esperado', () => {
+  const simple = (monto: string): EfectivoDeclarado => ({ modo: 'simple', monto });
+
+  function turnoDeQuinientos(): string {
+    return caja.abrir(idCajera, { modo: 'simple', monto: '500' }).id;
+  }
+
+  /** Una venta en efectivo del turno: sube lo que el sistema espera. */
+  function ventaEnEfectivo(sesionId: string, total: string): string {
+    return repos.ventas.crear({
+      cajaSesionId: sesionId,
+      usuarioId: idCajera,
+      subtotal: total,
+      total,
+      formaPago: 'efectivo',
+    }).id;
+  }
+
+  interface AsientoLeido {
+    readonly usuario_id: string | null;
+    readonly valor_anterior: string | null;
+    readonly valor_nuevo: string;
+  }
+
+  function asientos(accion: string, sesionId: string): AsientoLeido[] {
+    return base
+      .prepare(
+        'SELECT usuario_id, valor_anterior, valor_nuevo FROM auditoria_log WHERE accion = ? AND entidad_id = ? ORDER BY rowid',
+      )
+      .all(accion, sesionId) as AsientoLeido[];
+  }
+
+  /** En cuántos asientos aparece un id, en cualquier columna. */
+  function asientosQueNombran(id: string): number {
+    return (
+      base
+        .prepare(
+          `SELECT COUNT(*) AS n FROM auditoria_log
+            WHERE usuario_id = ? OR instr(coalesce(valor_nuevo, ''), ?) > 0 OR instr(coalesce(valor_anterior, ''), ?) > 0`,
+        )
+        .get(id, id, id) as { n: number }
+    ).n;
+  }
+
+  it('EL ESCENARIO MEDIDO: sobrante sellado, venta en efectivo por ese monto, mismo número otra vez: el asiento registra quién autorizó y por qué vía', () => {
+    const sesionId = turnoDeQuinientos();
+
+    const primero = caja.intentarCerrar(sesionId, simple('520'), { usuarioQueCierra: idCajera });
+    expect(primero.codigo).toBe('REQUIERE_AUTORIZACION');
+    expect(primero.diferencia).toBe('20.00');
+
+    ventaEnEfectivo(sesionId, '20.00');
+
+    const otraVez = caja.intentarCerrar(sesionId, simple('520'), { usuarioQueCierra: idCajera });
+    expect(otraVez.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');
+    expect(otraVez.montoEsperado).toBe('520.00');
+    expect(otraVez.diferencia).toBe('0.00');
+
+    expect(autenticacion.autorizarComoAdministrador(PIN_REMOTO_DE_JIMMY, 'cierre_con_diferencia').autenticado).toBe(true);
+    const cerrado = caja.intentarCerrar(sesionId, simple('520'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'remoto' },
+    });
+    expect(cerrado.cerrada).toBe(true);
+
+    const reconteos = asientos('reconteo_de_cierre_autorizado', sesionId);
+    expect(reconteos).toHaveLength(1);
+    const reconteo = reconteos[0];
+    expect(JSON.parse(reconteo?.valor_nuevo ?? '{}')).toEqual(
+      expect.objectContaining({
+        montoEsperado: '520.00',
+        montoReal: '520.00',
+        diferencia: '0.00',
+        autorizadaPor: idJimmy,
+        autorizadaVia: 'remoto',
+        cambioElConteo: false,
+        cambioElEsperado: true,
+      }),
+    );
+    expect(JSON.parse(reconteo?.valor_anterior ?? '{}')).toEqual({
+      conteosSellados: [expect.objectContaining({ montoEsperado: '500.00', montoReal: '520.00', diferencia: '20.00' })],
+    });
+
+    const cierre = JSON.parse(asientos('caja_cerrada', sesionId)[0]?.valor_nuevo ?? '{}') as Record<string, unknown>;
+    expect(cierre).toEqual(
+      expect.objectContaining({ conteosSellados: 1, huboReconteo: false, cambioElEsperado: true }),
+    );
+
+    // Lo que el defecto medía: el id de quien tecleó el PIN estaba en 0 asientos.
+    expect(asientosQueNombran(idJimmy)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('LA OTRA DIRECCIÓN: el esperado BAJA entre el sello y la reconfirmación (hoy lo produce anular() del repositorio) y el autorizante queda igual', () => {
+    const sesionId = turnoDeQuinientos();
+    const ventaId = ventaEnEfectivo(sesionId, '27.50');
+
+    const primero = caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
+    expect(primero.diferencia).toBe('-27.50');
+
+    repos.ventas.anular(ventaId);
+
+    const otraVez = caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
+    expect(otraVez.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');
+
+    const cerrado = caja.intentarCerrar(sesionId, simple('500'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'presencial' },
+    });
+    expect(cerrado.cerrada).toBe(true);
+
+    expect(JSON.parse(asientos('reconteo_de_cierre_autorizado', sesionId)[0]?.valor_nuevo ?? '{}')).toEqual(
+      expect.objectContaining({
+        autorizadaPor: idJimmy,
+        autorizadaVia: 'presencial',
+        cambioElConteo: false,
+        cambioElEsperado: true,
+      }),
+    );
+  });
+
+  it('EL MENSAJE dice que lo que cambió es lo ESPERADO, y no habla de «corregir un conteo»', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('520'), { usuarioQueCierra: idCajera });
+    ventaEnEfectivo(sesionId, '20.00');
+
+    const otraVez = caja.intentarCerrar(sesionId, simple('520'), { usuarioQueCierra: idCajera });
+
+    expect(otraVez.mensaje).toContain('Lo contado no cambió');
+    expect(otraVez.mensaje).toContain('era Q500.00 y ahora es Q520.00');
+    expect(otraVez.mensaje).not.toContain('Corregir un conteo');
+    expect(otraVez.mensaje).not.toContain('cambió lo contado');
+  });
+
+  it('REGRESIÓN, el caso que ya funcionaba: cambia lo CONTADO y el esperado no; se registra igual que antes, y el mensaje dice que cambió lo contado', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+
+    const corregido = caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
+    expect(corregido.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');
+    expect(corregido.mensaje).toContain('cambió lo contado');
+    expect(corregido.mensaje).toContain('Corregir un conteo');
+    expect(corregido.mensaje).not.toContain('Lo contado no cambió');
+
+    caja.intentarCerrar(sesionId, simple('500'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'presencial' },
+    });
+
+    const reconteos = asientos('reconteo_de_cierre_autorizado', sesionId);
+    expect(reconteos).toHaveLength(1);
+    expect(JSON.parse(reconteos[0]?.valor_nuevo ?? '{}')).toEqual(
+      expect.objectContaining({
+        montoReal: '500.00',
+        diferencia: '0.00',
+        autorizadaPor: idJimmy,
+        autorizadaVia: 'presencial',
+        cambioElConteo: true,
+        cambioElEsperado: false,
+      }),
+    );
+    expect(JSON.parse(asientos('caja_cerrada', sesionId)[0]?.valor_nuevo ?? '{}')).toEqual(
+      expect.objectContaining({ huboReconteo: true, cambioElEsperado: false }),
+    );
+  });
+
+  it('cambian LAS DOS cosas: el mensaje lo dice y el asiento marca las dos', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+    ventaEnEfectivo(sesionId, '10.00');
+
+    const otraVez = caja.intentarCerrar(sesionId, simple('510'), { usuarioQueCierra: idCajera });
+    expect(otraVez.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');
+    expect(otraVez.mensaje).toContain('cambiaron las dos cosas');
+
+    caja.intentarCerrar(sesionId, simple('510'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'presencial' },
+    });
+    expect(JSON.parse(asientos('reconteo_de_cierre_autorizado', sesionId)[0]?.valor_nuevo ?? '{}')).toEqual(
+      expect.objectContaining({ autorizadaPor: idJimmy, cambioElConteo: true, cambioElEsperado: true }),
+    );
+  });
+
+  it('REGRESIÓN: cerrar con el MISMO número sellado que SIGUE con diferencia no inventa un reconteo; el autorizante queda en caja_sesiones, como siempre', () => {
+    const sesionId = turnoDeQuinientos();
+    caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
+    caja.intentarCerrar(sesionId, simple('480'), {
+      usuarioQueCierra: idCajera,
+      autorizacion: { autorizadaPor: idJimmy, via: 'presencial' },
+    });
+
+    expect(asientos('reconteo_de_cierre_autorizado', sesionId)).toEqual([]);
+    const sesion = repos.cajaSesiones.obtenerPorId(sesionId);
+    expect(sesion?.diferenciaAutorizadaPor).toBe(idJimmy);
+    expect(sesion?.diferenciaAutorizadaVia).toBe('presencial');
+  });
+});
+
+// ===========================================================================
 describe('monto_esperado = monto inicial + ventas en efectivo del turno', () => {
   it('un turno SIN ventas espera exactamente el fondo con que se abrió', () => {
     const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '750.25' });

@@ -51,7 +51,12 @@ export const ACCIONES_DE_CAJA = {
   cierreDeCaja: 'caja_cerrada',
   /** Un conteo de cierre CONFIRMADO que dio diferencia. Es el sello. */
   conteoSellado: 'conteo_de_cierre_sellado',
-  /** Se cerró con un conteo distinto de uno ya sellado, con autorización. */
+  /**
+   * Se cerró un turno con conteos sellados usando una autorización que los
+   * sellos exigieron: porque cambió lo contado, porque cambió lo esperado, o
+   * las dos cosas. Es la única constancia de quién autorizó cuando el cierre
+   * cuadra (§4.39).
+   */
   reconteoAutorizado: 'reconteo_de_cierre_autorizado',
 } as const;
 
@@ -515,10 +520,7 @@ export class ServicioDeCaja {
         return {
           cerrada: false,
           codigo: 'REQUIERE_AUTORIZACION_DE_RECONTEO',
-          mensaje:
-            `Antes se confirmó un conteo de Q${primero.montoReal} con ` +
-            `${this.describirDiferencia(new Decimal(primero.diferencia))}. ` +
-            'Corregir un conteo que mostraba una diferencia exige la autorización de un administrador, aunque ahora cuadre.',
+          mensaje: this.describirReconteo(sellados, montoRealTexto, montoEsperadoTexto),
           sesion: null,
           diferencia: diferenciaTexto,
           montoEsperado: montoEsperadoTexto,
@@ -528,8 +530,32 @@ export class ServicioDeCaja {
       }
     }
 
-    /** ¿Algún conteo sellado es distinto del que se está cerrando? */
+    /** ¿Algún conteo sellado CONTÓ un número distinto del que se está cerrando? */
     const huboReconteo = sellados.some((sellado) => sellado.montoReal !== montoRealTexto);
+    /** ¿Algún conteo sellado se hizo contra un ESPERADO distinto del de ahora? */
+    const cambioElEsperado = sellados.some((sellado) => sellado.montoEsperado !== montoEsperadoTexto);
+
+    /*
+      ¿SE ESCRIBE EL ASIENTO DE LA AUTORIZACIÓN? Hasta el 2026-09-15 dependía
+      solo de `huboReconteo`, y eso perdía al autorizante en un caso medido: un
+      conteo sellado, después cambia el ESPERADO (una venta en efectivo en el
+      medio) y se confirma el MISMO número, que ahora cuadra. Ese cierre pasa
+      por `REQUIERE_AUTORIZACION_DE_RECONTEO` y exige el PIN, pero como lo
+      contado no cambió no se escribía ningún asiento, y `caja_sesiones` no
+      puede guardarlo porque cuadra (CHECK de la 008).
+
+      La regla ahora no depende de por qué: si hubo sellos y el cierre CUADRA,
+      llegar hasta acá exigió una autorización —sin ella se devolvió arriba—, y
+      esa autorización queda en su asiento SIEMPRE. Se conserva además el caso
+      que ya funcionaba —cambió lo contado y el final sigue con diferencia—, en
+      el que el autorizante está también en `caja_sesiones`.
+
+      Lo que NO se registra como reconteo, igual que antes: cerrar con el mismo
+      número sellado que sigue con diferencia. Ahí no se corrigió nada, y quién
+      autorizó queda en `caja_sesiones`.
+    */
+    const autorizacionExigidaPorUnSello = sellados.length > 0 && !hayDiferencia;
+    const registrarAutorizacionDeReconteo = huboReconteo || autorizacionExigidaPorUnSello;
 
     /*
       Igual que en `abrir`: las tres escrituras del cierre —el desglose, la
@@ -582,6 +608,7 @@ export class ServicioDeCaja {
             // el cierre fue con uno distinto (§4.39).
             conteosSellados: sellados.length,
             huboReconteo,
+            cambioElEsperado,
           },
           fecha: new Date(this.ahora()).toISOString(),
         });
@@ -594,7 +621,7 @@ export class ServicioDeCaja {
           esa autorización es este asiento. Lleva los DOS lados: cada conteo
           sellado, con su diferencia, y el final.
         */
-        const asientoDeReconteo = huboReconteo
+        const asientoDeReconteo = registrarAutorizacionDeReconteo
           ? this.auditoria.registrar({
               usuarioId: contexto.usuarioQueCierra,
               accion: ACCIONES_DE_CAJA.reconteoAutorizado,
@@ -616,6 +643,10 @@ export class ServicioDeCaja {
                 modo: efectivo.modo,
                 autorizadaPor: autorizacion?.autorizadaPor ?? null,
                 autorizadaVia: autorizacion?.via ?? null,
+                // Por qué se exigió: son causas distintas y quien audita tiene
+                // que poder separarlas sin recalcular nada.
+                cambioElConteo: huboReconteo,
+                cambioElEsperado,
               },
               fecha: new Date(this.ahora()).toISOString(),
             })
@@ -680,6 +711,54 @@ export class ServicioDeCaja {
           modo: datos.modo,
         };
       });
+  }
+
+  /**
+   * Por qué un cierre que cuadra exige autorización, dicho sin confundir las
+   * dos causas: que cambió lo CONTADO, o que cambió lo que el sistema ESPERA.
+   *
+   * Solo lo ve un administrativo: a otro rol el proceso principal le reemplaza
+   * el mensaje entero, porque nombra el esperado (§4.40.3). Las dos banderas
+   * miran TODOS los sellos, igual que `huboReconteo`; los números que se citan
+   * son los del último sello, que es lo más reciente que se confirmó.
+   */
+  private describirReconteo(
+    sellados: readonly ConteoSellado[],
+    montoRealTexto: string,
+    montoEsperadoTexto: string,
+  ): string {
+    const ultimo = sellados.at(-1);
+    if (ultimo === undefined) {
+      return 'Este turno no tiene conteos sellados.';
+    }
+    const cambioElConteo = sellados.some((sellado) => sellado.montoReal !== montoRealTexto);
+    const cambioElEsperado = sellados.some((sellado) => sellado.montoEsperado !== montoEsperadoTexto);
+    const antes =
+      `${sellados.length > 1 ? 'El último conteo confirmado fue' : 'Antes se confirmó un conteo'} de ` +
+      `Q${ultimo.montoReal} con ${this.describirDiferencia(new Decimal(ultimo.diferencia))}, ` +
+      `cuando el sistema esperaba Q${ultimo.montoEsperado}. `;
+
+    if (cambioElEsperado && !cambioElConteo) {
+      return (
+        antes +
+        'Lo contado no cambió: lo que cambió es lo que el sistema espera, que ' +
+        `era Q${ultimo.montoEsperado} y ahora es Q${montoEsperadoTexto}. ` +
+        'Cerrar un turno que tuvo un conteo con diferencia exige la autorización de un administrador, aunque ahora cuadre.'
+      );
+    }
+    if (cambioElEsperado && cambioElConteo) {
+      return (
+        antes +
+        `Desde entonces cambiaron las dos cosas: lo contado (ahora Q${montoRealTexto}) ` +
+        `y lo que el sistema espera (ahora Q${montoEsperadoTexto}). ` +
+        'Cerrar un turno que tuvo un conteo con diferencia exige la autorización de un administrador, aunque ahora cuadre.'
+      );
+    }
+    return (
+      antes +
+      `Ahora se contaron Q${montoRealTexto}: cambió lo contado. ` +
+      'Corregir un conteo que mostraba una diferencia exige la autorización de un administrador, aunque ahora cuadre.'
+    );
   }
 
   /** El primer sello, solo si su número es distinto del conteo de ahora. */
