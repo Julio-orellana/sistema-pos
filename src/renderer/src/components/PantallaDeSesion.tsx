@@ -20,6 +20,7 @@ import { PantallaDeReportes } from './PantallaDeReportes';
 import { PantallaDeLimites } from './PantallaDeLimites';
 import { PantallaDeNube } from './PantallaDeNube';
 import { PantallaDeImpresora } from './PantallaDeImpresora';
+import { PantallaDeHistorialDeCajas } from './PantallaDeHistorialDeCajas';
 import { PantallaDeSincronizacion } from './PantallaDeSincronizacion';
 import { PantallaDeVenta } from './PantallaDeVenta';
 
@@ -43,6 +44,7 @@ type Vista =
   | 'limites'
   | 'nube'
   | 'impresora'
+  | 'historial-de-cajas'
   | 'sincronizacion';
 
 /**
@@ -157,6 +159,9 @@ export function PantallaDeSesion({
   if (vista === 'nube') {
     return <PantallaDeNube alVolver={() => { setVista('menu'); }} />;
   }
+  if (vista === 'historial-de-cajas') {
+    return <PantallaDeHistorialDeCajas alVolver={() => { setVista('menu'); }} />;
+  }
   if (vista === 'impresora') {
     return <PantallaDeImpresora alVolver={() => { setVista('menu'); }} />;
   }
@@ -221,6 +226,13 @@ export function PantallaDeSesion({
               onClick={() => { setVista('usuarios'); }}
             >
               Usuarios
+            </button>
+            <button
+              type="button"
+              data-prueba="ir-a-historial-de-cajas"
+              onClick={() => { setVista('historial-de-cajas'); }}
+            >
+              Historial de cajas
             </button>
             <button
               type="button"
