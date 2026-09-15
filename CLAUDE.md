@@ -6620,13 +6620,51 @@ documentación de Microsoft. **No se midió en ninguna máquina Windows.**
 | ¿`-Command` está alcanzado por esa política? | No: `-Command` ejecuta texto como si se tecleara, y la política gobierna la carga de archivos de script. | El envío corre con `-Command`. **Es la diferencia real entre las dos**, y es la que decidió la vía. |
 | ¿`-ExecutionPolicy Bypass` lo arregla todo? | Fija la política solo para ese proceso, y **no le gana a una política puesta por directiva de grupo**. Además, la política «no es un límite de seguridad». | Se pasa `Bypass` solo para la consulta optativa del trabajo (`Get-PrintJob`/`Get-Printer`), cuyo módulo carga archivos de formato. Si una directiva lo impide, esa consulta devuelve `null` y el envío no cambia. |
 | ¿Hay algo que bloquee aunque se use `-Command`? | Sí: el **modo de lenguaje restringido** (`ConstrainedLanguage`), que imponen AppLocker o WDAC, no deja que `Add-Type` cargue C# ni llame a la API de Win32. | Ahí el envío falla con clase `entorno` y el mensaje nombra el modo restringido. **No se puede resolver desde la aplicación**: es configuración de la computadora. |
-| ¿Cómo se evita que las comillas rompan la línea? | `-EncodedCommand` existe para comandos con comillas complicadas. | Se eligió otra forma con el mismo efecto: el texto de `-Command` **no lleva ninguna comilla doble**, y el script, el nombre de la impresora y los bytes viajan en variables de entorno. Hay prueba de que el comando no tiene `"`. |
+| ¿Cómo se evita que las comillas rompan la línea? | `-EncodedCommand` recibe el comando en base64 (UTF-16LE), para comandos con comillas complicadas. | **Se usa `-EncodedCommand` con el script constante.** Cada argumento queda en letras, dígitos, `+`, `/` e `=`, así que Windows no tiene nada que escapar. Ver «El nombre de la impresora nunca es código», abajo. |
+| ¿Los argumentos que siguen a `-Command` llegan como valores? | No: se unen en un solo texto y se interpretan como código. | Por eso el nombre **no** va como argumento. `-File` sí pasa los argumentos como valores, pero corre un archivo de script, que es lo que la política alcanza. |
 
 Fuentes: [about_Execution_Policies](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies),
 [about_PowerShell_exe](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe),
 [about_Language_Modes](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_language_modes),
 [Send raw data to a printer by using the Win32 API](https://learn.microsoft.com/troubleshoot/windows/win32/win32-raw-data-to-printer),
 [WritePrinter](https://learn.microsoft.com/windows/win32/printdocs/writeprinter).
+
+#### El nombre de la impresora nunca es código (corregido el 2026-09-15)
+
+La primera versión usaba `-Command` con un texto fijo que decodificaba el script
+de una variable de entorno y lo corría con `Invoke-Expression`. **El nombre ya
+no se armaba dentro del código**: iba en `POS_IMPRESION_NOMBRE` y el script lo
+leía con `$env:`. Pero `Invoke-Expression` convierte texto en código al
+ejecutar, y Julio pidió quitarlo. Es el mismo principio de las funciones
+SECURITY DEFINER de la sincronización: el dato nunca se arma como texto de
+código.
+
+| | Antes | Desde el 2026-09-15 |
+|---|---|---|
+| Cómo llega el script | Variable de entorno + `Invoke-Expression` | **Argumento de `-EncodedCommand`**, constante calculada al cargar el módulo |
+| Texto convertido en código al ejecutar | Sí, el script propio | **Ninguno** |
+| Cómo llega el nombre | `$env:POS_IMPRESION_NOMBRE` | Igual: variable de entorno, leída como valor |
+| Caracteres en la línea de comandos | Sin comillas dobles | Solo `[-A-Za-z0-9+/=]` |
+
+**La prueba** (`cola-de-windows.test.ts`) pasa diez nombres hostiles —comillas
+simples y dobles, backticks, punto y coma, `$(…)`, `&`, `|`, saltos de línea y
+un here-string— y exige para cada uno cuatro cosas. Los argumentos tienen que
+ser idénticos a los de un nombre común. Cada argumento tiene que ser del
+alfabeto base64. El script decodificado tiene que ser la constante byte a byte,
+sin el nombre. Y el nombre tiene que llegar intacto en su variable. Además exige
+que el script no tenga `Invoke-Expression`, `iex`, `ScriptBlock::Create` ni
+`Invoke-Command`, y que `$nombre` solo se use como argumento de tres llamadas.
+
+**Falsificado:** con el nombre interpolado en `-Command` caen 11 pruebas; con
+`Invoke-Expression` sobre el nombre dentro del script caen 2.
+
+> **Lo que esta prueba NO puede decir:** qué hace PowerShell con el texto. En
+> esta Mac no hay PowerShell. Lo probado es que el nombre nunca llega al texto
+> que se ejecuta. Que PowerShell no vuelve a interpretar el valor de `$env:` es
+> documentación, no medición. **Riesgo inferido, no medido:** algunos antivirus
+> miran con sospecha `-EncodedCommand`, porque lo usa también el malware. Si
+> Defender lo bloqueara en la tienda, el síntoma sería la clase `entorno` con el
+> mensaje de PowerShell en el detalle.
 
 #### Lo que la computadora puede saber, y lo que no
 
@@ -6679,7 +6717,7 @@ exige que la lea en un solo lugar y con esa condición.
 
 | Qué | Cómo | Resultado |
 |---|---|---|
-| El envío, la clasificación, `-Command` sin `-File`, el límite de tiempo | `cola-de-windows.test.ts`, con un proceso de mentira | 22 de 22 |
+| El envío, la clasificación, `-EncodedCommand` sin `-Command` ni `-File`, los nombres hostiles, el límite de tiempo | `cola-de-windows.test.ts`, con un proceso de mentira | 36 de 36 |
 | Lista sin hardware, persistencia tras reiniciar, prueba sin impresora, confirmación, `structuredClone`, quitar sin romper los recibos (con `ServicioDeRecibos` real) | `servicio-de-impresora.test.ts` | 35 de 35 |
 | Los seis canales con guard y esquema | `impresora-guard.test.ts` | 8 de 8 |
 | Los seis canales clonables con servicios reales | `todo-canal-responde-algo-serializable.test.ts` | 62 canales, 86 llamadas, todas `ok` |
@@ -6983,9 +7021,10 @@ venta sin impresora: {"numeroRecibo":2,…,"pdfGenerado":true,"impreso":false,"m
 | **Cerrar con autorización son dos pasos: el PIN correcto revela el monto y deja una autorización PENDIENTE en el proceso principal; la caja se cierra con una segunda confirmación, y cancelar la retira.** | Mostrar el monto antes del PIN, como el descuento; cerrar con el PIN y mostrar el monto después; guardar la autorización en la ventana | Pedido de Julio. Antes del PIN no se puede mostrar: es lo que la cajera no debe ver. Cerrar primero dejaría aprobar sin ver. En la ventana, cancelar no la retiraría y quedaría usable desde la consola. Atada al turno, la sesión, el conteo y el monto mostrado; dos minutos y un solo uso. §4.40.5. | Prompt 60 — 2026-09-15 |
 | **`POS_COMPILAR_SIN_NUBE=1` compila sin la nube incrustada; lo usan los arneses de pantalla.** | Borrar `.env.empaquetado` antes de verificar; incrustar solo en `dist` | Desde §4.38 toda compilación apuntaba al proyecto de pruebas y `verify:pantallas` medía otra cosa. La variable no cambia el empaquetado. Mover la incrustación solo a `dist` sería lo más limpio y cambia cómo compila `npm run dev`: queda para decidir. | Prompt 57 — 2026-09-14 |
 | **CORREGIDO: `\\.\USB001` era probablemente incorrecto y nunca se midió en hardware real. La térmica se imprime por la cola de Windows en RAW, con PowerShell.** | Seguir escribiendo en la ruta con `node:fs`; una librería USB (libusb); un módulo nativo con `winspool` | La investigación previa a la pantalla, confirmada por fuentes externas independientes: `USB001` es un puerto del spooler, no un archivo; `usbprint.sys` se queda con la impresora USB y libusb exigiría reemplazarlo, rompiendo la cola. Un módulo nativo obliga a compilar para Windows (§4.37). Julio eligió PowerShell. §4.14 y §4.43. | Prompt 65 — 2026-09-15 |
-| **PowerShell se invoca con `-Command`, nunca con `-File`, y el comando no lleva comillas dobles.** | Un archivo `.ps1`; `-EncodedCommand` | Según la documentación de Microsoft (no medido), la política por omisión `Restricted` bloquea archivos de script pero no comandos. El script, el nombre y los bytes van en variables de entorno para que armar la línea de comandos no pueda romper nada. `ConstrainedLanguage` bloquea igual y se informa como `entorno`. §4.43. | Prompt 65 — 2026-09-15 |
+| ~~**PowerShell se invoca con `-Command`, nunca con `-File`, y el comando no lleva comillas dobles.**~~ **REEMPLAZADA el mismo día por la fila siguiente: sigue sin `-File`, pero ya no usa `-Command` con `Invoke-Expression`.** | Un archivo `.ps1`; `-EncodedCommand` | Según la documentación de Microsoft (no medido), la política por omisión `Restricted` bloquea archivos de script pero no comandos. El script, el nombre y los bytes van en variables de entorno para que armar la línea de comandos no pueda romper nada. `ConstrainedLanguage` bloquea igual y se informa como `entorno`. §4.43. | Prompt 65 — 2026-09-15 |
 | **Después de un ticket de prueba aceptado, la persona contesta cómo salió, y «símbolos raros o sin cortar» se guarda como señal de incompatibilidad ESC/POS, distinta de un fallo de conexión.** | Dar por buena la impresora si Windows aceptó el trabajo | Una térmica ESC/POS no contesta: ningún software puede saber si entendió los comandos. §4.43. | Prompt 65 — 2026-09-15 |
 | **`impresora.json` guarda el NOMBRE de la impresora; el formato viejo con `dispositivo` se sigue leyendo pero la pantalla ya no lo ofrece.** | Migrar el archivo viejo; dejar de leerlo | Dejar de leerlo cambiaría en silencio a solo PDF una terminal que alguien configuró a mano. Guardar desde la pantalla lo reemplaza. §4.43. | Prompt 65 — 2026-09-15 |
+| **PowerShell recibe el script constante con `-EncodedCommand`; el nombre de la impresora y los bytes van SOLO en variables de entorno, y ningún texto se convierte en código al ejecutar.** | `-Command` con `Invoke-Expression` del script (la versión anterior); pasar el nombre como argumento después de `-Command`; `-File` con los argumentos aparte | Pedido de Julio, con el principio de las funciones SECURITY DEFINER: el dato nunca se arma como código. La versión anterior no interpolaba el nombre, pero `Invoke-Expression` ejecutaba texto. Los argumentos después de `-Command` se interpretan como código, así que el nombre ahí sería la inyección. `-File` los pasa como valores, pero corre un archivo de script, que la política alcanza. En base64 la línea no tiene nada que escapar. Diez nombres hostiles en la prueba, falsificada. Riesgo inferido: antivirus que sospechan de `-EncodedCommand`. §4.43. | Prompt 66 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
