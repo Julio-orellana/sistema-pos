@@ -6275,6 +6275,59 @@ devuelve sin filtrar caen las 2 estructurales.
 > qué aprueba. Lo ve recién en la confirmación, ya cerrado, y queda en la
 > bitácora. Las salidas son dejarlo así, o mostrar el monto después de que el
 > PIN correcto se teclea y antes de cerrar (un paso más). Es de Julio.
+>
+> **RESUELTO EL MISMO DÍA (§4.40.5)**: Julio eligió la segunda salida.
+
+#### 5. El PIN primero, el monto después, la confirmación al final
+
+Cierra la consecuencia de §4.40.3. Es el mismo patrón de «esto es lo que estás
+autorizando» del descuento excedente y del cierre con diferencia, con el orden
+invertido: allá se ve el monto y después se pide el PIN; acá el PIN prueba que
+quien mira es un administrador, y recién entonces se ve el monto, porque el
+monto es justamente lo que no puede verse antes.
+
+**Un PIN correcto (normal o remoto) NO cierra la caja.** El flujo vive en
+`src/main/ipc/cierre-de-caja.ts` (`FlujoDeCierreDeCaja`), fuera del manejador
+IPC, para poder probarlo contra SQLite real:
+
+| Paso | Qué hace | Qué devuelve |
+|---|---|---|
+| PIN correcto | Guarda una AUTORIZACIÓN PENDIENTE. La caja sigue abierta | `AUTORIZACION_VALIDADA`, con esperado, diferencia y quién autorizó, a cualquier rol |
+| «Sí, cerrar la caja» | Consume la autorización y cierra, con el autorizante y la vía del PIN validado | El cierre |
+| «Cancelar» | Descarta la autorización EN EL PROCESO PRINCIPAL (`caja:cancelar-autorizacion-de-cierre`) | Vuelve al diálogo del PIN |
+| PIN incorrecto | Nada: ni autorización ni monto | El rechazo, filtrado como siempre |
+
+**La autorización vive en el proceso principal, no en la ventana.** Si cancelar
+solo cerrara el cuadro, seguiría viva dos minutos y cualquiera con la sesión
+podría cerrar desde la consola con un permiso que el administrador retiró.
+
+Deja de valer si cambia el turno, quien tiene la sesión, el conteo exacto o el
+esperado y la diferencia que se mostraron (una venta en el medio). Vale dos
+minutos, como la solicitud de salida controlada, y un solo uso: se consume al
+intentar confirmar, salga bien o mal. Un intento nuevo la descarta.
+
+Verificado en la aplicación real (`verify:pantallas:caja`, 44 de 44, macOS):
+
+```
+OK  EL PIN CORRECTO NO CIERRA: revela lo autorizado (esperado Q527.50, sin diferencia) y la caja SIGUE ABIERTA en la base
+OK  UN PIN INCORRECTO NUNCA MUESTRA NINGÚN MONTO: sigue el diálogo, sin revelación, sin 204.25 ni «Debería haber»
+revelación en la sesión de la CAJERA tras el PIN del administrador: {"esperado":"Q204.25","quien":"Jimmy de verificación autorizó en persona. Revisá el monto y confirmá el cierre.","estado":"abierta"}
+tras CANCELAR, window.pos.caja.confirmarCierreAutorizado(Q204.25) desde la consola: {"ok":true,"datos":{"cerrada":false,"codigo":"AUTORIZACION_NO_VIGENTE","mensaje":"No hay ninguna autorización para confirmar. Tecleá el PIN de un administrador.","diferencia":null,"montoEsperado":null,…}}
+OK  CANCELAR no cierra y retira la autorización: confirmar desde la consola después no cierra nada
+```
+
+**Un defecto que encontró la prueba nueva**: la primera versión del filtro de
+§4.40.3 le quitaba los montos a la cajera también en `AUTORIZACION_VALIDADA`,
+así que el PIN correcto no revelaba nada. Falló «con el PIN normal… el esperado»
+y se corrigió: ese código viaja entero.
+
+Falsificado: si el PIN correcto cierra directo caen 10 de las 15 pruebas del
+flujo; si cancelar no retira la autorización cae la suya.
+
+> **Lo que se asume, dicho en voz alta:** al revelarse, el monto queda en la
+> pantalla de la cajera. Si el administrador cancela, ella ya lo vio. Cualquier
+> conteo nuevo sigue sellado y exige PIN, así que queda registrado.
+
 
 #### 4. La 0031 y la 0032 en `pos-pruebas-descartable`, con evidencia del catálogo
 
@@ -6565,6 +6618,7 @@ linter: los mismos 7 avisos de antes, ninguno nuevo.
 | **`venta_detalle.costo_unitario_snap` guarda el costo al vender; el margen usa esa foto, y una línea sin foto se cuenta aparte, nunca como cero.** Migraciones 032 / 0032. **SUPERA la fila del Prompt 57 que decía «el margen usa el costo vigente».** | Seguir con el costo vigente; rellenar las ventas viejas con el costo de hoy | Con el costo vigente, corregir un precio de compra hoy cambiaría el margen de ventas ya hechas. Rellenar el pasado con el costo de hoy sería inventarlo. Es el mismo criterio de `precio_unitario_snap` (§4.13). | Prompt 58 — 2026-09-14 |
 | **A quien no es administrativo, el canal de cierre le manda esperado y diferencia en null, un mensaje sin montos, y el reconteo presentado como una autorización común** (`resultadoDeCierreParaLaVentana`). | Ocultarlo solo en la pantalla; dejar la diferencia visible; dejar los dos códigos distintos | Pedido de Julio. La diferencia con lo contado revela el esperado, y el código de reconteo solo aparece cuando el conteo nuevo cuadra, así que distinguirlo le diría a la cajera que acertó. El filtro envuelve todo el manejador y hay pruebas estructurales. **Cierra la interpretación de §4.40.1 y abre otra**: el administrador que autoriza en la sesión de la cajera no ve el monto. §4.40.3. | Prompt 59 — 2026-09-15 |
 | **La 0031 y la 0032 se aplican a `pos-pruebas-descartable` y NO al real.** | Aplicarlas a los dos; esperar al instalador nuevo | Decisión de Julio. El real no sincroniza activamente hoy y su momento se decide con el plan de entrega. Se asume que la cola de la instalación de prueba de Jimmy se detiene hasta que instale una versión con la 031 y la 032. §4.40.4. | Prompt 59 — 2026-09-15 |
+| **Cerrar con autorización son dos pasos: el PIN correcto revela el monto y deja una autorización PENDIENTE en el proceso principal; la caja se cierra con una segunda confirmación, y cancelar la retira.** | Mostrar el monto antes del PIN, como el descuento; cerrar con el PIN y mostrar el monto después; guardar la autorización en la ventana | Pedido de Julio. Antes del PIN no se puede mostrar: es lo que la cajera no debe ver. Cerrar primero dejaría aprobar sin ver. En la ventana, cancelar no la retiraría y quedaría usable desde la consola. Atada al turno, la sesión, el conteo y el monto mostrado; dos minutos y un solo uso. §4.40.5. | Prompt 60 — 2026-09-15 |
 | **`POS_COMPILAR_SIN_NUBE=1` compila sin la nube incrustada; lo usan los arneses de pantalla.** | Borrar `.env.empaquetado` antes de verificar; incrustar solo en `dist` | Desde §4.38 toda compilación apuntaba al proyecto de pruebas y `verify:pantallas` medía otra cosa. La variable no cambia el empaquetado. Mover la incrustación solo a `dist` sería lo más limpio y cambia cómo compila `npm run dev`: queda para decidir. | Prompt 57 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
@@ -6778,7 +6832,8 @@ npm run verify:pantallas # maneja la app real y comprueba qué se ve en pantalla
 npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en vivo, cierre con
                          # confirmación, EL RECUENTO SELLADO (escenario de Jimmy), el margen con
                          # la foto del costo, y quién ve el teórico: el administrativo en el
-                         # resumen y NO al contar; la cajera ni en pantalla ni por el canal.
+                         # resumen y NO al contar; la cajera ni en pantalla ni por el canal; y el
+                         # PIN correcto que revela y espera (confirmar o cancelar).
                          # Deja capturas y lee la base al final (§4.39).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
