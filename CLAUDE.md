@@ -7796,6 +7796,10 @@ directo se crea, como antes.
 - la ventana del desinstalador: «Desinstalación de POS Jimmy Cano».
 
 Solo la barra de título del instalador dice «Instalación de Vixo POS».
+**SUPERADO EL MISMO DÍA (§4.49):** desde el commit `5909f1b` dicen «Vixo POS»
+también los textos del asistente, el pie, los accesos directos, «Programas y
+características» y el desinstalador. Siguen diciendo «POS Jimmy Cano» el
+ejecutable, la carpeta de instalación y la carpeta de datos.
 
 #### Verificado inspeccionando el paquete armado (macOS)
 
@@ -7907,6 +7911,160 @@ del package.json». Falsificada con `package.json` en 1.1.1, cayó con
   pasar (misma `appId`, mismo `productName`), pero no se midió.
 - **Windows SmartScreen** con el publicador nuevo: el instalador sigue sin
   firmar, así que Windows no muestra «Vixo POS» como editor verificado.
+
+### 4.49 Los dos instaladores de la 1.1.0: prueba y producción (2026-09-15)
+
+#### La pregunta del título: sí, y hasta dónde
+
+Julio preguntó si el asistente y los accesos directos pueden decir «Vixo POS»
+sin tocar `productName`. **Sí.** Leído en `templates/nsis` de app-builder-lib
+26.15.3:
+
+| Qué ve la persona | De dónde sale | ¿Forma alguna ruta o identidad? |
+|---|---|---|
+| Textos y pie del asistente, y el desinstalador | `PRODUCT_NAME` → `Name`, `BrandingText` y dos `DetailPrint` | No |
+| Accesos directos del escritorio y del menú Inicio | `SHORTCUT_NAME` → nombre del `.lnk` y el valor `ShortcutName` del registro | No: el `.lnk` apunta a `POS Jimmy Cano.exe` |
+| «Programas y características» | `UNINSTALL_DISPLAY_NAME` → `DisplayName` | No: la clave es el GUID de `appId` |
+| Carpeta de instalación, `.exe`, desinstalador, `$APPDATA` | `PRODUCT_FILENAME` / `APP_FILENAME`, de `productName` | **Sí: no se tocaron** |
+
+`build/instalador.nsh` redefine `PRODUCT_NAME` antes de que `common.nsh` lo
+use, y `shortcutName`/`uninstallDisplayName` pasaron a «Vixo POS». La prueba
+exige que el `.nsh` no redefina ninguno de los identificadores de la última
+fila. Falsificada: redefinir `APP_FILENAME` hace caer «no redefine Name ni
+ningún identificador…»; mover `PRODUCT_NAME` adentro de la guarda del
+instalador hace caer la del nombre visible.
+
+#### Cómo se eligió la nube de cada build
+
+`electron.vite.config.ts` acepta `POS_ARCHIVO_NUBE_EMPAQUETADO=<ruta>` para leer
+otro archivo con el mismo formato. Sin la variable lee `.env.empaquetado`, como
+siempre. El build de producción se armó con un archivo temporal del scratchpad
+que tenía **solo** `POS_NUBE_URL`, `POS_NUBE_LLAVE_PUBLICABLE` y
+`POS_SYNC_PROVIDER`, copiados de `.env.nube-real` y `.env.empaquetado`. Se
+borró al terminar. Así `.env.empaquetado` nunca apuntó al real: si la
+compilación se cortaba, ningún `npm run dev` iba a quedar apuntando a
+producción.
+
+#### Los dos instaladores
+
+Los dos salieron del commit `5909f1b`, con `npm run verify` en verde (2327
+pruebas) antes de compilar.
+
+| | Prueba | Producción |
+|---|---|---|
+| Ruta | `release/1.1.0-prueba/POS-Jimmy-Cano-Setup-1.1.0-prueba.exe` | `release/1.1.0/POS-Jimmy-Cano-Setup-1.1.0.exe` |
+| Tamaño | 115 636 441 bytes (110.3 MB) | 115 636 749 bytes (110.3 MB) |
+| sha256 | `f3b3bdb8…a6e227` | `d411bc1e…4f2490` |
+| URL incrustada (leída del asar) | `https://ztidrshifrblhfraiowg.supabase.co` | `https://zgsdaelmbxufgcsideep.supabase.co` |
+| Llave incrustada | `sb_publishable`, 46 caracteres, sha256[:16] `99079c21ed207a84`; **es la del proyecto de pruebas según `get_publishable_keys`**, y no la del real | JWT `anon`, 208 caracteres, sha256[:16] `265c0e3bc1d86e8a`; payload `iss=supabase ref=zgsdaelmbxufgcsideep role=anon`; **es la del real según `get_publishable_keys`**, y no la de pruebas |
+| `verify:paquete` (a mano, por separado) | 751 entradas, 0 hallazgos, salida 0, «APUNTA A: ztidrshifrblhfraiowg (proyecto de pruebas)» | 751 entradas, 0 hallazgos, salida 0, «APUNTA A: zgsdaelmbxufgcsideep — ***EL PROYECTO REAL***» |
+| JWT en el asar | 0 | 1: el `anon` del real |
+| `productName` en el asar | «POS Jimmy Cano» | «POS Jimmy Cano» |
+
+Las llaves se muestran por huella. Son públicas, pero la regla de la sesión es
+no imprimir valores de los `.env`. La comprobación fuerte es la coincidencia
+con la lista que devuelve el propio Supabase para cada proyecto.
+
+**Mismo código:** al extraer los dos asar, `diff -rq` da un único archivo
+distinto, `dist-electron/main/index.js`. Con la URL y la llave normalizadas
+quedan 0 líneas distintas.
+
+**Credenciales de usuario: cero en los dos.** Se buscaron 20 agujas en UTF-8 y
+UTF-16LE, sin mostrar ningún valor: todos los correos y contraseñas de
+`.env.nube-pruebas` y `.env.nube-real`, más los literales de los correos,
+`service_role` y los nombres de las variables de clave. Se buscaron en los 694
+archivos del asar extraído, en los 133 archivos de `win-unpacked` (incluido
+`app.asar.unpacked`), en el header descomprimido del instalador y en el `.exe`
+crudo. Las 20 dieron 0 en los dos paquetes.
+
+**Marca y licencia, leídas del instalador de cada uno:**
+
+```
+[propiedades] POS Jimmy Cano.exe: CompanyName="Vixo POS" ProductName="POS Jimmy Cano" LegalCopyright="Copyright (c) 2026 Julio Orellana (Vixo POS)" FileVersion="1.1.0"
+«Publisher» — entrada #1276 (opcode 51): parámetros → ["Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\109d86f2-337e-5400-93e0-936527ee0792","Publisher","Vixo POS"]
+«DisplayName» — entrada #1270 (opcode 51): parámetros → ["…\\Uninstall\\109d86f2-337e-5400-93e0-936527ee0792","DisplayName","Vixo POS<3>肁"]
+«ShortcutName» — entrada #1263 (opcode 51): parámetros → ["Software\\109d86f2-337e-5400-93e0-936527ee0792","ShortcutName","Vixo POS"]
+[instalador] "Instalación de Vixo POS" · "Vixo POS 1.1.0" · "&Acepto" · "<2>ᤐ\\Vixo POS.lnk" · "<3>肕\\POS Jimmy Cano" (carpeta de instalación) · "<3>肕\\POS Jimmy Cano.exe"
+[licencia] dentro del instalador: 1875 caracteres · idéntica a build/licencia.txt: true · sha256(LF)=bd9897f4c73cd8ad39e0ce69effb8cc8a5e108b3d01ad16438322b6637bbbaa7
+control, instalador 1.0.0: Publisher → "Julio Orellana", DisplayName → "POS Jimmy Cano", mismo GUID 109d86f2-…
+```
+
+La primera lectura del publicador buscaba la cadena que venía **después** de
+«Publisher» en la tabla, y ahí apareció «Comments». NSIS no repite cadenas
+iguales, y «Vixo POS» ya estaba antes como nombre del asistente. Por eso se
+leyó la tabla de instrucciones: la escritura de `Publisher` apunta a «Vixo
+POS». El mismo GUID en 1.0.0 y 1.1.0 indica que la 1.1.0 actualiza la
+instalación existente; eso es lectura, no instalación.
+
+**Qué entró, buscado por su marca en cada asar** (los mismos 18 «SÍ» en los
+dos):
+
+| Arreglo | Marca buscada | ¿Está? |
+|---|---|---|
+| Teclado en pantalla (§4.39, §4.46) | `teclado-en-pantalla` | Sí |
+| Monto teórico oculto al contar (§4.40) | «Contar para cerrar» | Sí |
+| Confirmación del cierre (§4.39) | «Caja cerrada con éxito» | Sí |
+| Precio de compra y margen (§4.39, §4.40) | migraciones `031`, `032`; «Margen:» | Sí |
+| Código remoto en la salida (§4.41) | «dictado por teléfono» | Sí |
+| Cierre de caja ajena (§4.42) | «Vas a necesitar el», `RESPUESTA_NO_SERIALIZABLE` | Sí |
+| Selección de impresora (§4.43) | `impresora:listar` | Sí |
+| Historial de cajas (§4.44) | `cajas:historial` | Sí |
+| Arreglo del reconteo (Prompt 68) | `cambioElEsperado` | Sí |
+| Núcleo local de la anulación (§4.45) | migración `033`, `venta:anular` | Sí |
+| Asiento de conflicto unificado (§4.3) | `valorDelConflictoDeInventario` | Sí |
+| TOTP (§4.47) | migraciones `036`, `037`; emisor «Vixo POS» | Sí |
+
+#### LO QUE BLOQUEA INSTALAR EL DE PRODUCCIÓN EN LA TIENDA
+
+Medido con `list_migrations`, en solo lectura:
+
+```
+pos-jimmy-cano (zgsdaelmbxufgcsideep): 24 migraciones, la última 0029_restauracion_ventas_por_mes — SIN 0031 NI 0032
+pos-pruebas-descartable (ztidrshifrblhfraiowg): 26 migraciones, con 0031_productos_precio_compra y 0032_venta_detalle_costo_unitario_snap
+```
+
+1. **El real no tiene la `0031` ni la `0032`.** La 1.1.0 trae la 031 y la 032
+   locales, así que sube `productos.precio_compra` y
+   `venta_detalle.costo_unitario_snap`. La nube sin esas columnas lo rechaza
+   (medido en §4.39: «P0001 CONTRATO: el payload de public.productos trae
+   columnas que la tabla no tiene: precio_compra»). **La cola se detiene en el
+   primer lote de productos o de venta.** Aplicarlas al real exige ver el SQL y
+   la aprobación de Julio. No se hizo.
+2. **La anulación no tiene puerta en ninguna nube** (§4.45). No hay pantalla,
+   pero el canal se puede llamar desde la consola. Una anulación detendría la
+   cola en los dos proyectos.
+3. **La instalación de Jimmy pierde su PIN remoto fijo** al migrar a la 037, y
+   tiene que inscribirse con la app en la terminal (punto 25 de §6.2).
+
+El instalador de prueba no tiene el bloqueo 1: su proyecto ya tiene la 0031 y
+la 0032. Sí tiene el 2 y el 3.
+
+#### Lo que se encontró de paso
+
+- **`.env.nube-real` tiene las contraseñas del usuario de terminal y del de
+  restauración del proyecto real**, aunque su cabecera dice «SOLO datos
+  públicos… NINGUNA contraseña». Se comprobó por largo, sin leer los valores. No
+  entraron a ningún instalador (búsqueda de arriba). Está ignorado por git
+  (`.gitignore:55`).
+- **El correo del usuario de terminal del real en ese archivo es
+  `terminal@pos-jimmy-cano.invalid`**, y §4.38 dice
+  `terminal-1@pos-jimmy-cano.invalid`. Uno de los dos está desactualizado. No se
+  consultó `auth.users`.
+
+#### Lo que NO se verificó, y solo se ve instalando en Windows
+
+- Que los dos instaladores instalen y la aplicación arranque. En particular,
+  que `better-sqlite3` cargue (§4.37).
+- Que la 1.1.0 **actualice** la 1.0.0 de Jimmy sin duplicarse, dejando
+  legibles la base, la credencial y el secreto TOTP. Por lo leído debería (mismo
+  GUID, mismo `productName`), pero no se midió.
+- Que los accesos directos renombrados reemplacen a los viejos
+  «POS Jimmy Cano.lnk». El desinstalador viejo los borra en la actualización
+  (leído). No se midió qué pasa con un ícono anclado a la barra de tareas.
+- Cómo se ven la licencia, la casilla y los textos en pantalla. Qué muestra
+  «Programas y características». SmartScreen con un instalador sin firmar.
+- Que la terminal de prueba suba de verdad a `pos-pruebas-descartable` desde el
+  instalador. Lo medido es a qué proyecto apunta.
 
 ## 5. Registro de decisiones técnicas
 
@@ -8199,6 +8357,8 @@ del package.json». Falsificada con `package.json` en 1.1.1, cayó con
 | **A REVISAR — el copyright queda «Copyright (c) 2026 Julio Orellana (Vixo POS)».** | «Copyright (c) 2026 Vixo POS» | El pedido dice agregar la marca al copyright. Poner solo la marca como titular es una decisión legal: la licencia dice que el software es «propiedad del desarrollador», y no consta que «Vixo POS» sea una persona jurídica. Se agregó sin quitar al titular. §4.48. | Prompt 73 — 2026-09-15 |
 | **El acceso directo del escritorio es opcional con una página propia (`customPageAfterChangeDir`); electron-builder lo sigue creando y `customInstall` lo quita si se desmarcó.** | `createDesktopShortcut: false` y crearlo a mano; una casilla en la página final | Con `false`, el desinstalador de electron-builder deja de borrarlo. En la página final la elección llegaría después de instalar. En silencioso se crea, como antes. §4.48. | Prompt 73 — 2026-09-15 |
 | **El título del asistente es `Caption "Instalación de Vixo POS"`, solo en el instalador; no se cambia `Name`.** | Cambiar `Name` para que todos los textos digan «Vixo POS»; no cambiar nada | `Caption` es solo de la ventana del instalador y electron-builder no lo fija. `Name` lo fija `common.nsh`: repetirlo es una advertencia y el empaquetado corre con `-WX`. Los textos de las páginas siguen diciendo «POS Jimmy Cano». §4.48. | Prompt 73 — 2026-09-15 |
+| **El asistente, el desinstalador, los accesos directos y «Programas y características» dicen «Vixo POS»: se redefine `PRODUCT_NAME` en el `.nsh` y cambian `shortcutName`/`uninstallDisplayName`. El `.exe`, la carpeta de instalación y `productName` no cambian.** | Dejar solo `Caption`; renombrar el ejecutable | Pedido de Julio. En las plantillas NSIS esos tres valores son solo nombres visibles. Las rutas y la identidad salen de `PRODUCT_FILENAME`/`APP_FILENAME` y del GUID de `appId`, que no se tocan. Medido en los dos instaladores: mismo GUID que 1.0.0 y misma carpeta de instalación. §4.49. | Prompt 74 — 2026-09-15 |
+| **`POS_ARCHIVO_NUBE_EMPAQUETADO` elige el archivo de nube de una compilación; el de producción se arma con un archivo temporal que solo tiene URL, llave publicable y proveedor.** | Pisar `.env.empaquetado` con el real y restaurarlo | Si la compilación se cortara con el archivo pisado, el desarrollo quedaría apuntando al real. Si la variable apunta a un archivo que no existe, la compilación falla en vez de compilar sin nube. §4.49. | Prompt 74 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -8247,6 +8407,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 25 | **¿Qué pasa si Jimmy pierde el teléfono, o la instalación que ya tiene tenía un PIN remoto fijo?** | Perder el teléfono no se puede resolver a distancia: la reinscripción exige un administrador en la terminal. Mientras tanto, la vía remota de esa persona queda sin uso, y quien tenga el teléfono desbloqueado puede generar códigos hasta que se reinscriba. La instalación de prueba de Jimmy (`v1.0.0-prueba.1`) **tiene un PIN remoto fijo que deja de funcionar al instalar esta versión**: la 037 lo borra. Antes de actualizar hay que avisarle que se inscriba con la app, y decidir quién lo acompaña. | Abierto — **bloquea la entrega de esta versión a Jimmy** |
 | 26 | ~~**La licencia dice «Versión: 1.1.0» y el package.json dice 1.0.0.**~~ | ~~El instalador de verificación salió como `POS-Jimmy-Cano-Setup-1.0.0.exe` con una licencia de la 1.1.0.~~ | **RESUELTO (2026-09-15, Julio): `package.json` pasó a 1.1.0.** Una prueba exige ahora que la versión de la licencia sea la del `package.json`, así que cada release futuro obliga a actualizar el texto aprobado (§4.48). |
 | 27 | **¿Quién figura como titular en el copyright del instalador?** | Hoy «Julio Orellana (Vixo POS)» (§4.48). Poner solo «Vixo POS» depende de que la marca tenga una persona jurídica detrás o de cómo se inscriba ante el Registro de la Propiedad Intelectual. Es legal, no técnico. | Abierto — decisión de Julio |
+| 28 | **El instalador de producción 1.1.0 no puede sincronizar con `pos-jimmy-cano` hasta aplicar la `0031` y la `0032` en el real.** | Medido con `list_migrations`: el real termina en la 0029. La 1.1.0 sube columnas que el real no tiene y la cola se detiene en la primera venta (§4.49). Además, la anulación no tiene puerta en ninguna nube (§4.45). Aplicarlas exige mostrar el SQL y la aprobación de Julio. | Abierto — **bloquea instalar el de producción en la tienda** |
+| 29 | **`.env.nube-real` contiene las contraseñas de terminal y de restauración del real, aunque su cabecera dice que no.** Y su correo de terminal (`terminal@…`) no coincide con el de §4.38 (`terminal-1@…`). | Está ignorado por git y no entró a ningún instalador (§4.49). Hay que decidir si esas contraseñas deben estar en un archivo de la máquina de desarrollo, y corregir la cabecera o el archivo. | Abierto — decisión de Julio |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
