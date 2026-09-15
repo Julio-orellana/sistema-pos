@@ -7688,9 +7688,52 @@ Postgres desde la `0021`. El `0036` y el `0037` quedan reservados.
 - **El reloj de la tienda.** Un desfase de más de 30 s rechaza los códigos. El
   aviso de reloj desfasado (§4.36) solo va a la bitácora técnica y solo mide
   cuando hay nube configurada.
-- **El emisor**: en el instalador el QR dice «POS Jimmy Cano», que es
+- ~~**El emisor**: en el instalador el QR dice «POS Jimmy Cano», que es
   `app.getName()`, pero eso **no se midió en un instalador**. En desarrollo
-  dice «pos-agricola».
+  dice «pos-agricola».~~ **CORREGIDO EL 2026-09-15:** el emisor es la constante
+  `EMISOR_DEL_CODIGO_REMOTO = 'Vixo POS'`, la marca comercial que indicó Julio,
+  igual en desarrollo y en el instalador. Ver «El emisor es la marca», abajo.
+
+#### El emisor es la marca, «Vixo POS» (corregido el mismo día)
+
+**Qué cambió.** El emisor del `otpauth://` es el texto que la app de
+autenticación muestra encima del código. Antes era `app.getName()`: en
+desarrollo «pos-agricola», el nombre interno del repositorio, y en el instalador
+«POS Jimmy Cano» (esto último no medido). Julio pidió la marca comercial del
+software. Ahora es la constante `EMISOR_DEL_CODIGO_REMOTO` en `totp.ts`, y el
+canal `iniciarAutorizacionRemota` la usa.
+
+**Una premisa del pedido que no se pudo confirmar.** El pedido decía que la
+marca «ya está establecida» en la licencia del instalador y en el metadato de
+publicador. Buscado el 2026-09-15: «Vixo» no aparece en ningún archivo del
+repositorio ni en el historial de ninguna rama (`git log --all -S`). No hay
+archivo de licencia en la raíz. El publicador dice `"author": "Julio Orellana"`
+(`package.json`) y `copyright: Copyright (c) 2026 Julio Orellana`
+(`electron-builder.yml`). Por eso esta constante es, hoy, **el único lugar del
+repositorio que nombra la marca**. Si la marca se establece en otros lugares,
+conviene que lean esta misma constante o que una prueba compare los textos.
+
+**Qué NO cambia.** El emisor no entra en el cálculo del código. Los secretos
+guardados siguen valiendo. Las cuentas ya agregadas a un teléfono conservan el
+nombre con que se escanearon; para ver «Vixo POS» hay que volver a inscribirse.
+
+**Verificado en la app real** (`verify:pantallas:caja`, 57 de 57, macOS). El QR
+se leyó con CoreImage:
+
+```
+QR leído por CoreImage (lector ajeno a la librería): otpauth://totp/Vixo%20POS:Jimmy%20de%20verificaci%C3%B3n?secret=<oculto>&issuer=Vixo%20POS&algorithm=SHA1&digits=6&period=30
+OK    EL QR SE LEE con un lector ajeno y codifica la URI otpauth:// con EXACTAMENTE el secreto que se muestra en texto
+57 comprobaciones, 0 fallidas.
+```
+
+El espacio viaja como `%20` en la etiqueta y en `issuer`, como pide el formato
+de Google Authenticator.
+
+**Falsificado**: con el canal de vuelta en `app.getName()` cae «iniciar usa la
+marca comercial como emisor» (`autorizacion-remota-guard.test.ts`).
+
+**No verificado:** que Google o Microsoft Authenticator muestren «Vixo POS» en
+un teléfono real.
 
 ## 5. Registro de decisiones técnicas
 
@@ -7977,6 +8020,7 @@ Postgres desde la `0021`. El `0036` y el `0037` quedan reservados.
 | **A REVISAR — un código de inscripción equivocado DESCARTA el secreto y hay que empezar de nuevo con un QR nuevo.** | Conservar el secreto pendiente para reintentar con el mismo QR | Es la letra del pedido. La contrapartida: la cuenta ya agregada en el teléfono queda inútil y hay que borrarla, cosa que el mensaje dice. §4.47. | Prompt 71 — 2026-09-15 |
 | **La colisión de PIN ya no mira la autorización remota; para el PIN normal no cambió.** | Comparar el PIN nuevo contra los códigos actuales de cada secreto | El secreto no lo elige una persona, así que no hay colisión de elección. Comparar contra el código de ahora exigiría descifrar todos los secretos en cada alta de usuario, sin proteger nada: el código cambia en 30 s. §4.47. | Prompt 71 — 2026-09-15 |
 | **El QR lo arma el proceso principal como matriz de booleanos (`qrcode-generator`, MIT, JavaScript puro) y la ventana lo dibuja con `<rect>` de SVG.** | Mandar un `data:` o SVG en texto e inyectarlo; una librería nativa; generarlo en el renderer | La ventana no recibe HTML ni una URL que tenga que inyectar, y la política de contenido no cambia. Se comprobó en el paquete que la librería no tiene dependencias, guiones de instalación ni binarios. Que el QR se lee se midió con CoreImage, un lector ajeno. §4.47. | Prompt 71 — 2026-09-15 |
+| **El emisor del `otpauth://` es la constante `EMISOR_DEL_CODIGO_REMOTO = 'Vixo POS'`, no `app.getName()`.** | Seguir con `app.getName()`; leer la marca de `package.json` | Pedido de Julio: la app de autenticación de Jimmy mostraba el nombre interno del repositorio. `app.getName()` cambia entre desarrollo y el instalador, y ninguno de los dos es la marca. `package.json` no tiene la marca en ningún campo. La premisa de que la marca ya estaba en la licencia y el publicador no se confirmó: hoy esta constante es el único lugar que la nombra. §4.47. | Prompt 72 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

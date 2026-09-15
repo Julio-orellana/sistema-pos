@@ -75,6 +75,7 @@ import {
 import { registrarManejadoresDeVenta } from './venta';
 import { registrarManejadoresDeUsuarios } from './usuarios';
 import { matrizDeQr } from '@main/domain/usuarios/qr';
+import { EMISOR_DEL_CODIGO_REMOTO } from '@main/domain/usuarios/totp';
 import { registrarManejadoresDeNube } from './nube';
 import { registrarManejadoresDeSincronizacion } from './sincronizacion';
 import { registrarManejadoresDeRestauracion } from './restauracion';
@@ -375,9 +376,12 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     async (): Promise<RespuestaIpc<InscripcionRemotaIpc>> =>
       ejecutarConRespuesta('INSCRIPCION_REMOTA_FALLIDA', () =>
         requiereRol(dependencias.sesion, 'administrativo', () => {
-          // El emisor es el nombre de la aplicación: «POS Jimmy Cano» en el
-          // instalador. Es lo que el teléfono muestra encima del código.
-          const inscripcion = dependencias.autenticacion.iniciarInscripcionRemota(enSesionOFallar().id, app.getName());
+          // El emisor es la marca comercial, no el nombre interno de la
+          // aplicación: es lo que el teléfono muestra encima del código.
+          const inscripcion = dependencias.autenticacion.iniciarInscripcionRemota(
+            enSesionOFallar().id,
+            EMISOR_DEL_CODIGO_REMOTO,
+          );
           return {
             secreto: inscripcion.secreto,
             qr: matrizDeQr(inscripcion.uri),

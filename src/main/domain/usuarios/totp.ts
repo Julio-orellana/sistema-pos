@@ -48,6 +48,18 @@ export const BYTES_DEL_SECRETO = 20;
  */
 export const PASOS_DE_TOLERANCIA = 1;
 
+/**
+ * El emisor que muestra la app de autenticación encima del código: la marca
+ * comercial del software, «Vixo POS».
+ *
+ * Es una CONSTANTE y no `app.getName()`: el nombre de la aplicación es
+ * «pos-agricola» en desarrollo y el del producto en el instalador, y ninguno de
+ * los dos es lo que tiene que leer Jimmy en su teléfono. Cambiarla no rompe
+ * nada guardado (el emisor no entra en el cálculo del código), pero las cuentas
+ * ya agregadas en los teléfonos conservan el nombre con que se escanearon.
+ */
+export const EMISOR_DEL_CODIGO_REMOTO = 'Vixo POS';
+
 /** Un código de autorización remota bien formado: seis dígitos. */
 const FORMATO_DEL_CODIGO = /^[0-9]{6}$/;
 

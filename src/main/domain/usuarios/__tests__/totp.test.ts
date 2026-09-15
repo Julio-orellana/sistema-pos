@@ -17,6 +17,7 @@ import {
   generarSecretoTotp,
   pasoDeTiempo,
   pasoQueCoincide,
+  EMISOR_DEL_CODIGO_REMOTO,
   tieneFormatoDeCodigoTotp,
   uriOtpauth,
 } from '../totp';
@@ -136,6 +137,13 @@ describe('El secreto y la URI del QR', () => {
     expect(decodificarBase32(uno)).toHaveLength(BYTES_DEL_SECRETO);
     expect(uno).toMatch(/^[A-Z2-7]{32}$/);
     expect(uno).not.toBe(otro);
+  });
+
+  it('el emisor es la marca comercial «Vixo POS», y así sale en la URI', () => {
+    expect(EMISOR_DEL_CODIGO_REMOTO).toBe('Vixo POS');
+    expect(uriOtpauth(EMISOR_DEL_CODIGO_REMOTO, 'Jimmy', SECRETO_DEL_RFC_BASE32)).toBe(
+      'otpauth://totp/Vixo%20POS:Jimmy?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Vixo%20POS&algorithm=SHA1&digits=6&period=30',
+    );
   });
 
   it('la URI tiene el formato de Google Authenticator, con el nombre codificado', () => {

@@ -1150,10 +1150,10 @@ async function main() {
       }
       // Se anota sin el secreto: la salida del arnés también es un lugar donde no tiene que quedar.
       anotar(`QR leído por CoreImage (lector ajeno a la librería): ${lectura.replace(/secret=[A-Z2-7]+/, 'secret=<oculto>')}`);
-      const uriEsperada = `otpauth://totp/pos-agricola:Jimmy%20de%20verificaci%C3%B3n?secret=${secreto}&issuer=pos-agricola&algorithm=SHA1&digits=6&period=30`;
+      const uriEsperada = `otpauth://totp/Vixo%20POS:Jimmy%20de%20verificaci%C3%B3n?secret=${secreto}&issuer=Vixo%20POS&algorithm=SHA1&digits=6&period=30`;
       comprobar(
         'EL QR SE LEE con un lector ajeno y codifica la URI otpauth:// con EXACTAMENTE el secreto que se muestra en texto',
-        'otpauth://totp/pos-agricola:Jimmy%20de%20verificaci%C3%B3n?secret=<el del texto>&issuer=pos-agricola&algorithm=SHA1&digits=6&period=30',
+        'otpauth://totp/Vixo%20POS:Jimmy%20de%20verificaci%C3%B3n?secret=<el del texto>&issuer=Vixo%20POS&algorithm=SHA1&digits=6&period=30',
         lectura === uriEsperada ? 'idéntica' : lectura.replace(/secret=[A-Z2-7]+/, 'secret=<otro>'),
         lectura === uriEsperada,
       );

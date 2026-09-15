@@ -49,6 +49,12 @@ describe('Los canales de la autorización remota', () => {
     expect(esquemaCodigoDeInscripcion.safeParse({ codigo: '1234567' }).success).toBe(false);
   });
 
+  it('iniciar usa la marca comercial como emisor, y no el nombre interno de la aplicación', () => {
+    const bloque = bloqueDe('iniciarAutorizacionRemota');
+    expect(bloque).toContain('EMISOR_DEL_CODIGO_REMOTO');
+    expect(bloque).not.toContain('app.getName()');
+  });
+
   it('iniciar manda la matriz del QR y NO la URI: la ventana no arma nada con ella', () => {
     const bloque = bloqueDe('iniciarAutorizacionRemota');
     expect(bloque).toContain('qr: matrizDeQr(inscripcion.uri)');
