@@ -358,6 +358,8 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
+**DESDE EL 2026-09-14 HAY UNA MIGRACIÓN ESCRITA Y SIN APLICAR EN NINGÚN PROYECTO: la `0031_productos_precio_compra`** (§4.39). No es aditiva para el contrato: cambia la forma del payload de `productos`, así que se aplica en el mismo momento en que se instala la versión que trae la 031 local, primero en el proyecto de pruebas y después en el real con aprobación. Lo que sigue de este párrafo describe el estado ANTERIOR a ella.
+
 **NO QUEDA NINGUNA MIGRACIÓN PENDIENTE EN `pos-jimmy-cano`: la `0029`
 (`restauracion_ventas_por_mes`, fase 4.b, §4.35) se aplicó el 2026-09-14**, con
 la aprobación explícita de Julio, después de confirmar la 030 local sobre una
@@ -5967,6 +5969,154 @@ tendría dos y nadie sabría a cuál se conecta.
   del archivo es el mismo. Si alguna vez conviven los dos, conviene que el
   nombre lo diga.
 
+### 4.39 Lo que Jimmy encontró en el equipo real (2026-09-14)
+
+Jimmy probó el sistema en la máquina de la tienda y encontró cinco cosas. Esta
+sección las cierra, en el orden del pedido. **Todo se verificó en macOS**,
+manejando la aplicación real con `npm run verify:pantallas:caja` (29 de 29) y
+`npm run verify:pantallas` (48 de 48). Windows sigue pendiente, como siempre.
+
+#### 1. El teclado en pantalla faltaba en dos lugares
+
+Era una regresión, no una función nueva: la caja es táctil y el teclado
+numérico ya existía para el PIN y el ticket.
+
+| Dónde faltaba | Qué se hizo |
+|---|---|
+| Efectivo, modo «Escribir el total» | El `<input>` se reemplazó por `TecladoNumerico` en modo cantidad, con dos decimales. Su ✓ confirma igual que el botón de la pantalla. |
+| Efectivo, modo por denominación | Tocar la cantidad de una denominación abre el teclado numérico para escribir las piezas de una vez. El «+» y el «−» siguen. |
+| Formularios de productos y categorías | **Teclado alfanumérico nuevo**, `TecladoEnPantalla`: uno solo para toda la aplicación, anclado abajo. Cada campo que lo usa es un `CampoDeTexto`. También lo usan el buscador de productos y el modal de ajuste de inventario. |
+
+`TecladoNumerico` ganó `admiteCero`: al contar efectivo, cero piezas de Q200 es
+un conteo válido; en el ticket, cero libras sigue sin confirmarse.
+
+El teclado alfanumérico tiene tres disposiciones —texto, decimal y entero— y
+qué texto queda después de cada tecla lo decide `teclado/teclas.ts`, puro y con
+sus pruebas. Las vocales con tilde y la eñe tienen tecla propia. El campo lleva
+`inputMode="none"` para que Windows no abra además su propio teclado.
+
+**Un defecto que encontró `verify:pantallas`, y se midió la causa.** La primera
+versión cerraba el teclado al tocar fuera usando `pointerdown`. Eso quitaba el
+espacio reservado al pie antes de que llegara el clic, el botón «Guardar» se
+movía debajo del dedo y la categoría no se guardaba. Con `click` pasa. Se
+comprobó volviendo a `pointerdown`: el recorrido vuelve a fallar en el mismo
+punto.
+
+#### 2. El efectivo teórico en vivo
+
+La pantalla de caja abierta muestra las ventas en efectivo del turno y el
+**efectivo teórico ahora**. Sale de `ServicioDeCaja.resumenDelTurno`, que usa
+el MISMO `montoEsperadoDe` del cierre: el teórico del turno y el esperado del
+cierre no pueden decir dos números distintos. La pantalla vuelve a pedir el
+estado cada 10 s. Medido: una venta insertada en la base con la pantalla abierta
+apareció a los 10.0 s, sin navegar.
+
+> **UNA TENSIÓN QUE HAY QUE DECIDIR, dicha en voz alta.** Mostrar el teórico
+> MIENTRAS se cuenta le dice al cajero qué número tiene que escribir. Un cajero
+> que teclea el teórico a la primera nunca dispara el sello de la sección 4,
+> aunque en el cajón falte dinero. El control habitual es el **conteo a
+> ciegas**: contar sin ver el esperado. Se construyó tal como se pidió; la
+> decisión de ocultarlo en el paso de conteo, o de mostrarlo solo al rol
+> administrativo, es de Julio y queda como el punto 21 de §6.2.
+
+#### 3. La confirmación del cierre
+
+Un cierre exitoso termina en «Caja cerrada con éxito» con el efectivo inicial,
+el teórico y el final, y el faltante o sobrante si lo hubo. Recién al aceptarla
+la pantalla vuelve a «Abrir caja».
+
+#### 4. EL HUECO DEL RECUENTO, cerrado
+
+**El defecto.** Si al cerrar el sistema mostraba una diferencia, el cajero podía
+volver atrás y probar otro número hasta que cuadrara, sin rastro del primero.
+
+**La regla nueva, que parece de dos casos y es uno solo:**
+
+> **Un turno con algún conteo sellado solo se cierra con autorización.**
+
+Un conteo se SELLA en el momento en que se confirma y da diferencia: queda un
+asiento `conteo_de_cierre_sellado` en `auditoria_log` con el esperado, el
+contado y la diferencia. Antes de confirmar, el cajero es libre y nada se
+registra: la pantalla no le manda nada al proceso principal mientras escribe.
+Después del sello, o el conteo final es uno sellado —y ese ya tenía diferencia—,
+o es otro distinto, y cambiar el resultado después de ver un problema es lo que
+hay que autorizar. No hay tercer caso.
+
+| Pregunta | Respuesta |
+|---|---|
+| ¿Qué PIN? | El de `cierre_con_diferencia`: normal o remoto, con el mismo candado de intentos. Medido: un PIN equivocado sumó 1 intento en esa superficie. |
+| ¿Y si el número final cuadra? | Igual pide PIN (`REQUIERE_AUTORIZACION_DE_RECONTEO`). |
+| ¿Dónde queda quién autorizó? | En `reconteo_de_cierre_autorizado`, con todos los conteos sellados y el final. **No en `caja_sesiones`**: si cuadra, el CHECK de la 008 exige esas columnas vacías. |
+| ¿Sobrevive a reiniciar? | Sí. Los sellos se leen de `auditoria_log`, que es inmutable. Hay prueba con un servicio nuevo sobre la misma base. |
+| ¿Confirmar dos veces el mismo número duplica el sello? | No: se sella una vez por par esperado/contado. |
+| ¿Viaja a la nube? | Sí, los dos asientos se encolan y suben por `sincronizar_asiento`. |
+| ¿Qué ve quien autoriza? | El primer conteo con su diferencia y el conteo de ahora. La pantalla de caja avisa del sello aunque se salga y se vuelva. |
+
+Salida cruda del escenario de Jimmy en la aplicación real (teórico Q527.50,
+cuenta Q500, corrige a Q527.50):
+
+```
+auditoria_log: conteo_de_cierre_sellado | nuevo={"montoEsperado":"527.50","montoReal":"500.00","diferencia":"-27.50","modo":"simple"}
+bloqueos_de_autorizacion tras el PIN equivocado: [{"superficie":"cierre_con_diferencia","intentos_fallidos":1}]
+auditoria_log: caja_cerrada | nuevo={…,"montoReal":"527.50","diferencia":"0.00",…,"autorizadaPor":null,"conteosSellados":1,"huboReconteo":true}
+auditoria_log: reconteo_de_cierre_autorizado | anterior={"conteosSellados":[{…,"montoReal":"500.00","diferencia":"-27.50"}]} | nuevo={"montoReal":"527.50","diferencia":"0.00","autorizadaPor":"853bc6e6-…","autorizadaVia":"presencial"}
+caja_sesiones: {"estado":"cerrada","monto_esperado":"527.50","monto_real":"527.50","diferencia":"0.00","diferencia_autorizada_por":null}
+```
+
+Falsificado: quitando la rama que exige autorización tras un sello, caen 4 de
+las 13 pruebas nuevas, incluida la del escenario de Jimmy.
+
+#### 5. El precio de compra y el margen (migraciones 031 / 0031)
+
+`productos.precio_compra`, nulable, editable desde el formulario de producto
+(que ya exige rol administrativo). **`NULL` es «sin costo cargado», nunca
+cero**: un campo vacío se guarda como `NULL`, y editar sin mandar el costo lo
+conserva.
+
+El reporte de ventas por producto muestra, por fila, `margen = cobrado −
+precio_compra × cantidad`, sumado con Decimal y redondeado una sola vez. Sin
+costo, el margen dice **«sin dato»**. El margen del período suma solo lo que
+tiene costo, y dice cuántos productos quedaron fuera y cuánto vendieron.
+
+> **El margen usa el costo VIGENTE, no el del día de la venta.** `venta_detalle`
+> guarda el precio, no el costo. Si el costo cambia en el período, las ventas
+> viejas se calculan con el nuevo. Está dicho en la pantalla. Congelar el costo
+> por venta sería una columna más en `venta_detalle` y su espejo.
+
+**LA 0031 NO ESTÁ APLICADA EN NINGÚN PROYECTO, y es a propósito.** Las funciones
+de la nube exigen EXACTAMENTE las columnas de la tabla, así que una terminal y
+una nube con distinta versión detienen la cola en el primer lote de productos,
+y toda venta lleva uno. La instalación de Jimmy está subiendo al proyecto de
+pruebas desde anoche (leído del catálogo: 1 producto, 4 ventas, 29 asientos,
+último a las 02:01 UTC), y aplicar la 0031 ahí le detendría la cola.
+
+Lo que sí se midió contra Postgres, en `pos-pruebas-descartable`, dentro de un
+bloque que termina en excepción para revertirlo entero:
+
+```
+A  nube SIN 0031, payload CON precio_compra -> P0001 CONTRATO: el payload de public.productos trae columnas que la tabla no tiene: precio_compra
+B  nube CON 0031, payload CON precio_compra -> insertada, insertada; precio_compra guardado en Postgres = 4.50
+C  nube CON 0031, payload SIN precio_compra -> P0001 CONTRATO: al payload de public.productos le faltan columnas que la tabla sí tiene: precio_compra
+después: columna precio_compra = 0, productos de ensayo = 0, productos = 1, asientos = 29
+```
+
+**Las dos direcciones se recuperan sin perder nada.** La 031 local además le
+agrega `precio_compra: null` a los payloads de productos que esperaban en la
+cola, así que al quedar las dos partes iguales «Reintentar ahora» sube todo. La
+0031 se aplica en el mismo momento en que se instala la versión que trae la 031.
+`supabase/esquema-nube.json` ya declara la columna, así que `npm run verify:nube`
+contra cualquiera de los dos proyectos va a reportar esa diferencia hasta
+aplicarla; la batería destructiva también la exige.
+
+#### Una corrección de la sesión anterior: la compilación incrustaba la nube siempre
+
+Desde §4.38, con `.env.empaquetado` presente, TODA compilación quedaba apuntando
+al proyecto de pruebas, incluida la de `verify:pantallas`, que verifica las
+pantallas «sin configurar». `POS_COMPILAR_SIN_NUBE=1` compila sin nube, y lo usan
+`verify:pantallas` y `verify:pantallas:caja`. El empaquetado no cambió. **`npm
+run dev` y `npm run build` a secas siguen incrustando el proyecto de pruebas**
+mientras exista el archivo.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -6209,6 +6359,13 @@ tendría dos y nadie sabría a cuál se conecta.
 | **El nombre del producto es `POS Jimmy Cano`, y el `appId` NO cambia.** | Dejar «POS Agricola»; «POS Agrícola» con tilde; renombrar también el appId por coherencia | De `productName` salen la carpeta de datos (`%APPDATA%\POS Jimmy Cano\`, donde vive la base con todas las ventas), la llave con que DPAPI cifra la credencial de la nube (§4.23, medido) y el nombre del ejecutable: **cambiarlo en una versión futura deja huérfana la base y deja ilegible toda credencial guardada**, sin recuperación automática. «POS Agricola» sin tilde se lee como un error de tecleo y con tilde mete un carácter no ASCII en una ruta de Windows sin ganar nada; el nombre del dueño hace inconfundible el ícono en su escritorio. El `appId` es un identificador y no un nombre visible: de él salen la clave de desinstalación del registro y la agrupación en la barra de tareas, así que cambiarlo instalaría la versión nueva AL LADO de la vieja en vez de actualizarla. El nombre se inyecta al paquete con `extraMetadata` y NO al `package.json` del repositorio, así que la aplicación de desarrollo sigue siendo `pos-agricola` y no comparte datos ni credencial con la instalada. | Prompt 55 — 2026-09-14 |
 | **Empaquetar para Windows desde macOS NO necesita cross-compilar, porque no hay nada que compilar: `npmRebuild: false`.** | Dejar `npmRebuild: true` y confiar; montar una máquina Windows para el build; agregar un paso de CI en Windows | `better-sqlite3` 13 —la única dependencia nativa— trae los binarios de todas las plataformas dentro del paquete de npm (`prebuilds/`), elegidos en tiempo de ejecución por `process.platform` y hechos con N-API, así que el mismo archivo sirve para cualquier versión de Electron. Medido: en esta máquina no existe ningún `.node` compilado localmente, y el `prebuilds/win32-x64.node` es un `PE32+ DLL x86-64`. Con `npmRebuild: true` el empaquetado intentaría compilar C++ para Windows desde macOS, que es lo único que sí necesitaría una máquina Windows. **Lo que sigue sin medirse es que ese binario CARGUE en Windows**, que es distinto de que sea el archivo correcto. Si algún día entra una segunda dependencia nativa sin prebuilds, esta línea deja de alcanzar. | Prompt 55 — 2026-09-14 |
 | **La pantalla de restauración nombra el proyecto de Supabase ANTES de que el usuario escriba nada.** | Dejarlo como estaba; mostrarlo solo en el error; mostrar solo la URL | El 2026-09-14 se tecleó la credencial del proyecto de PRUEBAS contra el REAL: cada proyecto tiene su propia tabla de usuarios, así que la credencial de uno nunca sirve en el otro, y GoTrue contesta `invalid_credentials`, que la pantalla traduce a «revisá que sean los de tu usuario de restauración». O sea que el síntoma apunta a la contraseña cuando el problema es el proyecto. Mostrarlo en el error llegaría tarde: lo que hay que evitar es tipear la credencial equivocada, no explicarla después. Se muestra la REFERENCIA —lo que el panel usa como nombre y lo que una persona reconoce— con la URL al lado. El dato ya viajaba en el progreso; lo que faltaba era mostrarlo. | Prompt 54 — 2026-09-14 |
+| **Un turno con algún conteo de cierre SELLADO solo se cierra con autorización, aunque el conteo final cuadre.** El sello es un asiento `conteo_de_cierre_sellado` escrito al CONFIRMAR un conteo con diferencia. | Registrar solo el conteo final; exigir autorización solo si el final también tiene diferencia; guardar el sello en memoria o en una columna de `caja_sesiones` | Jimmy lo encontró en el equipo real: el cajero probaba números hasta cuadrar y no quedaba rastro del primero, lo que anulaba la autorización de diferencias. Exigir PIN solo si el final no cuadra deja el hueco intacto. La regla se reduce a un caso: si el final es un conteo sellado, ya tenía diferencia; si es otro, es una corrección. En memoria se borraría matando el proceso, que §4.5 permite. Una columna exigiría migración en la nube; `auditoria_log` ya es inmutable, se sincroniza y es donde un auditor busca. Usa el candado de `cierre_con_diferencia`, sin inventar otro. Ver §4.39. | Prompt 57 — 2026-09-14 |
+| **La autorización de un reconteo vive en su propio asiento, `reconteo_de_cierre_autorizado`, con todos los conteos sellados y el final.** | Guardarla en `caja_sesiones.diferencia_autorizada_por` | Si el final cuadra, el CHECK de la migración 008 exige esas columnas vacías, y relajarlo reabriría el hueco de la 007 (§4.9). El asiento es la única constancia posible, y lleva los dos lados para que quien lo lea no tenga que reconstruirlos. | Prompt 57 — 2026-09-14 |
+| **Un teclado alfanumérico en pantalla, UNO para toda la aplicación, abierto por `CampoDeTexto`; cierra al tocar fuera usando `click`, no `pointerdown`.** | Un teclado por formulario; confiar en el teclado táctil de Windows; cerrar en `pointerdown` | En la tienda no aparecía ningún teclado. Uno por campo dejaría dos abiertos a la vez. El de Windows no apareció en la prueba de Jimmy y encima taparía el nuestro, por eso `inputMode="none"`. `pointerdown` se midió: mueve el botón antes del clic y la categoría no se guarda. | Prompt 57 — 2026-09-14 |
+| **El efectivo teórico en vivo sale del MISMO cálculo que `monto_esperado`, y se refresca cada 10 s.** | Calcularlo en la pantalla; una fórmula aparte para el turno | Dos cálculos terminan diciendo dos números. La pantalla no suma. Diez segundos porque las ventas se cobran en otra pantalla de la misma terminal. **La tensión con el conteo a ciegas queda abierta como punto 21 de §6.2.** | Prompt 57 — 2026-09-14 |
+| **`productos.precio_compra` es nulable y `NULL` no es cero; el margen sin costo es «sin dato».** Migraciones 031 / 0031. | Default cero; exigir el costo al crear | El catálogo real no llegó y el costo no se conoce para todo. Cero diría que el producto no deja ganancia. El margen usa el costo vigente y lo dice. | Prompt 57 — 2026-09-14 |
+| **La 0031 NO se aplicó a `pos-pruebas-descartable`: se midió dentro de un bloque revertido.** | Aplicarla ya, como las migraciones aditivas | Las funciones de la nube exigen el payload exacto, y la instalación de Jimmy sube a ese proyecto: aplicarla le detendría la cola. A diferencia de la 0027, esta cambia la forma del payload. Se aplica al instalar la versión con la 031. | Prompt 57 — 2026-09-14 |
+| **`POS_COMPILAR_SIN_NUBE=1` compila sin la nube incrustada; lo usan los arneses de pantalla.** | Borrar `.env.empaquetado` antes de verificar; incrustar solo en `dist` | Desde §4.38 toda compilación apuntaba al proyecto de pruebas y `verify:pantallas` medía otra cosa. La variable no cambia el empaquetado. Mover la incrustación solo a `dist` sería lo más limpio y cambia cómo compila `npm run dev`: queda para decidir. | Prompt 57 — 2026-09-14 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -6250,6 +6407,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 18 | **¿Hace falta una pantalla para crear y editar precios especiales, y con qué reglas de autorización?** | `precios_especiales` existe desde el Prompt 5 y la venta los aplica desde el Prompt 19, pero **nada en producción los crea**: no hay servicio, ni canal, ni pantalla, así que hoy la tabla solo se llena desde las pruebas. Es el mismo hueco que tenía `limites_descuento` hasta el Prompt 25. Falta decidir quién puede configurar una promoción, si necesita autorización, y qué pasa con las vigencias solapadas más allá de la regla de «gana la más reciente» que el servicio ya aplica. **La sincronización lo tiene en cuenta**: la tabla está declarada como sincronizable y encolará sola el día que exista quien la escriba (§4.17). | Abierto |
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
+| 21 | **¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?** | Hoy se muestra en la misma pantalla donde se cuenta (§4.39), como se pidió. Un cajero que teclea el teórico a la primera nunca dispara el sello del recuento, aunque falte dinero. Las salidas son ocultarlo en el paso de conteo, mostrarlo solo al rol administrativo, o dejarlo. Es un control de auditoría, así que lo decide Julio. | Abierto |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -6417,6 +6575,9 @@ npm run seed:limites:limpiar  # los quita, y los dos roles vuelven a cero
                          # desde el Prompt 25 los topes se cambian desde la
                          # aplicación, con su auditoría (§4.16).
 npm run verify:pantallas # maneja la app real y comprueba qué se ve en pantalla
+npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en vivo, cierre con
+                         # confirmación, EL RECUENTO SELLADO (escenario de Jimmy) y el margen.
+                         # Deja capturas y lee la base al final (§4.39).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
