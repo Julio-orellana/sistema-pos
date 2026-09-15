@@ -37,7 +37,16 @@
 # ---------------------------------------------------------------------------
 appId: gt.posagricola.desktop
 productName: POS Jimmy Cano
-copyright: Copyright (c) 2026 Julio Orellana
+# ---------------------------------------------------------------------------
+# LA MARCA «Vixo POS» VA EN LOS METADATOS, NUNCA EN `productName`
+# ---------------------------------------------------------------------------
+# `copyright` llega a `LegalCopyright` de las propiedades del `.exe` y del
+# instalador. El publicador («Compañía» en las propiedades del `.exe`,
+# «Editor» en «Programas y características») sale de `author` del
+# package.json: ver `extraMetadata.author`, más abajo. Ninguno de los dos
+# participa de la carpeta de datos ni de la llave de `safeStorage`, que salen
+# de `productName` (§4.47 de CLAUDE.md).
+copyright: Copyright (c) 2026 Julio Orellana (Vixo POS)
 
 directories:
   buildResources: build
@@ -105,8 +114,21 @@ files:
 # NO comparten carpeta de datos ni credencial.** Es lo correcto —los datos de
 # prueba de una máquina de desarrollo no tienen por qué mezclarse con los de la
 # tienda— y hay que saberlo para no buscar en la carpeta equivocada.
+#
+# `author` se inyecta acá por la misma vía y por la misma razón: electron-builder
+# toma el publicador de `author.name` del package.json empaquetado
+# (`appInfo.companyName`, app-builder-lib 26.15.3). Se cambia SOLO en el
+# paquete: el package.json del repositorio sigue diciendo «Julio Orellana».
+# `author` no interviene en `app.getName()`, en la carpeta de instalación
+# (sale de `productName`) ni en la clave de desinstalación (sale de `appId`),
+# así que una versión con este cambio actualiza la instalación anterior en vez
+# de instalarse al lado. El valor tiene que ser igual a
+# `EMISOR_DEL_CODIGO_REMOTO` (src/main/domain/usuarios/totp.ts); lo exige
+# `instalador-marca-y-licencia.test.ts`.
 extraMetadata:
   productName: POS Jimmy Cano
+  author:
+    name: Vixo POS
 
 # El módulo nativo no puede cargarse desde dentro del asar: Windows necesita el
 # `.node` como archivo suelto en el disco.
@@ -217,8 +239,36 @@ nsis:
   # instala en vez de que aparezca instalado sin haber preguntado.
   oneClick: false
   allowToChangeInstallationDirectory: true
-  # Un acceso directo en el escritorio y otro en el menú de inicio: es una
-  # terminal de mostrador, y encontrar el programa no puede depender de buscar.
+  # ---------------------------------------------------------------------------
+  # LA LICENCIA
+  # ---------------------------------------------------------------------------
+  # Con un `.txt`, electron-builder inserta `MUI_PAGE_LICENSE` sin casilla ni
+  # botones de opción (nsisLicense.js): la página muestra el texto y el botón
+  # «Acepto». Sin pulsarlo no se avanza; la otra salida es «Cancelar».
+  #
+  # El archivo va en UTF-8 CON BOM y con CRLF. electron-builder convierte a
+  # UTF-8 con BOM sus licencias localizadas (`license_xx.txt`), pero NO la que
+  # se nombra acá, así que el BOM se escribe en el archivo. **No está medido
+  # que sin BOM falle**: armado en macOS sin BOM, el texto llegó igual con sus
+  # tildes. Se deja para no depender de cómo detecta la codificación el
+  # `makensis` de la máquina que arme el instalador. El texto exacto lo fija
+  # `instalador-marca-y-licencia.test.ts`.
+  license: build/licencia.txt
+  # La casilla del acceso directo y el título «Instalación de Vixo POS». Ver
+  # los comentarios del propio archivo.
+  include: build/instalador.nsh
+  # Solo español. Sin esto el instalador carga todos los idiomas y elige el de
+  # Windows: en un Windows en inglés el botón diría «I Agree», y la licencia
+  # dice «Al hacer clic en "Acepto"». 3082 es el identificador de Spanish
+  # (International), el que usa NSIS para `SpanishInternational`; con él se
+  # escribe también la información de versión del instalador.
+  installerLanguages:
+    - es_ES
+  language: '3082'
+  # El acceso directo del menú Inicio se crea siempre. El del escritorio lo
+  # crea electron-builder y la página de `instalador.nsh` lo quita si la
+  # persona desmarcó la casilla. Queda en `true` y no en `false` a propósito:
+  # con `false`, el desinstalador de electron-builder deja de borrarlo.
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: POS Jimmy Cano

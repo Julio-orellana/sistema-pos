@@ -1,0 +1,39 @@
+﻿CONTRATO DE LICENCIA DE USO DE SOFTWARE
+
+Software base: Vixo POS
+Implementación: POS Jimmy Cano
+Versión: 1.1.0
+
+Este programa se le entrega a el/la LICENCIATARIO/A bajo los siguientes
+términos:
+
+1. OBJETO DE LA LICENCIA. Se concede una licencia de uso PERMANENTE,
+   no exclusiva y no transferible, para utilizar este software
+   ("Vixo POS", en su implementación particular "POS Jimmy Cano") en
+   el negocio para el cual fue configurado. Esta licencia autoriza el
+   USO del software; no constituye una venta ni una transferencia de
+   propiedad del código fuente, ni de los derechos de autor sobre él.
+
+2. PROTECCIÓN LEGAL Y PROPIEDAD. El software base "Vixo POS", incluido
+   su código fuente, su arquitectura y su lógica de negocio, es
+   propiedad del desarrollador y está protegido desde su creación por
+   la Ley de Derecho de Autor y Derechos Conexos de Guatemala (Decreto
+   33-98). El desarrollador se reserva el derecho de inscribir el
+   software ante el Registro de la Propiedad Intelectual, así como de
+   reutilizar, adaptar, licenciar y comercializar el mismo software
+   base (o partes de él) con otros clientes, en cualquier rubro de
+   negocio, sin que ello afecte los derechos de uso ya concedidos por
+   este contrato.
+
+3. ALCANCE. Esta licencia cubre exclusivamente la instalación
+   configurada para el negocio indicado arriba. No incluye derecho de
+   redistribución, sublicencia, copia del código fuente, ingeniería
+   inversa, ni instalación en negocios distintos sin autorización
+   expresa del desarrollador.
+
+Los términos completos de esta licencia, incluidas las condiciones
+aplicables en caso de incumplimiento, forman parte del contrato de
+servicios ya suscrito entre las partes.
+
+Al hacer clic en "Acepto", usted confirma haber leído y aceptado estos
+términos como condición para instalar el software.
