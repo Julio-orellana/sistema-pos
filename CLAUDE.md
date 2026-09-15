@@ -6089,7 +6089,41 @@ hay que autorizar. No hay tercer caso.
 > asiento de reconteo solo se escribe si cambió el número contado
 > (`huboReconteo`), así que el id de quien autorizó no queda en ningún asiento
 > ni en `caja_sesiones`. Salida cruda y propuesta en
-> `docs/ANULACION-DE-VENTA.md` §0.7. **Sin arreglar todavía.**
+> `docs/ANULACION-DE-VENTA.md` §0.7. ~~**Sin arreglar todavía.**~~
+>
+> **ARREGLADO EL 2026-09-15 (Prompt 68).** El asiento
+> `reconteo_de_cierre_autorizado` se escribe SIEMPRE que un cierre con conteos
+> sellados CUADRA, además del caso que ya funcionaba (cambió lo contado y el
+> final sigue con diferencia). Llegar a cerrar ahí exigió el PIN, sea por lo que
+> sea. Cerrar con el mismo número sellado que SIGUE con diferencia no escribe
+> reconteo, igual que antes: el autorizante está en `caja_sesiones`.
+>
+> | | Antes | Desde el arreglo |
+> |---|---|---|
+> | Condición del asiento | `huboReconteo` (cambió lo contado) | `huboReconteo` **o** (hay sellos **y** el cierre cuadra) |
+> | Datos nuevos del asiento de reconteo | — | `cambioElConteo`, `cambioElEsperado` |
+> | Dato nuevo de `caja_cerrada` | — | `cambioElEsperado` (junto a `huboReconteo`) |
+> | Mensaje del servicio | «Corregir un conteo…» en los dos casos | «cambió lo contado» / «Lo contado no cambió: lo que cambió es lo que el sistema espera, que era Qx y ahora es Qy» / «cambiaron las dos cosas» |
+> | Diálogo de reconteo | título fijo «El conteo cambió…» | título neutro, el motivo del servicio y los dos esperados (solo lo ve un administrativo, §4.40.3) |
+> | Historial de cajas | «Recuento corregido: contó Q520, cerró con Q520» | «Cambió el esperado: contó Q520.00, teórico de Q500.00 a Q520.00» |
+>
+> Salida cruda de la app real (`verify:pantallas:caja`, macOS), escenario
+> sobrante Q520 contra Q500 y venta de Q20 en el medio:
+>
+> ```
+> auditoria_log: caja_cerrada | nuevo={…,"autorizadaPor":null,"autorizadaVia":null,"conteosSellados":1,"huboReconteo":false,"cambioElEsperado":true}
+> auditoria_log: reconteo_de_cierre_autorizado | anterior={"conteosSellados":[{…,"montoEsperado":"500.00","montoReal":"520.00","diferencia":"20.00",…}]} | nuevo={"montoEsperado":"520.00","montoReal":"520.00","diferencia":"0.00","modo":"simple","autorizadaPor":"ad16213a-…","autorizadaVia":"presencial","cambioElConteo":false,"cambioElEsperado":true}
+> ```
+>
+> Falsificado volviendo a condicionar el asiento solo a `huboReconteo`. En
+> Vitest caen las 2 pruebas del esperado (sube y baja); en la app real cae
+> «QUIÉN AUTORIZÓ QUEDA ESCRITO…» con `real: NO HAY ASIENTO DE RECONTEO`.
+> Las regresiones del caso que ya funcionaba siguen pasando.
+>
+> **Lo que los cierres ANTERIORES al arreglo no tienen**: si alguno cayó en
+> este caso, su autorizante no está escrito en ninguna parte y no se puede
+> reconstruir. Se reconoce en la bitácora por `caja_cerrada` con
+> `huboReconteo: false`, `conteosSellados > 0` y `diferencia "0.00"`.
 
 Salida cruda del escenario de Jimmy en la aplicación real (teórico Q527.50,
 cuenta Q500, corrige a Q527.50):
@@ -7164,6 +7198,7 @@ Ahora se compara sin distinguir mayúsculas.
 | **`impresora.json` guarda el NOMBRE de la impresora; el formato viejo con `dispositivo` se sigue leyendo pero la pantalla ya no lo ofrece.** | Migrar el archivo viejo; dejar de leerlo | Dejar de leerlo cambiaría en silencio a solo PDF una terminal que alguien configuró a mano. Guardar desde la pantalla lo reemplaza. §4.43. | Prompt 65 — 2026-09-15 |
 | **PowerShell recibe el script constante con `-EncodedCommand`; el nombre de la impresora y los bytes van SOLO en variables de entorno, y ningún texto se convierte en código al ejecutar.** | `-Command` con `Invoke-Expression` del script (la versión anterior); pasar el nombre como argumento después de `-Command`; `-File` con los argumentos aparte | Pedido de Julio, con el principio de las funciones SECURITY DEFINER: el dato nunca se arma como código. La versión anterior no interpolaba el nombre, pero `Invoke-Expression` ejecutaba texto. Los argumentos después de `-Command` se interpretan como código, así que el nombre ahí sería la inyección. `-File` los pasa como valores, pero corre un archivo de script, que la política alcanza. En base64 la línea no tiene nada que escapar. Diez nombres hostiles en la prueba, falsificada. Riesgo inferido: antivirus que sospechan de `-EncodedCommand`. §4.43. | Prompt 66 — 2026-09-15 |
 | **El historial de cajas lee lo guardado y NO recalcula el corte; la corrección de un recuento sellado sale del asiento `reconteo_de_cierre_autorizado`.** | Recalcular teórico y diferencia; agregar columnas a `caja_sesiones` para el reconteo | Recalcular haría que una regla nueva cambiara un corte viejo. Una columna exigiría migración en las dos nubes, y si el conteo final cuadra el CHECK de la 008 obliga a dejar la autorización vacía: el asiento es la única constancia. Un asiento ilegible se muestra como aviso, no se esconde. §4.44. | Prompt 67 — 2026-09-15 |
+| **El asiento `reconteo_de_cierre_autorizado` se escribe siempre que un cierre con sellos CUADRA, no solo cuando cambió lo contado; y el mensaje distingue «cambió lo contado» de «cambió lo esperado».** | Seguir condicionándolo a `huboReconteo`; guardar el autorizante en `caja_cerrada.autorizadaPor` | Medido: con un sello, una venta en efectivo en el medio y el mismo número reconfirmado, el cierre exigía PIN y no dejaba escrito quién lo tecleó. `caja_cerrada.autorizadaPor` refleja las columnas de la diferencia de `caja_sesiones` y cambiarle el significado confundiría a quien ya la lee; el asiento de reconteo es donde §4.39 dice que está. Las dos causas son distintas y se registran por separado. §4.39. | Prompt 68 — 2026-09-15 |
 | **Los filtros del historial son por día de APERTURA en hora de Guatemala y por quien ABRIÓ.** | Filtrar por día de cierre; filtrar por quien abrió o cerró | Una caja se identifica por su apertura, que existe también en las abiertas. Contar a quien cerró mezclaría en el filtro de Jimmy las cajas ajenas que solo cerró. Se reutiliza `resolverPeriodo`, para que un día signifique lo mismo que en los reportes (§4.15). §4.44. | Prompt 67 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
