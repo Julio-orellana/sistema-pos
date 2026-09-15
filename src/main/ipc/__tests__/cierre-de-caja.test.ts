@@ -12,6 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
+import Decimal from 'decimal.js';
 
 import { generarHashDePin } from '@shared/auth';
 import type { EfectivoDeclaradoIpc } from '@shared/types/ipc';
@@ -244,6 +245,57 @@ describe('La autorización pendiente vale para ESE cierre y nada más', () => {
     expect(confirmacion.cerrada).toBe(false);
     expect(confirmacion.mensaje).toContain('El monto cambió');
     expect(estadoDelTurno().estado).toBe('abierta');
+  });
+});
+
+// ===========================================================================
+/**
+ * EL DEFECTO QUE BLOQUEÓ A JIMMY EL 2026-09-15, fijado para que no vuelva.
+ *
+ * En `v1.0.0-prueba.1`, cerrar la caja que abrió OTRA persona devolvía el
+ * resultado del servicio con la `sesion` de dominio adentro, y sus montos son
+ * objetos Decimal: decimal.js les pone `constructor` como propiedad PROPIA, una
+ * función, y el puente IPC de Electron no clona funciones. El manejador lanzaba
+ * «An object could not be cloned», la ventana nunca recibía respuesta y el
+ * botón quedaba deshabilitado sin decir nada. Ninguna prueba lo veía porque
+ * llamaban al flujo directo, sin cruzar el puente. Esta pasa cada respuesta por
+ * `structuredClone`, que rechaza lo mismo.
+ */
+describe('TODA respuesta del cierre cruza el puente IPC (se puede clonar)', () => {
+  const cruzaElPuente = (resultado: unknown): unknown => structuredClone(resultado);
+
+  it('control del detector: un Decimal suelto NO se puede clonar, que es el caso que rompió', () => {
+    expect(() => cruzaElPuente({ montoInicial: new Decimal('100') })).toThrow();
+  });
+
+  it('CAJA AJENA: el pedido de PIN, un PIN equivocado y el cierre con PIN, los tres se clonan', () => {
+    const exacto: EfectivoDeclaradoIpc = { modo: 'simple', monto: '510.00' };
+    const pedido = flujo.intentar({ efectivo: exacto }, jimmy);
+    expect(pedido.codigo).toBe('REQUIERE_AUTORIZACION_DE_CAJA_AJENA');
+    expect(cruzaElPuente(pedido)).toEqual(pedido);
+
+    const equivocado = flujo.intentar({ efectivo: exacto, pinCajaAjena: PIN_EQUIVOCADO }, jimmy);
+    expect(equivocado.cerrada).toBe(false);
+    expect(cruzaElPuente(equivocado)).toEqual(equivocado);
+
+    const cerrado = flujo.intentar({ efectivo: exacto, pinCajaAjena: PIN_DE_JIMMY }, jimmy);
+    expect(cerrado.cerrada).toBe(true);
+    expect(cruzaElPuente(cerrado)).toEqual(cerrado);
+    expect(estadoDelTurno().estado).toBe('cerrada');
+  });
+
+  it('CIERRE PROPIO con diferencia: el pedido, la revelación, la confirmación y el «ya no vigente» se clonan', () => {
+    const pedido = flujo.intentar({ efectivo: CONTEO_DE_MENOS }, cajera);
+    const revelado = flujo.intentar({ efectivo: CONTEO_DE_MENOS, pin: PIN_DE_JIMMY }, cajera);
+    flujo.cancelarAutorizacion();
+    const noVigente = flujo.confirmarAutorizacion(CONTEO_DE_MENOS, cajera);
+    flujo.intentar({ efectivo: CONTEO_DE_MENOS, pin: PIN_DE_JIMMY }, cajera);
+    const confirmado = flujo.confirmarAutorizacion(CONTEO_DE_MENOS, cajera);
+    expect(confirmado.cerrada).toBe(true);
+    expect(noVigente.codigo).toBe(CODIGO_AUTORIZACION_NO_VIGENTE);
+    for (const resultado of [pedido, revelado, confirmado, noVigente]) {
+      expect(cruzaElPuente(resultado)).toEqual(resultado);
+    }
   });
 });
 
