@@ -151,7 +151,9 @@ que deja la base de datos sin consolidar y no registra nada en la auditoría.
   a cualquier otra aplicación abierta.
 - **Requiere PIN de administrador.** El PIN se verifica en el proceso
   principal, nunca en la interfaz. Tres intentos fallidos bloquean el atajo 30
-  segundos.
+  segundos. **Desde el 2026-09-15 acepta también el PIN REMOTO** de un
+  administrador, por decisión explícita de Julio (§4.41); el asiento registra
+  cuál se usó en `autorizadaVia`. El candado no cambió.
 - **Qué cuenta como intento fallido:** un PIN **completo y bien formado pero
   equivocado** (por ejemplo, teclear `1234` cuando el PIN es `5678`) **sí**
   consume uno de los tres intentos. **No** consumen intento las entradas que
@@ -1141,7 +1143,7 @@ validación que vive en la interfaz se salta llamando al canal directamente.
 |---|---|---|
 | `cierre_con_diferencia` | **Sí** | Es el caso para el que el PIN remoto se creó. |
 | `descuento_excedente` | **Sí**, desde el 2026-09-11 | Decisión explícita de Julio. Ver §4.13. |
-| `salida_controlada` | **No** | El PIN remoto se pidió para una sola cosa, autorizar diferencias de caja por teléfono; dárselo además a cerrar la aplicación lo ampliaría más allá de lo pedido. |
+| `salida_controlada` | **Sí**, desde el 2026-09-15 — **ampliada por decisión explícita el 2026-09-15** | Hasta ese día **No**, con esta razón, que no estaba equivocada: el PIN remoto se pidió para una sola cosa, autorizar diferencias de caja por teléfono, y dárselo además a cerrar la aplicación lo ampliaba más allá de lo pedido. Julio decidió ampliarlo: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. Ver §4.41. |
 | `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
 
 **LA POLÍTICA VIVE EN LA TABLA, NO EN QUIEN LLAMA.** Antes era un parámetro
@@ -1711,6 +1713,10 @@ determina cuál coincidió.
 > siguen sin aceptar el PIN remoto, cada una por su razón, y hay pruebas que lo
 > comprueban en el mismo archivo que comprueba la ampliación. Que esta se haya
 > concedido no es precedente para conceder la próxima sin pedirla.
+>
+> **Nota del 2026-09-15:** `salida_controlada` SÍ lo acepta desde ese día, por
+> una SEGUNDA decisión explícita (§4.41). No la heredó de esta: se pidió aparte.
+> `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo.
 
 **La contrapartida, dicha en voz alta:** un descuento es dinero que sale de la
 venta, y autorizarlo por teléfono es aprobarlo **sin ver el ticket**. Es un
@@ -4724,6 +4730,9 @@ permanente** en el respaldo de la nube. Por eso:
   PIN remoto**, por el mismo alcance mínimo que `salida_controlada` y
   `cierre_de_caja_ajena` —acá el argumento es más fuerte todavía: el hueco es
   permanente, así que quien autoriza tiene que estar viendo la pantalla—.
+  *(Desde el 2026-09-15 `salida_controlada` sí acepta el remoto, por decisión
+  explícita, §4.41; esta superficie sigue sin aceptarlo y la ampliación no se
+  hereda.)*
 - **Se pide el PIN aunque el canal YA exija `requiereRol('administrativo')`.**
   No es una comprobación de permisos redundante: es la firma deliberada que el
   diseño pide textualmente («tiene que quedar firmada»), el mismo criterio con
@@ -6364,6 +6373,67 @@ la nube declara coincide con supabase/esquema-nube.json», 0 diferencias. El
 linter: los mismos 7 avisos de antes, ninguno nuevo.
 
 
+### 4.41 La salida controlada acepta el PIN remoto (2026-09-15)
+
+**Decisión explícita de Julio**, la segunda ampliación del PIN remoto después
+del descuento excedente (§4.13): Jimmy tiene que poder autorizar el cierre de
+la aplicación cuando no está en la tienda, por ejemplo para apagar la
+computadora al final del día si no hay ningún administrador presente.
+
+**Qué cambió, y qué no:**
+
+| | Antes | Desde el 2026-09-15 |
+|---|---|---|
+| `ACEPTA_PIN_REMOTO.salida_controlada` | `false` | `true` |
+| Verificación | `autorizarComoAdministrador`, la única del sistema | La misma, sin lógica nueva |
+| Asiento `salida_controlada_autorizada` | `{ origen, detalle }` | `{ origen, detalle, autorizadaVia }` (`presencial` o `remoto`; `null` en un rechazo) |
+| Candado de la superficie | 3 intentos, 30 s, propio | **Sin cambios** |
+| Texto del diálogo | «Ingresá el PIN de administrador…» | «Ingresá el PIN de un administrador, en persona o dictado por teléfono…» |
+
+La vía se guarda con la misma clave que usa el asiento del cierre de caja,
+`autorizadaVia`. La salida no tiene fila en ninguna tabla de negocio, así que el
+asiento es el único lugar.
+
+**Verificado en la aplicación real** (`verify:pantallas:caja`, al final del
+recorrido, macOS): el administrador se configura el PIN remoto, cierra su
+sesión, se pide la salida desde el botón de la barra de estado en la pantalla de
+ingreso y se teclea el remoto.
+
+```
+texto del diálogo de salida: "Salida de administradorIngresá el PIN de un administrador, en persona o dictado por teléfono, para cerrar el punto de venta de forma ordenada.CancelarCerrar aplicación"
+el proceso de Electron terminó con 0 a los 171 ms
+auditoria_log de la salida: [{"accion":"salida_controlada_autorizada","usuario_id":"33a5e906-…","valor_nuevo":"{\"origen\":\"boton_de_interfaz\",\"detalle\":\"PIN correcto\",\"autorizadaVia\":\"remoto\"}"}]
+```
+
+**Pruebas:** el PIN normal sigue cerrando como `presencial`; el remoto cierra
+como `remoto` por las tres rutas; un rechazo lleva `autorizadaVia: null`; y los
+candados siguen independientes: bloquear la salida no bloquea la diferencia, el
+descuento ni la caja ajena, y bloquear cualquiera de las otras no bloquea la
+salida, que sigue aceptando el remoto. Las combinaciones entre las tres que
+aceptan el remoto pasaron de 2 a 6.
+
+Falsificado: con la tabla de vuelta en `false` caen 7 pruebas; sin registrar la
+vía caen 3.
+
+**La guardia del alcance funcionó.** Al cambiar la tabla falló, sin que nadie
+la buscara, una prueba del módulo de venta escrita el 2026-09-11 para vigilar
+que la ampliación del descuento no se extendiera: «salida_controlada no debe
+aceptar el PIN remoto». Se actualizó a mano, con la decisión nueva en un
+comentario, y ahora vigila `cierre_de_caja_ajena` y
+`saltar_lote_de_sincronizacion`. Es exactamente lo que tenía que pasar: una
+ampliación no puede entrar sin tocar la prueba que la prohíbe.
+
+> **Lo que queda fuera, dicho en voz alta:**
+> - **El diálogo de salida no tiene teclado en pantalla**: es un campo que se
+>   escribe con teclado físico. No es nuevo ni de este cambio, pero con el PIN
+>   dictado por teléfono en una pantalla táctil conviene revisarlo.
+> - **Quien recibe el PIN remoto dictado puede, hasta que se cambie, cerrar la
+>   aplicación** además de autorizar diferencias y descuentos. Es ordenado y
+>   auditado; si deja de haber confianza en quien lo escuchó, se cambia el PIN
+>   remoto desde «PIN de autorización remota».
+> - En Windows no se probó, como siempre.
+
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -6418,7 +6488,7 @@ linter: los mismos 7 avisos de antes, ninguno nuevo.
 | **La sesión vive en memoria y no se persiste.** | Recordar la sesión entre arranques | Es una terminal compartida: si la sesión sobreviviera al reinicio, el primero que encienda la máquina por la mañana actuaría con la identidad de quien la apagó anoche y la auditoría le atribuiría sus ventas a otra persona. | Prompt 10 — 2026-09-06 |
 | **Los permisos se comprueban con un guard que envuelve la operación** (`requiereRol`), nunca con un `if` dentro de cada manejador. | Comprobar el rol a mano en cada canal | Envuelto, es imposible olvidarlo o escribirlo distinto en cada módulo, y la operación protegida no llega a ejecutarse. Suelto, basta que un módulo futuro se distraiga. | Prompt 10 — 2026-09-06 |
 | **Dos modos de capturar efectivo, mutuamente excluyentes por construcción.** En modo detallado el sistema suma; nunca se pide además el total. | Pedir siempre el total; pedir el total y el desglose y compararlos | Si se piden las dos cosas, tarde o temprano no coinciden y hay que decidir a cuál creerle, con un cliente esperando. El tipo es una unión discriminada, así que un valor con los dos modos a la vez no se puede ni construir: no es una validación que se pueda olvidar. | Prompt 13 — 2026-09-06 |
-| **PIN de autorización remota separado del PIN normal**, en la columna `pin_remoto_hash`. | Un solo PIN para todo; una contraseña aparte más larga | El PIN normal abre la sesión del administrador. Dictarlo por teléfono se lo entrega a quien escucha, para siempre y para todo. Con uno separado, lo que se cede al dictarlo es solo la capacidad de autorizar a distancia: no sirve para entrar, y la auditoría distingue `remoto` de `presencial`. El sistema deduce cuál se usó según cuál hash coincidió, sin preguntarle al cajero. Se rechaza configurarlo igual al PIN normal, porque eso anularía toda la separación. **Solo vale en el cierre con diferencia, no en la salida controlada**, y la razón es de alcance, no física: el PIN remoto se pidió para autorizar diferencias de caja y nada más, así que dárselo a otra acción sería ampliarlo más allá de lo pedido. Cada superficie nueva se decide aparte. | Prompt 13 — 2026-09-06; alcance corregido en Prompt 14 — 2026-09-06 |
+| **PIN de autorización remota separado del PIN normal**, en la columna `pin_remoto_hash`. **Su alcance fue AMPLIADO por decisión explícita dos veces: a `descuento_excedente` el 2026-09-11 y a `salida_controlada` el 2026-09-15 — ver las filas de cada ampliación. NO revertida: la separación de los dos PIN sigue igual.** | Un solo PIN para todo; una contraseña aparte más larga | El PIN normal abre la sesión del administrador. Dictarlo por teléfono se lo entrega a quien escucha, para siempre y para todo. Con uno separado, lo que se cede al dictarlo es solo la capacidad de autorizar a distancia: no sirve para entrar, y la auditoría distingue `remoto` de `presencial`. El sistema deduce cuál se usó según cuál hash coincidió, sin preguntarle al cajero. Se rechaza configurarlo igual al PIN normal, porque eso anularía toda la separación. **Solo vale en el cierre con diferencia, no en la salida controlada**, y la razón es de alcance, no física: el PIN remoto se pidió para autorizar diferencias de caja y nada más, así que dárselo a otra acción sería ampliarlo más allá de lo pedido. Cada superficie nueva se decide aparte. | Prompt 13 — 2026-09-06; alcance corregido en Prompt 14 — 2026-09-06 |
 | **El candado por superficie se reutiliza, no se duplica**, para `cierre_con_diferencia`. | Un limitador nuevo para el cierre; compartir el de la salida controlada | El mecanismo ya era genérico salvo por el tipo de la superficie; se amplió el `CHECK` y el tipo, y se le pasa la superficie por parámetro. Cada superficie mantiene su propio contador, así que un error al autorizar un descuadre no bloquea la salida de la aplicación ni el login de nadie. | Prompt 13 — 2026-09-06 |
 | ~~**`monto_esperado` es hoy el monto inicial, con un TODO explícito.**~~ **RESUELTA en el Prompt 19:** ver la fila de la fórmula definitiva. | Inventar una suma de ventas parcial para que "quede completo" | Todavía no existe el módulo de ventas. Una lógica de ventas a medias, escrita para rellenar un hueco, quedaría enterrada y nadie la encontraría al construir el módulo real. Queda marcado en el código y en la sección 4.10, y hay una prueba que documenta el comportamiento actual para que cambiarlo obligue a tocar ambos. | Prompt 13 — 2026-09-06 |
 | **El ajuste de inventario es una ACCIÓN PROPIA, no un campo de «editar producto».** Canal IPC propio, botón propio y nombre de acción propio en la auditoría (`inventario_ajustado`). El tipo `CambiosDeProducto` ni siquiera incluye el saldo. | Un campo más en el formulario de edición; un campo editable en la lista | Recibir mercadería y corregir el catálogo son **hechos distintos del negocio**. Si compartieran operación, cambiar el inventario quedaría registrado como «producto editado» y no se podría auditar cuánta mercadería entró sin abrir y leer el contenido de cada asiento; peor, se podría mover el saldo «de paso» al corregir un precio, sin que quedara constancia de que entró nada. Separadas, el asiento guarda saldo anterior, saldo nuevo, cantidad agregada y motivo. La operación **solo suma**: las mermas y pérdidas son un módulo futuro con sus propias reglas de autorización, y dejar que esta aceptara negativos convertiría la recepción de mercadería en una vía para bajar inventario sin controles. | Prompt 15 — 2026-09-07 |
@@ -6463,6 +6533,7 @@ linter: los mismos 7 avisos de antes, ninguno nuevo.
 | **La vigencia de un precio especial se compara POR DÍA, no por instante.** Una promoción cuyo `vigente_hasta` es hoy vale todo el día. | Comparar el instante completo, como hacía `listarVigentes` | El último día de una promoción es un día de promoción. Con comparación por instante, una promoción que vence «hoy» deja de aplicarse a las 00:00 y el cliente paga de más justo el día en que el cartel del mostrador todavía dice que está rebajado. Queda anotada la salvedad de zona horaria: `date()` trabaja sobre cadenas UTC y Guatemala es UTC−6, así que el «hoy» de la base se adelanta a las 18:00 locales. Para una promoción de varios días es indiferente; para una de un solo día habrá que decidirlo cuando exista una real, y es definición de negocio. | Prompt 19 — 2026-09-10 |
 | **`descuento_excedente` es una superficie de candado propia y NO acepta el PIN remoto** (migración 013, no espejada). **AMPLIADA en el Prompt 26 — ver la fila siguiente. NO revertida: la mitad de la superficie propia sigue vigente tal cual.** | Reusar `cierre_con_diferencia`; aceptar el PIN remoto para poder autorizar por teléfono | La razón es de alcance, la misma de siempre: el PIN remoto se pidió para autorizar diferencias de caja por teléfono y nada más, y dárselo a otra acción sería ampliarlo más allá de lo pedido. Acá el argumento es incluso más fuerte que en la salida controlada: **un descuento es dinero que sale de la venta**, y autorizarlo a distancia sin ver el ticket es aprobar a ciegas; quien autoriza tiene que estar mirando la pantalla donde se le muestra el tope, el pedido y el exceso. No se reusa la superficie de la diferencia porque son candados independientes por diseño (§4.8) y fallar al autorizar un descuento no debe bloquear un corte de caja. | Prompt 19 — 2026-09-10 |
 | **AMPLIACIÓN DECIDIDA, NO CORRECCIÓN: `descuento_excedente` acepta también el PIN remoto.** La superficie propia y su candado independiente siguen exactamente igual; lo único que cambia es qué PIN acepta. | Dejarla como estaba y que el cliente espere a que Jimmy vuelva a la tienda; ampliar de paso las otras dos superficies «por coherencia» | **LA FILA DE ARRIBA NO ESTABA EQUIVOCADA.** Decía que ampliar el alcance del PIN remoto exigía una decisión explícita, y el código lo repetía en un comentario. **Julio tomó esa decisión el 2026-09-11**, con un motivo de negocio concreto: Jimmy no siempre está en la tienda y un cliente parado en el mostrador no puede esperar a que vuelva. Es el mecanismo previsto funcionando —el valor por omisión fue «no», la ampliación tuvo que pedirse, y se pidió— y por eso se anota como ampliación y no como reversión. **EL PRINCIPIO DE ALCANCE MÍNIMO POR OMISIÓN SIGUE VIGENTE PARA CUALQUIER AMPLIACIÓN FUTURA NO SOLICITADA**, y se acotó a propósito: `salida_controlada` y `cierre_de_caja_ajena` siguen sin aceptarlo, con pruebas que lo comprueban en el mismo archivo que comprueba la ampliación, para que ninguna sesión futura lea esto como permiso para conceder la próxima sin pedirla. La contrapartida se asume a sabiendas: autorizar por teléfono es aprobar un descuento sin ver el ticket, y lo que juega en contra es que queda registrado con autorizante, vía y asiento de auditoría, y que la alternativa real no era «autorizarlo mirando» sino «no poder vender». | Prompt 26 — 2026-09-11 |
+| **AMPLIACIÓN DECIDIDA, NO CORRECCIÓN, POR SEGUNDA VEZ: `salida_controlada` acepta también el PIN remoto.** Su candado sigue exactamente igual; lo único que cambia es qué PIN acepta, y el asiento registra la vía en `autorizadaVia`. | Dejarla como estaba y que la computadora quede encendida si no hay un administrador; ampliar de paso `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` «por coherencia» | **LA FILA QUE DECÍA QUE NO LO ACEPTABA NO ESTABA EQUIVOCADA.** El PIN remoto se pidió para autorizar diferencias por teléfono, y dárselo a cerrar la aplicación lo ampliaba más allá de lo pedido; el valor por omisión era «no» y ampliarlo exigía una decisión explícita. **Julio la tomó el 2026-09-15**, con un motivo concreto: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. Es la segunda vez que el mecanismo funciona como se diseñó —la primera fue el descuento— y no una excepción por conveniencia. **EL PRINCIPIO DE ALCANCE MÍNIMO SIGUE VIGENTE**: `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo, con pruebas en el mismo archivo. Se reutilizó la verificación dual existente cambiando UNA entrada de `ACEPTA_PIN_REMOTO`, sin lógica nueva. La contrapartida: quien recibe el PIN remoto dictado puede, hasta que se cambie, también cerrar la aplicación; cerrar es ordenado y queda auditado con su vía. §4.41. | Prompt 61 — 2026-09-15 |
 | **Qué superficie acepta el PIN remoto pasa a ser una TABLA (`ACEPTA_PIN_REMOTO`), no un argumento de quien llama.** | Dejar el parámetro `aceptaPinRemoto` en cada llamada; un `if` por superficie dentro del servicio | La verificación dual —probar los PIN normales, después los remotos, y reportar cuál coincidió— **nunca estuvo duplicada**: vive en `autorizarComoAdministrador` desde el Prompt 13. Lo que sí estaba repetido era la POLÍTICA: los cuatro lugares que autorizan escribían `{ aceptaPinRemoto: true/false }` a mano al lado del nombre de la superficie. Dos datos que tienen que concordar siempre, decididos en archivos distintos, es una discrepancia esperando a ocurrir: alcanzaba con copiar un bloque y cambiar el nombre de la superficie sin tocar el booleano para que una superficie empezara a aceptar un PIN que la documentación dice que no acepta, **sin que nada fallara**. Con la tabla, quien llama no tiene dónde contradecir la política, y `Record<SuperficieDeAutorizacion, boolean>` obliga a decidir explícitamente qué acepta cada superficie nueva. Al hacer el cambio, el compilador marcó los cuatro llamados, que es exactamente la señal que se buscaba. **Cada superficie conserva su propio candado**: compartir qué PIN aceptan no es compartir contador, y hay pruebas nuevas del par `cierre_con_diferencia` ↔ `descuento_excedente`, un caso que antes no podía existir porque solo una superficie aceptaba el remoto. | Prompt 26 — 2026-09-11 |
 | **`ventas.descuento_autorizado_via` registra CÓMO se autorizó un descuento, y va siempre con el autorizante** (migración 017 y su espejo 0017). El asiento de auditoría también lleva la vía. | Deducir la vía de otro dato; no registrarla y quedarse solo con quién autorizó | Mientras la superficie aceptaba un solo PIN, la respuesta era siempre «presencial» y la columna habría sido ruido. Desde que acepta los dos, **«Jimmy autorizó Q40» dejó de ser una sola cosa**: autorizarlo frente al mostrador viendo el ticket y autorizarlo por teléfono sin verlo son dos hechos distintos, y es exactamente lo que un auditor va a querer separar. No se puede deducir de ningún otro dato guardado. La columna de la venta guarda el ESTADO final y el asiento guarda el HECHO, igual que con el cierre de caja. El par autorizante/vía se hace inseparable en las **tres** capas: un solo objeto en el tipo (`AutorizacionDeDescuento`, imposible construir uno sin el otro), el servicio descarta las dos mitades juntas cuando el descuento no excedía, y el CHECK de la base rechaza la fila. | Prompt 26 — 2026-09-11 |
 | **El CHECK de coherencia NO copia la forma de la migración 007: los `IS NOT NULL` van ADELANTE.** | Copiar literalmente `(via IS NULL AND por IS NULL) OR (via IN (...) AND por IS NOT NULL)`, que es la forma que ya estaba en el proyecto | **Se midió antes de escribir la migración, y la forma de la 007 NO rechaza un autorizante sin vía.** El motivo es la lógica de tres valores de SQL: con `via` en NULL, `via IN ('presencial','remoto')` no da FALSO sino NULL, la segunda rama entera da NULL, y **un CHECK pasa cuando su expresión da NULL**; solo falla cuando da FALSO. Así que `por` lleno con `via` vacía entraba sin protestar, justo la mitad que el comentario de la 007 decía proteger. En `caja_sesiones` el hueco está tapado por otra vía —el CHECK de la migración 008 exige `diferencia_autorizada_via IS NOT NULL` de forma explícita— así que **no hay ningún dato mal guardado hoy**, pero la forma de la 007 por sí sola es más débil de lo que aparenta. Acá no hay una segunda restricción que salve, así que se escribe con los `IS NOT NULL` adelante, que cortocircuitan a FALSO. Verificado con las ocho combinaciones, incluidos los dos UPDATE que romperían el par. | Prompt 26 — 2026-09-11 |
@@ -6833,7 +6904,8 @@ npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en v
                          # confirmación, EL RECUENTO SELLADO (escenario de Jimmy), el margen con
                          # la foto del costo, y quién ve el teórico: el administrativo en el
                          # resumen y NO al contar; la cajera ni en pantalla ni por el canal; y el
-                         # PIN correcto que revela y espera (confirmar o cancelar).
+                         # PIN correcto que revela y espera (confirmar o cancelar). AL FINAL
+                         # sale de la aplicación con el PIN REMOTO y lee el asiento (§4.41).
                          # Deja capturas y lee la base al final (§4.39).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
