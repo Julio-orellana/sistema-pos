@@ -1095,7 +1095,11 @@ async function main() {
     await prueba('dialogo-salida').waitFor({ timeout: ESPERA_CORTA });
     const textoDelDialogoDeSalida = await texto('dialogo-salida');
     anotar(`texto del diálogo de salida: ${JSON.stringify(textoDelDialogoDeSalida)}`);
-    await prueba('dialogo-salida').locator('input').fill(PIN_REMOTO);
+    // Desde el 2026-09-15 el PIN de salida se toca en el teclado numérico del
+    // diálogo: ya no hay ningún campo nativo que llenar (§4.45).
+    for (const digito of PIN_REMOTO) {
+      await prueba('dialogo-salida').locator(`[data-prueba="tecla-${digito}"]`).click();
+    }
     await capturar('8-salida-con-pin-remoto');
     const procesoTerminado = new Promise((resolver) => {
       app.process().once('exit', (codigo) => {
