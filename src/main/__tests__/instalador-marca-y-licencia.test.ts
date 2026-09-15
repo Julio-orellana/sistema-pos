@@ -54,8 +54,13 @@ interface ConfiguracionDelInstalador {
 const config = yaml.load(readFileSync(join(RAIZ, 'electron-builder.yml'), 'utf8')) as ConfiguracionDelInstalador;
 const paqueteDelRepositorio = JSON.parse(readFileSync(join(RAIZ, 'package.json'), 'utf8')) as Record<string, unknown>;
 
-/** sha256 del texto de la licencia sin BOM y con saltos LF: el texto exacto que pidió Julio el 2026-09-15. */
-const HUELLA_DE_LA_LICENCIA = '8c6bf039d701e96bc141c4b01beab29c798753d6d736d2b306b00043add1daff';
+/**
+ * sha256 del texto de la licencia sin BOM y con saltos LF: el texto exacto que
+ * aprobó Julio el 2026-09-15, con la única corrección que pidió después
+ * («a el/la» → «al/a la»). Huella anterior a esa corrección:
+ * 8c6bf039d701e96bc141c4b01beab29c798753d6d736d2b306b00043add1daff.
+ */
+const HUELLA_DE_LA_LICENCIA = 'bd9897f4c73cd8ad39e0ce69effb8cc8a5e108b3d01ad16438322b6637bbbaa7';
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
@@ -109,6 +114,11 @@ describe('La pantalla de licencia', () => {
     const { texto } = leerLicencia();
     const huella = createHash('sha256').update(texto.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
     expect(huella).toBe(HUELLA_DE_LA_LICENCIA);
+  });
+
+  it('la versión que dice la licencia es la del package.json: el instalador no puede decir una versión y la licencia otra', () => {
+    const version = /^Versión: (.+)$/m.exec(leerLicencia().texto.replace(/\r\n/g, '\n'));
+    expect(version?.[1]).toBe(paqueteDelRepositorio.version);
   });
 
   it('NO lleva la cláusula de penalidad: esa va solo en el contrato de servicios', () => {

@@ -7774,7 +7774,7 @@ No se decidió de memoria. Se leyeron `node_modules/app-builder-lib/out` y
 | `build/licencia.txt` | El texto aprobado, en UTF-8 con BOM y CRLF. 1901 bytes |
 | `build/instalador.nsh` | `Caption "Instalación de Vixo POS"`, la página con la casilla y `customInstall` |
 | `electron-builder.yml` | `copyright`, `extraMetadata.author`, `nsis.license`, `nsis.include`, `installerLanguages`, `language: '3082'` |
-| `src/main/__tests__/instalador-marca-y-licencia.test.ts` | 16 pruebas |
+| `src/main/__tests__/instalador-marca-y-licencia.test.ts` | 17 pruebas (la 17.ª, desde la corrección de abajo) |
 
 **Las pantallas del asistente, en orden** (leído de `assistedInstaller.nsh` con
 esta configuración): (1) **Acuerdo de licencia**, con «Acepto»; (2)
@@ -7870,6 +7870,25 @@ header igual, con sus tildes (`'Implementación: POS Jimmy Cano\nVersión:
 1.1.0'`). El BOM se deja porque es la forma que electron-builder usa para sus
 propias licencias, así no depende de la detección del `makensis` de la máquina
 que arme. El comentario de `electron-builder.yml` lo dice así.
+
+#### Dos correcciones del mismo día, pedidas por Julio
+
+| Qué | Antes | Después |
+|---|---|---|
+| Frase de la licencia | «se le entrega a el/la LICENCIATARIO/A» | «se le entrega al/a la LICENCIATARIO/A». Nada más del texto cambió: 4 bytes distintos, mismo largo (1901 bytes), BOM y 39 CRLF intactos |
+| Huella del texto (sin BOM, LF) | `8c6bf039…1daff` | `bd9897f4…bbaa7` |
+| `package.json` y `package-lock.json` | 1.0.0 | **1.1.0**, la versión del próximo release, que es la que nombra la licencia |
+
+La salida cruda de §4.48 de arriba (los 1875 caracteres idénticos y la huella
+`8c6bf039…`) es del instalador armado **antes** de la corrección. El
+instalador no se volvió a armar con el texto corregido: eso lo hace el prompt de
+los builds de release.
+
+Con el texto cambiado cayó exactamente la prueba de la huella
+(`expected 'bd9897f4c73cd8ad39e0ce69effb8cc8a5e10…' to be '8c6bf039d701e96bc141c4b01beab29c79875…'`)
+antes de actualizarla. Se agregó además «la versión que dice la licencia es la
+del package.json». Falsificada con `package.json` en 1.1.1, cayó con
+`expected '1.1.0' to be '1.1.1'`.
 
 #### Lo que NO se verificó, y solo se ve instalando en Windows
 
@@ -8226,7 +8245,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 23 | ~~**¿Qué claves lleva `valor_nuevo` del asiento `conflicto_de_inventario`?**~~ | ~~La venta escribe `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo`, `comparacion` y `momento`. La anulación (§4.45) escribe `saldoLeido`, `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Es la misma acción con dos formas. Ningún código lee estos asientos, así que alinearlas no rompe nada, pero un auditor que filtre por la acción va a encontrar las dos. §4.3.~~ | **RESUELTO (2026-09-15, decisión de Julio): una sola forma y una sola puerta.** Nombres de la venta, sin `momento`, con `ventaId` (null en la venta) y `causaTecnica`. La escribe solo `conflicto-de-inventario.ts`, y una prueba estructural lo exige. No había ningún asiento escrito con ninguna de las dos formas (§4.3). |
 | 24 | **La autorización remota por TOTP no viaja entre terminales ni sobrevive a una restauración, a una terminal nueva ni a un cambio del nombre del producto.** | Por la regla no negociable (§4.47), el secreto vive solo cifrado en ESTA terminal. En cada uno de esos casos el administrador tiene que volver a inscribirse, **estando físicamente en la terminal**, porque la inscripción exige su sesión. Con más de una caja (punto 10), cada una necesita su propia inscripción y el teléfono muestra una cuenta por caja. Hay que decidir si eso es aceptable o si se diseña otra cosa. **No se decidió acá.** | Abierto |
 | 25 | **¿Qué pasa si Jimmy pierde el teléfono, o la instalación que ya tiene tenía un PIN remoto fijo?** | Perder el teléfono no se puede resolver a distancia: la reinscripción exige un administrador en la terminal. Mientras tanto, la vía remota de esa persona queda sin uso, y quien tenga el teléfono desbloqueado puede generar códigos hasta que se reinscriba. La instalación de prueba de Jimmy (`v1.0.0-prueba.1`) **tiene un PIN remoto fijo que deja de funcionar al instalar esta versión**: la 037 lo borra. Antes de actualizar hay que avisarle que se inscriba con la app, y decidir quién lo acompaña. | Abierto — **bloquea la entrega de esta versión a Jimmy** |
-| 26 | **La licencia dice «Versión: 1.1.0» y el package.json dice 1.0.0.** | El instalador de verificación salió como `POS-Jimmy-Cano-Setup-1.0.0.exe` con una licencia de la 1.1.0. Subir la versión es parte del release, y no se hizo acá. Si la licencia va a cambiar de número en cada versión, hay que decidir si se reescribe el texto aprobado cada vez o si deja de nombrar la versión. | Abierto — **antes de armar la 1.1.0** |
+| 26 | ~~**La licencia dice «Versión: 1.1.0» y el package.json dice 1.0.0.**~~ | ~~El instalador de verificación salió como `POS-Jimmy-Cano-Setup-1.0.0.exe` con una licencia de la 1.1.0.~~ | **RESUELTO (2026-09-15, Julio): `package.json` pasó a 1.1.0.** Una prueba exige ahora que la versión de la licencia sea la del `package.json`, así que cada release futuro obliga a actualizar el texto aprobado (§4.48). |
 | 27 | **¿Quién figura como titular en el copyright del instalador?** | Hoy «Julio Orellana (Vixo POS)» (§4.48). Poner solo «Vixo POS» depende de que la marca tenga una persona jurídica detrás o de cómo se inscriba ante el Registro de la Propiedad Intelectual. Es legal, no técnico. | Abierto — decisión de Julio |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
