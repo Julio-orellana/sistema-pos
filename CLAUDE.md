@@ -7066,6 +7066,35 @@ sync_cola: lote 1bc4ed03 #0 anulaciones_de_venta insertar · #1 productos actual
 errores en la consola de la ventana: []
 ```
 
+**La 033 y la 034 sobre una copia de la base de trabajo real** (la regla de
+§4.14). La copia es de las 09:28 hora local del 2026-09-15, con sha256
+`6b702bff…45653`, cuando la base estaba todavía en la 030. Se abrió con el
+migrador de la aplicación:
+
+```
+migraciones al abrir: {"aplicadasAhora":["031_productos_precio_compra","032_venta_detalle_costo_unitario_snap","033_anulaciones_de_venta","034_superficie_anulacion_de_venta"],…,"ultimaAplicada":"034_superficie_anulacion_de_venta"}
+integrity_check: [{"integrity_check":"ok"}]
+foreign_key_check: []
+anulaciones_de_venta: [{"filas":0}] · disparadores: anulaciones_de_venta_prohibir_delete, anulaciones_de_venta_prohibir_update, auditoria_log_prohibir_delete, auditoria_log_prohibir_update
+CHECK de bloqueos incluye anulacion_de_venta: [{"incluye":1}]
+el resto de la base: {"usuarios":2,"productos":6,"ventas":1,"venta_detalle":2,"cajas":2,"auditoria_log":23,"limites":2,"sync_cola":2}
+la venta real: {"id":"7e46d49a-…","total":"190.00","estado":"completada","anulaciones":0}
+```
+
+> **LA BASE DE TRABAJO REAL YA TIENE LA 033 Y LA 034, y no se aplicaron desde
+> esta sesión.** A las 15:43:32 UTC del 2026-09-15 (09:43 hora local) alguien
+> abrió la aplicación con esa carpeta de datos. Los checksums registrados de la
+> 033 y la 034 son idénticos a los archivos de este repositorio
+> (`e22b38ed…` y `f4e801b5…`), cuando todavía no estaban en commits. Ninguna de
+> las tres copias de `.claude/worktrees/` tiene esas migraciones. El migrador
+> aplicó en ese arranque la 031, la 032, la 033 y la 034. La bitácora técnica
+> muestra el proyecto de pruebas incrustado y **ninguna credencial guardada**:
+> no subió nada. Después hubo dos ingresos fallidos, dos correctos y una salida
+> controlada, espaciados como los de una persona. **Consecuencia, leída del
+> migrador:** una versión anterior abre esa base igual, porque `aplicarMigraciones`
+> no se niega ante migraciones registradas que no conoce: las ignora. La tabla
+> nueva queda vacía y sin uso.
+
 **Falsificado**, una mutación por vez; se revirtió con `git checkout` y
 `git status` quedó limpio después de cada una:
 
