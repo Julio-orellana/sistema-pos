@@ -88,7 +88,7 @@ export function ModalDeSalida(): React.JSX.Element | null {
       <div className="modal">
         <h2 id="titulo-salida">Salida de administrador</h2>
         <p className="modal__texto">
-          Ingresá el PIN de administrador para cerrar el punto de venta de forma ordenada.
+          Ingresá el PIN de un administrador, en persona o dictado por teléfono, para cerrar el punto de venta de forma ordenada.
         </p>
 
         <input

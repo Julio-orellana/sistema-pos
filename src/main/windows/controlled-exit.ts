@@ -208,7 +208,7 @@ export class ControladorDeSalidaControlada {
     const origen = this.origenDeLaSolicitud ?? 'atajo_de_teclado';
 
     // ÚNICA verificación de PIN del sistema, para las tres rutas.
-    const resultado = this.autenticacion.autorizarComoAdministrador(pin);
+    const resultado = this.autenticacion.autorizarComoAdministrador(pin, 'salida_controlada');
 
     if (!resultado.autenticado) {
       console.warn(`[kiosko] Intento de salida rechazado (${origen}): ${resultado.codigo}`);
@@ -225,9 +225,13 @@ export class ControladorDeSalidaControlada {
     this.cierreAutorizado = true;
     const autorizadoPor = resultado.usuario?.id ?? null;
     console.info(
-      `[kiosko] Salida autorizada por ${resultado.usuario?.nombre ?? 'desconocido'} (origen: ${origen}).`,
+      `[kiosko] Salida autorizada por ${resultado.usuario?.nombre ?? 'desconocido'} (origen: ${origen}, vía: ${resultado.viaDeAutorizacion ?? 'presencial'}).`,
     );
-    this.autenticacion.registrarSalida(true, origen, autorizadoPor, 'PIN correcto');
+    // Acepta el PIN normal y, desde el 2026-09-15, también el remoto: lo
+    // decide la tabla ACEPTA_PIN_REMOTO, no esta llamada. La vía queda en el
+    // asiento, igual que en el descuento y en el cierre de caja.
+    const via = resultado.viaDeAutorizacion ?? 'presencial';
+    this.autenticacion.registrarSalida(true, origen, autorizadoPor, 'PIN correcto', via);
     this.cerrarAplicacion();
 
     return {

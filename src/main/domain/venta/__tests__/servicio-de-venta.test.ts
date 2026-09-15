@@ -372,10 +372,12 @@ describe('Descuento discrecional: el tope del rol decide si hace falta PIN', () 
     expect(intento.viaDeAutorizacion).toBe('remoto');
   });
 
-  it('y las otras dos superficies SIGUEN sin aceptarlo: la ampliación fue acotada', () => {
+  it('y las superficies que no se ampliaron SIGUEN sin aceptarlo: la ampliación fue acotada', () => {
     fijarTopes();
 
-    for (const superficie of ['salida_controlada', 'cierre_de_caja_ajena'] as const) {
+    // `salida_controlada` salió de esta lista el 2026-09-15 por una SEGUNDA
+    // decisión explícita (CLAUDE.md §4.41), no por heredar la del descuento.
+    for (const superficie of ['cierre_de_caja_ajena', 'saltar_lote_de_sincronizacion'] as const) {
       const intento = autenticacion.autorizarComoAdministrador(PIN_REMOTO_DE_JIMMY, superficie);
       expect(intento.autenticado, `${superficie} no debe aceptar el PIN remoto`).toBe(false);
       expect(intento.usuario).toBeNull();

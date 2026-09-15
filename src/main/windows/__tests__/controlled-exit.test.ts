@@ -28,6 +28,8 @@ afterEach(() => {
 });
 
 const PIN_CORRECTO = '4321';
+/** El PIN de autorización a distancia del mismo administrador. */
+const PIN_REMOTO = '8765';
 const PIN_EQUIVOCADO = '1111';
 const MILISEGUNDOS_POR_MINUTO = 60_000;
 
@@ -91,11 +93,12 @@ function crearEscenario(): {
   const prueba = crearBaseMigrada();
   limpiezas.push(prueba.limpiar);
   const repos = crearRepositorios(prueba.base);
-  repos.usuarios.crear({
+  const jimmy = repos.usuarios.crear({
     nombre: 'Jimmy',
     rol: 'administrativo',
     pinHash: generarHashDePin(PIN_CORRECTO),
   });
+  repos.usuarios.actualizarPinRemotoHash(jimmy.id, generarHashDePin(PIN_REMOTO));
 
   const autenticacion = new ServicioDeAutenticacion({
     base: prueba.base,
@@ -471,5 +474,73 @@ describe('Las TRES rutas de salida usan la misma verificación y el mismo asient
         'salida_controlada_rechazada',
       );
     }
+  });
+});
+
+// ===========================================================================
+// AMPLIADA EL 2026-09-15: la salida acepta también el PIN REMOTO
+// ===========================================================================
+describe('La salida controlada acepta el PIN normal O el remoto, y el asiento dice cuál', () => {
+  /** El `valor_nuevo` del asiento de salida autorizada, ya leído como objeto. */
+  function asientoDeSalida(
+    asientos: { accion: string; valor_nuevo: string | null }[],
+  ): Record<string, unknown> {
+    const asiento = asientos.find((a) => a.accion === 'salida_controlada_autorizada');
+    return JSON.parse(asiento?.valor_nuevo ?? '{}') as Record<string, unknown>;
+  }
+
+  it('SIN CAMBIOS: el PIN normal de un administrador presente cierra, registrado como PRESENCIAL', () => {
+    const { controlador, cerrarAplicacion, asientosDeAuditoria } = crearEscenario();
+    const { ventana, dispararEntrada } = crearVentanaFalsa();
+    controlador.conectarVentana(ventana);
+    dispararEntrada(PULSACION_DEL_ATAJO);
+
+    expect(controlador.confirmarSalida(PIN_CORRECTO).autorizado).toBe(true);
+    expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
+    expect(asientoDeSalida(asientosDeAuditoria())).toMatchObject({
+      origen: 'atajo_de_teclado',
+      autorizadaVia: 'presencial',
+    });
+  });
+
+  it('AHORA: el PIN REMOTO del administrador también cierra, registrado como REMOTO', () => {
+    const { controlador, cerrarAplicacion, asientosDeAuditoria } = crearEscenario();
+    const { ventana, dispararEntrada } = crearVentanaFalsa();
+    controlador.conectarVentana(ventana);
+    dispararEntrada(PULSACION_DEL_ATAJO);
+
+    const resultado = controlador.confirmarSalida(PIN_REMOTO);
+
+    expect(resultado.autorizado).toBe(true);
+    expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
+    const asiento = asientoDeSalida(asientosDeAuditoria());
+    expect(asiento).toMatchObject({ origen: 'atajo_de_teclado', autorizadaVia: 'remoto' });
+  });
+
+  it('por las TRES rutas el remoto cierra con la misma acción y la vía en el asiento', () => {
+    for (const origen of ['atajo_de_teclado', 'cierre_del_sistema', 'boton_de_interfaz'] as const) {
+      const { controlador, cerrarAplicacion, asientosDeAuditoria } = crearEscenario();
+      const { ventana } = crearVentanaFalsa();
+      controlador.conectarVentana(ventana);
+      controlador.solicitarPin(ventana, origen);
+
+      expect(controlador.confirmarSalida(PIN_REMOTO).autorizado, origen).toBe(true);
+      expect(cerrarAplicacion, origen).toHaveBeenCalledTimes(1);
+      expect(asientoDeSalida(asientosDeAuditoria()), origen).toMatchObject({
+        origen,
+        autorizadaVia: 'remoto',
+      });
+    }
+  });
+
+  it('un rechazo no inventa vía: el asiento de rechazo lleva autorizadaVia null', () => {
+    const { controlador, asientosDeAuditoria } = crearEscenario();
+    const { ventana, dispararEntrada } = crearVentanaFalsa();
+    controlador.conectarVentana(ventana);
+    dispararEntrada(PULSACION_DEL_ATAJO);
+
+    controlador.confirmarSalida(PIN_EQUIVOCADO);
+    const rechazo = asientosDeAuditoria().find((a) => a.accion === 'salida_controlada_rechazada');
+    expect(JSON.parse(rechazo?.valor_nuevo ?? '{}')).toMatchObject({ autorizadaVia: null });
   });
 });

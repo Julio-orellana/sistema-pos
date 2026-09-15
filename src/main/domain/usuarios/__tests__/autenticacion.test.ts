@@ -510,14 +510,22 @@ describe('PIN de autorización remota', () => {
     expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
   });
 
-  it('el PIN remoto NO autoriza donde no se acepta (salida controlada)', () => {
+  it('el PIN remoto NO autoriza donde no se acepta (cierre de una caja ajena)', () => {
     servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-    // No es que cerrar la app sea una acción física. El PIN remoto se pidió
-    // para una sola cosa —autorizar diferencias de caja— y dárselo además a
-    // la salida controlada le ampliaría el alcance más allá de lo pedido.
-    expect(servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada').autenticado).toBe(
-      false,
-    );
+    // Hasta el 2026-09-15 este caso era la salida controlada, que ahora sí lo
+    // acepta por decisión explícita. La caja ajena sigue sin aceptarlo: quien
+    // cierra la caja de otro está parado frente a ella.
+    expect(
+      servicio.autorizarComoAdministrador(PIN_REMOTO, 'cierre_de_caja_ajena').autenticado,
+    ).toBe(false);
+  });
+
+  it('DESDE EL 2026-09-15 el PIN remoto SÍ autoriza la salida controlada, y queda como REMOTO', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    const permiso = servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada');
+    expect(permiso.autenticado).toBe(true);
+    expect(permiso.viaDeAutorizacion).toBe('remoto');
+    expect(permiso.usuario?.id).toBe(idJimmy);
   });
 
   it('el PIN normal autoriza como PRESENCIAL y el remoto como REMOTO', () => {
@@ -635,8 +643,7 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     //
     // Creció a cinco en la Fase 4.a con `saltar_lote_de_sincronizacion`
     // (pantalla de sincronización, decisión 9 del diseño): NO acepta el
-    // remoto, por el mismo alcance mínimo que `salida_controlada` y
-    // `cierre_de_caja_ajena`.
+    // remoto, por el mismo alcance mínimo que `cierre_de_caja_ajena`.
     expect(Object.keys(ACEPTA_PIN_REMOTO).sort()).toEqual([
       'cierre_con_diferencia',
       'cierre_de_caja_ajena',
@@ -646,13 +653,13 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     ]);
   });
 
-  it('las DOS que lo aceptan son el cierre descuadrado y el descuento excedente', () => {
+  it('las TRES que lo aceptan: el cierre descuadrado, el descuento excedente y, desde el 2026-09-15, la salida controlada', () => {
     expect(ACEPTA_PIN_REMOTO.cierre_con_diferencia).toBe(true);
     expect(ACEPTA_PIN_REMOTO.descuento_excedente).toBe(true);
+    expect(ACEPTA_PIN_REMOTO.salida_controlada).toBe(true);
   });
 
-  it('las TRES que NO lo aceptan siguen sin aceptarlo', () => {
-    expect(ACEPTA_PIN_REMOTO.salida_controlada).toBe(false);
+  it('las DOS que NO lo aceptan siguen sin aceptarlo: la ampliación no se hereda', () => {
     expect(ACEPTA_PIN_REMOTO.cierre_de_caja_ajena).toBe(false);
     expect(ACEPTA_PIN_REMOTO.saltar_lote_de_sincronizacion).toBe(false);
   });
@@ -773,26 +780,28 @@ describe('Los cinco candados son independientes: las diez combinaciones cruzadas
     dejaría a la tienda sin poder cerrar una caja descuadrada, que es
     exactamente la negación de servicio que la separación vino a eliminar.
   */
-  const PAREJA_QUE_ACEPTA_REMOTO: readonly SuperficieDeAutorizacion[] = [
+  // Desde el 2026-09-15 son TRES: `salida_controlada` se sumó a la pareja.
+  const LAS_QUE_ACEPTAN_REMOTO: readonly SuperficieDeAutorizacion[] = [
+    'salida_controlada',
     'cierre_con_diferencia',
     'descuento_excedente',
   ];
 
-  for (const bloqueadaConRemoto of PAREJA_QUE_ACEPTA_REMOTO) {
-    const otra = PAREJA_QUE_ACEPTA_REMOTO.find((una) => una !== bloqueadaConRemoto);
+  for (const bloqueadaConRemoto of LAS_QUE_ACEPTAN_REMOTO) {
+    for (const otra of LAS_QUE_ACEPTAN_REMOTO.filter((una) => una !== bloqueadaConRemoto)) {
+      it(`bloquear ${bloqueadaConRemoto} no bloquea ${otra}, que SIGUE aceptando el PIN REMOTO`, () => {
+        servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+        agotar(bloqueadaConRemoto);
 
-    it(`bloquear ${bloqueadaConRemoto} con el PIN REMOTO no bloquea ${String(otra)}`, () => {
-      servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-      agotar(bloqueadaConRemoto);
+        expect(bloqueada(bloqueadaConRemoto)).toBe(true);
 
-      expect(bloqueada(bloqueadaConRemoto)).toBe(true);
-
-      // La otra sigue aceptando el remoto, que es la mitad que importa: no
-      // alcanza con que no esté bloqueada, tiene que seguir autorizando.
-      const permiso = servicio.autorizarComoAdministrador(PIN_REMOTO, otra ?? 'salida_controlada');
-      expect(permiso.autenticado).toBe(true);
-      expect(permiso.viaDeAutorizacion).toBe('remoto');
-    });
+        // La otra sigue aceptando el remoto, que es la mitad que importa: no
+        // alcanza con que no esté bloqueada, tiene que seguir autorizando.
+        const permiso = servicio.autorizarComoAdministrador(PIN_REMOTO, otra);
+        expect(permiso.autenticado).toBe(true);
+        expect(permiso.viaDeAutorizacion).toBe('remoto');
+      });
+    }
 
     it(`y ${bloqueadaConRemoto} bloqueada tampoco acepta el remoto: el candado manda`, () => {
       // La contraparte. Un candado que dejara pasar el PIN remoto no sería un
@@ -806,7 +815,7 @@ describe('Los cinco candados son independientes: las diez combinaciones cruzadas
     });
   }
 
-  it('agotar las dos que aceptan el remoto NO impide iniciar sesión ni salir de la app', () => {
+  it('agotar la diferencia y el descuento NO impide iniciar sesión ni salir de la app, tampoco con el PIN remoto', () => {
     servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
     agotar('cierre_con_diferencia');
     agotar('descuento_excedente');
@@ -814,7 +823,21 @@ describe('Los cinco candados son independientes: las diez combinaciones cruzadas
     expect(bloqueada('cierre_con_diferencia')).toBe(true);
     expect(bloqueada('descuento_excedente')).toBe(true);
     expect(bloqueada('salida_controlada')).toBe(false);
+    expect(servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada').autenticado).toBe(true);
     expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+  });
+
+  it('agotar la SALIDA no bloquea la caja ajena, que sigue aceptando el PIN normal', () => {
+    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    agotar('salida_controlada');
+
+    expect(bloqueada('salida_controlada')).toBe(true);
+    expect(servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada').codigo).toBe(
+      'AUTORIZACION_BLOQUEADA',
+    );
+    expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'cierre_de_caja_ajena').autenticado).toBe(
+      true,
+    );
   });
 
   it('cada una de las cuatro superficies lleva su propio contador en la base', () => {

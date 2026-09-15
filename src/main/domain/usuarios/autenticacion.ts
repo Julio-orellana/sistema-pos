@@ -84,8 +84,19 @@ import type {
  * un cliente no puede quedarse esperando en el mostrador a que el dueño
  * vuelva. Así que esto **no corrige un error**: es exactamente el mecanismo que
  * el diseño anterior previó, funcionando como se esperaba. El valor por omisión
- * sigue siendo NO aceptar el remoto, y `salida_controlada` y
- * `cierre_de_caja_ajena` siguen sin aceptarlo.
+ * sigue siendo NO aceptar el remoto.
+ *
+ * **Y la SEGUNDA vez, el 2026-09-15, fue `salida_controlada`**: Jimmy necesita
+ * poder autorizar que se apague el punto de venta al final del día cuando no
+ * hay ningún administrador en la tienda. Tampoco corrige un error: la regla de
+ * alcance mínimo se aplicó, la ampliación se pidió, y se decidió a propósito.
+ * `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo.
+ *
+ * La contrapartida de la salida, dicha en voz alta: quien recibe el PIN remoto
+ * dictado por teléfono puede, desde ese momento y hasta que se cambie, cerrar la
+ * aplicación además de autorizar diferencias y descuentos. Cerrar es ordenado y
+ * queda en la auditoría con su vía, así que el daño es acotado; pero el PIN
+ * dictado conviene cambiarlo si deja de haber confianza en quien lo escuchó.
  *
  * Queda una contrapartida dicha en voz alta: **un descuento es dinero que sale
  * de la venta**, y autorizarlo por teléfono es aprobarlo sin ver el ticket.
@@ -94,7 +105,8 @@ import type {
  * «autorizarlo mirando» sino «no poder venderlo».
  */
 export const ACEPTA_PIN_REMOTO: Readonly<Record<SuperficieDeAutorizacion, boolean>> = {
-  salida_controlada: false,
+  // Ampliada por decisión explícita de Julio el 2026-09-15 (ver arriba).
+  salida_controlada: true,
   cierre_de_caja_ajena: false,
   cierre_con_diferencia: true,
   descuento_excedente: true,
@@ -570,6 +582,7 @@ export class ServicioDeAutenticacion {
     origen: OrigenDeSalida,
     usuarioId: string | null,
     detalle: string,
+    autorizadaVia: ViaDeAutorizacion | null = null,
   ): void {
     conBandejaDeSalida(this.base, () => {
       const asiento = this.auditoria.registrar({
@@ -580,7 +593,9 @@ export class ServicioDeAutenticacion {
         entidadTipo: 'aplicacion',
         // El origen es un DATO del asiento, no una acción distinta: por las tres
         // rutas ocurre el mismo hecho de negocio.
-        valorNuevo: { origen, detalle },
+        // `autorizadaVia` es el mismo dato que guardan el descuento y el cierre
+        // de caja: con qué PIN se autorizó. `null` en un rechazo.
+        valorNuevo: { origen, detalle, autorizadaVia },
         fecha: new Date(this.ahora()).toISOString(),
       });
       return {
