@@ -23,6 +23,7 @@
 import { useState } from 'react';
 
 import { formatearQuetzales, montoACadena } from '@shared/money';
+import { LARGOS_DE_AUTORIZACION } from '@shared/pin';
 import type { PedidoDeCobro, ResultadoDeCobro, VentaRegistrada } from '@shared/types/ipc';
 import { CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
@@ -251,8 +252,8 @@ export function DialogoDeCobro({
             esto mismo en el Prompt 13.
           */}
           <p className="modal__texto">
-            Un administrador debe autorizarlo con su PIN, en persona o dictándolo por
-            teléfono.
+            Un administrador debe autorizarlo con su PIN en persona, o dictando por teléfono
+            el código de seis dígitos de su aplicación.
           </p>
 
           {aviso !== null && (
@@ -268,6 +269,7 @@ export function DialogoDeCobro({
               void cobrar(pin);
             }}
             deshabilitado={enviando}
+            largos={LARGOS_DE_AUTORIZACION}
           />
 
           <div className="modal__acciones">

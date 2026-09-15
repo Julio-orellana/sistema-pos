@@ -16,9 +16,13 @@ import { crearRepositorios, type Repositorios } from '@main/database/repositorie
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { ServicioDeCaja, type EfectivoDeclarado } from '../servicio-de-caja';
+import { CifradoDePrueba, codigoDeLaApp, SECRETO_DE_PRUEBA, sembrarAutorizacionRemota } from '@main/domain/usuarios/__tests__/ayuda-totp';
 
 const PIN_DE_JIMMY = '2468';
-const PIN_REMOTO_DE_JIMMY = '9753';
+/** El cifrado del sistema, de prueba: el mismo para sembrar el secreto y para verificarlo. */
+const cifrado = new CifradoDePrueba();
+/** El código que muestra ahora la app de autenticación de Jimmy. */
+const codigoRemotoDeJimmy = (): string => codigoDeLaApp(SECRETO_DE_PRUEBA, Date.now());
 const PIN_DE_LA_CAJERA = '1357';
 
 let base: Database;
@@ -70,6 +74,7 @@ beforeEach(() => {
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
   });
 
   idJimmy = repos.usuarios.crear({
@@ -77,7 +82,7 @@ beforeEach(() => {
     rol: 'administrativo',
     pinHash: generarHashDePin(PIN_DE_JIMMY),
   }).id;
-  repos.usuarios.actualizarPinRemotoHash(idJimmy, generarHashDePin(PIN_REMOTO_DE_JIMMY));
+  sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy);
 
   idCajera = repos.usuarios.crear({
     nombre: 'Cajera',
@@ -348,7 +353,7 @@ describe('Cierre de caja CON diferencia: exige autorización', () => {
   it('con el PIN REMOTO del mismo administrador, cierra y registra vía REMOTO', () => {
     const sesionId = turnoDeQuinientos();
     const autorizacion = autenticacion.autorizarComoAdministrador(
-      PIN_REMOTO_DE_JIMMY,
+      codigoRemotoDeJimmy(),
       'cierre_con_diferencia',
 );
 
@@ -498,7 +503,7 @@ describe('EL CONTEO CONFIRMADO CON DIFERENCIA QUEDA SELLADO', () => {
     const sesionId = turnoDeQuinientos();
     caja.intentarCerrar(sesionId, simple('480'), { usuarioQueCierra: idCajera });
 
-    const permiso = autenticacion.autorizarComoAdministrador(PIN_REMOTO_DE_JIMMY, 'cierre_con_diferencia');
+    const permiso = autenticacion.autorizarComoAdministrador(codigoRemotoDeJimmy(), 'cierre_con_diferencia');
     expect(permiso.autenticado).toBe(true);
     const cerrado = caja.intentarCerrar(sesionId, simple('500'), {
       usuarioQueCierra: idCajera,
@@ -699,7 +704,7 @@ describe('EL AUTORIZANTE DE UN CONTEO SELLADO QUEDA REGISTRADO, cambie lo contad
     expect(otraVez.montoEsperado).toBe('520.00');
     expect(otraVez.diferencia).toBe('0.00');
 
-    expect(autenticacion.autorizarComoAdministrador(PIN_REMOTO_DE_JIMMY, 'cierre_con_diferencia').autenticado).toBe(true);
+    expect(autenticacion.autorizarComoAdministrador(codigoRemotoDeJimmy(), 'cierre_con_diferencia').autenticado).toBe(true);
     const cerrado = caja.intentarCerrar(sesionId, simple('520'), {
       usuarioQueCierra: idCajera,
       autorizacion: { autorizadaPor: idJimmy, via: 'remoto' },
@@ -957,7 +962,7 @@ describe('Cerrar una caja que abrió OTRA persona', () => {
     // El PIN remoto se pidió para autorizar diferencias de caja por teléfono y
     // nada más. Ampliarlo a otra acción sería estirarle el alcance.
     const rechazo = autenticacion.autorizarComoAdministrador(
-      PIN_REMOTO_DE_JIMMY,
+      codigoRemotoDeJimmy(),
       'cierre_de_caja_ajena',
 );
     expect(rechazo.autenticado).toBe(false);

@@ -51,8 +51,19 @@ export const CANALES_IPC = {
   cerrarSesion: 'sesion:cerrar',
   /** Creación del primer administrador, solo en una instalación vacía. */
   crearPrimerAdministrador: 'sesion:crear-primer-administrador',
-  /** Un administrador configura o cambia su propio PIN de autorización remota. */
-  configurarPinRemoto: 'sesion:configurar-pin-remoto',
+  /**
+   * Autorización remota por TOTP (migraciones 036 y 037), solo sobre la PROPIA
+   * cuenta de un administrador. Reemplazan al viejo `sesion:configurar-pin-remoto`.
+   *
+   *   · iniciar: genera un secreto, lo guarda EN MEMORIA y devuelve el QR y el
+   *     secreto en Base32 para mostrarlos. No escribe nada.
+   *   · confirmar: con el primer código del teléfono. Solo si coincide se
+   *     guarda el secreto, cifrado; si no, se descarta la inscripción entera.
+   *   · cancelar: descarta la inscripción en curso.
+   */
+  iniciarAutorizacionRemota: 'sesion:autorizacion-remota-iniciar',
+  confirmarAutorizacionRemota: 'sesion:autorizacion-remota-confirmar',
+  cancelarAutorizacionRemota: 'sesion:autorizacion-remota-cancelar',
 
   // --- Caja ---------------------------------------------------------------
   /** Turno abierto del usuario en sesión y denominaciones para contar. */
@@ -536,6 +547,9 @@ export type EfectivoDeclaradoIpc = z.infer<typeof esquemaEfectivoDeclarado>;
 /** Payload de apertura de caja. El usuario sale de la sesión, nunca del payload. */
 export const esquemaAperturaDeCaja = z.object({ efectivo: esquemaEfectivoDeclarado });
 
+/** Largo del código remoto de TOTP en la frontera. */
+const LARGO_DEL_CODIGO_REMOTO_IPC = 6;
+
 /**
  * Payload de cierre de caja.
  *
@@ -543,14 +557,17 @@ export const esquemaAperturaDeCaja = z.object({ efectivo: esquemaEfectivoDeclara
  *
  *   · `pinCajaAjena` autoriza cerrar un turno que abrió otra persona. Solo
  *     acepta el PIN NORMAL de un administrador.
- *   · `pin` autoriza una DIFERENCIA de arqueo. Acepta también el PIN remoto.
+ *   · `pin` autoriza una DIFERENCIA de arqueo. Acepta también el código de
+ *     seis dígitos de la app de autenticación.
  *
  * Un mismo cierre puede necesitar los dos: cerrar la caja de otro y encima
  * encontrarla descuadrada. Cada uno tiene su propio candado de intentos.
  */
+
 export const esquemaCierreDeCaja = z.object({
   efectivo: esquemaEfectivoDeclarado,
-  pin: z.string().length(LARGO_DEL_PIN_IPC).optional(),
+  /** 4 dígitos (PIN normal) o 6 (código remoto de TOTP). El servicio decide cuál es. */
+  pin: z.string().min(LARGO_DEL_PIN_IPC).max(LARGO_DEL_CODIGO_REMOTO_IPC).optional(),
   pinCajaAjena: z.string().length(LARGO_DEL_PIN_IPC).optional(),
   /**
    * Segundo paso del cierre autorizado: confirma la autorización que un PIN
@@ -559,8 +576,28 @@ export const esquemaCierreDeCaja = z.object({
   confirmarAutorizacion: z.literal(true).optional(),
 });
 
-/** Payload de configuración del PIN remoto. */
-export const esquemaPinRemoto = z.object({ pin: z.string().length(LARGO_DEL_PIN_IPC) });
+/** Payload de la confirmación de una inscripción remota: el primer código del teléfono. */
+export const esquemaCodigoDeInscripcion = z.object({ codigo: z.string().length(LARGO_DEL_CODIGO_REMOTO_IPC) });
+
+/**
+ * Una inscripción remota iniciada, tal como la muestra la pantalla.
+ *
+ * LLEVA EL SECRETO, y es la única respuesta del sistema que lo lleva: tiene que
+ * verse para cargarlo en el teléfono. La pantalla lo muestra y no lo guarda.
+ */
+export interface InscripcionRemotaIpc {
+  /** El secreto en Base32, para teclearlo a mano. */
+  readonly secreto: string;
+  /**
+   * El QR de la URI `otpauth://`, como matriz de módulos: `true` es un módulo
+   * oscuro. Se dibuja en la pantalla con rectángulos, sin HTML crudo.
+   */
+  readonly qr: readonly (readonly boolean[])[];
+  /** Si reemplaza una inscripción anterior de esta misma persona. */
+  readonly reemplazaUnaAnterior: boolean;
+  /** Hasta cuándo se puede confirmar (ISO-8601 UTC). */
+  readonly venceEn: string;
+}
 
 /** Una denominación tal como la muestra la pantalla de conteo. */
 export interface DenominacionParaContar {
@@ -1198,7 +1235,7 @@ export const esquemaCambioDePin = z.object({
 /**
  * Un usuario tal como lo muestra la pantalla de gestión.
  *
- * NO LLEVA `pinHash` NI `pinRemotoHash`, y no es un olvido: el hash no tiene
+ * NO LLEVA `pinHash` NI el secreto de TOTP, y no es un olvido: el hash no tiene
  * nada que hacer en la ventana. Tampoco sirve para nada allí, y exponerlo
  * pondría al alcance de un renderer comprometido el material con el que
  * atacar los PIN fuera de línea.
@@ -1208,8 +1245,8 @@ export interface UsuarioIpc {
   readonly nombre: string;
   readonly rol: RolIpc;
   readonly activo: boolean;
-  /** `true` si tiene configurado el PIN de autorización remota. */
-  readonly tienePinRemoto: boolean;
+  /** `true` si está inscrito en la autorización remota por TOTP. Sí o no: nunca el secreto. */
+  readonly tieneAutorizacionRemota: boolean;
   /**
    * `true` si no tiene ningún PIN: fue restaurado desde la nube y nadie le
    * asignó uno (por ejemplo, un usuario de baja que se reactiva después de una
@@ -1968,8 +2005,12 @@ export interface ApiPos {
       nombre: string,
       pin: string,
     ): Promise<RespuestaIpc<SesionIniciada>>;
-    /** Configura el PIN de autorización remota del administrador en sesión. */
-    configurarPinRemoto(pin: string): Promise<RespuestaIpc<boolean>>;
+    /** Empieza la inscripción remota por TOTP del administrador en sesión: devuelve el QR y el secreto. */
+    iniciarAutorizacionRemota(): Promise<RespuestaIpc<InscripcionRemotaIpc>>;
+    /** La confirma con el primer código de la app. Solo así se guarda. */
+    confirmarAutorizacionRemota(codigo: string): Promise<RespuestaIpc<boolean>>;
+    /** Descarta la inscripción en curso. */
+    cancelarAutorizacionRemota(): Promise<RespuestaIpc<boolean>>;
   };
 
   /** Apertura y cierre del turno de caja. */

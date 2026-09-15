@@ -1,0 +1,22 @@
+-- ===========================================================================
+-- 037_quitar_pin_remoto_hash.sql — Se quita el PIN remoto fijo
+-- ===========================================================================
+--
+-- La autorización remota es TOTP desde la 036. La columna de la 005 ya no la
+-- lee nadie, y dejarla invitaría a usarla.
+--
+-- NO SE PRESERVAN los PIN remotos fijos que existan: un hash de un PIN no se
+-- puede convertir en un secreto de TOTP. Todo administrador que tuviera uno
+-- vuelve a inscribirse con el flujo nuevo. Decisión explícita de Julio del
+-- 2026-09-15.
+--
+-- `DROP COLUMN` sin reconstruir la tabla funciona porque la columna no tiene
+-- CHECK, índice, llave foránea ni disparador que la nombre (la 005 la agregó
+-- sola). SQLite reescribe la tabla y comprueba el esquema; si algún día algo la
+-- nombrara, esta migración fallaría y se revertiría entera.
+--
+-- En Postgres la columna no existe desde la `0021` (decisión 17), así que no hay
+-- espejo que escribir. El `0037` queda reservado del otro lado.
+-- ===========================================================================
+
+ALTER TABLE usuarios DROP COLUMN pin_remoto_hash;

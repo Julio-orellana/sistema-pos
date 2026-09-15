@@ -25,7 +25,10 @@ import {
   INTENTOS_MAXIMOS,
   SEGUNDOS_DE_BLOQUEO,
   ServicioDeAutenticacion,
+  VIDA_DE_LA_INSCRIPCION_PENDIENTE_MS,
 } from '../autenticacion';
+import { decodificarBase32, SEGUNDOS_POR_PASO } from '../totp';
+import { CifradoDePrueba, codigoDeLaApp, inscribir, SECRETO_DE_PRUEBA, sembrarAutorizacionRemota } from './ayuda-totp';
 
 const PIN_DE_JIMMY = '2468';
 const PIN_DE_LA_CAJERA = '1357';
@@ -37,6 +40,9 @@ let repos: Repositorios;
 let servicio: ServicioDeAutenticacion;
 let limpiar: () => void;
 let instante: number;
+let cifrado: CifradoDePrueba;
+/** Lo que el servicio anotó en la bitácora técnica. */
+let bitacora: string[];
 
 /** Adelanta el reloj del servicio, sin esperar de verdad. */
 function avanzarSegundos(segundos: number): void {
@@ -53,12 +59,16 @@ beforeEach(() => {
   limpiar = prueba.limpiar;
   repos = crearRepositorios(base);
   instante = Date.UTC(2026, 8, 6, 12, 0, 0);
+  cifrado = new CifradoDePrueba();
+  bitacora = [];
 
   servicio = new ServicioDeAutenticacion({
     base,
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
+    log: { registrar: (origen, mensaje): void => { bitacora.push(`[${origen}] ${mensaje}`); } },
     ahora: (): number => instante,
   });
 
@@ -216,6 +226,8 @@ describe('Bloqueo por intentos, POR USUARIO y persistido en la base', () => {
       usuarios: repos.usuarios,
       auditoria: repos.auditoria,
       bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
+    log: { registrar: (origen, mensaje): void => { bitacora.push(`[${origen}] ${mensaje}`); } },
       ahora: (): number => instante,
     });
 
@@ -279,6 +291,7 @@ describe('Autorización administrativa (la que usa la salida controlada)', () =>
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
       bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
+      cifrado,
     });
 
     expect(sinAdmins.autorizarComoAdministrador('1234').codigo).toBe('SIN_ADMINISTRADORES');
@@ -300,6 +313,7 @@ describe('Primer arranque', () => {
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
       bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
+      cifrado,
     });
 
     expect(recienInstalado.requiereConfiguracionInicial()).toBe(true);
@@ -325,6 +339,7 @@ describe('Primer arranque', () => {
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
       bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
+      cifrado,
     });
 
     const creado = recienInstalado.crearPrimerAdministrador('Jimmy', generarHashDePin('4321'));
@@ -353,6 +368,7 @@ describe('Primer arranque', () => {
       usuarios: otrosRepos.usuarios,
       auditoria: otrosRepos.auditoria,
       bloqueosDeAutorizacion: otrosRepos.bloqueosDeAutorizacion,
+      cifrado,
     });
 
     const creado = recienInstalado.crearPrimerAdministrador('Jimmy', generarHashDePin('4321'));
@@ -433,6 +449,8 @@ describe('LOS DOS CANDADOS ESTÁN SEPARADOS (ingreso vs. diálogo de autorizaci�
       usuarios: repos.usuarios,
       auditoria: repos.auditoria,
       bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
+    log: { registrar: (origen, mensaje): void => { bitacora.push(`[${origen}] ${mensaje}`); } },
       ahora: (): number => instante,
     });
 
@@ -474,82 +492,304 @@ describe('LOS DOS CANDADOS ESTÁN SEPARADOS (ingreso vs. diálogo de autorizaci�
 });
 
 // ===========================================================================
-describe('PIN de autorización remota', () => {
-  const PIN_REMOTO = '8642';
+describe('Autorización remota por TOTP: la INSCRIPCIÓN', () => {
+  const MS_POR_PASO = SEGUNDOS_POR_PASO * MILISEGUNDOS_POR_SEGUNDO;
 
-  it('un administrador puede configurar su PIN remoto', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).not.toBeNull();
+  /** Todo lo que una inscripción podría haber tocado, para comparar antes y después. */
+  function huella(): string {
+    return JSON.stringify({
+      usuarios: base.prepare('SELECT * FROM usuarios ORDER BY id').all(),
+      auditoria: base.prepare('SELECT COUNT(*) AS n FROM auditoria_log').get(),
+      cola: base.prepare('SELECT COUNT(*) AS n FROM sync_cola').get(),
+      candados: base.prepare('SELECT * FROM bloqueos_de_autorizacion ORDER BY superficie').all(),
+    });
+  }
+
+  it('INICIAR no escribe nada: devuelve un secreto de 160 bits y la URI del QR con el nombre de la persona', () => {
+    const antes = huella();
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS Jimmy Cano');
+
+    expect(decodificarBase32(inscripcion.secreto)).toHaveLength(20);
+    expect(inscripcion.uri).toBe(
+      `otpauth://totp/POS%20Jimmy%20Cano:Jimmy?secret=${inscripcion.secreto}&issuer=POS%20Jimmy%20Cano&algorithm=SHA1&digits=6&period=30`,
+    );
+    expect(inscripcion.reemplazaUnaAnterior).toBe(false);
+    expect(huella()).toBe(antes);
+    expect(cifrado.vecesQueCifro).toBe(0);
   });
 
-  it('SE RECHAZA un PIN remoto igual al PIN normal, y el mensaje explica por qué', () => {
+  it('CONFIRMAR con el código de la app guarda el secreto CIFRADO, y descifrado es el mismo', () => {
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    servicio.confirmarInscripcionRemota(idJimmy, codigoDeLaApp(inscripcion.secreto, instante));
+
+    const guardado = repos.usuarios.obtenerPorId(idJimmy)?.totpSecretoCifrado;
+    expect(guardado).toBeInstanceOf(Buffer);
+    expect(guardado?.includes(Buffer.from(inscripcion.secreto, 'utf8'))).toBe(false);
+    expect(guardado?.includes(decodificarBase32(inscripcion.secreto))).toBe(false);
+    expect(cifrado.decryptString(guardado ?? Buffer.alloc(0))).toBe(inscripcion.secreto);
+  });
+
+  it('un código INCORRECTO no deja NINGÚN rastro —ni columna, ni asiento, ni cola, ni candado— y descarta la inscripción', () => {
+    const antes = huella();
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    const correcto = codigoDeLaApp(inscripcion.secreto, instante);
+    const incorrecto = correcto === '000000' ? '000001' : '000000';
+
     try {
-      servicio.configurarPinRemoto(idJimmy, PIN_DE_JIMMY);
-      expect.unreachable('Se esperaba que un PIN remoto igual al normal fuera rechazado.');
+      servicio.confirmarInscripcionRemota(idJimmy, incorrecto);
+      expect.unreachable('Se esperaba el rechazo del código incorrecto.');
     } catch (error) {
-      const negocio = error as ErrorDeNegocio;
-      expect(negocio.codigo).toBe('DATO_INVALIDO');
-      expect(negocio.mensajeParaElUsuario).toContain('DISTINTO');
-      expect(negocio.mensajeParaElUsuario).toContain('teléfono');
+      expect((error as ErrorDeNegocio).codigo).toBe('CODIGO_DE_INSCRIPCION_INCORRECTO');
+      expect((error as ErrorDeNegocio).mensajeParaElUsuario).toContain('no se guardó nada');
     }
-    // Y no quedó configurado.
-    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).toBeNull();
+    expect(huella()).toBe(antes);
+    expect(cifrado.vecesQueCifro).toBe(0);
+
+    // Descartada: ni el código correcto la revive. El secreto mostrado ya no sirve.
+    expect(() => { servicio.confirmarInscripcionRemota(idJimmy, correcto); }).toThrow(/Empezá de nuevo/);
+    expect(huella()).toBe(antes);
   });
 
-  it('un usuario de VENTA no puede tener PIN remoto', () => {
-    expect(() => { servicio.configurarPinRemoto(idCajera, PIN_REMOTO); }).toThrow(/administrador/);
+  it('y se puede REINTENTAR: una inscripción nueva trae OTRO secreto y esa sí se guarda', () => {
+    const primera = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    expect(() => { servicio.confirmarInscripcionRemota(idJimmy, '000000'); }).toThrow();
+
+    const segunda = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    expect(segunda.secreto).not.toBe(primera.secreto);
+    servicio.confirmarInscripcionRemota(idJimmy, codigoDeLaApp(segunda.secreto, instante));
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.totpSecretoCifrado).not.toBeNull();
   });
 
-  it('rechaza un PIN remoto con formato inválido', () => {
-    expect(() => { servicio.configurarPinRemoto(idJimmy, '123'); }).toThrow(/cuatro dígitos/);
+  it('un código MAL FORMADO no descarta la inscripción: no se llegó a comparar nada', () => {
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    expect(() => { servicio.confirmarInscripcionRemota(idJimmy, '12345'); }).toThrow(/seis dígitos/);
+    servicio.confirmarInscripcionRemota(idJimmy, codigoDeLaApp(inscripcion.secreto, instante));
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.totpSecretoCifrado).not.toBeNull();
   });
 
-  it('el PIN remoto NO sirve para iniciar sesión: es solo para autorizar', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-    expect(servicio.autenticar(idJimmy, PIN_REMOTO).autenticado).toBe(false);
-    expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
+  it('la inscripción VENCE: pasados diez minutos no se confirma', () => {
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    instante += VIDA_DE_LA_INSCRIPCION_PENDIENTE_MS + 1;
+    expect(() => {
+      servicio.confirmarInscripcionRemota(idJimmy, codigoDeLaApp(inscripcion.secreto, instante));
+    }).toThrow(/Empezá de nuevo/);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.totpSecretoCifrado).toBeNull();
   });
 
-  it('el PIN remoto NO autoriza donde no se acepta (cierre de una caja ajena)', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-    // Hasta el 2026-09-15 este caso era la salida controlada, que ahora sí lo
-    // acepta por decisión explícita. La caja ajena sigue sin aceptarlo: quien
-    // cierra la caja de otro está parado frente a ella.
-    expect(
-      servicio.autorizarComoAdministrador(PIN_REMOTO, 'cierre_de_caja_ajena').autenticado,
-    ).toBe(false);
+  it('CANCELAR descarta la inscripción en curso', () => {
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    servicio.cancelarInscripcionRemota(idJimmy);
+    expect(() => {
+      servicio.confirmarInscripcionRemota(idJimmy, codigoDeLaApp(inscripcion.secreto, instante));
+    }).toThrow(/Empezá de nuevo/);
   });
 
-  it('DESDE EL 2026-09-15 el PIN remoto SÍ autoriza la salida controlada, y queda como REMOTO', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-    const permiso = servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada');
+  it('SOLO SOBRE LA PROPIA CUENTA: la inscripción de uno no la confirma otro administrador', () => {
+    const rosa = repos.usuarios.crear({ nombre: 'Rosa', rol: 'administrativo', pinHash: generarHashDePin('4321') }).id;
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    expect(() => {
+      servicio.confirmarInscripcionRemota(rosa, codigoDeLaApp(inscripcion.secreto, instante));
+    }).toThrow(/Empezá de nuevo/);
+    expect(repos.usuarios.obtenerPorId(rosa)?.totpSecretoCifrado).toBeNull();
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.totpSecretoCifrado).toBeNull();
+  });
+
+  it('un usuario de VENTA no se puede inscribir, ni un administrador dado de baja', () => {
+    expect(() => servicio.iniciarInscripcionRemota(idCajera, 'POS pruebas')).toThrow(/administrador activo/);
+    const rosa = repos.usuarios.crear({ nombre: 'Rosa', rol: 'administrativo', pinHash: generarHashDePin('4321') }).id;
+    repos.usuarios.fijarActivo(rosa, false);
+    expect(() => servicio.iniciarInscripcionRemota(rosa, 'POS pruebas')).toThrow(/administrador activo/);
+  });
+
+  it('sin el cifrado del sistema NO se muestra ningún secreto: un secreto que no se puede guardar no se muestra', () => {
+    cifrado.disponible = false;
+    try {
+      servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+      expect.unreachable('Se esperaba CIFRADO_NO_DISPONIBLE.');
+    } catch (error) {
+      expect((error as ErrorDeNegocio).codigo).toBe('CIFRADO_NO_DISPONIBLE');
+    }
+  });
+
+  it('REINSCRIBIRSE reemplaza el secreto anterior SIN conocerlo: el código viejo deja de autorizar y el nuevo autoriza', () => {
+    const viejo = inscribir(servicio, idJimmy, instante);
+    instante += MS_POR_PASO * 4;
+
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    expect(inscripcion.reemplazaUnaAnterior).toBe(true);
+    servicio.confirmarInscripcionRemota(idJimmy, codigoDeLaApp(inscripcion.secreto, instante));
+
+    // El paso consumido se reinició con el secreto: el siguiente paso del NUEVO sirve.
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(viejo, instante, 1), 'cierre_con_diferencia').autenticado).toBe(false);
+    const nuevo = servicio.autorizarComoAdministrador(codigoDeLaApp(inscripcion.secreto, instante, 1), 'cierre_con_diferencia');
+    expect(nuevo.autenticado).toBe(true);
+    expect(nuevo.viaDeAutorizacion).toBe('remoto');
+  });
+
+  it('queda en auditoría y se encola, SIN el secreto ni el código', () => {
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    const codigo = codigoDeLaApp(inscripcion.secreto, instante);
+    servicio.confirmarInscripcionRemota(idJimmy, codigo);
+
+    const asiento = base
+      .prepare("SELECT id, valor_nuevo FROM auditoria_log WHERE accion = 'autorizacion_remota_inscrita'")
+      .get() as { id: string; valor_nuevo: string };
+    expect(JSON.parse(asiento.valor_nuevo)).toEqual({ mecanismo: 'totp', reemplazoUnaAnterior: false });
+    expect(asiento.valor_nuevo).not.toContain(inscripcion.secreto);
+    expect(asiento.valor_nuevo).not.toContain(codigo);
+
+    const cola = base.prepare('SELECT entidad_tipo, entidad_id, payload FROM sync_cola ORDER BY orden_en_lote').all() as {
+      entidad_tipo: string;
+      entidad_id: string;
+      payload: string;
+    }[];
+    expect(cola.map((f) => f.entidad_tipo)).toEqual(['usuarios', 'auditoria_log']);
+    for (const fila of cola) {
+      expect(fila.payload).not.toContain(inscripcion.secreto);
+      expect(fila.payload).not.toContain('totp_secreto_cifrado');
+      expect(fila.payload).not.toContain('totp_ultimo_paso');
+    }
+  });
+});
+
+// ===========================================================================
+describe('Autorización remota por TOTP: la VERIFICACIÓN', () => {
+  const MS_POR_PASO = SEGUNDOS_POR_PASO * MILISEGUNDOS_POR_SEGUNDO;
+
+  it('VECTOR DE RFC 6238: con el secreto del apéndice B y T = 59 s, el código 287082 autoriza como remoto', () => {
+    // «12345678901234567890» en Base32. El vector de 8 dígitos es 94287082; los
+    // 6 que muestra una app son los últimos seis.
+    sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    instante = 59 * MILISEGUNDOS_POR_SEGUNDO;
+
+    const permiso = servicio.autorizarComoAdministrador('287082', 'cierre_con_diferencia');
     expect(permiso.autenticado).toBe(true);
     expect(permiso.viaDeAutorizacion).toBe('remoto');
     expect(permiso.usuario?.id).toBe(idJimmy);
   });
 
-  it('el PIN normal autoriza como PRESENCIAL y el remoto como REMOTO', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
-
-    // Ya no se le pasa ningún `aceptaPinRemoto`: la política sale de la
-    // superficie, y quien llama no tiene dónde contradecirla.
-    const presencial = servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'cierre_con_diferencia');
-    expect(presencial.viaDeAutorizacion).toBe('presencial');
-
-    const remoto = servicio.autorizarComoAdministrador(PIN_REMOTO, 'cierre_con_diferencia');
-    expect(remoto.viaDeAutorizacion).toBe('remoto');
-    expect(remoto.usuario?.id).toBe(idJimmy);
+  it('control del vector: el código de 8 dígitos del RFC NO se acepta, y uno cambiado tampoco', () => {
+    sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+    instante = 59 * MILISEGUNDOS_POR_SEGUNDO;
+    expect(servicio.autorizarComoAdministrador('94287082', 'cierre_con_diferencia').codigo).toBe('FORMATO_INVALIDO');
+    expect(servicio.autorizarComoAdministrador('287083', 'cierre_con_diferencia').codigo).toBe('PIN_INCORRECTO');
   });
 
-  it('configurar el PIN remoto queda en auditoría, sin guardar el código', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+  it('±30 s: el código de un teléfono 30 s ATRASADO o 30 s ADELANTADO se acepta', () => {
+    const secreto = inscribir(servicio, idJimmy, instante);
+    instante += MS_POR_PASO * 3;
 
-    const asiento = base
-      .prepare("SELECT valor_nuevo FROM auditoria_log WHERE accion = 'pin_remoto_configurado'")
-      .get() as { valor_nuevo: string };
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante - MS_POR_PASO), 'cierre_con_diferencia').autenticado).toBe(true);
+    instante += MS_POR_PASO * 3;
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante + MS_POR_PASO), 'cierre_con_diferencia').autenticado).toBe(true);
+  });
 
-    expect(JSON.parse(asiento.valor_nuevo)).toEqual({ configurado: true });
-    expect(asiento.valor_nuevo).not.toContain(PIN_REMOTO);
+  it('±60 s (dos pasos): se RECHAZA y cuenta como intento, atrasado o adelantado', () => {
+    const secreto = inscribir(servicio, idJimmy, instante);
+    instante += MS_POR_PASO * 5;
+
+    const atrasado = servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante - 2 * MS_POR_PASO), 'cierre_con_diferencia');
+    expect(atrasado.autenticado).toBe(false);
+    expect(atrasado.codigo).toBe('PIN_INCORRECTO');
+    const adelantado = servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante + 2 * MS_POR_PASO), 'cierre_con_diferencia');
+    expect(adelantado.autenticado).toBe(false);
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').intentosFallidos).toBe(2);
+  });
+
+  it('el MISMO código no sirve dos veces: CODIGO_YA_USADO, y cuenta como intento', () => {
+    const secreto = inscribir(servicio, idJimmy, instante);
+    instante += MS_POR_PASO * 2;
+    const codigo = codigoDeLaApp(secreto, instante);
+
+    expect(servicio.autorizarComoAdministrador(codigo, 'descuento_excedente').autenticado).toBe(true);
+    const repetido = servicio.autorizarComoAdministrador(codigo, 'cierre_con_diferencia');
+    expect(repetido.autenticado).toBe(false);
+    expect(repetido.codigo).toBe('CODIGO_YA_USADO');
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').intentosFallidos).toBe(1);
+
+    // El código SIGUIENTE sí sirve.
+    instante += MS_POR_PASO;
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante), 'cierre_con_diferencia').autenticado).toBe(true);
+  });
+
+  it('un código ANTERIOR al último usado tampoco sirve, aunque siga dentro de la ventana', () => {
+    const secreto = inscribir(servicio, idJimmy, instante);
+    instante += MS_POR_PASO * 3;
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante), 'salida_controlada').autenticado).toBe(true);
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante, -1), 'salida_controlada').codigo).toBe('CODIGO_YA_USADO');
+  });
+
+  it('el código con el que se CONFIRMÓ la inscripción no sirve para autorizar', () => {
+    const inscripcion = servicio.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    const codigo = codigoDeLaApp(inscripcion.secreto, instante);
+    servicio.confirmarInscripcionRemota(idJimmy, codigo);
+    expect(servicio.autorizarComoAdministrador(codigo, 'cierre_con_diferencia').codigo).toBe('CODIGO_YA_USADO');
+  });
+
+  it('el código remoto NO sirve para iniciar sesión', () => {
+    const secreto = inscribir(servicio, idJimmy, instante);
+    const intento = servicio.autenticar(idJimmy, codigoDeLaApp(secreto, instante, 1));
+    expect(intento.autenticado).toBe(false);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.intentosFallidos).toBe(0);
+  });
+
+  it('donde no se acepta, un código de 6 dígitos es FORMATO_INVALIDO: no autoriza, no consume intento ni paso', () => {
+    const secreto = inscribir(servicio, idJimmy, instante);
+    const codigo = codigoDeLaApp(secreto, instante, 1);
+    const pasoAntes = repos.usuarios.obtenerPorId(idJimmy)?.totpUltimoPaso;
+
+    const intento = servicio.autorizarComoAdministrador(codigo, 'cierre_de_caja_ajena');
+    expect(intento.autenticado).toBe(false);
+    expect(intento.codigo).toBe('FORMATO_INVALIDO');
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_de_caja_ajena').intentosFallidos).toBe(0);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.totpUltimoPaso).toBe(pasoAntes);
+    // Y el mismo código sigue sirviendo donde sí se acepta.
+    expect(servicio.autorizarComoAdministrador(codigo, 'salida_controlada').autenticado).toBe(true);
+  });
+
+  it('con DOS administradores inscritos, cada código se atribuye a su dueño', () => {
+    const rosa = repos.usuarios.crear({ nombre: 'Rosa', rol: 'administrativo', pinHash: generarHashDePin('4321') }).id;
+    const deJimmy = inscribir(servicio, idJimmy, instante);
+    const deRosa = inscribir(servicio, rosa, instante);
+
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(deRosa, instante, 1), 'cierre_con_diferencia').usuario?.id).toBe(rosa);
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(deJimmy, instante, 1), 'cierre_con_diferencia').usuario?.id).toBe(idJimmy);
+  });
+
+  it('un código que coincide con DOS administradores a la vez es AMBIGUO: no autoriza, no cuenta intento, no consume ningún paso', () => {
+    // Con secretos aleatorios pasa muy rara vez; se fuerza sembrando el mismo.
+    const rosa = repos.usuarios.crear({ nombre: 'Rosa', rol: 'administrativo', pinHash: generarHashDePin('4321') }).id;
+    sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy);
+    sembrarAutorizacionRemota(repos.usuarios, cifrado, rosa);
+
+    const intento = servicio.autorizarComoAdministrador(codigoDeLaApp(SECRETO_DE_PRUEBA, instante), 'cierre_con_diferencia');
+    expect(intento.autenticado).toBe(false);
+    expect(intento.codigo).toBe('CODIGO_AMBIGUO');
+    expect(intento.usuario).toBeNull();
+    expect(repos.bloqueosDeAutorizacion.obtener('cierre_con_diferencia').intentosFallidos).toBe(0);
+    expect(repos.usuarios.obtenerPorId(idJimmy)?.totpUltimoPaso).toBeNull();
+    expect(repos.usuarios.obtenerPorId(rosa)?.totpUltimoPaso).toBeNull();
+  });
+
+  it('un administrador DADO DE BAJA deja de autorizar con su código', () => {
+    const rosa = repos.usuarios.crear({ nombre: 'Rosa', rol: 'administrativo', pinHash: generarHashDePin('4321') }).id;
+    const deRosa = inscribir(servicio, rosa, instante);
+    repos.usuarios.fijarActivo(rosa, false);
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(deRosa, instante, 1), 'cierre_con_diferencia').autenticado).toBe(false);
+  });
+
+  it('un secreto que NO SE PUEDE DESCIFRAR no autoriza ni rompe nada, y la bitácora lo dice sin el secreto', () => {
+    const secreto = inscribir(servicio, idJimmy, instante);
+    cifrado.fallarAlDescifrar = true;
+
+    const intento = servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante, 1), 'cierre_con_diferencia');
+    expect(intento.autenticado).toBe(false);
+    expect(intento.codigo).toBe('PIN_INCORRECTO');
+    expect(bitacora.join('\n')).toContain(idJimmy);
+    expect(bitacora.join('\n')).toContain('volver a inscribirse');
+    expect(bitacora.join('\n')).not.toContain(secreto);
+    // Y el PIN normal sigue autorizando.
+    expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'cierre_con_diferencia').autenticado).toBe(true);
   });
 });
 
@@ -630,10 +870,10 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     que no acepta, sin que nada fallara. Ahora la política viaja con la
     superficie y no hay dónde contradecirla.
   */
-  const PIN_REMOTO = '8642';
+  let secreto: string;
 
   beforeEach(() => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    secreto = inscribir(servicio, idJimmy, instante);
   });
 
   it('la tabla cubre las SEIS superficies, sin huecos', () => {
@@ -675,8 +915,10 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     // La mitad que de verdad importa: que la tabla no sea una declaración
     // decorativa sino lo que el servicio hace.
     for (const [superficie, acepta] of Object.entries(ACEPTA_PIN_REMOTO)) {
+      // Un paso más por superficie: un código no sirve dos veces.
+      instante += SEGUNDOS_POR_PASO * MILISEGUNDOS_POR_SEGUNDO;
       const intento = servicio.autorizarComoAdministrador(
-        PIN_REMOTO,
+        codigoDeLaApp(secreto, instante),
         superficie as SuperficieDeAutorizacion,
       );
       expect(intento.autenticado, `${superficie} debería ${acepta ? 'aceptar' : 'rechazar'}`).toBe(
@@ -704,8 +946,6 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
 // ===========================================================================
 describe('Los cinco candados son independientes: las diez combinaciones cruzadas', () => {
   const PIN_MALO = '0000';
-  /** El PIN de autorización a distancia de Jimmy, para los casos con remoto. */
-  const PIN_REMOTO = '8642';
 
   /** Las cuatro superficies de autorización. */
   const SUPERFICIES: readonly SuperficieDeAutorizacion[] = [
@@ -797,14 +1037,14 @@ describe('Los cinco candados son independientes: las diez combinaciones cruzadas
   for (const bloqueadaConRemoto of LAS_QUE_ACEPTAN_REMOTO) {
     for (const otra of LAS_QUE_ACEPTAN_REMOTO.filter((una) => una !== bloqueadaConRemoto)) {
       it(`bloquear ${bloqueadaConRemoto} no bloquea ${otra}, que SIGUE aceptando el PIN REMOTO`, () => {
-        servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+        const secreto = inscribir(servicio, idJimmy, instante);
         agotar(bloqueadaConRemoto);
 
         expect(bloqueada(bloqueadaConRemoto)).toBe(true);
 
         // La otra sigue aceptando el remoto, que es la mitad que importa: no
         // alcanza con que no esté bloqueada, tiene que seguir autorizando.
-        const permiso = servicio.autorizarComoAdministrador(PIN_REMOTO, otra);
+        const permiso = servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante, 1), otra);
         expect(permiso.autenticado).toBe(true);
         expect(permiso.viaDeAutorizacion).toBe('remoto');
       });
@@ -813,33 +1053,33 @@ describe('Los cinco candados son independientes: las diez combinaciones cruzadas
     it(`y ${bloqueadaConRemoto} bloqueada tampoco acepta el remoto: el candado manda`, () => {
       // La contraparte. Un candado que dejara pasar el PIN remoto no sería un
       // candado: bastaría con tener el otro código para saltarlo.
-      servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+      const secreto = inscribir(servicio, idJimmy, instante);
       agotar(bloqueadaConRemoto);
 
-      const intento = servicio.autorizarComoAdministrador(PIN_REMOTO, bloqueadaConRemoto);
+      const intento = servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante, 1), bloqueadaConRemoto);
       expect(intento.autenticado).toBe(false);
       expect(intento.codigo).toBe('AUTORIZACION_BLOQUEADA');
     });
   }
 
   it('agotar la diferencia y el descuento NO impide iniciar sesión ni salir de la app, tampoco con el PIN remoto', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    const secreto = inscribir(servicio, idJimmy, instante);
     agotar('cierre_con_diferencia');
     agotar('descuento_excedente');
 
     expect(bloqueada('cierre_con_diferencia')).toBe(true);
     expect(bloqueada('descuento_excedente')).toBe(true);
     expect(bloqueada('salida_controlada')).toBe(false);
-    expect(servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada').autenticado).toBe(true);
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante, 1), 'salida_controlada').autenticado).toBe(true);
     expect(servicio.autenticar(idJimmy, PIN_DE_JIMMY).autenticado).toBe(true);
   });
 
   it('agotar la SALIDA no bloquea la caja ajena, que sigue aceptando el PIN normal', () => {
-    servicio.configurarPinRemoto(idJimmy, PIN_REMOTO);
+    const secreto = inscribir(servicio, idJimmy, instante);
     agotar('salida_controlada');
 
     expect(bloqueada('salida_controlada')).toBe(true);
-    expect(servicio.autorizarComoAdministrador(PIN_REMOTO, 'salida_controlada').codigo).toBe(
+    expect(servicio.autorizarComoAdministrador(codigoDeLaApp(secreto, instante, 1), 'salida_controlada').codigo).toBe(
       'AUTORIZACION_BLOQUEADA',
     );
     expect(servicio.autorizarComoAdministrador(PIN_DE_JIMMY, 'cierre_de_caja_ajena').autenticado).toBe(

@@ -24,7 +24,8 @@ function usuarioCon(rol: Usuario['rol']): Usuario {
     nombre: rol === 'venta' ? 'Ana' : 'Jimmy',
     rol,
     pinHash: 'scrypt$1$16384$8$1$c2Fs$Y2xhdmU=',
-    pinRemotoHash: null,
+    totpSecretoCifrado: null,
+    totpUltimoPaso: null,
     activo: true,
     intentosFallidos: 0,
     bloqueadoHasta: null,
@@ -115,8 +116,10 @@ describe('Ningún canal de gestión de usuarios queda sin guard', () => {
     expect(fuente).not.toContain('requiereSesion');
   });
 
-  it('el hash del PIN no se copia al DTO que va a la ventana', () => {
+  it('ni el hash del PIN ni el secreto de TOTP se copian al DTO que va a la ventana', () => {
     expect(fuente).not.toContain('pinHash:');
-    expect(fuente).not.toContain('pinRemotoHash:');
+    // Lo único que cruza del TOTP es si está inscrito: `usuario.totpSecretoCifrado !== null`.
+    expect(fuente).not.toMatch(/totpSecretoCifrado:/);
+    expect(fuente).not.toMatch(/totpUltimoPaso/);
   });
 });

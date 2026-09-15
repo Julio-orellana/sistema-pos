@@ -10,7 +10,8 @@ interface FilaUsuario {
   readonly nombre: string;
   readonly rol: Rol;
   readonly pin_hash: string;
-  readonly pin_remoto_hash: string | null;
+  readonly totp_secreto_cifrado: Buffer | null;
+  readonly totp_ultimo_paso: number | null;
   readonly activo: number;
   readonly intentos_fallidos: number;
   readonly bloqueado_hasta: string | null;
@@ -25,7 +26,8 @@ function aEntidad(fila: FilaUsuario): Usuario {
     nombre: fila.nombre,
     rol: fila.rol,
     pinHash: fila.pin_hash,
-    pinRemotoHash: fila.pin_remoto_hash,
+    totpSecretoCifrado: fila.totp_secreto_cifrado,
+    totpUltimoPaso: fila.totp_ultimo_paso,
     activo: desdeColumnaBooleana(fila.activo, 'usuarios.activo'),
     intentosFallidos: fila.intentos_fallidos,
     bloqueadoHasta: fila.bloqueado_hasta,
@@ -147,14 +149,47 @@ export class RepositorioDeUsuarios extends RepositorioBase {
   }
 
   /**
-   * Fija el hash del PIN de autorización remota. `null` lo desconfigura.
-   * Es una columna aparte de `pin_hash` a propósito: ver CLAUDE.md §4.9.
+   * Guarda el secreto de TOTP YA CIFRADO de una persona, y reinicia su último
+   * paso usado: un secreto nuevo empieza sin códigos consumidos.
+   *
+   * Recibe bytes cifrados y nunca el secreto en claro: este repositorio no sabe
+   * cifrar ni tiene por qué ver el secreto. Reemplazar uno anterior es escribir
+   * encima; el viejo deja de existir.
    */
-  public actualizarPinRemotoHash(id: string, pinRemotoHash: string | null): void {
+  public fijarTotpCifrado(id: string, cifrado: Buffer): void {
     this.ejecutar(() => {
       this.base
-        .prepare('UPDATE usuarios SET pin_remoto_hash = ?, actualizado_en = ? WHERE id = ?')
-        .run(pinRemotoHash, ahora(), id);
+        .prepare(
+          `UPDATE usuarios
+              SET totp_secreto_cifrado = ?, totp_ultimo_paso = NULL, actualizado_en = ?
+            WHERE id = ?`,
+        )
+        .run(cifrado, ahora(), id);
+    });
+  }
+
+  /**
+   * Consume un paso de TOTP: lo anota como el último usado SOLO si es posterior
+   * al último anotado. Es un comparar-y-cambiar: dos autorizaciones con el
+   * mismo código no pueden pasar las dos.
+   *
+   * No toca `actualizado_en`: es estado operativo de esta terminal, como el
+   * contador de intentos, y no un cambio del usuario.
+   *
+   * Devuelve `false` si ese paso (o uno posterior) ya se había usado.
+   */
+  public consumirPasoTotp(id: string, paso: number): boolean {
+    return this.ejecutar(() => {
+      const resultado = this.base
+        .prepare(
+          `UPDATE usuarios
+              SET totp_ultimo_paso = @paso
+            WHERE id = @id
+              AND totp_secreto_cifrado IS NOT NULL
+              AND (totp_ultimo_paso IS NULL OR totp_ultimo_paso < @paso)`,
+        )
+        .run({ id, paso });
+      return resultado.changes === 1;
     });
   }
 

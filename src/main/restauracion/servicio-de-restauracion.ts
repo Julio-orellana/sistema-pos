@@ -764,7 +764,7 @@ export class ServicioDeRestauracion {
 
   /**
    * Lo que se escribe distinto de como viene, por tabla (§6.3):
-   *   · usuarios: SIN PIN, sin PIN remoto, sin intentos ni bloqueo;
+   *   · usuarios: SIN PIN, sin secreto de TOTP (nunca estuvo en la nube), sin intentos ni bloqueo;
    *   · ventas: ya sincronizada, porque de la nube viene;
    *   · recibos: sin imprimir, y `pdf_path` en su forma canónica RELATIVA
    *     (`recibos/<nombre>.pdf`). Una fila subida desde la migración 030 ya
@@ -777,7 +777,7 @@ export class ServicioDeRestauracion {
   private sobrescriturasDe(tabla: TablaRestaurable, fila: FilaParaSqlite): FilaParaSqlite {
     switch (tabla) {
       case 'usuarios':
-        return { ...fila, pin_hash: HASH_SIN_PIN, pin_remoto_hash: null, intentos_fallidos: 0, bloqueado_hasta: null };
+        return { ...fila, pin_hash: HASH_SIN_PIN, totp_secreto_cifrado: null, totp_ultimo_paso: null, intentos_fallidos: 0, bloqueado_hasta: null };
       case 'ventas':
         return { ...fila, estado_sincronizacion: 'sincronizado' };
       case 'recibos':

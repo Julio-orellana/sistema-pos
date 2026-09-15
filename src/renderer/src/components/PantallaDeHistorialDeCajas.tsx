@@ -75,7 +75,7 @@ function cambioLoContado(reconteo: ReconteoEnHistorialIpc): boolean {
 }
 
 function via(valor: 'presencial' | 'remoto' | null): string {
-  return valor === 'remoto' ? 'por teléfono (PIN remoto)' : valor === 'presencial' ? 'en persona' : 'vía desconocida';
+  return valor === 'remoto' ? 'por teléfono (autorización remota)' : valor === 'presencial' ? 'en persona' : 'vía desconocida';
 }
 
 export function PantallaDeHistorialDeCajas({

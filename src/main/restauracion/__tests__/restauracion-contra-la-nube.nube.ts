@@ -318,11 +318,12 @@ describe('La restauración contra pos-pruebas-descartable', () => {
   });
 
   it('TODO usuario restaurado quedó sin ningún PIN utilizable', () => {
-    const usuarios = destino.base.prepare('SELECT nombre, pin_hash, pin_remoto_hash, intentos_fallidos, bloqueado_hasta FROM usuarios').all() as Record<string, unknown>[];
+    const usuarios = destino.base.prepare('SELECT nombre, pin_hash, totp_secreto_cifrado, totp_ultimo_paso, intentos_fallidos, bloqueado_hasta FROM usuarios').all() as Record<string, unknown>[];
     expect(usuarios.length).toBeGreaterThanOrEqual(2);
     for (const u of usuarios) {
       expect(u.pin_hash).toBe(HASH_SIN_PIN);
-      expect(u.pin_remoto_hash).toBeNull();
+      expect(u.totp_secreto_cifrado).toBeNull();
+      expect(u.totp_ultimo_paso).toBeNull();
       expect(u.intentos_fallidos).toBe(0);
       expect(u.bloqueado_hasta).toBeNull();
     }

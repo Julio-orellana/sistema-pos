@@ -29,9 +29,13 @@ import { FlujoDeAnulacionDeVenta } from '@main/ipc/anulacion-de-venta';
 import type { PedidoDeAnulacionIpc, ResultadoDeAnulacionIpc } from '@shared/types/ipc';
 import { ServicioDeVenta, type DatosDeLaVenta } from '../servicio-de-venta';
 import { ServicioDeAnulacionDeVenta } from '../servicio-de-anulacion';
+import { CifradoDePrueba, codigoDeLaApp, SECRETO_DE_PRUEBA, sembrarAutorizacionRemota } from '@main/domain/usuarios/__tests__/ayuda-totp';
 
 const PIN_DE_JIMMY = '2468';
-const PIN_REMOTO_DE_JIMMY = '9753';
+/** El cifrado del sistema, de prueba: el mismo para sembrar el secreto y para verificarlo. */
+const cifrado = new CifradoDePrueba();
+/** El código que muestra ahora la app de autenticación de Jimmy. */
+const codigoRemotoDeJimmy = (): string => codigoDeLaApp(SECRETO_DE_PRUEBA, Date.now());
 const PIN_DE_ANA = '1357';
 const PIN_MALO = '0000';
 const MOTIVO = 'el cliente devolvió el producto';
@@ -200,6 +204,7 @@ beforeEach(() => {
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
   });
   bitacoraTecnica = new BitacoraQueGuarda();
   anulacion = new ServicioDeAnulacionDeVenta({
@@ -218,7 +223,7 @@ beforeEach(() => {
   flujo = new FlujoDeAnulacionDeVenta({ anulacion, autenticacion });
 
   idJimmy = repos.usuarios.crear({ nombre: 'Jimmy', rol: 'administrativo', pinHash: generarHashDePin(PIN_DE_JIMMY) }).id;
-  repos.usuarios.actualizarPinRemotoHash(idJimmy, generarHashDePin(PIN_REMOTO_DE_JIMMY));
+  sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy);
   idAna = repos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pinHash: generarHashDePin(PIN_DE_ANA) }).id;
   idCategoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
   idMaiz = crearProducto('Maíz blanco', '4.25', '100');
@@ -839,13 +844,18 @@ describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulació
 
 // ===========================================================================
 describe('Autorización: superficie propia, sin PIN remoto, cada rechazo con su asiento', () => {
-  it('el PIN REMOTO se rechaza en esta superficie y no anula nada', () => {
+  it('el CÓDIGO REMOTO (6 dígitos) se rechaza en esta superficie y no anula nada', () => {
+    // Desde la migración 036 el remoto es un código TOTP de seis dígitos, así
+    // que en una superficie que no lo acepta ni siquiera es un PIN posible:
+    // FORMATO_INVALIDO, sin consumir intento (antes era un PIN de cuatro
+    // dígitos que no coincidía, PIN_INCORRECTO).
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
 
-    const resultado = pedir(ventaId, PIN_REMOTO_DE_JIMMY);
+    const resultado = pedir(ventaId, codigoRemotoDeJimmy());
 
     expect(resultado.anulada).toBe(false);
-    expect(resultado.codigo).toBe('PIN_INCORRECTO');
+    expect(resultado.codigo).toBe('FORMATO_INVALIDO');
+    expect(repos.bloqueosDeAutorizacion.obtener('anulacion_de_venta').intentosFallidos).toBe(0);
     expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toBeNull();
     expect(inventarioDe(idMaiz)).toBe('98.000');
   });

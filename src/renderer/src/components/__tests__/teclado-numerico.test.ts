@@ -253,3 +253,49 @@ describe('Modo cantidad que ADMITE CERO: contar efectivo', () => {
     expect(tecla('5')?.disabled).toBe(true);
   });
 });
+
+// ===========================================================================
+describe('Modo PIN con varios largos: el PIN normal (4) o el código de la app (6)', () => {
+  it('con [4, 6] confirma a los cuatro dígitos, deja seguir hasta seis y confirma a los seis', () => {
+    montar({ largos: [4, 6] });
+    pulsar('1', '2', '3', '4');
+    expect(tecla('confirmar')?.disabled).toBe(false);
+    expect(tecla('5')?.disabled).toBe(false);
+
+    pulsar('5');
+    // Cinco no es ninguno de los dos largos.
+    expect(tecla('confirmar')?.disabled).toBe(true);
+
+    pulsar('6');
+    expect(valorActual).toBe('123456');
+    expect(tecla('confirmar')?.disabled).toBe(false);
+    expect(tecla('7')?.disabled).toBe(true);
+    pulsar('confirmar');
+    expect(confirmaciones).toBe(1);
+  });
+
+  it('con [4, 6] muestra cuatro puntos al empezar y crece con lo tecleado, sin mostrar el número', () => {
+    montar({ largos: [4, 6] });
+    const visor = (): Element | null => contenedor.querySelector('[data-prueba="puntos-del-pin"]');
+    expect(visor()?.querySelectorAll('.teclado__punto')).toHaveLength(4);
+    pulsar('9', '8', '7', '6', '5');
+    expect(visor()?.querySelectorAll('.teclado__punto')).toHaveLength(5);
+    expect(visor()?.querySelectorAll('.teclado__punto--lleno')).toHaveLength(5);
+    expect(visor()?.textContent).toBe('');
+  });
+
+  it('con [6] (la inscripción) no confirma a los cuatro', () => {
+    montar({ largos: [6] });
+    pulsar('1', '2', '3', '4');
+    expect(tecla('confirmar')?.disabled).toBe(true);
+    pulsar('5', '6');
+    expect(tecla('confirmar')?.disabled).toBe(false);
+  });
+
+  it('sin `largos` sigue siendo exactamente cuatro', () => {
+    montar();
+    pulsar('1', '2', '3', '4');
+    expect(tecla('5')?.disabled).toBe(true);
+    expect(tecla('confirmar')?.disabled).toBe(false);
+  });
+});

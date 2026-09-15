@@ -38,6 +38,7 @@ import { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-de-lim
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { LogTecnicoSilencioso } from '@main/log-tecnico';
+import { CifradoDePrueba } from '@main/domain/usuarios/__tests__/ayuda-totp';
 
 /** Los PIN de la terminal de origen. Ninguno tiene que servir después de restaurar. */
 export const PIN_DE_JIMMY = '2468';
@@ -87,6 +88,7 @@ export function sembrarTerminalDeOrigen(base: Database, carpetaDeDatos: string):
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado: new CifradoDePrueba(),
   });
   const usuarios = new ServicioDeUsuarios({ base, usuarios: repos.usuarios, auditoria: repos.auditoria });
   const categorias = new ServicioDeCategorias({ base, categorias: repos.categorias, auditoria: repos.auditoria });

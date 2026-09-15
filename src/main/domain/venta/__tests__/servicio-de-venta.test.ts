@@ -21,9 +21,13 @@ import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ejecutarConRespuesta } from '@main/ipc/respuesta';
 import type { LogTecnico, OrigenTecnico } from '@main/log-tecnico';
 import { ServicioDeVenta, type DatosDeLaVenta } from '../servicio-de-venta';
+import { CifradoDePrueba, codigoDeLaApp, SECRETO_DE_PRUEBA, sembrarAutorizacionRemota } from '@main/domain/usuarios/__tests__/ayuda-totp';
 
 const PIN_DE_JIMMY = '2468';
-const PIN_REMOTO_DE_JIMMY = '9753';
+/** El cifrado del sistema, de prueba: el mismo para sembrar el secreto y para verificarlo. */
+const cifrado = new CifradoDePrueba();
+/** El código que muestra ahora la app de autenticación de Jimmy. */
+const codigoRemotoDeJimmy = (): string => codigoDeLaApp(SECRETO_DE_PRUEBA, Date.now());
 
 /** Bitácora técnica que guarda lo que se le escribe, para poder leerlo. */
 class BitacoraQueGuarda implements LogTecnico {
@@ -119,6 +123,7 @@ beforeEach(() => {
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
   });
   bitacoraTecnica = new BitacoraQueGuarda();
   venta = new ServicioDeVenta({
@@ -139,7 +144,7 @@ beforeEach(() => {
     rol: 'administrativo',
     pinHash: generarHashDePin(PIN_DE_JIMMY),
   }).id;
-  repos.usuarios.actualizarPinRemotoHash(idJimmy, generarHashDePin(PIN_REMOTO_DE_JIMMY));
+  sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy);
 
   idCajera = repos.usuarios.crear({
     nombre: 'Ana',
@@ -378,7 +383,7 @@ describe('Descuento discrecional: el tope del rol decide si hace falta PIN', () 
     fijarTopes();
 
     const intento = autenticacion.autorizarComoAdministrador(
-      PIN_REMOTO_DE_JIMMY,
+      codigoRemotoDeJimmy(),
       'descuento_excedente',
     );
 
@@ -393,7 +398,7 @@ describe('Descuento discrecional: el tope del rol decide si hace falta PIN', () 
     // `salida_controlada` salió de esta lista el 2026-09-15 por una SEGUNDA
     // decisión explícita (CLAUDE.md §4.41), no por heredar la del descuento.
     for (const superficie of ['cierre_de_caja_ajena', 'saltar_lote_de_sincronizacion'] as const) {
-      const intento = autenticacion.autorizarComoAdministrador(PIN_REMOTO_DE_JIMMY, superficie);
+      const intento = autenticacion.autorizarComoAdministrador(codigoRemotoDeJimmy(), superficie);
       expect(intento.autenticado, `${superficie} no debe aceptar el PIN remoto`).toBe(false);
       expect(intento.usuario).toBeNull();
     }
@@ -405,7 +410,7 @@ describe('Descuento discrecional: el tope del rol decide si hace falta PIN', () 
     abrirCaja();
 
     const permiso = autenticacion.autorizarComoAdministrador(
-      PIN_REMOTO_DE_JIMMY,
+      codigoRemotoDeJimmy(),
       'descuento_excedente',
     );
     const resultado = venta.registrar(idCajera, 'venta', {

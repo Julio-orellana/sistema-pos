@@ -19,7 +19,8 @@ import {
   esquemaCierreDeCaja,
   esquemaPedidoDeAnulacion,
   esquemaIntentoDeIngreso,
-  esquemaPinRemoto,
+  esquemaCodigoDeInscripcion,
+  type InscripcionRemotaIpc,
   esquemaPrimerAdministrador,
   esquemaSolicitudDiagnostico,
   type DiagnosticoAplicacion,
@@ -73,6 +74,7 @@ import {
 } from './catalogo';
 import { registrarManejadoresDeVenta } from './venta';
 import { registrarManejadoresDeUsuarios } from './usuarios';
+import { matrizDeQr } from '@main/domain/usuarios/qr';
 import { registrarManejadoresDeNube } from './nube';
 import { registrarManejadoresDeSincronizacion } from './sincronizacion';
 import { registrarManejadoresDeRestauracion } from './restauracion';
@@ -357,23 +359,53 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
       }),
   );
 
+  // --- Autorización remota por TOTP (migraciones 036 y 037) -----------------
+  // Los tres canales: solo un administrador, y SIEMPRE sobre su propia cuenta.
+  // El id sale de la sesión, nunca del payload.
+  const enSesionOFallar = (): { readonly id: string } => {
+    const enSesion = dependencias.sesion.obtener();
+    if (enSesion === null) {
+      throw new Error('No hay sesión iniciada.');
+    }
+    return enSesion;
+  };
+
   ipcMain.handle(
-    CANALES_IPC.configurarPinRemoto,
-    async (_evento, payload: unknown): Promise<RespuestaIpc<boolean>> =>
-      ejecutarConRespuesta('CONFIGURACION_DE_PIN_REMOTO_FALLIDA', () =>
-        // Solo un administrador, y solo sobre SU PROPIO PIN: el id sale de la
-        // sesión, nunca del payload.
+    CANALES_IPC.iniciarAutorizacionRemota,
+    async (): Promise<RespuestaIpc<InscripcionRemotaIpc>> =>
+      ejecutarConRespuesta('INSCRIPCION_REMOTA_FALLIDA', () =>
         requiereRol(dependencias.sesion, 'administrativo', () => {
-          const datos = esquemaPinRemoto.parse(payload);
-          const enSesion = dependencias.sesion.obtener();
-          if (enSesion === null) {
-            throw new Error('No hay sesión iniciada.');
-          }
-          // Solo sobre SU PROPIO PIN: el id sale de la sesión, nunca del
-          // payload. La regla de que debe diferir del PIN normal vive en el
-          // servicio, no aquí: una validación en la frontera se saltaría
-          // llamando al servicio desde otro lugar.
-          dependencias.autenticacion.configurarPinRemoto(enSesion.id, datos.pin);
+          // El emisor es el nombre de la aplicación: «POS Jimmy Cano» en el
+          // instalador. Es lo que el teléfono muestra encima del código.
+          const inscripcion = dependencias.autenticacion.iniciarInscripcionRemota(enSesionOFallar().id, app.getName());
+          return {
+            secreto: inscripcion.secreto,
+            qr: matrizDeQr(inscripcion.uri),
+            reemplazaUnaAnterior: inscripcion.reemplazaUnaAnterior,
+            venceEn: inscripcion.venceEn,
+          };
+        }),
+      ),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.confirmarAutorizacionRemota,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<boolean>> =>
+      ejecutarConRespuesta('INSCRIPCION_REMOTA_FALLIDA', () =>
+        requiereRol(dependencias.sesion, 'administrativo', () => {
+          const datos = esquemaCodigoDeInscripcion.parse(payload);
+          dependencias.autenticacion.confirmarInscripcionRemota(enSesionOFallar().id, datos.codigo);
+          return true;
+        }),
+      ),
+  );
+
+  ipcMain.handle(
+    CANALES_IPC.cancelarAutorizacionRemota,
+    async (): Promise<RespuestaIpc<boolean>> =>
+      ejecutarConRespuesta('INSCRIPCION_REMOTA_FALLIDA', () =>
+        requiereRol(dependencias.sesion, 'administrativo', () => {
+          dependencias.autenticacion.cancelarInscripcionRemota(enSesionOFallar().id);
           return true;
         }),
       ),

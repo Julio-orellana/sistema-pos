@@ -468,11 +468,19 @@ app.whenReady().then(
 
     const baseDeDatos = obtenerBaseDeDatos();
     const repositorios = crearRepositorios(baseDeDatos);
+    // Bitácora TÉCNICA (§4.14): se crea antes que los servicios porque la
+    // autenticación también la usa, para anotar un secreto de TOTP que no se
+    // pudo descifrar (sin el secreto, solo el id).
+    const logTecnico = new LogTecnicoEnArchivo(app.getPath('userData'));
     const autenticacion = new ServicioDeAutenticacion({
       base: baseDeDatos,
       usuarios: repositorios.usuarios,
       auditoria: repositorios.auditoria,
       bloqueosDeAutorizacion: repositorios.bloqueosDeAutorizacion,
+      // El secreto de TOTP se cifra con el mismo `safeStorage` que la
+      // credencial de sincronización (§4.23), y queda atado al nombre del producto.
+      cifrado: safeStorage,
+      log: logTecnico,
     });
     const sesion = new SesionActual();
     const caja = new ServicioDeCaja({
@@ -558,7 +566,6 @@ app.whenReady().then(
     */
     const carpetaDePdf = join(app.getPath('userData'), SUBCARPETA_DE_RECIBOS);
     mkdirSync(carpetaDePdf, { recursive: true });
-    const logTecnico = new LogTecnicoEnArchivo(app.getPath('userData'));
     const carpetaDeImpresorasSimuladas = app.isPackaged ? '' : (process.env.POS_IMPRESORAS_SIMULADAS ?? '');
     const enviadorDeImpresion: EnviadorRaw =
       carpetaDeImpresorasSimuladas === '' ? new EnviadorPorPowerShell() : new EnviadorSimulado(carpetaDeImpresorasSimuladas);

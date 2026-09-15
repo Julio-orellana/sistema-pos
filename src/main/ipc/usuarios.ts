@@ -6,10 +6,10 @@
  * un renderer comprometido invoca el canal igual, y ahí es donde el guard tiene
  * que estar. Es la misma regla que ya rige para el catálogo.
  *
- * QUÉ NO CRUZA HACIA LA VENTANA: ni `pin_hash` ni `pin_remoto_hash`. El hash no
+ * QUÉ NO CRUZA HACIA LA VENTANA: ni `pin_hash` ni el secreto de TOTP. El hash no
  * le sirve de nada a la interfaz y exponerlo pondría al alcance de un renderer
  * comprometido el material con el que atacar los PIN fuera de línea. Lo que sí
- * viaja es si el PIN remoto está configurado, que es un sí o un no.
+ * viaja es si la autorización remota está inscrita, que es un sí o un no.
  *
  * QUIÉN ES EL ACTOR sale SIEMPRE de la sesión del proceso principal, nunca del
  * payload: si viniera del mensaje, cualquiera podría firmar sus cambios con el
@@ -74,7 +74,7 @@ export function registrarManejadoresDeUsuarios(
       nombre: usuario.nombre,
       rol: usuario.rol,
       activo: usuario.activo,
-      tienePinRemoto: usuario.pinRemotoHash !== null,
+      tieneAutorizacionRemota: usuario.totpSecretoCifrado !== null,
       sinPin: !tienePin(usuario.pinHash),
       bloqueado,
       esUnoMismo: usuario.id === actorId,

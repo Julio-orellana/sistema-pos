@@ -1,19 +1,24 @@
 /**
  * Dos usuarios activos no pueden compartir un PIN.
  *
- * VIVE EN SU PROPIO MÓDULO porque la regla la necesitan DOS servicios: el de
- * gestión de usuarios, al crear a alguien y al cambiarle el PIN, y el de
- * autenticación, al configurar un PIN remoto. Escribirla dos veces sería
- * garantizar que un día se apliquen criterios distintos en cada puerta, y la
- * colisión entraría por la que quedó floja.
+ * VIVE EN SU PROPIO MÓDULO por el día que la necesite otro servicio. Hoy la usa
+ * el de gestión de usuarios, al crear a alguien y al cambiarle el PIN.
+ *
+ * **YA NO SE APLICA A LA AUTORIZACIÓN REMOTA** (migraciones 036 y 037). Existía
+ * para el PIN remoto fijo porque un administrador ELEGÍA cuatro dígitos que
+ * podían coincidir con los de otro. El código remoto ahora es TOTP: el secreto
+ * es aleatorio de 160 bits, lo genera el sistema y nadie lo elige, así que la
+ * colisión de elección no es un escenario real. El caso rarísimo de que dos
+ * códigos de TOTP coincidan en el mismo momento lo resuelve la verificación
+ * misma, que rechaza un código ambiguo (`autenticacion.ts`). Para el PIN NORMAL
+ * esta regla sigue exactamente igual.
  *
  * DÓNDE ESTÁ EL DAÑO DE VERDAD, que no es donde parece. En el ingreso la
  * colisión es molesta pero acotada: primero se elige el nombre y después se
  * teclea, así que compartir PIN solo significa que una persona puede entrar
  * como otra si sabe que lo comparten. **El problema serio está en el diálogo de
- * autorización**, que prueba el PIN contra todos los administradores activos
- * —primero los normales, después los remotos— y se queda con el primero que
- * coincida (CLAUDE.md §4.9). Con dos PIN iguales,
+ * autorización**, que prueba el PIN contra todos los administradores activos y
+ * se queda con el primero que coincida (CLAUDE.md §4.9). Con dos PIN iguales,
  * `descuento_autorizado_por` y `diferencia_autorizada_por` terminan nombrando a
  * la persona equivocada, en silencio y sin forma de detectarlo después. En un
  * sistema cuyo valor es la auditoría, eso es peor que la suplantación.
@@ -36,19 +41,14 @@ import type { Usuario } from '@main/database/repositories/entidades';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 
 /**
- * ¿Este PIN es el de esta persona, por cualquiera de sus dos vías?
+ * ¿Este PIN es el PIN NORMAL de esta persona?
  *
- * Se miran el PIN normal Y el remoto, porque el diálogo de autorización prueba
- * los dos: un PIN que coincida con el remoto de un administrador produce
- * exactamente la misma atribución equivocada que uno que coincida con el
- * normal.
+ * Hasta la migración 037 se miraba además el PIN remoto fijo. Ya no existe: la
+ * autorización remota es TOTP, con un secreto que nadie elige.
  */
 export function pinCoincideCon(pin: string, usuario: Usuario): boolean {
   try {
-    if (verificarPin(pin, usuario.pinHash)) {
-      return true;
-    }
-    return usuario.pinRemotoHash !== null && verificarPin(pin, usuario.pinRemotoHash);
+    return verificarPin(pin, usuario.pinHash);
   } catch {
     /*
       Un hash ilegible no se puede comparar, así que no se puede afirmar que

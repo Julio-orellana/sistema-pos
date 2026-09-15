@@ -68,12 +68,19 @@ export interface Usuario {
   readonly rol: Rol;
   readonly pinHash: string;
   /**
-   * Hash del PIN de autorización REMOTA, o `null` si no lo configuró.
+   * El secreto de TOTP de la autorización remota, CIFRADO con `safeStorage`, o
+   * `null` si esta persona no se inscribió (migración 036).
    *
-   * Es un segundo PIN, distinto del normal, pensado para dictarse por
-   * teléfono. Ver la migración 005 y CLAUDE.md §4.9.
+   * **NUNCA sale de esta terminal**: quien lo descifre calcula todos los códigos
+   * futuros de esa persona. No viaja a la nube, no se registra en ningún log y
+   * no cruza a la ventana. Reemplaza al `pin_remoto_hash` fijo de la 005.
    */
-  readonly pinRemotoHash: string | null;
+  readonly totpSecretoCifrado: Buffer | null;
+  /**
+   * El último paso de tiempo de TOTP aceptado para esta persona, para que un
+   * código sirva una sola vez (RFC 6238 §5.2). Estado operativo: no viaja.
+   */
+  readonly totpUltimoPaso: number | null;
   readonly activo: boolean;
   /** Intentos de PIN fallidos consecutivos. Se reinicia al ingresar bien. */
   readonly intentosFallidos: number;

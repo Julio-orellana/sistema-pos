@@ -41,6 +41,10 @@ export type CodigoErrorDeNegocio =
   | 'VOUCHER_NO_COINCIDE'
   | 'UNIDAD_CAMBIADA'
   | 'CONTADORES_INCONSISTENTES'
+  // Autorización remota por TOTP (migraciones 036 y 037).
+  | 'CIFRADO_NO_DISPONIBLE'
+  | 'INSCRIPCION_NO_VIGENTE'
+  | 'CODIGO_DE_INSCRIPCION_INCORRECTO'
   | 'ANULACION_INMUTABLE';
 
 /**

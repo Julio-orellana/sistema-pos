@@ -28,9 +28,13 @@ import {
   VIDA_DE_LA_AUTORIZACION_PENDIENTE_MS,
   firmaDelEfectivo,
 } from '../cierre-de-caja';
+import { CifradoDePrueba, codigoDeLaApp, SECRETO_DE_PRUEBA, sembrarAutorizacionRemota } from '@main/domain/usuarios/__tests__/ayuda-totp';
 
 const PIN_DE_JIMMY = '2468';
-const PIN_REMOTO_DE_JIMMY = '9753';
+/** El cifrado del sistema, de prueba: el mismo para sembrar el secreto y para verificarlo. */
+const cifrado = new CifradoDePrueba();
+/** El código que muestra ahora la app de autenticación de Jimmy. */
+const codigoRemotoDeJimmy = (): string => codigoDeLaApp(SECRETO_DE_PRUEBA, Date.now());
 const PIN_DE_LA_CAJERA = '1357';
 const PIN_EQUIVOCADO = '1111';
 
@@ -65,6 +69,7 @@ beforeEach(() => {
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
   });
   flujo = new FlujoDeCierreDeCaja({ caja, autenticacion, ahora: (): number => reloj });
 
@@ -73,7 +78,7 @@ beforeEach(() => {
     rol: 'administrativo',
     pinHash: generarHashDePin(PIN_DE_JIMMY),
   }).id;
-  repos.usuarios.actualizarPinRemotoHash(idJimmy, generarHashDePin(PIN_REMOTO_DE_JIMMY));
+  sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy);
   const idCajera = repos.usuarios.crear({
     nombre: 'Cajera',
     rol: 'venta',
@@ -131,7 +136,7 @@ describe('UN PIN CORRECTO NO CIERRA LA CAJA: revela el monto y espera', () => {
   });
 
   it('con el PIN REMOTO: lo mismo, registrado como remoto, y la caja sigue abierta', () => {
-    const revelado = flujo.intentar({ efectivo: CONTEO_DE_MENOS, pin: PIN_REMOTO_DE_JIMMY }, cajera);
+    const revelado = flujo.intentar({ efectivo: CONTEO_DE_MENOS, pin: codigoRemotoDeJimmy() }, cajera);
 
     expect(revelado.codigo).toBe(CODIGO_AUTORIZACION_VALIDADA);
     expect(revelado.autorizadaVia).toBe('remoto');
@@ -141,7 +146,7 @@ describe('UN PIN CORRECTO NO CIERRA LA CAJA: revela el monto y espera', () => {
   });
 
   it('LA SEGUNDA CONFIRMACIÓN cierra, con el autorizante y la vía del PIN que se validó', () => {
-    flujo.intentar({ efectivo: CONTEO_DE_MENOS, pin: PIN_REMOTO_DE_JIMMY }, cajera);
+    flujo.intentar({ efectivo: CONTEO_DE_MENOS, pin: codigoRemotoDeJimmy() }, cajera);
     const cerrado = flujo.confirmarAutorizacion(CONTEO_DE_MENOS, cajera);
 
     expect(cerrado.cerrada).toBe(true);

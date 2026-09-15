@@ -17,7 +17,7 @@
  *
  * Hay DOS autorizaciones posibles y son distintas, con candados distintos:
  * cerrar una caja ajena (solo PIN normal de administrador) y cerrar con
- * diferencia (acepta también el PIN remoto). Un mismo cierre puede necesitar
+ * diferencia (acepta también el código de la app de autenticación). Un mismo cierre puede necesitar
  * las dos, y en ese orden.
  *
  * TRES AGREGADOS DEL 2026-09-14, de lo que Jimmy encontró probando en el
@@ -52,6 +52,7 @@ import type {
   TurnoAbierto,
 } from '@shared/types/ipc';
 import { formatearQuetzales } from '@shared/money';
+import { LARGOS_DE_AUTORIZACION } from '@shared/pin';
 import { CapturaDeEfectivo } from './CapturaDeEfectivo';
 import { TecladoNumerico } from './TecladoNumerico';
 import { llamarAlProcesoPrincipal } from './llamar-al-proceso-principal';
@@ -483,8 +484,8 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
           )}
 
           <p className="subtitulo">
-            Un administrador debe autorizar el cierre con su PIN, en persona o dictándolo
-            por teléfono.
+            Un administrador debe autorizar el cierre con su PIN en persona, o dictando por
+            teléfono el código de seis dígitos de su aplicación.
           </p>
 
           <TecladoNumerico
@@ -494,6 +495,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
               cerrar({ diferencia: pin });
             }}
             deshabilitado={trabajando}
+            largos={LARGOS_DE_AUTORIZACION}
           />
 
           <button type="button" className="boton--secundario" onClick={volverAContar}>
@@ -568,8 +570,8 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
             {resultado.mensaje}
           </p>
           <p className="subtitulo">
-            Puede autorizar en persona o dictando el PIN por teléfono. Los conteos quedan
-            registrados.
+            Puede autorizar con su PIN en persona, o dictando por teléfono el código de seis
+            dígitos de su aplicación. Los conteos quedan registrados.
           </p>
 
           <TecladoNumerico
@@ -579,6 +581,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
               cerrar({ diferencia: pin });
             }}
             deshabilitado={trabajando}
+            largos={LARGOS_DE_AUTORIZACION}
           />
 
           <button type="button" className="boton--secundario" onClick={volverAContar}>

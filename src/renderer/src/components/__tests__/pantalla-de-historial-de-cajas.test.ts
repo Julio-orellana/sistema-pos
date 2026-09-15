@@ -240,7 +240,7 @@ describe('La lista: cada caso se ve distinto', () => {
     const a = fila('sesion-a');
     expect(dentro(a, 'historial-cierre')?.textContent).toContain('faltante de Q20.00');
     expect(dentro(a, 'historial-cierre')?.textContent).toContain('teórico Q500.00');
-    expect(dentro(a, 'historial-autorizacion')?.textContent).toBe('Diferencia autorizada por Jimmy, por teléfono (PIN remoto)');
+    expect(dentro(a, 'historial-autorizacion')?.textContent).toBe('Diferencia autorizada por Jimmy, por teléfono (autorización remota)');
     expect(dentro(a, 'historial-etiqueta-reconteo')).toBeNull();
     expect(dentro(a, 'historial-etiqueta-ajena')).toBeNull();
   });
@@ -342,14 +342,14 @@ describe('El detalle', () => {
       await montar();
       const f = fila('sesion-f');
       expect(dentro(f, 'historial-etiqueta-reconteo')?.textContent).toBe(
-        'Cambió el esperado: contó Q520.00, teórico de Q500.00 a Q520.00 · autorizó Jimmy, por teléfono (PIN remoto)',
+        'Cambió el esperado: contó Q520.00, teórico de Q500.00 a Q520.00 · autorizó Jimmy, por teléfono (autorización remota)',
       );
       await tocar(dentro(f, 'historial-ver'));
       const detalle = dentro(contenedor, 'detalle-reconteo')?.textContent ?? '';
       expect(detalle).not.toContain('Se corrigió un conteo');
       expect(detalle).not.toContain('con otro número');
       expect(detalle).toContain('Lo contado no cambió');
-      expect(detalle).toContain('El cierre lo autorizó Jimmy, por teléfono (PIN remoto)');
+      expect(detalle).toContain('El cierre lo autorizó Jimmy, por teléfono (autorización remota)');
     } finally {
       sesiones.pop();
     }

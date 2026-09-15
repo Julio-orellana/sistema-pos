@@ -17,6 +17,19 @@
  */
 export const LARGO_DEL_PIN = 4;
 
+/**
+ * El código de autorización remota son seis dígitos: los que muestra la app de
+ * autenticación del teléfono (TOTP, migración 036). Cambia cada 30 segundos.
+ */
+export const LARGO_DEL_CODIGO_REMOTO = 6;
+
+/**
+ * Los largos que acepta un diálogo de autorización que admite las dos vías:
+ * cuatro dígitos son el PIN normal, seis el código de la app. El proceso
+ * principal decide cuál es por el largo; la pantalla solo deja confirmar esos dos.
+ */
+export const LARGOS_DE_AUTORIZACION: readonly number[] = [LARGO_DEL_PIN, LARGO_DEL_CODIGO_REMOTO];
+
 /** Un PIN válido son exactamente cuatro dígitos, sin espacios ni símbolos. */
 const FORMATO_DEL_PIN = /^[0-9]{4}$/;
 

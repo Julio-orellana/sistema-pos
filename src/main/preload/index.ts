@@ -20,6 +20,7 @@ import {
   type EstadoDeSesion,
   type EstadoDeVenta,
   type PedidoDeCobro,
+  type InscripcionRemotaIpc,
   type PedidoDeAnulacionIpc,
   type ResultadoDeAnulacionIpc,
   type ResultadoDeCobro,
@@ -114,10 +115,12 @@ const apiPos: ApiPos = {
         RespuestaIpc<SesionIniciada>
       >,
 
-    configurarPinRemoto: (pin: string): Promise<RespuestaIpc<boolean>> =>
-      ipcRenderer.invoke(CANALES_IPC.configurarPinRemoto, { pin }) as Promise<
-        RespuestaIpc<boolean>
-      >,
+    iniciarAutorizacionRemota: (): Promise<RespuestaIpc<InscripcionRemotaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.iniciarAutorizacionRemota) as Promise<RespuestaIpc<InscripcionRemotaIpc>>,
+    confirmarAutorizacionRemota: (codigo: string): Promise<RespuestaIpc<boolean>> =>
+      ipcRenderer.invoke(CANALES_IPC.confirmarAutorizacionRemota, { codigo }) as Promise<RespuestaIpc<boolean>>,
+    cancelarAutorizacionRemota: (): Promise<RespuestaIpc<boolean>> =>
+      ipcRenderer.invoke(CANALES_IPC.cancelarAutorizacionRemota) as Promise<RespuestaIpc<boolean>>,
   },
 
   caja: {

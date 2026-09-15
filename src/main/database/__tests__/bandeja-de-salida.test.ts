@@ -601,7 +601,7 @@ describe('El recibo se encola UNA vez, al emitirse, y nunca más', () => {
 // ===========================================================================
 
 describe('Las columnas excluidas no salen de esta terminal', () => {
-  it('el payload de usuarios no lleva pin_hash, pin_remoto_hash, intentos_fallidos ni bloqueado_hasta', () => {
+  it('el payload de usuarios no lleva pin_hash, el secreto de TOTP, su último paso, intentos_fallidos ni bloqueado_hasta', () => {
     const creado = usuarios.crear(idJimmy, { nombre: 'Pedro', rol: 'venta', pin: '4321' });
 
     const fila = cola().find((f) => f.entidad_tipo === 'usuarios')!;
@@ -616,12 +616,13 @@ describe('Las columnas excluidas no salen de esta terminal', () => {
     expect(payload.rol).toBe('venta');
   });
 
-  it('la lista de exclusiones de usuarios es exactamente la de la decisión 17, más las dos locales', () => {
+  it('la lista de exclusiones de usuarios es exactamente la de la decisión 17, más las locales y las dos de TOTP (migración 036)', () => {
     expect(COLUMNAS_EXCLUIDAS.usuarios).toEqual([
       'intentos_fallidos',
       'bloqueado_hasta',
       'pin_hash',
-      'pin_remoto_hash',
+      'totp_secreto_cifrado',
+      'totp_ultimo_paso',
     ]);
   });
 

@@ -10,6 +10,8 @@
  * ingreso posible no resuelve nada.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from 'better-sqlite3';
 
@@ -19,6 +21,11 @@ import { crearRepositorios, type Repositorios } from '@main/database/repositorie
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { ServicioDeAutenticacion } from '../autenticacion';
 import { ACCIONES_DE_USUARIO, ServicioDeUsuarios } from '../servicio-de-usuarios';
+
+import { CifradoDePrueba, codigoDeLaApp } from './ayuda-totp';
+
+/** El cifrado del sistema, de prueba. Cuenta cuántas veces descifra. */
+const cifrado = new CifradoDePrueba();
 
 const PIN_DE_JIMMY = '2468';
 const PIN_DE_ANA = '1357';
@@ -59,6 +66,7 @@ beforeEach(() => {
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
   });
 
   idJimmy = repos.usuarios.crear({
@@ -265,110 +273,27 @@ describe('Dos usuarios activos no pueden tener el mismo PIN', () => {
     );
   });
 
-  it('también choca contra el PIN REMOTO de un administrador', () => {
-    // El diálogo de autorización prueba los dos, así que un PIN nuevo igual al
-    // remoto de alguien produce la misma atribución equivocada.
-    autenticacion.configurarPinRemoto(idJimmy, '9753');
+  it('YA NO se compara contra la autorización remota de nadie, ni descifra ningún secreto (migración 037)', () => {
+    // Hasta el PIN remoto fijo, un PIN nuevo podía chocar con el remoto de un
+    // administrador. Con TOTP no hay nada con qué chocar: el código son seis
+    // dígitos que cambian cada 30 segundos, y un PIN tiene cuatro. La colisión
+    // mira SOLO el PIN normal de cada usuario activo.
+    const inscripcion = autenticacion.iniciarInscripcionRemota(idJimmy, 'POS pruebas');
+    autenticacion.confirmarInscripcionRemota(idJimmy, codigoDeLaApp(inscripcion.secreto, Date.now()));
+    const descifradosAntes = cifrado.vecesQueDescifro;
 
-    expect(() => usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '9753' })).toThrow(
-      /ya está en uso/,
-    );
-  });
-});
-
-// ===========================================================================
-/**
- * LA REGLA EN LA DIRECCIÓN CONTRARIA: el PIN remoto.
- *
- * `configurarPinRemoto` ya comprobaba que el remoto fuera distinto del PIN
- * normal DE UNO MISMO, pero no que no chocara con el de otra persona. Era el
- * hueco simétrico del que cerró el Prompt 22: la misma colisión, entrando por
- * la otra puerta.
- */
-describe('Un PIN remoto tampoco puede chocar con el de otra persona', () => {
-  it('un PIN remoto igual al PIN NORMAL de otro usuario se rechaza', () => {
-    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
-
-    expect(() => {
-      autenticacion.configurarPinRemoto(idJimmy, '1357');
-    }).toThrow(/ya está en uso/);
+    // Los primeros cuatro dígitos del código de ahora no reservan nada.
+    const pinParecido = codigoDeLaApp(inscripcion.secreto, Date.now()).slice(0, 4);
+    expect(usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: pinParecido }).nombre).toBe('Ana');
+    expect(cifrado.vecesQueDescifro).toBe(descifradosAntes);
   });
 
-  it('el rechazo NO nombra ni insinúa de quién es', () => {
-    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
-
-    try {
-      autenticacion.configurarPinRemoto(idJimmy, '1357');
-      throw new Error('Se esperaba el rechazo por PIN repetido.');
-    } catch (error) {
-      expect(error).toBeInstanceOf(ErrorDeNegocio);
-      const negocio = error as ErrorDeNegocio;
-
-      for (const texto of [negocio.mensajeParaElUsuario, negocio.causaTecnica]) {
-        expect(texto).not.toContain('Ana');
-        expect(texto).not.toContain('Jimmy');
-        expect(texto).not.toContain(ana.id);
-        expect(texto).not.toContain(idJimmy);
-      }
-      // Es EXACTAMENTE el mismo mensaje que en el alta: una sola regla, un
-      // solo texto.
-      expect(negocio.mensajeParaElUsuario).toBe('Ese PIN ya está en uso. Elegí otro.');
-    }
-  });
-
-  it('y el PIN remoto NO queda configurado: el rechazo no dejó nada', () => {
-    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
-    expect(() => {
-      autenticacion.configurarPinRemoto(idJimmy, '1357');
-    }).toThrow(ErrorDeNegocio);
-
-    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).toBeNull();
-  });
-
-  it('un PIN remoto igual al PIN REMOTO de otro administrador también se rechaza', () => {
-    const rosa = usuarios.crear(idJimmy, { nombre: 'Rosa', rol: 'administrativo', pin: '4321' });
-    autenticacion.configurarPinRemoto(rosa.id, '9753');
-
-    expect(() => {
-      autenticacion.configurarPinRemoto(idJimmy, '9753');
-    }).toThrow(/ya está en uso/);
-  });
-
-  it('con un PIN libre sí se configura', () => {
-    usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
-
-    expect(() => {
-      autenticacion.configurarPinRemoto(idJimmy, '9753');
-    }).not.toThrow();
-    expect(repos.usuarios.obtenerPorId(idJimmy)?.pinRemotoHash).not.toBeNull();
-  });
-
-  it('se puede REEMPLAZAR el propio PIN remoto por el mismo que ya tenía', () => {
-    // Se excluye a uno mismo, igual que en las otras dos operaciones: no es una
-    // colisión, es algo que no cambia nada.
-    autenticacion.configurarPinRemoto(idJimmy, '9753');
-    expect(() => {
-      autenticacion.configurarPinRemoto(idJimmy, '9753');
-    }).not.toThrow();
-  });
-
-  it('sigue sin poder ser igual al PIN NORMAL de uno mismo, con SU mensaje', () => {
-    // La regla vieja no se perdió, y conserva su propia explicación: ahí lo que
-    // se protege es no regalar el acceso a la sesión al dictarlo por teléfono.
-    expect(() => {
-      autenticacion.configurarPinRemoto(idJimmy, PIN_DE_JIMMY);
-    }).toThrow(
-      /DISTINTO de tu PIN normal/,
-    );
-  });
-
-  it('el PIN de alguien DADO DE BAJA no reserva el número tampoco acá', () => {
-    const ana = usuarios.crear(idJimmy, { nombre: 'Ana', rol: 'venta', pin: '1357' });
-    usuarios.fijarActivo(idJimmy, ana.id, false);
-
-    expect(() => {
-      autenticacion.configurarPinRemoto(idJimmy, '1357');
-    }).not.toThrow();
+  it('el módulo de colisión no nombra nada de la autorización remota', () => {
+    const fuente = readFileSync(join(__dirname, '..', 'colision-de-pin.ts'), 'utf8');
+    // Solo el código: los comentarios SÍ explican por qué el remoto ya no aplica.
+    const codigo = fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(codigo).not.toMatch(/totp|remoto|Remoto|cifrado/);
+    expect(codigo).toContain('verificarPin(pin, usuario.pinHash)');
   });
 });
 

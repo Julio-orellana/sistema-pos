@@ -11,7 +11,7 @@ import type { ResumenDeSincronizacionIpc, SesionIniciada } from '@shared/types/i
 import { PanelDeVerificacion } from './PanelDeVerificacion';
 import { PantallaDeCaja } from './PantallaDeCaja';
 import { PantallaDeCategorias } from './PantallaDeCategorias';
-import { PantallaDePinRemoto } from './PantallaDePinRemoto';
+import { PantallaDeAutorizacionRemota } from './PantallaDeAutorizacionRemota';
 import { PantallaDeProductos } from './PantallaDeProductos';
 import { PantallaDeUsuarios } from './PantallaDeUsuarios';
 import { PantallaDeNegocio } from './PantallaDeNegocio';
@@ -133,7 +133,7 @@ export function PantallaDeSesion({
     return <PantallaDeCaja alVolver={() => { setVista('menu'); }} />;
   }
   if (vista === 'pin-remoto') {
-    return <PantallaDePinRemoto alVolver={() => { setVista('menu'); }} />;
+    return <PantallaDeAutorizacionRemota alVolver={() => { setVista('menu'); }} />;
   }
   if (vista === 'categorias') {
     return <PantallaDeCategorias alVolver={() => { setVista('menu'); }} />;
@@ -200,7 +200,7 @@ export function PantallaDeSesion({
           Recibos
         </button>
         {/*
-          El catálogo y el PIN remoto son de administración. Esconder los
+          El catálogo y la autorización remota son de administración. Esconder los
           botones es comodidad: quien de verdad impide el acceso es el guard
           `requiereRol` del proceso principal, en cada canal.
         */}
@@ -279,10 +279,10 @@ export function PantallaDeSesion({
             <button
               type="button"
               className="boton--secundario"
-              data-prueba="ir-a-pin-remoto"
+              data-prueba="ir-a-autorizacion-remota"
               onClick={() => { setVista('pin-remoto'); }}
             >
-              PIN de autorización remota
+              Autorización remota
             </button>
           </>
         )}

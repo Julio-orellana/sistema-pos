@@ -17,6 +17,7 @@ import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { crearRepositorios } from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { ControladorDeSalidaControlada } from '../controlled-exit';
+import { CifradoDePrueba, codigoDeLaApp, SECRETO_DE_PRUEBA, sembrarAutorizacionRemota } from '@main/domain/usuarios/__tests__/ayuda-totp';
 
 /** Limpiezas pendientes de las bases temporales que crea cada escenario. */
 const limpiezas: (() => void)[] = [];
@@ -29,7 +30,10 @@ afterEach(() => {
 
 const PIN_CORRECTO = '4321';
 /** El PIN de autorización a distancia del mismo administrador. */
-const PIN_REMOTO = '8765';
+/** El cifrado del sistema, de prueba: el mismo para sembrar el secreto y para verificarlo. */
+const cifrado = new CifradoDePrueba();
+/** El código que muestra la app de Jimmy en el instante fijo del escenario (1 de enero de 2026). */
+const CODIGO_REMOTO = codigoDeLaApp(SECRETO_DE_PRUEBA, Date.UTC(2026, 0, 1));
 const PIN_EQUIVOCADO = '1111';
 const MILISEGUNDOS_POR_MINUTO = 60_000;
 
@@ -98,13 +102,14 @@ function crearEscenario(): {
     rol: 'administrativo',
     pinHash: generarHashDePin(PIN_CORRECTO),
   });
-  repos.usuarios.actualizarPinRemotoHash(jimmy.id, generarHashDePin(PIN_REMOTO));
+  sembrarAutorizacionRemota(repos.usuarios, cifrado, jimmy.id);
 
   const autenticacion = new ServicioDeAutenticacion({
     base: prueba.base,
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
     ahora: (): number => instante,
   });
 
@@ -354,6 +359,7 @@ describe('Instalación sin ningún administrador', () => {
         usuarios: repos.usuarios,
         auditoria: repos.auditoria,
         bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado,
       }),
       cerrarAplicacion,
     });
@@ -509,7 +515,7 @@ describe('La salida controlada acepta el PIN normal O el remoto, y el asiento di
     controlador.conectarVentana(ventana);
     dispararEntrada(PULSACION_DEL_ATAJO);
 
-    const resultado = controlador.confirmarSalida(PIN_REMOTO);
+    const resultado = controlador.confirmarSalida(CODIGO_REMOTO);
 
     expect(resultado.autorizado).toBe(true);
     expect(cerrarAplicacion).toHaveBeenCalledTimes(1);
@@ -524,7 +530,7 @@ describe('La salida controlada acepta el PIN normal O el remoto, y el asiento di
       controlador.conectarVentana(ventana);
       controlador.solicitarPin(ventana, origen);
 
-      expect(controlador.confirmarSalida(PIN_REMOTO).autorizado, origen).toBe(true);
+      expect(controlador.confirmarSalida(CODIGO_REMOTO).autorizado, origen).toBe(true);
       expect(cerrarAplicacion, origen).toHaveBeenCalledTimes(1);
       expect(asientoDeSalida(asientosDeAuditoria()), origen).toMatchObject({
         origen,

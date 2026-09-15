@@ -250,12 +250,27 @@ describe('Un teclado físico, si hay uno, sigue sirviendo igual que antes', () =
     expect(pinesEnviados).toEqual(['9875']);
   });
 
-  it('una letra no escribe nada, y un quinto dígito tampoco', () => {
+  it('una letra no escribe nada, y un SÉPTIMO dígito tampoco: seis es el código de la app (migración 036)', () => {
     pedirSalida();
-    for (const tecla of ['a', '1', '2', '3', '4', '5']) {
+    for (const tecla of ['a', '1', '2', '3', '4', '5', '6', '7']) {
       teclaFisica(tecla);
     }
-    expect(puntosLlenos()).toBe(4);
+    expect(puntosLlenos()).toBe(6);
+  });
+
+  it('seis dígitos y Enter mandan el CÓDIGO DE LA APP; cinco no mandan nada', async () => {
+    pedirSalida();
+    for (const tecla of ['1', '2', '3', '4', '5']) {
+      teclaFisica(tecla);
+    }
+    teclaFisica('Enter');
+    expect(pinesEnviados).toEqual([]);
+    teclaFisica('6');
+    teclaFisica('Enter');
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(pinesEnviados).toEqual(['123456']);
   });
 
   it('Enter con menos de cuatro dígitos no manda nada', () => {

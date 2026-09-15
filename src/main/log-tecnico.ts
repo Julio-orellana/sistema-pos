@@ -31,7 +31,7 @@ export const ARCHIVO_DE_LOG = 'log-tecnico.log';
  * del negocio va a `auditoria_log`; acá solo queda que ESE asiento faltó y por
  * qué.
  */
-export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion' | 'venta' | 'anulacion';
+export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion' | 'venta' | 'anulacion' | 'autenticacion';
 
 /** Escribe una línea en la bitácora técnica. */
 export interface LogTecnico {

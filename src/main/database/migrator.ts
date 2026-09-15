@@ -45,6 +45,8 @@ import sqlProductosPrecioCompra from './migrations/031_productos_precio_compra.s
 import sqlCostoUnitarioSnap from './migrations/032_venta_detalle_costo_unitario_snap.sql?raw';
 import sqlAnulacionesDeVenta from './migrations/033_anulaciones_de_venta.sql?raw';
 import sqlSuperficieAnulacionDeVenta from './migrations/034_superficie_anulacion_de_venta.sql?raw';
+import sqlTotpDeAutorizacionRemota from './migrations/036_totp_de_autorizacion_remota.sql?raw';
+import sqlQuitarPinRemotoHash from './migrations/037_quitar_pin_remoto_hash.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -142,6 +144,22 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 34,
     nombre: '034_superficie_anulacion_de_venta',
     sql: sqlSuperficieAnulacionDeVenta,
+  },
+  // El 035 local queda reservado: el diseño de anulación usa el `0035` en la
+  // nube para su función de sincronización.
+  //
+  // Sin espejo, y NUNCA lo va a tener: el secreto de TOTP no sale de esta
+  // terminal. El 0036 queda reservado del otro lado.
+  {
+    orden: 36,
+    nombre: '036_totp_de_autorizacion_remota',
+    sql: sqlTotpDeAutorizacionRemota,
+  },
+  // Sin espejo: en Postgres `pin_remoto_hash` no existe desde la `0021`.
+  {
+    orden: 37,
+    nombre: '037_quitar_pin_remoto_hash',
+    sql: sqlQuitarPinRemotoHash,
   },
 ];
 

@@ -56,6 +56,13 @@ export interface TecladoNumericoProps {
   /** Texto bajo el número, en modo cantidad. Por ejemplo la unidad. */
   readonly leyenda?: string;
   /**
+   * Solo en modo PIN: los largos que se pueden confirmar. Por omisión, solo el
+   * del PIN (4). Un diálogo que acepta también el código de la app de
+   * autenticación pasa `[4, 6]`, y la inscripción de ese código pasa `[6]`.
+   * Las teclas se apagan al llegar al más largo.
+   */
+  readonly largos?: readonly number[];
+  /**
    * Solo en modo cantidad: ¿se puede confirmar un cero?
    *
    * En el ticket no —una línea de cero libras no es una venta—, y por eso el
@@ -74,8 +81,14 @@ export function TecladoNumerico({
   decimales = 0,
   leyenda,
   admiteCero = false,
+  largos = [LARGO_DEL_PIN],
 }: TecladoNumericoProps): React.JSX.Element {
   const esPin = modo === 'pin';
+  const largoMaximo = Math.max(...largos);
+  const largoMinimo = Math.min(...largos);
+  // Un punto por dígito: tantos como el largo más corto, y crecen si se sigue
+  // tecleando. Con [4, 6] el PIN normal se ve igual que siempre.
+  const puntosVisibles = Math.min(largoMaximo, Math.max(largoMinimo, valor.length));
   const admitePunto = !esPin && decimales > 0;
 
   /** Cuántos decimales lleva escritos el valor actual. */
@@ -93,7 +106,7 @@ export function TecladoNumerico({
     return Number.isFinite(numero) && (numero > 0 || (admiteCero && numero === 0));
   };
 
-  const completo = esPin ? valor.length === LARGO_DEL_PIN : cantidadUtil();
+  const completo = esPin ? largos.includes(valor.length) : cantidadUtil();
 
   /**
    * ¿Se puede agregar un dígito más?
@@ -103,13 +116,13 @@ export function TecladoNumerico({
    * lee como que el toque no se registró y lleva a golpearla más fuerte.
    */
   const hayEspacio = esPin
-    ? valor.length < LARGO_DEL_PIN
+    ? valor.length < largoMaximo
     : valor.replace('.', '').length < MAXIMO_DE_DIGITOS_DE_CANTIDAD &&
       !(valor.includes('.') && decimalesEscritos() >= decimales);
 
   const agregar = (digito: string): void => {
     if (esPin) {
-      if (valor.length < LARGO_DEL_PIN) {
+      if (valor.length < largoMaximo) {
         alCambiar(valor + digito);
       }
       return;
@@ -148,7 +161,7 @@ export function TecladoNumerico({
         <>
           {/* Retroalimentación visual: un punto por dígito, nunca el número. */}
           <div className="teclado__puntos" data-prueba="puntos-del-pin" aria-live="polite">
-            {Array.from({ length: LARGO_DEL_PIN }, (_, indice) => (
+            {Array.from({ length: puntosVisibles }, (_, indice) => (
               <span
                 key={indice}
                 className={
@@ -158,7 +171,9 @@ export function TecladoNumerico({
             ))}
           </div>
           <span className="visualmente-oculto" aria-live="polite">
-            {`${String(valor.length)} de ${String(LARGO_DEL_PIN)} dígitos ingresados`}
+            {largos.length === 1
+              ? `${String(valor.length)} de ${String(largoMaximo)} dígitos ingresados`
+              : `${String(valor.length)} dígitos ingresados`}
           </span>
         </>
       ) : (
@@ -178,7 +193,7 @@ export function TecladoNumerico({
             onClick={() => {
               agregar(digito);
             }}
-            disabled={deshabilitado || (esPin && completo) || (!esPin && !hayEspacio)}
+            disabled={deshabilitado || !hayEspacio}
           >
             {digito}
           </button>
@@ -202,7 +217,7 @@ export function TecladoNumerico({
           onClick={() => {
             agregar('0');
           }}
-          disabled={deshabilitado || (esPin && completo) || (!esPin && !hayEspacio)}
+          disabled={deshabilitado || !hayEspacio}
         >
           0
         </button>

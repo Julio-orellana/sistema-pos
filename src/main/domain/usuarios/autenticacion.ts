@@ -29,7 +29,7 @@
  *   5. Todo ingreso, correcto o fallido, queda en la bitácora de auditoría.
  */
 
-import { generarHashDePin, verificarPin } from '@shared/auth';
+import { verificarPin } from '@shared/auth';
 import type { Database } from 'better-sqlite3';
 
 import { ErrorDeNegocio } from '@main/database/errores';
@@ -38,7 +38,9 @@ import { tieneFormatoDePinValido } from '@shared/pin';
 import type { Usuario, ViaDeAutorizacion } from '@main/database/repositories/entidades';
 import type { RepositorioDeAuditoria } from '@main/database/repositories/auditoria-log';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
-import { exigirPinNoUsado } from './colision-de-pin';
+import type { CifradoSeguro } from '@main/sincronizacion/credencial';
+import { LogTecnicoSilencioso, type LogTecnico } from '@main/log-tecnico';
+import { generarSecretoTotp, pasoQueCoincide, tieneFormatoDeCodigoTotp, uriOtpauth } from './totp';
 import type {
   RepositorioDeBloqueosDeAutorizacion,
   SuperficieDeAutorizacion,
@@ -65,12 +67,18 @@ import type {
  *
  * ## Qué acepta cada una, y por qué
  *
- * | Superficie | ¿PIN remoto? | Razón |
+ * «Remoto» es, desde la migración 036, el código de seis dígitos de la app de
+ * autenticación (TOTP). Hasta entonces era un PIN remoto fijo de cuatro
+ * dígitos; la tabla y sus razones no cambiaron con el mecanismo.
+ *
+ * | Superficie | ¿Remoto? | Razón |
  * |---|---|---|
- * | `salida_controlada` | **No** | El PIN remoto se pidió para autorizar diferencias de caja por teléfono. Dárselo además a cerrar la aplicación sería ampliarle el alcance más allá de lo pedido (§4.9). |
- * | `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
- * | `cierre_con_diferencia` | **Sí** | Es el caso para el que el PIN remoto se creó: un descuadre que hay que autorizar por teléfono. |
+ * | `cierre_con_diferencia` | **Sí** | Es el caso para el que la autorización remota se creó: un descuadre que hay que autorizar por teléfono. |
  * | `descuento_excedente` | **Sí**, desde el 2026-09-11 | **DECISIÓN EXPLÍCITA DE JULIO, no una corrección.** Ver abajo. |
+ * | `salida_controlada` | **Sí**, desde el 2026-09-15 | Segunda decisión explícita. Ver abajo. |
+ * | `cierre_de_caja_ajena` | **No** | Alcance mínimo. Además, quien cierra una caja ajena está parado frente a ella. |
+ * | `saltar_lote_de_sincronizacion` | **No** | El hueco que deja es permanente: quien autoriza tiene que ver el error. |
+ * | `anulacion_de_venta` | **No** | Por teléfono lo que se autoriza es un relato (docs/ANULACION-DE-VENTA.md §4.2). |
  *
  * ## `descuento_excedente`: por qué cambió, y por qué eso no afloja la regla
  *
@@ -92,11 +100,10 @@ import type {
  * alcance mínimo se aplicó, la ampliación se pidió, y se decidió a propósito.
  * `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo.
  *
- * La contrapartida de la salida, dicha en voz alta: quien recibe el PIN remoto
- * dictado por teléfono puede, desde ese momento y hasta que se cambie, cerrar la
- * aplicación además de autorizar diferencias y descuentos. Cerrar es ordenado y
- * queda en la auditoría con su vía, así que el daño es acotado; pero el PIN
- * dictado conviene cambiarlo si deja de haber confianza en quien lo escuchó.
+ * La contrapartida de la salida, dicha en voz alta: con el PIN remoto FIJO,
+ * quien lo escuchaba una vez podía cerrar la aplicación hasta que se cambiara.
+ * Con TOTP (migración 036) el código dictado sirve una sola vez y como mucho
+ * unos 90 segundos, así que esa exposición se acota a una autorización.
  *
  * Queda una contrapartida dicha en voz alta: **un descuento es dinero que sale
  * de la venta**, y autorizarlo por teléfono es aprobarlo sin ver el ticket.
@@ -149,7 +156,11 @@ export type CodigoDeAutenticacion =
   | 'USUARIO_INACTIVO'
   | 'SIN_ADMINISTRADORES'
   /** El diálogo de autorización está bloqueado. NO implica que un usuario lo esté. */
-  | 'AUTORIZACION_BLOQUEADA';
+  | 'AUTORIZACION_BLOQUEADA'
+  /** Un código remoto correcto que ya se usó: sirve una sola vez (RFC 6238 §5.2). Cuenta como intento. */
+  | 'CODIGO_YA_USADO'
+  /** Un código remoto que coincide con el de DOS administradores a la vez. No cuenta como intento. */
+  | 'CODIGO_AMBIGUO';
 
 /** Nombres de acción que se escriben en la bitácora de auditoría. */
 export const ACCIONES_DE_AUDITORIA = {
@@ -173,8 +184,12 @@ export const ACCIONES_DE_AUDITORIA = {
   primerAdministradorCreado: 'primer_administrador_creado',
   /** El diálogo de autorización quedó bloqueado por agotar los intentos. */
   autorizacionBloqueada: 'autorizacion_bloqueada',
-  /** Un administrador configuró o cambió su PIN de autorización remota. */
-  pinRemotoConfigurado: 'pin_remoto_configurado',
+  /**
+   * Un administrador se inscribió en la autorización remota por TOTP, o
+   * reemplazó su inscripción anterior. Reemplaza a `pin_remoto_configurado`,
+   * que se escribía con el PIN remoto fijo.
+   */
+  autorizacionRemotaInscrita: 'autorizacion_remota_inscrita',
 } as const;
 
 /** Resultado de un intento de autenticación. */
@@ -221,8 +236,51 @@ export interface DependenciasDeAutenticacion {
   readonly auditoria: RepositorioDeAuditoria;
   /** Candado por superficie del diálogo de autorización. */
   readonly bloqueosDeAutorizacion: RepositorioDeBloqueosDeAutorizacion;
+  /**
+   * El cifrado reversible del secreto de TOTP: `safeStorage` de Electron, el
+   * MISMO mecanismo que la credencial de sincronización (§4.23).
+   *
+   * **No es opcional**: sin él la autorización remota no podría leer ningún
+   * secreto, y fallaría en silencio. Con él obligatorio, el compilador nombra
+   * los lugares que construyen el servicio.
+   */
+  readonly cifrado: CifradoSeguro;
+  /**
+   * Bitácora técnica, para anotar un secreto que no se pudo descifrar. Nunca
+   * recibe el secreto ni el código.
+   */
+  readonly log?: LogTecnico;
   /** Reloj inyectable: las pruebas lo reemplazan para no esperar 30 segundos. */
   readonly ahora?: () => number;
+}
+
+/**
+ * Cuánto dura una inscripción iniciada y no confirmada: el tiempo de abrir la
+ * app de autenticación, escanear el QR y teclear el primer código. Pasado ese
+ * tiempo, el secreto que se mostró se descarta sin haberse guardado nunca.
+ */
+export const VIDA_DE_LA_INSCRIPCION_PENDIENTE_MS = 600_000; // diez minutos
+
+/** Lo que la pantalla necesita para mostrar la inscripción. */
+export interface InscripcionIniciada {
+  /**
+   * El secreto en Base32, para teclearlo a mano en el teléfono. Es la ÚNICA vez
+   * que sale del proceso principal, y sale porque tiene que verse en pantalla.
+   */
+  readonly secreto: string;
+  /** La URI `otpauth://` que codifica el QR. */
+  readonly uri: string;
+  /** Si esta persona ya tenía una inscripción, que esta va a reemplazar. */
+  readonly reemplazaUnaAnterior: boolean;
+  /** Hasta cuándo se puede confirmar (ISO-8601 UTC). */
+  readonly venceEn: string;
+}
+
+/** Una inscripción mostrada y todavía no confirmada. Vive SOLO en memoria. */
+interface InscripcionPendiente {
+  readonly usuarioId: string;
+  readonly secreto: string;
+  readonly venceEnMs: number;
 }
 
 /**
@@ -238,13 +296,23 @@ export class ServicioDeAutenticacion {
   private readonly usuarios: RepositorioDeUsuarios;
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly bloqueos: RepositorioDeBloqueosDeAutorizacion;
+  private readonly cifrado: CifradoSeguro;
+  private readonly log: LogTecnico;
   private readonly ahora: () => number;
+  /**
+   * La inscripción mostrada y no confirmada, si hay una. EN MEMORIA a
+   * propósito: un secreto que nadie confirmó no se escribe en ningún lado, y si
+   * se cierra la aplicación se pierde, que es lo correcto.
+   */
+  private inscripcionPendiente: InscripcionPendiente | null = null;
 
   public constructor(dependencias: DependenciasDeAutenticacion) {
     this.base = dependencias.base;
     this.usuarios = dependencias.usuarios;
     this.auditoria = dependencias.auditoria;
     this.bloqueos = dependencias.bloqueosDeAutorizacion;
+    this.cifrado = dependencias.cifrado;
+    this.log = dependencias.log ?? new LogTecnicoSilencioso();
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
 
@@ -357,33 +425,132 @@ export class ServicioDeAutenticacion {
       );
     }
 
-    // Una entrada que ni siquiera es un PIN posible no consume intentos.
-    if (!tieneFormatoDePinValido(pin)) {
-      return this.resultado(false, 'FORMATO_INVALIDO', 'El PIN debe tener cuatro dígitos.', null, null);
-    }
-
-    // Dos pasadas, y el orden importa: primero TODOS los PIN normales y
-    // después los remotos. Así, si por casualidad el PIN remoto de alguien
-    // coincidiera con el PIN normal de otro, gana la lectura presencial, que
-    // es la más conservadora de las dos para la auditoría.
-    for (const administrador of administradores) {
-      if (verificarPin(pin, administrador.pinHash)) {
-        return this.autorizacionConcedida(superficie, administrador, 'presencial');
-      }
-    }
-
-    if (aceptaPinRemoto) {
+    /*
+      CUÁL DE LOS DOS SE TECLEÓ LO DICE EL LARGO, sin preguntarle al cajero.
+      El PIN normal tiene 4 dígitos y el código remoto de TOTP tiene 6, así que
+      ya no puede pasar que un mismo número sea las dos cosas a la vez: la regla
+      vieja de «probar primero los normales para que gane la lectura
+      presencial» dejó de hacer falta.
+    */
+    if (tieneFormatoDePinValido(pin)) {
       for (const administrador of administradores) {
-        if (
-          administrador.pinRemotoHash !== null &&
-          verificarPin(pin, administrador.pinRemotoHash)
-        ) {
-          return this.autorizacionConcedida(superficie, administrador, 'remoto');
+        if (verificarPin(pin, administrador.pinHash)) {
+          return this.autorizacionConcedida(superficie, administrador, 'presencial');
         }
       }
+      return this.registrarFalloDeAutorizacion(superficie, candado.intentosFallidos);
     }
 
-    return this.registrarFalloDeAutorizacion(superficie, candado.intentosFallidos);
+    if (aceptaPinRemoto && tieneFormatoDeCodigoTotp(pin)) {
+      return this.autorizarConCodigoRemoto(superficie, administradores, pin, candado.intentosFallidos);
+    }
+
+    // Una entrada que ni siquiera es un PIN posible para esta superficie no
+    // consume intentos: tampoco un código de 6 dígitos donde el remoto no vale.
+    return this.resultado(
+      false,
+      'FORMATO_INVALIDO',
+      aceptaPinRemoto
+        ? 'Ingresá el PIN de cuatro dígitos o el código de seis dígitos de la aplicación.'
+        : 'El PIN debe tener cuatro dígitos.',
+      null,
+      null,
+    );
+  }
+
+  /**
+   * El código remoto de TOTP contra el secreto de cada administrador activo.
+   *
+   * CUATRO SALIDAS, y cada una por su razón:
+   *
+   *   · Coincide con UNO y ese paso no se había usado → autoriza como
+   *     `remoto` y CONSUME el paso: el mismo código no sirve dos veces
+   *     (RFC 6238 §5.2). Un código dictado por teléfono y escuchado por otra
+   *     persona no alcanza para una segunda autorización.
+   *   · Coincide con UNO pero ese paso ya se usó → rechaza con
+   *     `CODIGO_YA_USADO`, y CUENTA como intento: es un código bien formado
+   *     que no autoriza.
+   *   · Coincide con DOS O MÁS a la vez → rechaza con `CODIGO_AMBIGUO`, sin
+   *     contar intento y sin consumir nada. Con dos secretos distintos pasa
+   *     muy rara vez, pero atribuirle la autorización a uno de los dos sería
+   *     exactamente la atribución equivocada que §4.7 existe para impedir. El
+   *     código siguiente ya no coincide.
+   *   · No coincide con nadie → intento fallido, como un PIN equivocado.
+   *
+   * Un secreto que no se puede descifrar no autoriza ni tumba la verificación:
+   * se anota en la bitácora técnica, sin el secreto, y se sigue con los demás.
+   */
+  private autorizarConCodigoRemoto(
+    superficie: SuperficieDeAutorizacion,
+    administradores: readonly Usuario[],
+    codigo: string,
+    intentosPrevios: number,
+  ): ResultadoDeAutenticacion {
+    const instante = this.ahora();
+    const coincidencias: { readonly administrador: Usuario; readonly paso: number }[] = [];
+    for (const administrador of administradores) {
+      const secreto = this.descifrarSecreto(administrador);
+      if (secreto === null) {
+        continue;
+      }
+      const paso = pasoQueCoincide(secreto, codigo, instante);
+      if (paso !== null) {
+        coincidencias.push({ administrador, paso });
+      }
+    }
+
+    if (coincidencias.length > 1) {
+      return this.resultado(
+        false,
+        'CODIGO_AMBIGUO',
+        'Ese código coincide con el de más de un administrador. Esperá el código siguiente de la aplicación y volvé a intentar.',
+        null,
+        null,
+      );
+    }
+
+    const [coincidencia] = coincidencias;
+    if (coincidencia === undefined) {
+      return this.registrarFalloDeAutorizacion(superficie, intentosPrevios);
+    }
+
+    if (!this.usuarios.consumirPasoTotp(coincidencia.administrador.id, coincidencia.paso)) {
+      return this.registrarFalloDeAutorizacion(superficie, intentosPrevios, {
+        codigo: 'CODIGO_YA_USADO',
+        mensaje: 'Ese código ya se usó para otra autorización. Esperá a que la aplicación muestre el siguiente.',
+      });
+    }
+
+    return this.autorizacionConcedida(superficie, coincidencia.administrador, 'remoto');
+  }
+
+  /**
+   * El secreto de TOTP en claro, o `null` si no hay o no se puede descifrar.
+   *
+   * Lo que se anota en la bitácora dice DE QUIÉN y POR QUÉ, y nunca el secreto
+   * ni los bytes cifrados.
+   */
+  private descifrarSecreto(administrador: Usuario): string | null {
+    if (administrador.totpSecretoCifrado === null) {
+      return null;
+    }
+    if (!this.cifrado.isEncryptionAvailable()) {
+      this.log.registrar(
+        'autenticacion',
+        `No se pudo verificar la autorización remota de ${administrador.id}: esta máquina no tiene el cifrado del sistema disponible.`,
+      );
+      return null;
+    }
+    try {
+      return this.cifrado.decryptString(administrador.totpSecretoCifrado);
+    } catch {
+      this.log.registrar(
+        'autenticacion',
+        `No se pudo descifrar el secreto de autorización remota de ${administrador.id}. ` +
+          'Si cambió el nombre de la aplicación, ningún secreto anterior se puede leer: esa persona tiene que volver a inscribirse.',
+      );
+      return null;
+    }
   }
 
   /** Acierto: libera el candado de la superficie y reporta por cuál vía fue. */
@@ -404,10 +571,20 @@ export class ServicioDeAutenticacion {
     );
   }
 
-  /** Suma un intento al candado de la superficie y lo bloquea si se agotaron. */
+  /**
+   * Suma un intento al candado de la superficie y lo bloquea si se agotaron.
+   *
+   * `sinBloqueo` cambia solo el código y el mensaje del caso que NO bloquea
+   * —un código remoto ya usado dice eso y no «PIN incorrecto»—; el conteo de
+   * intentos es el mismo.
+   */
   private registrarFalloDeAutorizacion(
     superficie: SuperficieDeAutorizacion,
     intentosPrevios: number,
+    sinBloqueo: { readonly codigo: CodigoDeAutenticacion; readonly mensaje: string } = {
+      codigo: 'PIN_INCORRECTO',
+      mensaje: 'PIN incorrecto.',
+    },
   ): ResultadoDeAutenticacion {
     // UN intento por PIN equivocado, no uno por administrador: el intento es de
     // la superficie, no de cada persona contra la que se comparó.
@@ -449,7 +626,7 @@ export class ServicioDeAutenticacion {
       );
     }
 
-    return this.resultado(false, 'PIN_INCORRECTO', 'PIN incorrecto.', null, null);
+    return this.resultado(false, sinBloqueo.codigo, sinBloqueo.mensaje, null, null);
   }
 
   /**
@@ -499,80 +676,124 @@ export class ServicioDeAutenticacion {
   }
 
   /**
-   * Configura el PIN de autorización remota de un usuario.
+   * Empieza la inscripción de la autorización remota por TOTP de una persona.
    *
-   * REGLA: debe ser DISTINTO de su PIN normal. Este código se dicta por
-   * teléfono; si fuera el mismo, dictarlo entregaría también el acceso a su
-   * sesión y la separación entera que este PIN existe para lograr quedaría
-   * anulada. Se comprueba acá y no en la interfaz: una validación que vive en
-   * la pantalla se salta llamando al canal directamente.
+   * Genera un secreto nuevo de 160 bits y lo guarda EN MEMORIA, sin escribirlo
+   * en ningún lado. Solo se guarda —cifrado— cuando `confirmarInscripcionRemota`
+   * recibe un código correcto calculado con él: así se comprueba que el
+   * teléfono quedó configurado de verdad antes de reemplazar nada.
+   *
+   * Solo sobre la PROPIA cuenta: quien llama pasa el usuario de la sesión, nunca
+   * uno elegido en la pantalla. Iniciar otra inscripción descarta la anterior
+   * sin confirmar.
+   *
+   * `emisor` es el nombre con el que la app del teléfono muestra la cuenta.
    */
-  public configurarPinRemoto(usuarioId: string, pin: string): void {
-    const usuario = this.usuarios.obtenerPorId(usuarioId);
-    if (usuario === null) {
+  public iniciarInscripcionRemota(usuarioId: string, emisor: string): InscripcionIniciada {
+    const usuario = this.exigirAdministradorActivo(usuarioId);
+
+    // Antes de mostrar nada: un secreto que no se va a poder guardar no se
+    // muestra. Si se mostrara, la persona lo cargaría en el teléfono y después
+    // la confirmación fallaría sin remedio.
+    if (!this.cifrado.isEncryptionAvailable()) {
       throw new ErrorDeNegocio(
-        'REFERENCIA_INEXISTENTE',
-        'No se encontró el usuario.',
-        `usuario_id inexistente: ${usuarioId}`,
+        'CIFRADO_NO_DISPONIBLE',
+        'Esta computadora no tiene disponible el cifrado del sistema, así que no puede guardar el código de autorización remota.',
+        'safeStorage.isEncryptionAvailable() devolvió false al iniciar la inscripción.',
       );
     }
-    if (usuario.rol !== 'administrativo') {
+
+    const secreto = generarSecretoTotp();
+    const venceEnMs = this.ahora() + VIDA_DE_LA_INSCRIPCION_PENDIENTE_MS;
+    this.inscripcionPendiente = { usuarioId, secreto, venceEnMs };
+
+    return {
+      secreto,
+      uri: uriOtpauth(emisor, usuario.nombre, secreto),
+      reemplazaUnaAnterior: usuario.totpSecretoCifrado !== null,
+      venceEn: new Date(venceEnMs).toISOString(),
+    };
+  }
+
+  /**
+   * Confirma la inscripción con el primer código que muestra el teléfono.
+   *
+   * Tres salidas:
+   *
+   *   · Código mal formado → se rechaza SIN descartar la inscripción: no se
+   *     llegó a comparar nada.
+   *   · Código bien formado que no coincide → se DESCARTA la inscripción entera
+   *     y no queda NINGÚN rastro: ni fila, ni asiento, ni cola. Para reintentar
+   *     hay que empezar de nuevo, con un QR nuevo.
+   *   · Código correcto → el secreto se guarda CIFRADO, reemplazando el anterior
+   *     si había uno; el código de la confirmación queda consumido, y queda un
+   *     asiento que dice que se inscribió, sin el secreto.
+   *
+   * La colisión de PIN (`colision-de-pin.ts`) NO se comprueba acá, y no es un
+   * olvido: el secreto es aleatorio de 160 bits y lo genera el sistema, nunca
+   * lo elige una persona.
+   */
+  public confirmarInscripcionRemota(usuarioId: string, codigo: string): void {
+    const pendiente = this.inscripcionPendiente;
+    if (pendiente?.usuarioId !== usuarioId || pendiente.venceEnMs < this.ahora()) {
+      if (pendiente !== null && pendiente.venceEnMs < this.ahora()) {
+        this.inscripcionPendiente = null;
+      }
       throw new ErrorDeNegocio(
-        'PERMISO_DENEGADO',
-        'Solo un administrador puede tener PIN de autorización remota.',
-        `El usuario ${usuarioId} tiene rol ${usuario.rol}.`,
+        'INSCRIPCION_NO_VIGENTE',
+        'No hay ninguna inscripción en curso. Empezá de nuevo para ver un código QR nuevo.',
+        `No hay inscripción remota vigente para ${usuarioId}.`,
       );
     }
-    if (!tieneFormatoDePinValido(pin)) {
+
+    if (!tieneFormatoDeCodigoTotp(codigo)) {
       throw new ErrorDeNegocio(
         'DATO_INVALIDO',
-        'El PIN remoto debe tener cuatro dígitos.',
-        `Formato inválido para el PIN remoto del usuario ${usuarioId}.`,
+        'El código de la aplicación tiene seis dígitos.',
+        'Código de confirmación de inscripción mal formado.',
       );
     }
-    if (verificarPin(pin, usuario.pinHash)) {
+
+    const paso = pasoQueCoincide(pendiente.secreto, codigo, this.ahora());
+    if (paso === null) {
+      this.inscripcionPendiente = null;
       throw new ErrorDeNegocio(
-        'DATO_INVALIDO',
-        'El PIN remoto debe ser DISTINTO de tu PIN normal. Este se dicta por teléfono: ' +
-          'si fuera el mismo, estarías entregando también el acceso a tu sesión.',
-        'Se intentó fijar un pin_remoto_hash igual al pin_hash del propio usuario.',
+        'CODIGO_DE_INSCRIPCION_INCORRECTO',
+        'El código no coincide, así que no se guardó nada. Borrá en la aplicación del teléfono la cuenta que acabás de agregar y empezá de nuevo: se va a mostrar un código QR nuevo.',
+        'El código de confirmación no coincide con el secreto pendiente.',
+      );
+    }
+
+    const usuario = this.exigirAdministradorActivo(usuarioId);
+    let cifrado: Buffer;
+    try {
+      cifrado = this.cifrado.encryptString(pendiente.secreto);
+    } catch {
+      this.inscripcionPendiente = null;
+      throw new ErrorDeNegocio(
+        'CIFRADO_NO_DISPONIBLE',
+        'No se pudo cifrar el código de autorización remota, así que no se guardó nada. Empezá de nuevo.',
+        'safeStorage.encryptString falló al confirmar la inscripción.',
       );
     }
 
     /*
-      Y TAMPOCO PUEDE CHOCAR CON EL DE OTRA PERSONA. La comprobación de arriba
-      mira solo el PIN normal de uno mismo, que es un caso distinto: allí lo que
-      se protege es no regalar el acceso a la propia sesión al dictar el código
-      por teléfono. Acá se protege la ATRIBUCIÓN en la auditoría.
-
-      Este diálogo prueba el PIN contra todos los administradores activos
-      —primero los normales, después los remotos— y se queda con el primero que
-      coincida (§4.9). Un PIN remoto igual al PIN de otra persona haría que la
-      autorización quedara registrada a nombre de quien no la dio.
-
-      Es la MISMA función que usan el alta de usuarios y el cambio de PIN, no
-      una copia: la regla tiene que ser una sola, o la colisión entra por la
-      puerta que quedó floja. Excluye a uno mismo, no nombra a nadie en el
-      rechazo y trata un hash ilegible como que no coincide, igual que allá.
-    */
-    exigirPinNoUsado(this.usuarios, pin, usuarioId);
-
-    /*
-      Encola la fila de `usuarios` y su asiento. **El hash del PIN remoto NO
-      viaja**: `COLUMNAS_EXCLUIDAS` de la bandeja de salida lo saca del
-      payload (decisión 17), así que lo que sube es el resto de la fila. Se
-      encola igual porque `actualizado_en` cambió y el asiento tiene que
-      llegar.
+      Encola la fila de `usuarios` y su asiento, como toda operación de negocio
+      (§4.26). **El secreto NO viaja**: `COLUMNAS_EXCLUIDAS` saca
+      `totp_secreto_cifrado` y `totp_ultimo_paso` de todo payload, y el asiento
+      no lo lleva. La fila se encola porque `actualizado_en` cambió.
     */
     conBandejaDeSalida(this.base, () => {
-      this.usuarios.actualizarPinRemotoHash(usuarioId, generarHashDePin(pin));
+      this.usuarios.fijarTotpCifrado(usuarioId, cifrado);
+      // El código con el que se confirmó ya se vio en pantalla: no sirve para
+      // autorizar nada después.
+      this.usuarios.consumirPasoTotp(usuarioId, paso);
       const asiento = this.auditoria.registrar({
         usuarioId,
-        accion: ACCIONES_DE_AUDITORIA.pinRemotoConfigurado,
+        accion: ACCIONES_DE_AUDITORIA.autorizacionRemotaInscrita,
         entidadTipo: 'usuarios',
         entidadId: usuarioId,
-        // Nunca se registra el PIN ni su hash, solo que se configuró.
-        valorNuevo: { configurado: true },
+        valorNuevo: { mecanismo: 'totp', reemplazoUnaAnterior: usuario.totpSecretoCifrado !== null },
         fecha: new Date(this.ahora()).toISOString(),
       });
       return {
@@ -583,6 +804,31 @@ export class ServicioDeAutenticacion {
         ],
       };
     });
+
+    this.inscripcionPendiente = null;
+  }
+
+  /** Descarta la inscripción en curso de esa persona, si hay una. No escribe nada. */
+  public cancelarInscripcionRemota(usuarioId: string): void {
+    if (this.inscripcionPendiente?.usuarioId === usuarioId) {
+      this.inscripcionPendiente = null;
+    }
+  }
+
+  /** El usuario, si existe, está activo y es administrador; si no, el error que lo dice. */
+  private exigirAdministradorActivo(usuarioId: string): Usuario {
+    const usuario = this.usuarios.obtenerPorId(usuarioId);
+    if (usuario === null) {
+      throw new ErrorDeNegocio('REFERENCIA_INEXISTENTE', 'No se encontró el usuario.', `usuario_id inexistente: ${usuarioId}`);
+    }
+    if (usuario.rol !== 'administrativo' || !usuario.activo) {
+      throw new ErrorDeNegocio(
+        'PERMISO_DENEGADO',
+        'Solo un administrador activo puede tener autorización remota.',
+        `El usuario ${usuarioId} tiene rol ${usuario.rol} y activo=${String(usuario.activo)}.`,
+      );
+    }
+    return usuario;
   }
 
   /** Registra en auditoría una salida controlada, con su origen. */

@@ -102,11 +102,12 @@ export type TablaSincronizable =
  * | `usuarios.intentos_fallidos` | Estado por identidad, local por ahora. Una columna que existiera en Postgres sin sincronizarse mostraría `0` para todos y le haría creer al auditor que nadie falló jamás un ingreso (§4.4). |
  * | `usuarios.bloqueado_hasta` | Lo mismo: un candado deja de significar nada 30 segundos después de escribirse. |
  * | `usuarios.pin_hash` | Decisión 17 del diseño. Un PIN de cuatro dígitos tiene 10 000 valores: quien lea la tabla en la nube los saca todos. Y **no hacen falta allá**, porque toda restauración resetea los PIN sin mirarlos (§6.1). |
- * | `usuarios.pin_remoto_hash` | Igual que el anterior. |
+ * | `usuarios.totp_secreto_cifrado` | **NUNCA, bajo ninguna circunstancia** (migración 036). Es más sensible que un hash: quien descifre el secreto de TOTP calcula TODOS los códigos futuros de esa persona. Reemplaza al `pin_remoto_hash` de la 005, que se quitó en la 037. |
+ * | `usuarios.totp_ultimo_paso` | Estado operativo de esta terminal: qué código se usó por última vez, para que no sirva dos veces. |
  * | `ventas.estado_sincronizacion` | Decisión 4. Es estado operativo de esta terminal: en la nube diría siempre `'pendiente'`, que allá no significa nada. |
  */
 export const COLUMNAS_EXCLUIDAS: Readonly<Record<string, readonly string[]>> = {
-  usuarios: ['intentos_fallidos', 'bloqueado_hasta', 'pin_hash', 'pin_remoto_hash'],
+  usuarios: ['intentos_fallidos', 'bloqueado_hasta', 'pin_hash', 'totp_secreto_cifrado', 'totp_ultimo_paso'],
   ventas: ['estado_sincronizacion'],
 };
 

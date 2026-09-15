@@ -36,6 +36,7 @@ import { observarLotesEncolados, type ArchivoParaSubir } from '@main/database/ba
 import { reiniciarSenalDeTransaccion } from '@main/database/transaccion-en-curso';
 import { crearRepositorios, type Repositorios } from '@main/database/repositories';
 import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
+import { CifradoDePrueba, codigoDeLaApp } from '@main/domain/usuarios/__tests__/ayuda-totp';
 import { SesionActual } from '@main/domain/usuarios/sesion';
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
@@ -214,6 +215,7 @@ function dependenciasSobre(
     usuarios: repos.usuarios,
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
+    cifrado: new CifradoDePrueba(),
   });
   const fotos = new AlmacenDeFotos(carpeta, { reducir: (): Buffer | null => null });
   const productos = new ServicioDeProductos({
@@ -383,7 +385,15 @@ describe('1. En una tienda con datos, cada canal devuelve algo que el puente pue
     const ingreso = await llamar(CANALES_IPC.iniciarSesion, 'Jimmy', { usuarioId: terminal.ids.jimmy, pin: PIN_DE_JIMMY });
     expect(datosDe(ingreso, 'ingreso').autenticado).toBe(true);
     await llamar(CANALES_IPC.estadoDeSesion, 'con sesión');
-    await llamar(CANALES_IPC.configurarPinRemoto, 'PIN remoto de Jimmy', { pin: '8642' });
+    // La autorización remota por TOTP: iniciar devuelve el secreto y la matriz
+    // del QR, confirmar lo guarda con el código de la app, cancelar descarta.
+    const inscripcion = datosDe(await llamar(CANALES_IPC.iniciarAutorizacionRemota, 'iniciar inscripción remota de Jimmy'), 'iniciar');
+    await llamar(CANALES_IPC.confirmarAutorizacionRemota, 'confirmar con un código mal formado', { codigo: '12' });
+    await llamar(CANALES_IPC.confirmarAutorizacionRemota, 'confirmar con el código de la app', {
+      codigo: codigoDeLaApp(inscripcion.secreto as string, Date.now()),
+    });
+    await llamar(CANALES_IPC.iniciarAutorizacionRemota, 'iniciar otra (reemplazaría la anterior)');
+    await llamar(CANALES_IPC.cancelarAutorizacionRemota, 'cancelar la inscripción en curso');
   });
 
   it('catálogo: categorías, productos, ajuste y foto', async () => {

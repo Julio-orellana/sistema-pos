@@ -32,6 +32,7 @@ import { ORDEN_DE_RESTAURACION } from '../orden-de-restauracion';
 import { ACCIONES_DE_RESTAURACION, ServicioDeRestauracion } from '../servicio-de-restauracion';
 import { contratoDeLaFoto, NubeDeMentira, type OpcionesDeLaNubeDeMentira } from './nube-de-mentira';
 import { PIN_DE_ANA, PIN_DE_JIMMY, sembrarTerminalDeOrigen, type TerminalDeOrigen } from './terminal-de-origen';
+import { CifradoDePrueba } from '@main/domain/usuarios/__tests__/ayuda-totp';
 
 const URL_DEL_PROYECTO = 'https://ztidrshifrblhfraiowg.supabase.co';
 const CORREO = 'julio@restauracion.invalid';
@@ -213,7 +214,8 @@ describe('Una restauración completa, por falla, contra la nube de mentira', () 
     await restaurarEntera(crearNube());
     for (const fila of filas(destino.base, 'usuarios')) {
       expect(fila.pin_hash).toBe(HASH_SIN_PIN);
-      expect(fila.pin_remoto_hash).toBeNull();
+      expect(fila.totp_secreto_cifrado).toBeNull();
+      expect(fila.totp_ultimo_paso).toBeNull();
       expect(fila.intentos_fallidos).toBe(0);
       expect(fila.bloqueado_hasta).toBeNull();
     }
@@ -225,6 +227,7 @@ describe('Una restauración completa, por falla, contra la nube de mentira', () 
       usuarios: reposB.usuarios,
       auditoria: reposB.auditoria,
       bloqueosDeAutorizacion: reposB.bloqueosDeAutorizacion,
+      cifrado: new CifradoDePrueba(),
     });
     expect(autenticacion.autenticar(terminal.ids.jimmy, PIN_DE_JIMMY).codigo).toBe('PIN_INCORRECTO');
   });
@@ -580,6 +583,7 @@ describe('PIN nuevo y cierre de la restauración', () => {
       usuarios: reposB.usuarios,
       auditoria: reposB.auditoria,
       bloqueosDeAutorizacion: reposB.bloqueosDeAutorizacion,
+      cifrado: new CifradoDePrueba(),
     });
     expect(autenticacion.autenticar(terminal.ids.jimmy, '9753').autenticado).toBe(true);
     expect(autenticacion.autenticar(terminal.ids.jimmy, PIN_DE_JIMMY).autenticado).toBe(false);

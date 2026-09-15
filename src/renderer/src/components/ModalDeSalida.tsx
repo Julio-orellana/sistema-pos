@@ -28,7 +28,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { LARGO_DEL_PIN } from '@shared/pin';
+import { LARGO_DEL_CODIGO_REMOTO, LARGOS_DE_AUTORIZACION } from '@shared/pin';
 import { useCerrarTecladoEnPantalla } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 
@@ -71,7 +71,7 @@ export function ModalDeSalida(): React.JSX.Element | null {
     setMensaje(null);
   };
 
-  const completo = pin.length === LARGO_DEL_PIN;
+  const completo = LARGOS_DE_AUTORIZACION.includes(pin.length);
 
   const confirmar = (): void => {
     if (!completo || enviando) {
@@ -120,7 +120,7 @@ export function ModalDeSalida(): React.JSX.Element | null {
         if (/^[0-9]$/.test(evento.key)) {
           evento.preventDefault();
           setPin((anterior) =>
-            anterior.length < LARGO_DEL_PIN ? anterior + evento.key : anterior,
+            anterior.length < LARGO_DEL_CODIGO_REMOTO ? anterior + evento.key : anterior,
           );
           return;
         }
@@ -138,7 +138,7 @@ export function ModalDeSalida(): React.JSX.Element | null {
       <div className="modal">
         <h2 id="titulo-salida">Salida de administrador</h2>
         <p className="modal__texto">
-          Ingresá el PIN de un administrador, en persona o dictado por teléfono, para cerrar el punto de venta de forma ordenada.
+          Ingresá el PIN de un administrador, o el código de seis dígitos de su aplicación dictado por teléfono, para cerrar el punto de venta de forma ordenada.
         </p>
 
         <TecladoNumerico
@@ -146,6 +146,7 @@ export function ModalDeSalida(): React.JSX.Element | null {
           alCambiar={setPin}
           alConfirmar={confirmar}
           deshabilitado={enviando}
+          largos={LARGOS_DE_AUTORIZACION}
         />
 
         {mensaje !== null && (

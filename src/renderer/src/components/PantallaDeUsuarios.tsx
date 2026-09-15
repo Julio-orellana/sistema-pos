@@ -306,7 +306,7 @@ export function PantallaDeUsuarios({
                 )}
                 <span className="lista__detalle">
                   {nombreDelRol(usuario.rol)}
-                  {usuario.tienePinRemoto && ' · con PIN remoto'}
+                  {usuario.tieneAutorizacionRemota && ' · con autorización remota'}
                 </span>
               </div>
 
