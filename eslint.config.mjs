@@ -224,8 +224,12 @@ export default defineConfig(
   // son cincuenta parejas «carácter → byte» que ningún nombre aclararía. Cada
   // comando lleva su constante con nombre igual; lo que se permite acá son los
   // bytes sueltos de esas tablas.
+  //
+  // `totp.ts` es el mismo caso: Base32 de RFC 4648 (grupos de 5 y 8 bits) y la
+  // truncación dinámica de RFC 4226 (`& 0x0f`, `& 0x7f`, desplazamientos de 24,
+  // 16 y 8). Son los números del RFC, y las pruebas los fijan contra sus vectores.
   {
-    files: ['src/main/domain/recibo/escpos.ts'],
+    files: ['src/main/domain/recibo/escpos.ts', 'src/main/domain/usuarios/totp.ts'],
     rules: {
       '@typescript-eslint/no-magic-numbers': 'off',
     },
