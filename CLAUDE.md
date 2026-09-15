@@ -6760,6 +6760,135 @@ venta sin impresora: {"numeroRecibo":2,…,"pdfGenerado":true,"impreso":false,"m
 - **Qué pasa con una impresora compartida en red** (`\\equipo\impresora`). No
   se probó.
 
+### 4.44 El historial de cajas (2026-09-15)
+
+**Qué se pidió.** Una pantalla solo para administradores con TODAS las sesiones
+de caja, abiertas y cerradas, de la apertura más reciente a la más vieja, con
+filtros por rango de fechas y por quien abrió. Cada fila dice quién abrió,
+cuándo y con cuánto. Si se cerró, dice quién cerró, el teórico, el real y la
+diferencia, quién la autorizó y por qué vía, y si hubo un recuento sellado
+corregido. Tocar una fila abre el detalle con todo expandido y el desglose por
+denominación de la apertura y del cierre.
+
+#### El historial NO calcula nada del corte
+
+Lee lo que el cierre guardó y lo presenta. Si recalculara el teórico o la
+diferencia, una regla nueva cambiaría un corte viejo. Es el mismo criterio del
+recibo (§4.14).
+
+**De dónde sale cada dato**, porque no todo vive en la misma tabla:
+
+| Dato | Fuente |
+|---|---|
+| Quién abrió, cuándo, inicial, teórico, real, diferencia, estado | `caja_sesiones` |
+| Quién cerró, si fue otra persona | `caja_sesiones.cerrada_por` (`NULL` = cerró quien abrió, §4.9) |
+| Quién autorizó la diferencia y la vía | `caja_sesiones.diferencia_autorizada_por` / `_via` |
+| Quién autorizó cerrar la caja ajena | asiento `caja_cerrada`, campo `cierreAjenoAutorizadoPor` |
+| Los conteos sellados | asientos `conteo_de_cierre_sellado` |
+| La corrección de un conteo sellado: primer conteo, final, quién autorizó y vía | asiento `reconteo_de_cierre_autorizado` |
+| El desglose por denominación | `caja_sesion_denominaciones`, con el valor de `denominaciones` |
+
+**La corrección NO puede salir de `caja_sesiones`.** Si el conteo corregido
+cuadra, el CHECK de la migración 008 exige las columnas de autorización vacías,
+así que el único lugar donde queda quién la autorizó es el asiento (§4.39).
+
+- **El desglose se multiplica con Decimal**, y los subtotales se suman en la
+  aplicación, nunca en SQL (§4.15).
+- En modo simple no hay filas de desglose, y el detalle dice «Se contó
+  escribiendo el total».
+- **Un asiento que no se puede leer no se esconde.** La fila lleva un aviso,
+  por ejemplo «Hay una corrección de conteo autorizada en la bitácora que no se
+  pudo leer.».
+- Un usuario que no existe se muestra como «(usuario desconocido)». Este
+  historial existe para auditar, y un hueco silencioso es lo peor que puede
+  mostrar.
+
+#### Los filtros
+
+- **Las fechas filtran por el día de APERTURA, en hora de Guatemala.** Usan el
+  mismo `resolverPeriodo` de los reportes (§4.15). Una caja abierta el 12/09 a
+  las 23:30 de Guatemala (13/09 05:30 UTC) es del 12. Hay prueba de ese borde.
+- **El filtro de persona es por quien abrió**, no por quien cerró. Hay prueba
+  de que el cierre ajeno de Jimmy no aparece al filtrar por Jimmy.
+- Las opciones del selector son las personas que abrieron alguna caja.
+- Filtrar y ordenar se hace en SQL sobre texto ISO y UUID, que es exacto. Ninguna
+  columna decimal se ordena ni se agrega en SQL.
+- Una sola fecha, una fecha inexistente o un rango al revés se rechazan con
+  `DATO_INVALIDO` y un mensaje claro.
+
+#### Los dos canales exigen rol administrativo
+
+`cajas:historial` y `cajas:detalle` van envueltos en
+`requiereRol(sesion, 'administrativo', …)` con esquema Zod. Una prueba cuenta dos
+`ipcMain.handle` y dos guards. El botón «Historial de cajas» solo se dibuja para
+el rol administrativo, pero lo que rechaza es el canal.
+
+Los dos están en `todo-canal-responde-algo-serializable.test.ts`: 64 canales
+registrados, 64 llamados, 89 llamadas.
+
+#### Verificado en la aplicación real (macOS)
+
+`npm run verify:pantallas:historial-de-cajas`, 17 de 17. Las cinco sesiones se
+arman por los canales reales de la ventana, con PIN de verdad y sin tocar la
+base:
+
+| Caso | Qué pasó |
+|---|---|
+| A | Ana abre Q500, cuenta Q480 y Jimmy autoriza con el PIN remoto |
+| B | Ana abre y cierra por denominación (2 × Q200 + 1 × Q100), exacto |
+| C | Rosa abre Q300 y Jimmy la cierra con su PIN (caja ajena) |
+| D | Ana abre Q500, cuenta Q480, corrige a Q500 y Jimmy autoriza |
+| E | Rosa abre Q200, cuenta Q150 y la deja abierta |
+
+Salida cruda:
+
+```
+armado A PIN remoto: {"codigo":"AUTORIZACION_VALIDADA","cerrada":false}
+armado C ajena con PIN: {"codigo":"CIERRE_CORRECTO","cerrada":true}
+armado D corregir a 500: {"codigo":"REQUIERE_AUTORIZACION","cerrada":false}
+asientos de caja: [{"accion":"caja_abierta","n":5},{"accion":"caja_cerrada","n":4},{"accion":"conteo_de_cierre_sellado","n":3},{"accion":"reconteo_de_cierre_autorizado","n":1}]
+window.pos.historialDeCajas.listar() con la sesión de ROSA (venta): {"ok":false,"error":{"codigo":"PERMISO_DENEGADO",…}}
+fila 2: [cerrada] Abrió Ana · … · inicial Q500.00 Cerró Ana · … · teórico Q500.00 · real Q500.00 · cuadra RECUENTO CORREGIDO: CONTÓ Q480.00, CERRÓ CON Q500.00 · AUTORIZÓ JIMMY, EN PERSONA Ver detalle
+fila 3: [cerrada] Abrió Rosa · … · inicial Q300.00 Cerró Jimmy (otra persona) · … · cuadra CERRADA POR OTRA PERSONA Ver detalle
+fila 5: [cerrada] Abrió Ana · … · real Q480.00 · faltante de Q20.00 Diferencia autorizada por Jimmy, por teléfono (PIN remoto) Ver detalle
+filtro Rosa: [E, C]
+filtro 2026-09-15 a 2026-09-15: 5 filas; período: Aperturas del 15/09/2026 a 15/09/2026
+17 comprobaciones, 0 fallidas.
+```
+
+**Falsificado en la app real.** Con `requiereRol` quitado del canal de lista,
+falla «ROSA (VENTA)… PERMISO_DENEGADO» con `ok=true` y el guion sale con código
+1.
+
+**Falsificado en Vitest**, una mutación a la vez:
+
+| Mutación | Pruebas que caen |
+|---|---|
+| Orden ascendente en SQL | 3 |
+| Sin filtro de persona | 3 |
+| Días en UTC | 3 |
+| `cerradaPor` siempre quien abrió | 1 |
+| Reconteo en `null` | 2 |
+| Aviso silenciado | 1 |
+| Pantalla sin la etiqueta de recuento | 1 |
+| Filtro de persona que no se manda | 1 |
+| Guard quitado | 3 |
+
+**Un defecto del arnés, no del producto:** la primera corrida dio 3 fallas
+porque las etiquetas van en mayúsculas por CSS e `innerText` las devuelve así.
+Ahora se compara sin distinguir mayúsculas.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **El borde de día de Guatemala en la app real.** Las cinco sesiones del arnés
+  son de hoy. El filtro de otro día se ejercitó con «ayer» (cero filas); el borde
+  de las 18:00 está probado solo en Vitest sobre SQLite real.
+- **El rendimiento con un año de cajas.** La lista trae todas las sesiones sin
+  paginar y lee los asientos de caja en una sola consulta. No se midió en el i3.
+- **La presentación.** No se pidió pulido: el detalle usa listas de definición
+  sin estilo propio.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -7025,6 +7154,8 @@ venta sin impresora: {"numeroRecibo":2,…,"pdfGenerado":true,"impreso":false,"m
 | **Después de un ticket de prueba aceptado, la persona contesta cómo salió, y «símbolos raros o sin cortar» se guarda como señal de incompatibilidad ESC/POS, distinta de un fallo de conexión.** | Dar por buena la impresora si Windows aceptó el trabajo | Una térmica ESC/POS no contesta: ningún software puede saber si entendió los comandos. §4.43. | Prompt 65 — 2026-09-15 |
 | **`impresora.json` guarda el NOMBRE de la impresora; el formato viejo con `dispositivo` se sigue leyendo pero la pantalla ya no lo ofrece.** | Migrar el archivo viejo; dejar de leerlo | Dejar de leerlo cambiaría en silencio a solo PDF una terminal que alguien configuró a mano. Guardar desde la pantalla lo reemplaza. §4.43. | Prompt 65 — 2026-09-15 |
 | **PowerShell recibe el script constante con `-EncodedCommand`; el nombre de la impresora y los bytes van SOLO en variables de entorno, y ningún texto se convierte en código al ejecutar.** | `-Command` con `Invoke-Expression` del script (la versión anterior); pasar el nombre como argumento después de `-Command`; `-File` con los argumentos aparte | Pedido de Julio, con el principio de las funciones SECURITY DEFINER: el dato nunca se arma como código. La versión anterior no interpolaba el nombre, pero `Invoke-Expression` ejecutaba texto. Los argumentos después de `-Command` se interpretan como código, así que el nombre ahí sería la inyección. `-File` los pasa como valores, pero corre un archivo de script, que la política alcanza. En base64 la línea no tiene nada que escapar. Diez nombres hostiles en la prueba, falsificada. Riesgo inferido: antivirus que sospechan de `-EncodedCommand`. §4.43. | Prompt 66 — 2026-09-15 |
+| **El historial de cajas lee lo guardado y NO recalcula el corte; la corrección de un recuento sellado sale del asiento `reconteo_de_cierre_autorizado`.** | Recalcular teórico y diferencia; agregar columnas a `caja_sesiones` para el reconteo | Recalcular haría que una regla nueva cambiara un corte viejo. Una columna exigiría migración en las dos nubes, y si el conteo final cuadra el CHECK de la 008 obliga a dejar la autorización vacía: el asiento es la única constancia. Un asiento ilegible se muestra como aviso, no se esconde. §4.44. | Prompt 67 — 2026-09-15 |
+| **Los filtros del historial son por día de APERTURA en hora de Guatemala y por quien ABRIÓ.** | Filtrar por día de cierre; filtrar por quien abrió o cerró | Una caja se identifica por su apertura, que existe también en las abiertas. Contar a quien cerró mezclaría en el filtro de Jimmy las cajas ajenas que solo cerró. Se reutiliza `resolverPeriodo`, para que un día signifique lo mismo que en los reportes (§4.15). §4.44. | Prompt 67 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -7129,6 +7260,9 @@ negocio:
   propias reglas de autorización.
 - No hay log de auditoría: los puntos donde debería escribirse ya están
   marcados con `TODO(auditoria)` en el controlador de salida.
+- **Sí existe** el historial de cajas (§4.44): todas las sesiones con quién
+  abrió y cerró, diferencias autorizadas, recuentos corregidos, filtros y el
+  desglose por denominación. Solo administrativo.
 - **Sí existe** la impresión térmica real, por la cola de Windows en RAW, y la
   pantalla «Impresora de recibos» para elegirla, probarla y quitarla (§4.43).
   Sin `impresora.json` el recibo queda solo en PDF. No está probada en Windows
@@ -7242,6 +7376,9 @@ npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en v
                          # PIN correcto que revela y espera (confirmar o cancelar). AL FINAL
                          # sale de la aplicación con el PIN REMOTO y lee el asiento (§4.41).
                          # Deja capturas y lee la base al final (§4.39).
+npm run verify:pantallas:historial-de-cajas  # la app real: cinco cajas armadas por los canales reales
+                         # (diferencia autorizada, exacta por denominación, cerrada por otra persona,
+                         # recuento corregido, abierta); la cajera no llega; filtros y detalle (§4.44).
 npm run verify:pantallas:impresora  # la app real con impresoras SIMULADAS: estado, prueba sin elegir,
                          # desconectada, la que recibe (bytes ESC/POS), confirmación «ilegible»,
                          # guardar, reinicio, venta con impresora y venta después de quitarla (§4.43).
@@ -7331,7 +7468,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
   preload/      único puente hacia el renderer (expone window.pos)
   domain/       módulos de dominio
     usuarios/   autenticación, bloqueo por intentos, sesión, permisos y gestión de usuarios
-    caja/       apertura y cierre del turno, arqueo por denominaciones
+    caja/       apertura y cierre del turno, arqueo por denominaciones e historial de cajas
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
     venta/      precio efectivo, descuento, topes por rol y la transacción de la venta
     reportes/   los tres reportes y el período en hora de Guatemala. NUNCA agrega en SQL
