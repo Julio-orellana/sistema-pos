@@ -21,6 +21,7 @@ import type {
   DesgloseEnHistorialIpc,
   DetalleDeSesionDeCajaIpc,
   HistorialDeCajasIpc,
+  ReconteoEnHistorialIpc,
   SesionDeCajaEnHistorialIpc,
 } from '@shared/types/ipc';
 import { llamarAlProcesoPrincipal } from './llamar-al-proceso-principal';
@@ -60,6 +61,16 @@ function diferenciaLegible(sesion: SesionDeCajaEnHistorialIpc): string {
   }
   const sinSigno = cierre.diferencia.replace(/^-/u, '');
   return `${cierre.tipoDeDiferencia} de ${quetzales(sinSigno)}`;
+}
+
+/**
+ * ¿La autorización fue porque cambió lo CONTADO? Si todos los conteos sellados
+ * tienen el mismo número que el final, lo que cambió fue el esperado: una venta
+ * en el medio hizo cuadrar el mismo número (corregido el 2026-09-15). Compara
+ * los textos guardados; no calcula ningún monto.
+ */
+function cambioLoContado(reconteo: ReconteoEnHistorialIpc): boolean {
+  return reconteo.conteosSellados.some((conteo) => conteo.montoReal !== reconteo.conteoFinal.montoReal);
 }
 
 function via(valor: 'presencial' | 'remoto' | null): string {
@@ -300,9 +311,19 @@ function FilaDeHistorial({
         )}
         {reconteo !== null && (
           <span className="etiqueta" data-prueba="historial-etiqueta-reconteo">
-            Recuento corregido: contó {quetzales(reconteo.conteosSellados[0]?.montoReal ?? '?')}, cerró con{' '}
-            {quetzales(reconteo.conteoFinal.montoReal)} · autorizó {reconteo.autorizadoPor?.nombre ?? 'nadie registrado'},{' '}
-            {via(reconteo.via)}
+            {cambioLoContado(reconteo) ? (
+              <>
+                Recuento corregido: contó {quetzales(reconteo.conteosSellados[0]?.montoReal ?? '?')}, cerró con{' '}
+                {quetzales(reconteo.conteoFinal.montoReal)}
+              </>
+            ) : (
+              <>
+                Cambió el esperado: contó {quetzales(reconteo.conteoFinal.montoReal)}, teórico de{' '}
+                {quetzales(reconteo.conteosSellados[0]?.montoEsperado ?? '?')} a{' '}
+                {quetzales(reconteo.conteoFinal.montoEsperado)}
+              </>
+            )}{' '}
+            · autorizó {reconteo.autorizadoPor?.nombre ?? 'nadie registrado'}, {via(reconteo.via)}
           </span>
         )}
         {sesion.estado === 'abierta' && sesion.cantidadDeConteosSellados > 0 && (
@@ -444,10 +465,16 @@ function VistaDeDetalle({
 
       {reconteo !== null && (
         <section className="alerta" data-prueba="detalle-reconteo">
-          <h2>Se corrigió un conteo que tenía diferencia</h2>
+          <h2>
+            {cambioLoContado(reconteo)
+              ? 'Se corrigió un conteo que tenía diferencia'
+              : 'Se cerró con un conteo sellado después de que cambió el esperado'}
+          </h2>
           <p>
-            Antes de cerrar se confirmó un conteo con diferencia, y el cierre se hizo con otro número. La
-            corrección la autorizó <strong>{reconteo.autorizadoPor?.nombre ?? 'nadie registrado'}</strong>,{' '}
+            {cambioLoContado(reconteo)
+              ? 'Antes de cerrar se confirmó un conteo con diferencia, y el cierre se hizo con otro número.'
+              : 'Antes de cerrar se confirmó un conteo con diferencia. Lo contado no cambió: lo que cambió fue el teórico, y el mismo número pasó a cuadrar.'}{' '}
+            {cambioLoContado(reconteo) ? 'La corrección la autorizó' : 'El cierre lo autorizó'} <strong>{reconteo.autorizadoPor?.nombre ?? 'nadie registrado'}</strong>,{' '}
             {via(reconteo.via)} ({fechaYHora(reconteo.fecha)}).
           </p>
           <ul>

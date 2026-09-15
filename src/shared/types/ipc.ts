@@ -645,7 +645,8 @@ export interface ConteoSelladoIpc {
  *
  * `codigo` puede ser `CIERRE_CORRECTO`, `REQUIERE_AUTORIZACION` (hay
  * diferencia), `REQUIERE_AUTORIZACION_DE_RECONTEO` (el conteo de ahora cuadra
- * pero antes se confirmó otro con diferencia), `REQUIERE_AUTORIZACION_DE_CAJA_AJENA`
+ * pero el turno ya tiene un conteo sellado con diferencia: cambió lo contado,
+ * cambió lo esperado, o las dos cosas), `REQUIERE_AUTORIZACION_DE_CAJA_AJENA`
  * (la abrió otro), o el código de un intento de autorización fallido.
  */
 export interface ResultadoDeCierreIpc {

@@ -508,6 +508,7 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
     const resultado = autorizacion.resultado;
     const primero = resultado.primerConteo;
     const diferenciaDelPrimero = primero?.diferencia ?? null;
+    const esperadoEntonces = primero?.montoEsperado ?? null;
     return (
       <div className="ingreso" data-prueba="pantalla-de-caja">
         <h1>Cerrar caja</h1>
@@ -519,10 +520,14 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
         )}
 
         <div className="autorizacion" data-prueba="autorizacion-de-reconteo">
-          <h2>El conteo cambió después de mostrar una diferencia</h2>
+          <h2>Este turno ya tuvo un conteo con diferencia</h2>
 
-          {/* Quien autoriza ve los DOS números: el que primero no cuadró y el
-              de ahora. Autoriza la corrección, no solo el número final. */}
+          {/* Quien autoriza ve los DOS conteos Y los dos esperados: lo que pide
+              el PIN puede ser que cambió lo contado, que cambió lo que el
+              sistema espera (una venta en el medio) o las dos cosas, y son
+              causas distintas (corregido el 2026-09-15). Este diálogo solo lo
+              ve un administrativo: a otro rol el código llega como una
+              autorización común (§4.40.3). */}
           <div className="autorizacion__resumen">
             <div className="dato">
               <span className="dato__etiqueta">Primer conteo</span>
@@ -537,18 +542,34 @@ export function PantallaDeCaja({ alVolver }: { readonly alVolver: () => void }):
               </span>
             </div>
             <div className="dato">
+              <span className="dato__etiqueta">Esperado entonces</span>
+              <span className="dato__valor" data-prueba="reconteo-esperado-entonces">
+                {esperadoEntonces === null ? '—' : formatearQuetzales(esperadoEntonces)}
+              </span>
+            </div>
+            <div className="dato">
               <span className="dato__etiqueta">Conteo de ahora</span>
               <span className="dato__valor" data-prueba="reconteo-conteo-actual">
                 {formatearQuetzales(resultado.montoReal)}
                 {resultado.diferencia !== null && ` (${diferenciaLegible(resultado.diferencia)})`}
               </span>
             </div>
+            <div className="dato">
+              <span className="dato__etiqueta">Esperado ahora</span>
+              <span className="dato__valor" data-prueba="reconteo-esperado-ahora">
+                {resultado.montoEsperado === null ? '—' : formatearQuetzales(resultado.montoEsperado)}
+              </span>
+            </div>
           </div>
 
+          {/* El motivo lo arma el proceso principal: dice si cambió lo contado,
+              lo esperado o las dos cosas. */}
+          <p className="subtitulo" data-prueba="reconteo-motivo">
+            {resultado.mensaje}
+          </p>
           <p className="subtitulo">
-            Corregir un conteo que ya mostró una diferencia necesita la autorización de un
-            administrador, aunque ahora cuadre. Puede autorizar en persona o dictando el PIN por
-            teléfono. Los dos conteos quedan registrados.
+            Puede autorizar en persona o dictando el PIN por teléfono. Los conteos quedan
+            registrados.
           </p>
 
           <TecladoNumerico

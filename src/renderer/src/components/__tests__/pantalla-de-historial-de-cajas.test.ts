@@ -324,6 +324,37 @@ describe('El detalle', () => {
     expect(dentro(contenedor, 'detalle-reconteo-final')?.textContent).toContain('Conteo final: Q500.00');
   });
 
+  it('CAMBIÓ EL ESPERADO, NO LO CONTADO: ni la etiqueta ni el detalle dicen que se corrigió un conteo, y quien autorizó está', async () => {
+    const cambioElEsperado: SesionDeCajaEnHistorialIpc = {
+      ...RECONTEO,
+      id: 'sesion-f',
+      reconteo: {
+        fecha: '2026-09-13T23:02:00.000Z',
+        conteosSellados: [{ fecha: '2026-09-13T23:00:00.000Z', montoEsperado: '500.00', montoReal: '520.00', diferencia: '20.00' }],
+        conteoFinal: { montoEsperado: '520.00', montoReal: '520.00', diferencia: '0.00' },
+        autorizadoPor: JIMMY,
+        via: 'remoto',
+      },
+    };
+    const sesiones = HISTORIAL.sesiones as SesionDeCajaEnHistorialIpc[];
+    sesiones.push(cambioElEsperado);
+    try {
+      await montar();
+      const f = fila('sesion-f');
+      expect(dentro(f, 'historial-etiqueta-reconteo')?.textContent).toBe(
+        'Cambió el esperado: contó Q520.00, teórico de Q500.00 a Q520.00 · autorizó Jimmy, por teléfono (PIN remoto)',
+      );
+      await tocar(dentro(f, 'historial-ver'));
+      const detalle = dentro(contenedor, 'detalle-reconteo')?.textContent ?? '';
+      expect(detalle).not.toContain('Se corrigió un conteo');
+      expect(detalle).not.toContain('con otro número');
+      expect(detalle).toContain('Lo contado no cambió');
+      expect(detalle).toContain('El cierre lo autorizó Jimmy, por teléfono (PIN remoto)');
+    } finally {
+      sesiones.pop();
+    }
+  });
+
   it('CERRADA POR OTRA PERSONA: quién cerró y quién autorizó el cierre ajeno', async () => {
     await montar();
     await tocar(dentro(fila('sesion-c'), 'historial-ver'));

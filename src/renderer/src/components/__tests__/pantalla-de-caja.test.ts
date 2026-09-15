@@ -453,6 +453,8 @@ describe('EL RECONTEO: quien autoriza ve LOS DOS conteos', () => {
         ...RESPUESTA_BASE,
         cerrada: false,
         codigo: 'REQUIERE_AUTORIZACION_DE_RECONTEO',
+        mensaje:
+          'Antes se confirmó un conteo de Q480.00 con un FALTANTE de Q20.00, cuando el sistema esperaba Q500.00. Ahora se contaron Q500.00: cambió lo contado. Corregir un conteo que mostraba una diferencia exige la autorización de un administrador, aunque ahora cuadre.',
         diferencia: '0.00',
         montoEsperado: '500.00',
         montoReal: '500.00',
@@ -473,6 +475,39 @@ describe('EL RECONTEO: quien autoriza ve LOS DOS conteos', () => {
     expect(porPrueba('autorizacion-de-reconteo')?.textContent).toContain('aunque ahora cuadre');
     // Y NO se cerró: no hay confirmación.
     expect(porPrueba('confirmacion-de-cierre')).toBeNull();
+  });
+
+  it('CUANDO CAMBIÓ LO ESPERADO y no lo contado, el diálogo no dice que el conteo cambió: muestra los dos esperados y el motivo del proceso principal', async () => {
+    const motivo =
+      'Antes se confirmó un conteo de Q520.00 con un SOBRANTE de Q20.00, cuando el sistema esperaba Q500.00. Lo contado no cambió: lo que cambió es lo que el sistema espera, que era Q500.00 y ahora es Q520.00. Cerrar un turno que tuvo un conteo con diferencia exige la autorización de un administrador, aunque ahora cuadre.';
+    instalarApiConCierres(TURNO_PROPIO, [
+      {
+        ...RESPUESTA_BASE,
+        cerrada: false,
+        codigo: 'REQUIERE_AUTORIZACION_DE_RECONTEO',
+        mensaje: motivo,
+        diferencia: '0.00',
+        montoEsperado: '520.00',
+        montoReal: '520.00',
+        primerConteo: {
+          fecha: '2026-09-14T20:00:00.000Z',
+          montoEsperado: '500.00',
+          montoReal: '520.00',
+          diferencia: '20.00',
+        },
+      },
+    ]);
+    await montar();
+    await irAContarYConfirmar();
+
+    const dialogo = porPrueba('autorizacion-de-reconteo')?.textContent ?? '';
+    expect(dialogo).not.toContain('El conteo cambió');
+    expect(dialogo).not.toContain('Corregir un conteo');
+    expect(porPrueba('reconteo-motivo')?.textContent).toBe(motivo);
+    expect(porPrueba('reconteo-esperado-entonces')?.textContent).toContain('500.00');
+    expect(porPrueba('reconteo-esperado-ahora')?.textContent).toContain('520.00');
+    expect(porPrueba('reconteo-primer-conteo')?.textContent).toContain('520.00');
+    expect(porPrueba('reconteo-conteo-actual')?.textContent).toContain('520.00');
   });
 });
 
