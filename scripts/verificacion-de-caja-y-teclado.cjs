@@ -1096,7 +1096,7 @@ async function main() {
     const textoDelDialogoDeSalida = await texto('dialogo-salida');
     anotar(`texto del diálogo de salida: ${JSON.stringify(textoDelDialogoDeSalida)}`);
     // Desde el 2026-09-15 el PIN de salida se toca en el teclado numérico del
-    // diálogo: ya no hay ningún campo nativo que llenar (§4.45).
+    // diálogo: ya no hay ningún campo nativo que llenar (§4.46).
     for (const digito of PIN_REMOTO) {
       await prueba('dialogo-salida').locator(`[data-prueba="tecla-${digito}"]`).click();
     }

@@ -43,6 +43,8 @@ import sqlSaltarLoteDeSincronizacion from './migrations/029_saltar_lote_de_sincr
 import sqlRecibosPdfPathRelativo from './migrations/030_recibos_pdf_path_relativo.sql?raw';
 import sqlProductosPrecioCompra from './migrations/031_productos_precio_compra.sql?raw';
 import sqlCostoUnitarioSnap from './migrations/032_venta_detalle_costo_unitario_snap.sql?raw';
+import sqlAnulacionesDeVenta from './migrations/033_anulaciones_de_venta.sql?raw';
+import sqlSuperficieAnulacionDeVenta from './migrations/034_superficie_anulacion_de_venta.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -126,6 +128,20 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 32,
     nombre: '032_venta_detalle_costo_unitario_snap',
     sql: sqlCostoUnitarioSnap,
+  },
+  // Con espejo en la nube, la `0033`, que TODAVÍA NO EXISTE: la sincronización
+  // de la anulación es un prompt aparte (docs/ANULACION-DE-VENTA.md §7).
+  {
+    orden: 33,
+    nombre: '033_anulaciones_de_venta',
+    sql: sqlAnulacionesDeVenta,
+  },
+  // Sin espejo: amplía `bloqueos_de_autorizacion`, que no se espeja. El 0034
+  // queda reservado del otro lado.
+  {
+    orden: 34,
+    nombre: '034_superficie_anulacion_de_venta',
+    sql: sqlSuperficieAnulacionDeVenta,
   },
 ];
 

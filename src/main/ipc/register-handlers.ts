@@ -17,6 +17,7 @@ import {
   esquemaConfirmacionDeSalida,
   esquemaAperturaDeCaja,
   esquemaCierreDeCaja,
+  esquemaPedidoDeAnulacion,
   esquemaIntentoDeIngreso,
   esquemaPinRemoto,
   esquemaPrimerAdministrador,
@@ -27,6 +28,7 @@ import {
   type EstadoDeSesion,
   type RespuestaIpc,
   type ResultadoDeCierreIpc,
+  type ResultadoDeAnulacionIpc,
   type TurnoAbierto,
   type ResultadoDeIngreso,
   type ResultadoIntentoDeSalida,
@@ -47,6 +49,8 @@ import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacio
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import { turnoParaLaVentana } from './turno-para-la-ventana';
 import { FlujoDeCierreDeCaja } from './cierre-de-caja';
+import { FlujoDeAnulacionDeVenta } from './anulacion-de-venta';
+import type { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import type { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import type { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import type { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
@@ -91,6 +95,8 @@ export interface DependenciasDeIpc {
   readonly catalogo: Omit<DependenciasDeCatalogo, 'sesion'>;
   /** Registro de la venta: la transacción que descuenta inventario y cobra. */
   readonly venta: ServicioDeVenta;
+  /** Anulación de una venta ya registrada: reposición, PIN y asiento (docs/ANULACION-DE-VENTA.md). */
+  readonly anulacionDeVenta: ServicioDeAnulacionDeVenta;
   /** Alta, edición, cambio de PIN y baja de usuarios. Todo con rol administrativo. */
   readonly gestionDeUsuarios: ServicioDeUsuarios;
   /** Datos de la tienda que encabezan el recibo. */
@@ -467,6 +473,29 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
         requiereSesion(dependencias.sesion, () => {
           flujoDeCierre.cancelarAutorizacion();
           return true;
+        }),
+      ),
+  );
+
+  // La anulación de una venta: los dos pasos viven en `FlujoDeAnulacionDeVenta`,
+  // que se prueba contra SQLite real. Exige SOLO SESIÓN, como el cobro: lo que
+  // autoriza es el PIN de un administrador, no el rol de quien pide (§4.3).
+  const flujoDeAnulacion = new FlujoDeAnulacionDeVenta({
+    anulacion: dependencias.anulacionDeVenta,
+    autenticacion: dependencias.autenticacion,
+  });
+
+  ipcMain.handle(
+    CANALES_IPC.ventaAnular,
+    async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeAnulacionIpc>> =>
+      ejecutarConRespuesta('ANULACION_DE_VENTA_FALLIDA', () =>
+        requiereSesion(dependencias.sesion, () => {
+          const pedido = esquemaPedidoDeAnulacion.parse(payload);
+          const enSesion = dependencias.sesion.obtener();
+          if (enSesion === null) {
+            throw new Error('No hay sesión iniciada.');
+          }
+          return flujoDeAnulacion.pedir(pedido, enSesion);
         }),
       ),
   );

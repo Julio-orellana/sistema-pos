@@ -90,6 +90,21 @@ const TABLAS_DE_LA_NUBE = [...TABLAS_QUE_VIAJAN, 'denominaciones'].sort();
 /** Tablas locales SIN espejo, a propósito (supabase/migrations/README.md, dirección 1). */
 const TABLAS_SOLO_LOCALES = ['sync_cola', 'bloqueos_de_autorizacion', 'migraciones_aplicadas'];
 
+/**
+ * Tablas que YA SE ENCOLAN pero cuyo espejo y cuya puerta en la nube TODAVÍA NO
+ * EXISTEN. No es una lista de perdón: cada entrada dice por qué está y cuándo
+ * sale, y la prueba de abajo obliga a sacarla el día que llegue su espejo.
+ */
+const TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA: readonly { readonly tabla: TablaSincronizable; readonly motivo: string }[] = [
+  {
+    tabla: 'anulaciones_de_venta',
+    motivo:
+      'Núcleo local de la anulación (docs/ANULACION-DE-VENTA.md). La migración 0033, la función ' +
+      '`sincronizar_anulacion_de_venta` y la entrada del enrutador son del prompt de sincronización (§7). ' +
+      'Hasta entonces, contra una nube real su lote detiene la cola (§7.5).',
+  },
+];
+
 interface ColumnaLocal {
   readonly nombre: string;
   readonly nulable: boolean;
@@ -141,6 +156,15 @@ describe('La foto de la nube tiene las tablas correctas', () => {
   it('ninguna tabla que es solo local está en la nube', () => {
     for (const tabla of TABLAS_SOLO_LOCALES) {
       expect(foto.tablas).not.toHaveProperty(tabla);
+    }
+  });
+
+  it('las tablas que viajan SIN PUERTA TODAVÍA no están ni en la foto ni en ninguna lista cerrada: el día que lleguen, hay que sacarlas de la lista', () => {
+    const admitidas = new Set(Object.values(TABLAS_ADMITIDAS_POR_FUNCION).flat());
+    for (const { tabla, motivo } of TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA) {
+      expect(motivo.length, `${tabla} necesita un motivo escrito`).toBeGreaterThan(40);
+      expect(foto.tablas, `${tabla} ya está en la foto: sacala de TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA`).not.toHaveProperty(tabla);
+      expect(admitidas.has(tabla), `${tabla} ya tiene función: sacala de TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA`).toBe(false);
     }
   });
 });

@@ -25,6 +25,7 @@ import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { LogTecnicoSilencioso } from '@main/log-tecnico';
 
 import { SupabaseSyncProvider } from '../supabase-sync-provider';
 import type { EstadoDeNube, SesionDeNube } from '../sesion-de-nube';
@@ -138,6 +139,7 @@ beforeEach(() => {
     limitesDescuento: repos.limitesDescuento,
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
   });
   categorias = new ServicioDeCategorias({ base, categorias: repos.categorias, auditoria: repos.auditoria });
   usuarios = new ServicioDeUsuarios({ base, usuarios: repos.usuarios, auditoria: repos.auditoria });
@@ -303,6 +305,50 @@ describe('CADA OPERACIÓN va a SU función, y no se confunden entre sí', () => 
       'sincronizar_apertura_de_caja',
       'sincronizar_cierre_de_caja',
     ]);
+  });
+});
+
+// ===========================================================================
+describe('UN CONFLICTO DE INVENTARIO: su asiento sube solo, por sincronizar_asiento (CLAUDE.md §4.3)', () => {
+  it('la venta revertida no viaja; el asiento conflicto_de_inventario sí, y queda sincronizado', async () => {
+    caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    base.prepare('DELETE FROM sync_cola').run();
+
+    // El UPDATE real corre con el saldo que se leyó y afecta cero filas: justo
+    // antes, «otro escritor» movió el saldo. Usa la misma conexión, así que se
+    // revierte con la venta.
+    const original = repos.productos.descontarSiSigueIgual.bind(repos.productos);
+    repos.productos.descontarSiSigueIgual = (id, leido, nuevo): boolean => {
+      base.prepare('UPDATE productos SET inventario_disponible = ? WHERE id = ?').run('90.000', id);
+      return original(id, leido, nuevo);
+    };
+    expect(() =>
+      venta.registrar(idCajera, 'venta', {
+        lineas: [{ productoId: idMaiz, cantidad: '2' }],
+        descuento: null,
+        formaPago: 'efectivo',
+        numBoleta: null,
+      }),
+    ).toThrow(/cambió mientras se cobraba/);
+
+    let mandado: { tabla: string; operacion: string; datos: Record<string, unknown> }[] = [];
+    const espia = ((url: string, opciones: RequestInit): Promise<Response> => {
+      mandado = (JSON.parse(opciones.body as string) as { lote: typeof mandado }).lote;
+      return fetchQueAcepta()(url, opciones);
+    }) as unknown as typeof fetch;
+
+    await crearTrabajador(espia).ejecutarCiclo();
+
+    expect(funcionesLlamadas()).toEqual(['sincronizar_asiento']);
+    expect(mandado.map((cambio) => [cambio.tabla, cambio.operacion])).toEqual([['auditoria_log', 'insertar']]);
+    const datos = mandado[0]?.datos ?? {};
+    expect(datos.accion).toBe('conflicto_de_inventario');
+    expect(datos.usuario_id).toBe(idCajera);
+    expect(datos.entidad_tipo).toBe('productos');
+    expect(datos.entidad_id).toBe(idMaiz);
+    // `valor_nuevo` viaja como el texto JSON que guardó SQLite; lo parsea la nube.
+    expect((JSON.parse(datos.valor_nuevo as string) as { operacion: string }).operacion).toBe('venta');
+    expect(repos.syncCola.contarPendientes()).toBe(0);
   });
 });
 

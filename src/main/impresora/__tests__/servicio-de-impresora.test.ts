@@ -18,7 +18,7 @@ import { generarHashDePin } from '@shared/auth';
 import { crearRepositorios } from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { ErrorDeNegocio } from '@main/database/errores';
-import type { LogTecnico, OrigenTecnico } from '@main/log-tecnico';
+import { LogTecnicoSilencioso, type LogTecnico, type OrigenTecnico } from '@main/log-tecnico';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
@@ -396,6 +396,7 @@ describe('Quitar la impresora vuelve a «solo PDF» y los recibos se siguen emit
         limitesDescuento: repos.limitesDescuento,
         cajaSesiones: repos.cajaSesiones,
         auditoria: repos.auditoria,
+        log: new LogTecnicoSilencioso(),
       });
       const cajera = repos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pinHash: generarHashDePin('1357') }).id;
       const categoriaId = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;

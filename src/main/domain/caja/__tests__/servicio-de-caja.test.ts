@@ -733,14 +733,23 @@ describe('EL AUTORIZANTE DE UN CONTEO SELLADO QUEDA REGISTRADO, cambie lo contad
     expect(asientosQueNombran(idJimmy)).toBeGreaterThanOrEqual(1);
   });
 
-  it('LA OTRA DIRECCIÓN: el esperado BAJA entre el sello y la reconfirmación (hoy lo produce anular() del repositorio) y el autorizante queda igual', () => {
+  it('LA OTRA DIRECCIÓN: el esperado BAJA entre el sello y la reconfirmación (una venta anulada) y el autorizante queda igual', () => {
     const sesionId = turnoDeQuinientos();
     const ventaId = ventaEnEfectivo(sesionId, '27.50');
 
     const primero = caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
     expect(primero.diferencia).toBe('-27.50');
 
-    repos.ventas.anular(ventaId);
+    // La fila de anulación directo: acá importa que el esperado baje, no cómo se
+    // anula; el servicio de anulación tiene sus propias pruebas.
+    repos.anulacionesDeVenta.crear({
+      ventaId,
+      solicitadaPor: idCajera,
+      autorizadaPor: idJimmy,
+      autorizadaVia: 'presencial',
+      motivo: 'prueba del esperado que baja',
+      fecha: '2026-09-15T12:00:00.000Z',
+    });
 
     const otraVez = caja.intentarCerrar(sesionId, simple('500'), { usuarioQueCierra: idCajera });
     expect(otraVez.codigo).toBe('REQUIERE_AUTORIZACION_DE_RECONTEO');

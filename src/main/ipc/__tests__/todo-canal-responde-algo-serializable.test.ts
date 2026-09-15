@@ -45,6 +45,7 @@ import { AlmacenDeFotos } from '@main/domain/catalogo/almacen-de-fotos';
 import { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
 import { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-de-limites-de-descuento';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { ServicioDeReportes } from '@main/domain/reportes/servicio-de-reportes';
 import { LogTecnicoSilencioso } from '@main/log-tecnico';
@@ -257,6 +258,19 @@ function dependenciasSobre(
       limitesDescuento: repos.limitesDescuento,
       cajaSesiones: repos.cajaSesiones,
       auditoria: repos.auditoria,
+      log: new LogTecnicoSilencioso(),
+    }),
+    anulacionDeVenta: new ServicioDeAnulacionDeVenta({
+      base,
+      ventas: repos.ventas,
+      ventaDetalle: repos.ventaDetalle,
+      productos: repos.productos,
+      cajaSesiones: repos.cajaSesiones,
+      recibos: repos.recibos,
+      usuarios: repos.usuarios,
+      anulaciones: repos.anulacionesDeVenta,
+      auditoria: repos.auditoria,
+      log: new LogTecnicoSilencioso(),
     }),
     gestionDeUsuarios: new ServicioDeUsuarios({ base, usuarios: repos.usuarios, auditoria: repos.auditoria }),
     negocio: new ServicioDeConfiguracionDeNegocio({ base, configuracion: repos.configuracionNegocio, auditoria: repos.auditoria }),
@@ -402,19 +416,35 @@ describe('1. En una tienda con datos, cada canal devuelve algo que el puente pue
     await llamar(CANALES_IPC.productosFijarActivo, 'reactivar', { id: producto.id, activo: true });
   });
 
-  it('venta: estado, cobro simple y cobro con descuento que exige PIN', async () => {
+  it('venta: estado, cobro simple, cobro con descuento que exige PIN, y la anulación en sus dos pasos', async () => {
     await llamar(CANALES_IPC.ventaEstado, 'con la caja de Jimmy abierta');
     const lineas = [{ productoId: terminal.ids.frijol, cantidad: '1' }];
-    await llamar(CANALES_IPC.ventaCobrar, 'efectivo sin descuento', { lineas, descuento: null, formaPago: 'efectivo', numBoleta: null });
+    const enEfectivo = datosDe(
+      await llamar(CANALES_IPC.ventaCobrar, 'efectivo sin descuento', { lineas, descuento: null, formaPago: 'efectivo', numBoleta: null }),
+      'cobro en efectivo',
+    );
     const descuento = { tipo: 'porcentaje', valor: '5' };
     await llamar(CANALES_IPC.ventaCobrar, 'descuento sin PIN', { lineas, descuento, formaPago: 'efectivo', numBoleta: null });
-    await llamar(CANALES_IPC.ventaCobrar, 'descuento con PIN', {
-      lineas,
-      descuento,
-      formaPago: 'tarjeta',
-      numBoleta: 'B-1',
-      pinDescuento: PIN_DE_JIMMY,
-    });
+    const conTarjeta = datosDe(
+      await llamar(CANALES_IPC.ventaCobrar, 'descuento con PIN', {
+        lineas,
+        descuento,
+        formaPago: 'tarjeta',
+        numBoleta: 'B-1',
+        pinDescuento: PIN_DE_JIMMY,
+      }),
+      'cobro con tarjeta',
+    );
+
+    // La anulación (docs/ANULACION-DE-VENTA.md §4.3): sin PIN devuelve la vista
+    // previa; con un PIN equivocado, el rechazo; con el correcto, la anulación.
+    const efectivo = { ventaId: enEfectivo.ventaId, motivo: 'el cliente devolvió el producto', voucher: null };
+    await llamar(CANALES_IPC.ventaAnular, 'anulación en efectivo, sin PIN', { ...efectivo, pin: null });
+    await llamar(CANALES_IPC.ventaAnular, 'anulación en efectivo, PIN equivocado', { ...efectivo, pin: '0000' });
+    await llamar(CANALES_IPC.ventaAnular, 'anulación en efectivo, con PIN', { ...efectivo, pin: PIN_DE_JIMMY });
+    const tarjeta = { ventaId: conTarjeta.ventaId, motivo: 'cobro duplicado', voucher: 'B-1' };
+    await llamar(CANALES_IPC.ventaAnular, 'anulación con tarjeta, voucher equivocado (se niega)', { ...tarjeta, voucher: 'B-2', pin: null });
+    await llamar(CANALES_IPC.ventaAnular, 'anulación con tarjeta, con PIN', { ...tarjeta, pin: PIN_DE_JIMMY });
   });
 
   it('usuarios', async () => {

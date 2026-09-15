@@ -413,6 +413,38 @@ export interface NuevaVentaDetalle {
 // ---------------------------------------------------------------------------
 
 /**
+ * La anulación de una venta (docs/ANULACION-DE-VENTA.md, sección 1).
+ *
+ * UNA VENTA ESTÁ ANULADA SI Y SOLO SI EXISTE ESTA FILA. La venta no se toca:
+ * `ventas.estado` queda en 'completada' también en las anuladas, y ninguna
+ * consulta decide por esa columna. No copia el total ni la forma de pago: están
+ * en `ventas`, que no cambia.
+ */
+export interface AnulacionDeVenta {
+  readonly id: string;
+  readonly ventaId: string;
+  /** Quién tenía la sesión cuando se pidió. */
+  readonly solicitadaPor: string;
+  /** El administrador cuyo PIN coincidió. Puede ser la misma persona. */
+  readonly autorizadaPor: string;
+  readonly autorizadaVia: ViaDeAutorizacion;
+  readonly motivo: string;
+  readonly fecha: string;
+}
+
+/** Datos para registrar una anulación. Solo la escribe el servicio de anulación. */
+export interface NuevaAnulacionDeVenta {
+  readonly ventaId: string;
+  readonly solicitadaPor: string;
+  readonly autorizadaPor: string;
+  readonly autorizadaVia: ViaDeAutorizacion;
+  readonly motivo: string;
+  readonly fecha: string;
+}
+
+// ---------------------------------------------------------------------------
+
+/**
  * Datos de la tienda que encabezan el recibo.
  *
  * Las cuatro son nulables porque los datos reales de Jimmy todavía no llegaron.

@@ -20,6 +20,8 @@ import {
   type EstadoDeSesion,
   type EstadoDeVenta,
   type PedidoDeCobro,
+  type PedidoDeAnulacionIpc,
+  type ResultadoDeAnulacionIpc,
   type ResultadoDeCobro,
   type ConfiguracionDeNegocioIpc,
   type ReciboEnHistorialIpc,
@@ -214,6 +216,10 @@ const apiPos: ApiPos = {
     cobrar: (pedido: PedidoDeCobro): Promise<RespuestaIpc<ResultadoDeCobro>> =>
       ipcRenderer.invoke(CANALES_IPC.ventaCobrar, pedido) as Promise<
         RespuestaIpc<ResultadoDeCobro>
+      >,
+    anular: (pedido: PedidoDeAnulacionIpc): Promise<RespuestaIpc<ResultadoDeAnulacionIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.ventaAnular, pedido) as Promise<
+        RespuestaIpc<ResultadoDeAnulacionIpc>
       >,
   },
 

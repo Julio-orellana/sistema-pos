@@ -1,6 +1,9 @@
 # Anulación de una venta — documento de diseño
 
-> **Estado: PROPUESTA PARA APROBAR. No hay código ni migraciones escritas.**
+> **Estado: APROBADO entero el 2026-09-15. El NÚCLEO LOCAL está construido**
+> (secciones 1, 2, 3.1 a 3.4, 4 y 6; migraciones locales 033 y 034; ver
+> CLAUDE.md §4.45). **Falta:** la sincronización (7), la restauración (8), el
+> recibo (5), el reporte de cobros con tarjeta (3.5) y la pantalla.
 > Escrito el 2026-09-15. Ninguna migración de este documento se aplica a ningún
 > proyecto de Supabase —tampoco a `pos-pruebas-descartable`— sin que Julio vea
 > el SQL completo primero.
@@ -118,6 +121,14 @@ aparece en `errores.ts` y en ese servicio.
 
 La anulación sí lo registra (sección 2.5). El hueco de la venta queda señalado
 para arreglarlo por separado.
+
+> **ARREGLADO EL 2026-09-15.** La venta escribe el asiento `conflicto_de_inventario`
+> después de revertir, en su propio lote, con `operacion: 'venta'` (CLAUDE.md
+> §4.3). Dos cosas quedaron abiertas: ~~sus claves no coinciden con las de la
+> anulación (punto 23 de §6.2 de CLAUDE.md)~~ **(resuelta el mismo día: una sola
+> forma y una sola puerta, ver §6.1)**, y un segundo escritor en otra
+> conexión no llega a ningún asiento, porque la transacción abre `BEGIN` y no
+> `BEGIN IMMEDIATE` (punto 22).
 
 ### 0.5 El comentario de la migración 015 dice que `cantidad_vendida` «nunca baja»
 
@@ -723,6 +734,31 @@ frenar. Es lo que ya hace la salida controlada.
 no como otra acción. Así, cuando se corrija el hueco de la venta (0.4), la
 venta usa la misma acción con `operacion: 'venta'`. Es el criterio de §4.1: el
 origen es un dato del asiento.
+
+> ~~**Desde el 2026-09-15 la venta ya lo usa**, con `valor_nuevo`
+> `{ operacion, productoId, nombre, comparacion, saldoQueSeLeyo,
+> cantidadVendidaQueSeLeyo, momento }`. La anulación escribe `saldoLeido`,
+> `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Alinearlas está
+> pendiente (punto 23 de §6.2 de CLAUDE.md).~~
+>
+> **ALINEADAS EL 2026-09-15, con la decisión de Julio.** Las dos operaciones
+> escriben ahora la MISMA forma, por una sola puerta
+> (`src/main/domain/venta/conflicto-de-inventario.ts`):
+>
+> `{ operacion, ventaId, productoId, nombre, comparacion, saldoQueSeLeyo,
+> cantidadVendidaQueSeLeyo, causaTecnica }`
+>
+> - Los nombres son los de la venta. `comparacion` vale `inventario_disponible`
+>   o `cantidad_vendida`: en la anulación reemplaza a `detalle`, que valía
+>   `inventario` o `contadores` para las mismas dos columnas.
+> - `ventaId` es `null` en la venta.
+> - No hay `momento`: repetía la columna `fecha`.
+> - Si el asiento no se puede escribir, la anulación ya no lanza ese error: el
+>   cajero recibe el conflicto, igual que en la venta, y la falla va a la
+>   bitácora técnica.
+>
+> Una prueba estructural falla si la acción se escribe por fuera de esa puerta
+> (CLAUDE.md §4.3).
 
 Los tres asientos sueltos son **exactamente el caso para el que existe
 `sincronizar_asiento`**: hechos del negocio sin fila principal (0027).

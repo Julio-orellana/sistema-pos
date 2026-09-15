@@ -291,7 +291,7 @@ En concreto:
 | ¿Qué se revierte? | **Toda** la transacción: la venta, su detalle, el descuento de inventario y el contador de ventas. No queda nada a medias. |
 | ¿Hay que rehacer la venta desde cero? | **No.** Se revierte la transacción de base, no el carrito de la pantalla. El cajero vuelve a pulsar Cobrar; no vuelve a capturar los productos. |
 | ¿Qué ve el cajero? | `CONFLICTO_DE_INVENTARIO`: *"El inventario de {producto} cambió mientras se cobraba. No se registró la venta. Revisá la cantidad y volvé a cobrar."* El código y el mensaje ya existen en `errores.ts` (`errorDeConflictoDeInventario`). |
-| ¿Queda registrado? | **Sí**, un asiento de auditoría. En esta arquitectura no debería ocurrir nunca, así que cada ocurrencia es evidencia de que algo hay que investigar. |
+| ¿Queda registrado? | **Sí**, el asiento `conflicto_de_inventario`, escrito **después de revertir**, en una transacción aparte y en su propio lote de la cola, que sube por `sincronizar_asiento`. En esta arquitectura no debería ocurrir nunca, así que cada ocurrencia es evidencia de que algo hay que investigar. **HASTA EL 2026-09-15 ESTA FILA DECÍA «SÍ» Y NO ESTABA IMPLEMENTADO**: el servicio lanzaba el error dentro de la transacción y nadie escribía nada después. Ver «El asiento del conflicto», más abajo. |
 
 **Por qué cero reintentos, y no uno o tres con espera:**
 
@@ -302,6 +302,12 @@ En concreto:
    falla, la premisa se rompió: hay un segundo escritor sobre el archivo, o el
    saldo se leyó fuera de la transacción, que es exactamente el error que este
    patrón existe para atrapar. **Reintentar taparía el defecto.**
+   **(CORREGIDO EL 2026-09-15: el código NO abre `BEGIN IMMEDIATE`.**
+   `enTransaccionDeNegocio` llama a `base.transaction(fn)()`, que corre `BEGIN`
+   a secas —`node_modules/better-sqlite3/lib/methods/transaction.js`, línea
+   42—, y en `src/main` no hay ningún `.immediate`. Qué cambia eso está medido
+   en «Lo que el asiento NO cubre», más abajo. La razón de los cero reintentos
+   sigue valiendo; lo que no es cierto es el mecanismo que se nombra acá.**)**
 2. **Un reintento silencioso podría cobrar algo distinto de lo que el cajero
    vio.** Al releer el saldo, la venta se recalcularía contra un inventario que
    nadie revisó, con un cliente esperando. Preferimos un mensaje claro.
@@ -314,12 +320,185 @@ hace el propio controlador: better-sqlite3 espera hasta su `timeout`, que por
 omisión es de **5000 ms** (verificado en `node_modules/better-sqlite3/lib/database.js`).
 Eso es contención de bloqueo, no un conflicto de datos, y no lo maneja nuestro
 código. Si vence ese tiempo, la venta falla igual y el cajero reintenta.
+**(PRECISADO EL 2026-09-15, medido: con `BEGIN` a secas y WAL, si otra
+conexión confirma una escritura DESPUÉS de que la venta leyó, la primera
+escritura de la venta lanza `SQLITE_BUSY_SNAPSHOT` en el acto. Ese código no lo
+espera el `timeout`: la ventana recibe «La operación no pudo completarse.» a los
+2 ms.)**
 
 **Cuándo revisar esta decisión:** si un conflicto de inventario llega a
 ocurrir en la tienda, la respuesta NO es agregar reintentos, sino averiguar de
 dónde salió el segundo escritor. Probablemente signifique que se abrió el punto
 pendiente n.º 10 (¿más de una caja contra la misma base?), y ese escenario pide
 un rediseño —descuento del lado del servidor en Postgres— y no un bucle.
+
+#### El asiento del conflicto: prometido desde el Prompt 7, escrito desde el 2026-09-15
+
+**La discrepancia.** La tabla de arriba decía «¿Queda registrado? Sí» y el
+código no lo hacía. `ServicioDeVenta.registrar` lanzaba
+`errorDeConflictoDeInventario` dentro de la transacción, en el paso 4
+(inventario) y en el paso 6 (cantidad vendida). La transacción se revertía y
+nadie escribía nada después. La encontró el diseño de la anulación
+(`docs/ANULACION-DE-VENTA.md` §0.4). Antes de tocar nada se confirmó de dos
+formas:
+
+```
+$ grep -rn "CONFLICTO_DE_INVENTARIO" src/main   (sin contar pruebas)
+src/main/database/errores.ts:23:  | 'CONFLICTO_DE_INVENTARIO'
+src/main/database/errores.ts:208:    'CONFLICTO_DE_INVENTARIO',
+
+sonda con el código anterior (432723b), conflicto forzado en cada paso:
+[sonda] descontarSiSigueIgual ANTES: auditoria_log por accion=[{"accion":"caja_abierta","n":1}]
+[sonda] descontarSiSigueIgual: error.codigo=CONFLICTO_DE_INVENTARIO mensaje="El inventario de Maíz cambió mientras se cobraba. No se registró la venta. Revisá la cantidad y volvé a cobrar."
+[sonda] descontarSiSigueIgual DESPUÉS: auditoria_log por accion=[{"accion":"caja_abierta","n":1}]
+[sonda] descontarSiSigueIgual DESPUÉS: sync_cola por entidad_tipo=[{"entidad_tipo":"auditoria_log","n":1},{"entidad_tipo":"caja_sesiones","n":1}]
+[sonda] registrarVentaDeProducto DESPUÉS: auditoria_log por accion=[{"accion":"caja_abierta","n":1}]
+```
+
+**Qué hace ahora.** El conflicto sale de la transacción envuelto en
+`ConflictoAlVender`, que es interno del servicio. Con la transacción ya
+revertida, `registrar` escribe el asiento con `conBandejaDeSalida` y relanza el
+MISMO `ErrorDeNegocio` de siempre. *(Desde el 2026-09-15 esa escritura pasa por
+la puerta compartida con la anulación; ver «Una sola forma», más abajo.)* El cajero ve exactamente lo mismo que antes:
+código, mensaje y causa técnica. Hay pruebas con los textos literales y con el
+sobre de IPC.
+
+| Campo | Valor |
+|---|---|
+| `accion` | `conflicto_de_inventario`, la misma que usa la anulación; la operación va como dato |
+| `usuario_id` | Quien vendía |
+| `entidad_tipo` / `entidad_id` | `productos` / el producto que falló. **No `ventas`**: la venta nunca existió, y un id de venta revertida apuntaría a la nada |
+| `fecha` | El instante de la venta intentada |
+| `valor_nuevo` | ~~`{ operacion: 'venta', productoId, nombre, comparacion, saldoQueSeLeyo, cantidadVendidaQueSeLeyo, momento }`~~ **Desde el 2026-09-15, la forma única compartida con la anulación:** `{ operacion: 'venta', ventaId: null, productoId, nombre, comparacion, saldoQueSeLeyo, cantidadVendidaQueSeLeyo, causaTecnica }`. Ver «Una sola forma», abajo |
+| En la cola | Una sola fila, `auditoria_log`, en su propio lote. Un lote de puros asientos va a `sincronizar_asiento` (0027); no hizo falta migración |
+
+`comparacion` es `inventario_disponible` o `cantidad_vendida` y dice cuál de
+los dos comparar-y-cambiar afectó cero filas. Van los dos valores leídos
+siempre: con solo `saldoQueSeLeyo`, un conflicto del paso 6 quedaría con el
+dato que no falló.
+
+> ~~**LAS CLAVES NO COINCIDEN CON LAS DE LA ANULACIÓN, y hay que decidirlo.** La
+> anulación (§4.45) escribe la misma acción con `saldoLeido`,
+> `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Las dos
+> operaciones se escribieron a la vez, sin verse. Ningún código lee estos
+> asientos todavía, así que alinearlas no rompe nada; es el punto 23 de §6.2.~~
+> **RESUELTO EL 2026-09-15**, con la decisión de Julio: una sola forma y una
+> sola puerta. Ver la subsección siguiente.
+
+#### Una sola forma para las dos operaciones, y una sola puerta (2026-09-15)
+
+**Lo que había, leído del código de `develop` (`cd93ee2`) antes de tocarlo:**
+
+| Dato | Venta (`servicio-de-venta.ts:556-571`) | Anulación (`servicio-de-anulacion.ts:678-696`) |
+|---|---|---|
+| qué comparación falló | `comparacion`: `inventario_disponible` / `cantidad_vendida` | `detalle`: `inventario` / `contadores` |
+| saldo leído | `saldoQueSeLeyo` | `saldoLeido` |
+| cantidad vendida leída | `cantidadVendidaQueSeLeyo` | `cantidadVendidaLeida` |
+| venta | no estaba | `ventaId` |
+| causa técnica | no estaba | `causaTecnica` |
+| instante | `momento` (repetía la columna `fecha`) | no estaba |
+| si el asiento no se podía escribir | el cajero recibía igual el conflicto | **el cajero recibía ese error en lugar del conflicto** (sin `try/catch`) |
+
+Antes de cambiar nada se buscó si ya había asientos escritos, porque
+`auditoria_log` es inmutable. En una copia de la base de trabajo real, en solo
+lectura, con el sha256 del original igual antes y después (`03ac99ec…`):
+
+```
+asientos conflicto_de_inventario: []
+en sync_cola: [{"n":0}]
+ultima migracion: [{"nombre":"034_superficie_anulacion_de_venta"}]
+```
+
+La instalación de Jimmy (`v1.0.0-prueba.1`) no trae ninguna de las dos
+operaciones; eso es razonamiento sobre versiones, no se consultó Supabase.
+
+**La forma única**, decidida por Julio: los nombres de la venta y sin `momento`.
+
+| Clave | Valor |
+|---|---|
+| `operacion` | `'venta'` o `'anulacion'` |
+| `ventaId` | La venta que se intentaba anular; **`null` en la venta**, que nunca existió |
+| `productoId`, `nombre` | El producto que falló |
+| `comparacion` | `inventario_disponible` o `cantidad_vendida`: el NOMBRE DE LA COLUMNA, sin traducir. Las dos operaciones comparan las mismas dos columnas |
+| `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo` | Los dos valores leídos, siempre |
+| `causaTecnica` | La misma que lleva el error que recibe el cajero |
+
+**Una sola puerta: `domain/venta/conflicto-de-inventario.ts`.**
+`dejarConstanciaDelConflictoDeInventario` escribe en su propia transacción y
+su propio lote, arma el valor con `valorDelConflictoDeInventario` y **no lanza
+nunca**: si la base falla, lo deja en la bitácora técnica con origen `[venta]`
+o `[anulacion]`. Los dos servicios la llaman. `ServicioDeAnulacionDeVenta`
+recibe `log`, obligatorio, como la venta. La acción ya no está en
+`ACCIONES_DE_VENTA` ni en `ACCIONES_DE_ANULACION`.
+
+**La prueba estructural** (`conflicto-de-inventario-una-sola-puerta.test.ts`)
+recorre el árbol sintáctico de `src/main` y `src/shared` y falla nombrando
+archivo y línea si la cadena `conflicto_de_inventario`, también dentro de
+plantillas o SQL, o la constante `ACCION_CONFLICTO_DE_INVENTARIO` aparece fuera
+de la puerta. Tiene sus controles: un comentario no cuenta.
+
+**Falsificado**, una mutación por vez y restaurando:
+
+| Mutación | Qué cae |
+|---|---|
+| La prueba estructural contra `develop` original (`cd93ee2`) | `servicio-de-anulacion.ts:91 nombra la cadena 'conflicto_de_inventario'` y `servicio-de-venta.ts:89 …` (y las 3 que exigen que la puerta exista) |
+| Agregar `conflictoDeInventario: 'conflicto_de_inventario'` a `ACCIONES_DE_ANULACION` | 1: `servicio-de-anulacion.ts:95 nombra la cadena 'conflicto_de_inventario'` |
+| Volver la anulación a su escritura original (forma vieja, sin envolver) | 6, entre ellas «dejan asientos con EXACTAMENTE las mismas claves» y la de la falla del asiento con `→ sin espacio en disco (simulado por la prueba)`: ese error le llegaba al cajero |
+| Una clave de más (`momento`) en la puerta | 5: las dos de la venta, las dos de la anulación y la de las mismas claves |
+
+**Si el asiento no se puede escribir, el cajero recibe IGUAL el conflicto.** La
+falla va a `log-tecnico.log` con origen `[venta]`. Por eso `ServicioDeVenta`
+recibe `log`, obligatorio: opcional, un sitio que se olvidara de pasarlo dejaría
+esa falla sin rastro. No se espera que pase (haría falta que la base falle justo
+después de revertir), pero si pasa no puede cambiar lo que ve el cajero.
+
+**Pruebas, y cómo se falsificaron.** Once en `servicio-de-venta.test.ts` y una
+de punta a punta en `integracion-fase-3b.test.ts`, que usa el trabajador y el
+proveedor reales y exige que se llame a `['sincronizar_asiento']`. El conflicto
+se provoca con el UPDATE real: justo antes del comparar-y-cambiar se mueve el
+saldo por la misma conexión, y la sentencia afecta cero filas. Contra el código
+anterior fallaban 6 de las 11; pasaban las 5 que fijan lo que ya funcionaba.
+Falsificaciones, restaurando el archivo y comprobando su sha256 cada vez:
+
+| Mutación | Pruebas que caen |
+|---|---|
+| Quitar la escritura del asiento | 7, con `expected [] to have a length of 1 but got +0` y `expected [] to deeply equal [ 'sincronizar_asiento' ]` |
+| Escribirlo DENTRO de la transacción, antes de lanzar | 6 (el `ROLLBACK` se lo lleva) |
+| Relanzar el envoltorio en vez del error de negocio | 12, entre ellas 2 que ya existían |
+| Dejar que la falla del asiento se escape | 1: `expected SqliteError: sin espacio en disco (simula…) to be an instance of ErrorDeNegocio` |
+
+#### Lo que el asiento NO cubre (medido el 2026-09-15)
+
+**El segundo escritor de verdad no llega a este asiento.** El asiento cubre el
+comparar-y-cambiar que afecta cero filas: el saldo se movió por la misma
+conexión, o se leyó fuera de la transacción. Una segunda conexión real no
+produce cero filas. Como la venta abre `BEGIN` a secas y la base está en WAL,
+la primera escritura lanza `SQLITE_BUSY_SNAPSHOT`, que no es un error de negocio.
+Medido con el servicio real sobre una base migrada y una segunda conexión que
+escribe entre la lectura y el UPDATE:
+
+```
+[sonda] journal_mode=[{"journal_mode":"wal"}]
+[sonda] la OTRA conexión escribió y confirmó: changes=1; base.inTransaction=true
+[sonda] +2ms respuesta a la ventana: {"ok":false,"error":{"codigo":"COBRO_FALLIDO","mensaje":"La operación no pudo completarse.","detalle":"database is locked"}}
+[sonda] asientos conflicto_de_inventario={"n":0}; filas nuevas en sync_cola=0; saldo={"s":"47.000"}; ventas={"n":0}
+```
+
+Y con una sonda mínima (dos conexiones, sin la aplicación), `BEGIN` contra
+`BEGIN IMMEDIATE`:
+
+```
+[default]   +0ms    A leyó dentro de la transacción: 50.000
+[default]   +1ms    B escribió y confirmó (autocommit): changes=1
+[default]   +1ms    A comparar-y-cambiar LANZÓ: SQLITE_BUSY_SNAPSHOT database is locked
+[immediate] +0ms    A leyó dentro de la transacción: 50.000
+[immediate] +1589ms B NO pudo escribir: SQLITE_BUSY database is locked
+[immediate] +1590ms A comparar-y-cambiar: changes=1
+```
+
+**No se cambió.** Pasar `enTransaccionDeNegocio` a `.immediate()` afecta a las
+ocho operaciones de negocio, no solo a la venta. Es una decisión aparte: punto 22
+de §6.2. Esto se midió en macOS; Windows no.
 
 ### 4.4 Estado del proyecto en Supabase
 
@@ -1145,6 +1324,7 @@ validación que vive en la interfaz se salta llamando al canal directamente.
 | `descuento_excedente` | **Sí**, desde el 2026-09-11 | Decisión explícita de Julio. Ver §4.13. |
 | `salida_controlada` | **Sí**, desde el 2026-09-15 — **ampliada por decisión explícita el 2026-09-15** | Hasta ese día **No**, con esta razón, que no estaba equivocada: el PIN remoto se pidió para una sola cosa, autorizar diferencias de caja por teléfono, y dárselo además a cerrar la aplicación lo ampliaba más allá de lo pedido. Julio decidió ampliarlo: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. **Se evaluó separar el PIN remoto por superficie y se decidió NO hacerlo** (Julio, 2026-09-15): cambiar el PIN remoto desde «PIN de autorización remota» ya es el control real si cambia a quién se le dicta, y un PIN por superficie duplicaría ese mecanismo. Ver §4.41. |
 | `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
+| `anulacion_de_venta` | **No**, desde que existe (2026-09-15) | El fraude que este PIN frena —cobrar en efectivo, anular y quedarse con el dinero— es el que un teléfono no puede verificar. Ver `docs/ANULACION-DE-VENTA.md` §4.2 y §4.45. |
 
 **LA POLÍTICA VIVE EN LA TABLA, NO EN QUIEN LLAMA.** Antes era un parámetro
 (`aceptaPinRemoto`) que cada uno de los cuatro lugares de autorización escribía
@@ -1225,7 +1405,7 @@ Qué queda fuera, y por qué:
 | Se excluye | Razón |
 |---|---|
 | **Las ventas con tarjeta** | Ese dinero nunca entró al cajón: entra por el banco, con su propia liquidación. Sumarlas haría que toda caja con ventas con tarjeta apareciera faltante por exactamente ese monto, y el cajero tendría que pedir una autorización de descuadre por un dinero que nadie perdió. |
-| **Las ventas anuladas** | Hoy nada las produce —anular una venta registrada todavía no existe—, pero el filtro va desde ahora para que el día que exista no haya que acordarse de agregarlo. |
+| **Las ventas anuladas** | **Se excluyen por su fila en `anulaciones_de_venta`, no por `ventas.estado`** (§4.45). Hasta el 2026-09-15 nada las producía y el filtro era por `estado = 'completada'`. |
 | **Las ventas de otros turnos** | Se filtra por `caja_sesion_id`, no por fecha: un turno es un turno, aunque cruce la medianoche. |
 
 **Suma los TOTALES, no los subtotales**: el descuento discrecional ya está
@@ -6499,7 +6679,7 @@ ampliación no puede entrar sin tocar la prueba que la prohíbe.
 > - ~~**El diálogo de salida no tiene teclado en pantalla**: es un campo que se
 >   escribe con teclado físico. No es nuevo ni de este cambio, pero con el PIN
 >   dictado por teléfono en una pantalla táctil conviene revisarlo.~~
->   **RESUELTO EL 2026-09-15 (§4.45)**: se encontró probando la app, y la
+>   **RESUELTO EL 2026-09-15 (§4.46)**: se encontró probando la app, y la
 >   auditoría que siguió encontró 21 campos más en la misma situación.
 > - **Quien recibe el PIN remoto dictado puede, hasta que se cambie, cerrar la
 >   aplicación** además de autorizar diferencias y descuentos. Es ordenado y
@@ -6947,7 +7127,186 @@ Ahora se compara sin distinguir mayúsculas.
 - **La presentación.** No se pidió pulido: el detalle usa listas de definición
   sin estilo propio.
 
-### 4.45 Todo campo donde se escribe pasa por el teclado en pantalla (2026-09-15)
+### 4.45 La anulación de una venta: el núcleo local (2026-09-15)
+
+**Diseño aprobado entero:** `docs/ANULACION-DE-VENTA.md`. Este prompt construyó
+solo el núcleo local, que se usa de punta a punta por el canal
+`venta:anular`.
+
+| Qué | Estado |
+|---|---|
+| Migración 033: `anulaciones_de_venta` y sus dos disparadores (§1.1) | **Hecho** |
+| Migración 034: superficie `anulacion_de_venta` (§4.1) | **Hecho** |
+| Servicio: los ocho pasos de §2.2, la unidad (§2.3) y el voucher (§3.3) antes del PIN | **Hecho** |
+| PIN: superficie propia, sin remoto, con `autorizarComoAdministrador` tal como estaba | **Hecho** |
+| Efectivo esperado y reportes: la anulada se excluye por su fila (§3.1, §1.3) | **Hecho** |
+| Los cuatro asientos de §6.1, con el contenido de §6.2 | **Hecho** |
+| Canal `venta:anular`, en la prueba de clonado de todos los canales (§4.42) | **Hecho** |
+| Sincronización a la nube (§7): la `0033`, la `0035`, el enrutador, el contrato | **No**. Prompt aparte |
+| Restauración (§8), el recibo marcado (§5), el reporte de cobros con tarjeta (§3.5), la pantalla | **No**. Prompts aparte |
+
+> **UNA VERSIÓN CON ESTE NÚCLEO NO SE INSTALA EN UNA TERMINAL CONECTADA A LA
+> NUBE.** El lote de la anulación se encola dentro de la transacción (§2.2,
+> paso 8), pero su puerta en la nube no existe todavía. El enrutador lo mandaría
+> a `sincronizar_lote_simple`, que lo rechaza por nombre, y la cola se detendría
+> (§7.5 del diseño). Sin pantalla nadie anula por accidente, pero el canal se
+> puede llamar desde la consola. `deriva-de-esquema.test.ts` anota la tabla en
+> `TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA`, y falla el día que llegue su espejo
+> hasta que se la saque.
+
+#### La regla, y lo que cambió en consultas que ya existían
+
+**Una venta está anulada si y solo si existe su fila en `anulaciones_de_venta`.**
+`ventas.estado` queda en `'completada'` también en las anuladas.
+
+- Las cuatro consultas de §0.3 del diseño filtran con un solo fragmento,
+  `VENTA_SIN_ANULACION` (`repositories/ventas.ts`). Dos se renombraron para no
+  mentir: `listarCompletadasEnRango` pasó a `listarNoAnuladasEnRango`, y su par
+  de `venta_detalle` también.
+- `RepositorioDeVentas.anular()` **se eliminó**: era el camino descartado.
+- Sus tres usos en pruebas insertan ahora la fila de anulación.
+
+**El comentario de la migración 015 dice que `cantidad_vendida` «nunca baja».**
+Desde hoy baja al anular (§2.4 del diseño), con `anularVentaDeProducto`, que es
+el espejo de `registrarVentaDeProducto`. El comentario no se corrige porque una
+migración aplicada no se edita (§4.2): esta nota es la aclaración.
+
+#### Los dos pasos del canal
+
+Es el patrón del descuento excedente: **un solo canal que se llama dos veces**,
+como dice §4.3 del diseño. No son dos canales.
+
+1. **Con `pin` en `null`.** Valida en este orden:
+   1. la venta existe;
+   2. su caja está abierta;
+   3. no tiene anulación;
+   4. el voucher coincide, si fue con tarjeta;
+   5. ninguna unidad cambió;
+   6. los contadores alcanzan;
+   7. el motivo es válido.
+
+   Si algo falla, contesta `ok: false` con el código, y no se pide el PIN. Si
+   no, contesta `REQUIERE_AUTORIZACION` con la vista previa.
+2. **Con el PIN.** Primero **vuelve a validar todo**: una caja cerrada mientras
+   tanto no consume un intento del candado. Después pide el PIN, y con el PIN
+   aceptado corre la transacción, que valida otra vez adentro.
+
+La coreografía vive en `FlujoDeAnulacionDeVenta` (`ipc/anulacion-de-venta.ts`)
+y se prueba contra SQLite real, igual que `FlujoDeCierreDeCaja`.
+
+| Código nuevo (`errores.ts`) | Cuándo |
+|---|---|
+| `VENTA_YA_ANULADA` | Segunda anulación. También traduce el UNIQUE de la 033 |
+| `CAJA_DE_LA_VENTA_CERRADA` | La caja de la venta ya se cerró |
+| `VOUCHER_NO_COINCIDE` | «El voucher no coincide con el de la venta original.» |
+| `UNIDAD_CAMBIADA` | Cambió `tipo_medida` o `unidad_peso` desde la venta |
+| `CONTADORES_INCONSISTENTES` | `cantidad_vendida` quedaría negativa o `contador_ventas` bajaría de cero |
+| `ANULACION_INMUTABLE` | Traduce los disparadores de la 033. Va ANTES que `AUDITORIA_INMUTABLE` |
+
+`CONFLICTO_DE_INVENTARIO` se reusa con otro texto: «…cambió mientras se
+anulaba. La venta no se anuló.»
+
+#### Cuatro interpretaciones del diseño, dichas para que Julio las confirme
+
+1. **Cada rechazo de autorización deja `anulacion_de_venta_rechazada` con su
+   código**: `PIN_INCORRECTO`, pero también el tercer intento
+   (`AUTORIZACION_BLOQUEADA`) o un PIN mal formado. §6.1 dice «cada PIN bien
+   formado pero equivocado» y cita a la salida controlada como modelo, y la
+   salida registra todo rechazo. Se hizo como la salida. El PIN no va en el
+   asiento.
+2. **La validación de contadores también corre antes del PIN**, no solo en la
+   transacción. §4.3 no la nombra entre las previas; pedir un PIN para después
+   rechazar por datos inconsistentes no tenía sentido.
+3. **`contador_ventas` baja por la cantidad de líneas del producto** (`veces`), no
+   por un 1 fijo. Hoy es 1 siempre, porque la venta rechaza el mismo producto
+   dos veces; el esquema no lo impide.
+4. **El motivo se guarda recortado** de espacios en los extremos.
+
+#### Evidencia
+
+**Vitest** (`npm run verify`): 90 archivos y 2155 pruebas, código de salida 0. Se
+sumaron 53 pruebas de servicio y flujo (`servicio-de-anulacion.test.ts`) y 12
+estructurales (`anulacion-estructural.test.ts`), cada detector con su control.
+
+**En la app real, por `window.pos.venta.anular`** (macOS; sonda temporal que no
+quedó en el repositorio):
+
+```
+typeof window.pos.venta.anular en la ventana: function
+productos antes: [{"inventario_disponible":"97.000","contador_ventas":2,"cantidad_vendida":"3.000"}]
+[efectivo, sin PIN] -> {"ok":true,"datos":{"anulada":false,"codigo":"REQUIERE_AUTORIZACION",…,"avisoDeDevolucion":"Hay que devolverle Q8.50 al cliente."},…}
+[efectivo, PIN equivocado] -> {"ok":true,"datos":{"anulada":false,"codigo":"PIN_INCORRECTO",…}}   candado: [{"intentos_fallidos":1}]
+[efectivo, PIN de Jimmy] -> {"ok":true,"datos":{"anulada":true,"codigo":"ANULACION_CORRECTA",…,"saldoAnterior":"97.000","saldoNuevo":"99.000"}]}}}
+[efectivo, otra vez] -> {"ok":false,"error":{"codigo":"VENTA_YA_ANULADA","mensaje":"Esa venta ya estaba anulada.",…}}
+[tarjeta, voucher equivocado con el PIN correcto] -> {"ok":false,"error":{"codigo":"VOUCHER_NO_COINCIDE","mensaje":"El voucher no coincide con el de la venta original.",…}}   candado: [{"intentos_fallidos":0}]
+[tarjeta, voucher correcto, PIN de Jimmy] -> {"ok":true,"datos":{"anulada":true,…,"efectivoQueDejaDeContar":"0.00",…}}
+productos después: [{"inventario_disponible":"100.000","contador_ventas":0,"cantidad_vendida":"0.000"}]
+ventas: [{…,"forma_pago":"efectivo","total":"8.50","estado":"completada"},{…,"forma_pago":"tarjeta","num_boleta":"004512","total":"4.25","estado":"completada"}]
+caja.estado() con la sesión de Ana: {…,"ventasEnEfectivo":null,"cantidadDeVentasEnEfectivo":null,"montoTeorico":null,…}
+sync_cola: lote 1bc4ed03 #0 anulaciones_de_venta insertar · #1 productos actualizar · #2 auditoria_log insertar
+errores en la consola de la ventana: []
+```
+
+**La 033 y la 034 sobre una copia de la base de trabajo real** (la regla de
+§4.14). La copia es de las 09:28 hora local del 2026-09-15, con sha256
+`6b702bff…45653`, cuando la base estaba todavía en la 030. Se abrió con el
+migrador de la aplicación:
+
+```
+migraciones al abrir: {"aplicadasAhora":["031_productos_precio_compra","032_venta_detalle_costo_unitario_snap","033_anulaciones_de_venta","034_superficie_anulacion_de_venta"],…,"ultimaAplicada":"034_superficie_anulacion_de_venta"}
+integrity_check: [{"integrity_check":"ok"}]
+foreign_key_check: []
+anulaciones_de_venta: [{"filas":0}] · disparadores: anulaciones_de_venta_prohibir_delete, anulaciones_de_venta_prohibir_update, auditoria_log_prohibir_delete, auditoria_log_prohibir_update
+CHECK de bloqueos incluye anulacion_de_venta: [{"incluye":1}]
+el resto de la base: {"usuarios":2,"productos":6,"ventas":1,"venta_detalle":2,"cajas":2,"auditoria_log":23,"limites":2,"sync_cola":2}
+la venta real: {"id":"7e46d49a-…","total":"190.00","estado":"completada","anulaciones":0}
+```
+
+> **LA BASE DE TRABAJO REAL YA TIENE LA 033 Y LA 034, y no se aplicaron desde
+> esta sesión.** A las 15:43:32 UTC del 2026-09-15 (09:43 hora local) alguien
+> abrió la aplicación con esa carpeta de datos. Los checksums registrados de la
+> 033 y la 034 son idénticos a los archivos de este repositorio
+> (`e22b38ed…` y `f4e801b5…`), cuando todavía no estaban en commits. Ninguna de
+> las tres copias de `.claude/worktrees/` tiene esas migraciones. El migrador
+> aplicó en ese arranque la 031, la 032, la 033 y la 034. La bitácora técnica
+> muestra el proyecto de pruebas incrustado y **ninguna credencial guardada**:
+> no subió nada. Después hubo dos ingresos fallidos, dos correctos y una salida
+> controlada, espaciados como los de una persona. **Consecuencia, leída del
+> migrador:** una versión anterior abre esa base igual, porque `aplicarMigraciones`
+> no se niega ante migraciones registradas que no conoce: las ignora. La tabla
+> nueva queda vacía y sin uso.
+
+**Falsificado**, una mutación por vez; se revirtió con `git checkout` y
+`git status` quedó limpio después de cada una:
+
+| Mutación | Qué cae |
+|---|---|
+| Volver al saldo del asiento de la venta en vez de sumar (planeada) | 3: queda 100 en vez de 147, el asiento de §6.2, y la estructural de §6.3 |
+| No bajar los contadores (planeada) | 2 |
+| Dejar el filtro por `estado` (planeada) | 6: el esperado, el reporte, la estructural y el cierre de caja |
+| Aceptar el PIN remoto (planeada) | 2 |
+| Encolar la fila de `ventas` (planeada) | 1: la forma del lote |
+| Comparar el voucher contra cualquier venta con tarjeta (planeada) | 1 |
+| Quitar la validación de unidad | 2 |
+| Mirar el PIN antes de validar | 10 |
+| Que el servicio lea la bitácora | 1: la estructural de §6.3 |
+| No dejar el asiento del conflicto | 2 |
+| Un disparador que no impide editar | 1 |
+
+La séptima falsificación planeada, «que el reporte lea `ventas.estado`», es
+del reporte de §3.5, que no se construyó en este prompt.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **Nada contra la nube.** El lote se encola y nadie lo sube a una puerta que
+  exista.
+- **Un conflicto real del comparar-y-cambiar.** Con una sola conexión síncrona no
+  puede pasar; se forzó envolviendo el método del repositorio.
+- **La cantidad de líneas de un mismo producto mayor que 1.** La venta no lo
+  permite y no se sembró a mano.
+
+### 4.46 Todo campo donde se escribe pasa por el teclado en pantalla (2026-09-15)
 
 **El hallazgo.** Probando la app, el diálogo «Salida de administrador» pedía el
 PIN sin abrir ningún teclado en pantalla. En la tienda no hay teclado físico
@@ -6991,8 +7350,10 @@ Ya tenían teclado: todos los PIN con `TecladoNumerico` (ingreso, configuración
 inicial, caja ajena, diferencia, descuento excedente, cambiar PIN, PIN remoto,
 saltar lote, PIN de restauración), conteo de caja, cantidad del ticket, y los
 `CampoDeTexto` de productos, categorías y ajuste de inventario. Fuera de
-alcance porque no reciben texto: `<select>`, radio y checkbox. El diálogo de
-anulación de venta no existe (solo su diseño).
+alcance porque no reciben texto: `<select>`, radio y checkbox. ~~El diálogo de
+anulación de venta no existe (solo su diseño).~~ *(Corregido al mergear con
+develop: la anulación tiene núcleo y canal desde el mismo día, §4.45, pero
+todavía no tiene pantalla, así que no tiene campos que auditar.)*
 
 #### El arreglo: estructural
 
@@ -7358,10 +7719,15 @@ Hasta hoy eso estaba razonado, no medido.
 | **El historial de cajas lee lo guardado y NO recalcula el corte; la corrección de un recuento sellado sale del asiento `reconteo_de_cierre_autorizado`.** | Recalcular teórico y diferencia; agregar columnas a `caja_sesiones` para el reconteo | Recalcular haría que una regla nueva cambiara un corte viejo. Una columna exigiría migración en las dos nubes, y si el conteo final cuadra el CHECK de la 008 obliga a dejar la autorización vacía: el asiento es la única constancia. Un asiento ilegible se muestra como aviso, no se esconde. §4.44. | Prompt 67 — 2026-09-15 |
 | **El asiento `reconteo_de_cierre_autorizado` se escribe siempre que un cierre con sellos CUADRA, no solo cuando cambió lo contado; y el mensaje distingue «cambió lo contado» de «cambió lo esperado».** | Seguir condicionándolo a `huboReconteo`; guardar el autorizante en `caja_cerrada.autorizadaPor` | Medido: con un sello, una venta en efectivo en el medio y el mismo número reconfirmado, el cierre exigía PIN y no dejaba escrito quién lo tecleó. `caja_cerrada.autorizadaPor` refleja las columnas de la diferencia de `caja_sesiones` y cambiarle el significado confundiría a quien ya la lee; el asiento de reconteo es donde §4.39 dice que está. Las dos causas son distintas y se registran por separado. §4.39. | Prompt 68 — 2026-09-15 |
 | **Los filtros del historial son por día de APERTURA en hora de Guatemala y por quien ABRIÓ.** | Filtrar por día de cierre; filtrar por quien abrió o cerró | Una caja se identifica por su apertura, que existe también en las abiertas. Contar a quien cerró mezclaría en el filtro de Jimmy las cajas ajenas que solo cerró. Se reutiliza `resolverPeriodo`, para que un día signifique lo mismo que en los reportes (§4.15). §4.44. | Prompt 67 — 2026-09-15 |
-| **Ningún archivo del renderer dibuja un `<input>`, `<textarea>` ni `contentEditable` fuera de `TecladoEnPantalla.tsx`; lo hace cumplir una prueba sobre el árbol sintáctico, y `ProveedorDeTeclado` es el único hijo de `<main>`.** | Parchar los 22 campos uno por uno; una regla de ESLint; buscar `<input` con una expresión regular | El diálogo de salida quedó sin teclado porque agregar un campo suelto no hacía fallar nada: es el mismo hueco que se cerró con «todo asiento pasa por el envoltorio». Una regla de ESLint exigiría un plugin propio para lo que el compilador de TypeScript ya parsea en una prueba. Con expresiones regulares, un `<input>` citado en un comentario da falso positivo. Radio y checkbox se admiten con el tipo literal: se tocan y no reciben texto. §4.45. | Prompt 69 — 2026-09-15 |
-| **El PIN de salida se teclea con `TecladoNumerico`, el mismo patrón de todas las autorizaciones, sin tocar el proceso principal.** | Un `CampoDeTexto` oculto con disposición entera | Es un PIN que se confirma, igual que el ingreso y las autorizaciones, y `TecladoNumerico` no tiene ningún campo que un teclado de Windows pueda reclamar. El teclado físico se conserva escuchando el diálogo. El candado y las tres vías viven en `controlled-exit.ts`, que no cambió. §4.45. | Prompt 69 — 2026-09-15 |
-| **Las fechas conservan el control nativo y abren el calendario con `showPicker()` al tocar el campo.** | Escribir la fecha con el teclado en pantalla; un calendario propio | Elegir un día tocando es mejor que teclear `AAAA-MM-DD`, y un calendario propio sería mucho código para lo que Chromium ya trae. El riesgo es que no está medido en Windows táctil; si resulta incómodo, se cambia `CampoDeFecha` y la prueba estructural garantiza que es el único lugar. §4.45. | Prompt 69 — 2026-09-15 |
-| **CORREGIDO: el cierre del teclado por «tocar fuera» mira dónde EMPEZÓ el gesto, no solo dónde terminó el `click`.** | Cerrar solo en `click` según su destino, como desde §4.39 | Medido en la app real: el teclado aparece bajo el dedo en el `mousedown`, el `click` va al ancestro común y el teclado se cerraba en el mismo toque que lo abría, en todo campo de la franja baja. `pointerdown` no sirve como disparador de cierre (§4.39, mueve el botón); sirve como marca de dónde empezó el gesto. §4.45. | Prompt 69 — 2026-09-15 |
+| **La anulación de una venta usa UN canal, `venta:anular`, llamado dos veces: sin PIN valida y devuelve la vista previa; con PIN vuelve a validar, autoriza y ejecuta.** | Dos canales, uno para pedir y otro para confirmar; una autorización pendiente como la del cierre de caja | Es lo que dice §4.3 del diseño y el patrón del descuento excedente. Acá no hay ningún monto oculto que revelar después del PIN, así que la autorización pendiente del cierre (§4.40.5) no agrega nada. Volver a validar antes de mirar el PIN hace que una caja cerrada o una venta anulada mientras tanto no consuman un intento. §4.45. | Prompt 69 — 2026-09-15 |
+| **`RepositorioDeVentas.anular()` se elimina y las consultas filtran con `VENTA_SIN_ANULACION`; dos se renombran a «NoAnuladas».** | Dejar `anular()` sin uso; dejar los nombres «Completadas» | Es el camino que el diseño descarta (§1.3), y dejarlo invita a usarlo. «Completadas» afirmaría que filtra por `estado`, que dice 'completada' también en las anuladas. Dos pruebas estructurales lo fijan. §4.45. | Prompt 69 — 2026-09-15 |
+| **El lote de la anulación se encola desde el núcleo local aunque su puerta en la nube no exista todavía; y una versión con este núcleo no se instala en una terminal conectada.** | No encolar hasta el prompt de sincronización; encolar y cablear el enrutador ya | Encolar es el paso 8 de la transacción (§2.2), y no hacerlo dejaría anulaciones que nunca subirían sin que nada fallara. Cablear el enrutador sin la función de la nube no evita que la cola se detenga. La deriva anota la tabla en una lista que obliga a sacarla cuando llegue su espejo. §4.45. | Prompt 69 — 2026-09-15 |
+| **Un conflicto de inventario al vender deja el asiento `conflicto_de_inventario` DESPUÉS de revertir, en una transacción aparte y en su propio lote. Si el asiento no se puede escribir, el cajero recibe igual el conflicto y la falla va a la bitácora técnica.** Hasta esta fecha §4.3 afirmaba que quedaba registrado y NO estaba implementado. | Escribirlo dentro de la transacción de la venta; corregir el texto de §4.3 en vez del código; dejar que una falla del asiento reemplace al conflicto; `log` opcional en `ServicioDeVenta` | Adentro, el `ROLLBACK` se lo lleva con la venta, que es lo que pasaba: medido con el código anterior, después del conflicto la bitácora solo tenía `caja_abierta`. Corregir solo el texto habría quitado la única evidencia de una premisa rota. Que la falla del asiento reemplazara al conflicto le mostraría al cajero «La operación no pudo completarse» en vez del producto que falló. El `log` es obligatorio para que ningún sitio la deje sin rastro. `entidad_tipo` es `productos` porque la venta nunca existió. **No cubre un segundo escritor en otra conexión**: con `BEGIN` a secas eso da `SQLITE_BUSY_SNAPSHOT` (medido); ver puntos 22 y 23 de §6.2. §4.3. | 2026-09-15 (número de prompt por confirmar) |
+| **El asiento `conflicto_de_inventario` tiene UNA sola forma, que arma y escribe UNA sola puerta (`conflicto-de-inventario.ts`), con una prueba estructural que falla si la acción aparece fuera de ella; la anulación envuelve la escritura igual que la venta.** | Alinear a mano los dos servicios; dejar las dos formas y documentarlas; los nombres de la anulación (`saldoLeido`, `detalle`) | La venta y la anulación se escribieron a la vez, sin verse, y quedaron con cinco claves distintas para lo mismo. Alinear a mano deja abierto el hueco para el tercero. Nombres de la venta y sin `momento`, por decisión de Julio: `momento` repetía la columna `fecha`. `comparacion` es el nombre de la columna que las dos comparan. Sin envolver, una falla del asiento de la anulación le llegaba al cajero en lugar del conflicto (falsificado). Se pudo cambiar porque no había ningún asiento escrito: `auditoria_log` es inmutable. §4.3. | 2026-09-15 (número de prompt por confirmar) |
+| **Ningún archivo del renderer dibuja un `<input>`, `<textarea>` ni `contentEditable` fuera de `TecladoEnPantalla.tsx`; lo hace cumplir una prueba sobre el árbol sintáctico, y `ProveedorDeTeclado` es el único hijo de `<main>`.** | Parchar los 22 campos uno por uno; una regla de ESLint; buscar `<input` con una expresión regular | El diálogo de salida quedó sin teclado porque agregar un campo suelto no hacía fallar nada: es el mismo hueco que se cerró con «todo asiento pasa por el envoltorio». Una regla de ESLint exigiría un plugin propio para lo que el compilador de TypeScript ya parsea en una prueba. Con expresiones regulares, un `<input>` citado en un comentario da falso positivo. Radio y checkbox se admiten con el tipo literal: se tocan y no reciben texto. §4.46. | Prompt 70 — 2026-09-15 |
+| **El PIN de salida se teclea con `TecladoNumerico`, el mismo patrón de todas las autorizaciones, sin tocar el proceso principal.** | Un `CampoDeTexto` oculto con disposición entera | Es un PIN que se confirma, igual que el ingreso y las autorizaciones, y `TecladoNumerico` no tiene ningún campo que un teclado de Windows pueda reclamar. El teclado físico se conserva escuchando el diálogo. El candado y las tres vías viven en `controlled-exit.ts`, que no cambió. §4.46. | Prompt 70 — 2026-09-15 |
+| **Las fechas conservan el control nativo y abren el calendario con `showPicker()` al tocar el campo.** | Escribir la fecha con el teclado en pantalla; un calendario propio | Elegir un día tocando es mejor que teclear `AAAA-MM-DD`, y un calendario propio sería mucho código para lo que Chromium ya trae. El riesgo es que no está medido en Windows táctil; si resulta incómodo, se cambia `CampoDeFecha` y la prueba estructural garantiza que es el único lugar. §4.46. | Prompt 70 — 2026-09-15 |
+| **CORREGIDO: el cierre del teclado por «tocar fuera» mira dónde EMPEZÓ el gesto, no solo dónde terminó el `click`.** | Cerrar solo en `click` según su destino, como desde §4.39 | Medido en la app real: el teclado aparece bajo el dedo en el `mousedown`, el `click` va al ancestro común y el teclado se cerraba en el mismo toque que lo abría, en todo campo de la franja baja. `pointerdown` no sirve como disparador de cierre (§4.39, mueve el botón); sirve como marca de dónde empezó el gesto. §4.46. | Prompt 70 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -7404,8 +7770,10 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 19 | **¿Cómo debe resolverse un choque contra una restricción única que NO es la llave primaria, al subir a la nube?** **UNA DE LAS NUEVE YA ESTÁ CERRADA**: `limites_descuento`, con el id fijo por rol de las migraciones `028`/`0028` (§4.32). Quedan OCHO. **La restauración (fase 4.b, §4.35) ya no las provoca**: conserva los ids de la nube, así que una terminal restaurada que vuelva a subir choca por `(id)`, que el upsert absorbe. Lo que sigue abierto es la segunda terminal. | `escribir_fila` hace `ON CONFLICT (id) DO UPDATE`, así que solo absorbe choques contra la llave primaria, y un choque contra cualquier otra sale como `23505` y **detiene la cola**. Está medido contra la nube con `limites_descuento.rol`. Hoy la tienda con una sola caja no lo puede provocar; lo provocan una reinstalación, una restauración (fase 4.b) o una segunda terminal —donde `recibos.numero_recibo`, correlativo POR terminal, choca garantizado—. Las salidas posibles son al menos tres y ninguna es obvia: que `escribir_fila` conozca la clave natural de cada tabla, que los UUID se deriven de la clave natural, o que la terminal trate el `23505` de otro modo. **Las tres tocan el contrato con la nube**, así que se decide antes de la fase 4.b y antes de que exista una segunda caja, no cuando ocurra. Depende también del punto 10. | Abierto — **bloquea la restauración y el multi-terminal**, no la operación de hoy |
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
 | 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. La interpretación sobre los diálogos se cerró en el Prompt 59: tampoco lo muestran al rol venta (§4.40.3). |
+| 22 | **¿La transacción de negocio debe abrir `BEGIN IMMEDIATE`, como dice §4.3, o se corrige el texto?** | Hoy `enTransaccionDeNegocio` abre `BEGIN` a secas. Medido el 2026-09-15: si otra conexión escribe entre la lectura y el comparar-y-cambiar, la venta falla con `SQLITE_BUSY_SNAPSHOT` en el acto, la ventana ve «La operación no pudo completarse.» y no queda asiento de conflicto. Con `.immediate()` la otra conexión es la que espera y falla. Afecta a las ocho operaciones de negocio, no solo a la venta. Hoy la instancia única lo hace improbable; importa si se abre el punto 10. §4.3. | Abierto — decisión técnica de Julio |
+| 23 | ~~**¿Qué claves lleva `valor_nuevo` del asiento `conflicto_de_inventario`?**~~ | ~~La venta escribe `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo`, `comparacion` y `momento`. La anulación (§4.45) escribe `saldoLeido`, `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Es la misma acción con dos formas. Ningún código lee estos asientos, así que alinearlas no rompe nada, pero un auditor que filtre por la acción va a encontrar las dos. §4.3.~~ | **RESUELTO (2026-09-15, decisión de Julio): una sola forma y una sola puerta.** Nombres de la venta, sin `momento`, con `ventaId` (null en la venta) y `causaTecnica`. La escribe solo `conflicto-de-inventario.ts`, y una prueba estructural lo exige. No había ningún asiento escrito con ninguna de las dos formas (§4.3). |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
-| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.45)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
+| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
@@ -7454,13 +7822,12 @@ negocio:
   sigue existiendo para entornos de desarrollo nuevos, pero **ya no es la única
   forma de cambiarlos**. Lo que falta es el número real que quiera Jimmy: punto
   15 de la sección 6.2.
-- **No existe todavía**: **anular una venta ya registrada**. `RepositorioDeVentas.anular`
-  existe como operación de datos y los reportes ya filtran por
-  `estado = 'completada'` para el día que exista, pero no hay servicio, canal ni
-  pantalla que la use, ni reglas de autorización, ni devolución de inventario.
-  **El diseño está escrito y PENDIENTE DE APROBACIÓN** en
-  `docs/ANULACION-DE-VENTA.md` (2026-09-15), sin código ni migraciones: no usa
-  ese método ni ese filtro, y dice por qué.
+- **Sí existe el NÚCLEO LOCAL de la anulación de una venta** (§4.45): las
+  migraciones 033 y 034, el servicio con la reposición, el voucher y el PIN, los
+  asientos y el canal `venta:anular`. **No existen todavía** su sincronización a
+  la nube, la restauración, el recibo marcado, el reporte de cobros con tarjeta
+  ni la pantalla. **Una versión con este núcleo no se instala en una terminal
+  conectada a la nube** hasta que exista la sincronización.
 - **No existen las alertas de stock mínimo, los gráficos ni la exportación de
   reportes a un archivo.** El umbral de cada producto es una definición de
   negocio que falta: punto 18 de la sección 6.2.
@@ -7587,7 +7954,7 @@ npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en v
                          # Deja capturas y lee la base al final (§4.39).
 npm run verify:pantallas:teclado  # la app real: toca los 22 campos que no tenían teclado y escribe con él; los
                          # caminos de salida (atajo real y sintético, Cmd+Q real, app.quit, close, botón)
-                         # siguen pidiendo PIN; el candado de intentos; la sonda de macOS (§4.45).
+                         # siguen pidiendo PIN; el candado de intentos; la sonda de macOS (§4.46).
 npm run verify:pantallas:historial-de-cajas  # la app real: cinco cajas armadas por los canales reales
                          # (diferencia autorizada, exacta por denominación, cerrada por otra persona,
                          # recuento corregido, abierta); la cajera no llega; filtros y detalle (§4.44).
@@ -7682,7 +8049,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     usuarios/   autenticación, bloqueo por intentos, sesión, permisos y gestión de usuarios
     caja/       apertura y cierre del turno, arqueo por denominaciones e historial de cajas
     catalogo/   categorías, productos, ajuste de inventario, fotos y datos de ejemplo
-    venta/      precio efectivo, descuento, topes por rol y la transacción de la venta
+    venta/      precio efectivo, descuento, topes por rol, la transacción de la venta y su anulación
     reportes/   los tres reportes y el período en hora de Guatemala. NUNCA agrega en SQL
     negocio/    los datos de la tienda que encabezan el recibo
     recibo/     modelo, plantilla, ESC/POS y emisión del comprobante
@@ -7717,7 +8084,7 @@ supabase/       espejo del esquema en Postgres (migraciones para la nube)
   esquema-nube.json  la FOTO del catálogo de la nube que coteja la prueba de deriva
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
   SINCRONIZACION.md  diseño de la sincronización. APROBADO; fases 1.a, 1.b, 2.a y 2.b construidas
-  ANULACION-DE-VENTA.md  diseño de la anulación de una venta. PROPUESTA, sin código
+  ANULACION-DE-VENTA.md  diseño de la anulación de una venta. APROBADO; núcleo local construido (§4.45)
 ```
 
 ## 10. Antes de cerrar cualquier sesión de trabajo

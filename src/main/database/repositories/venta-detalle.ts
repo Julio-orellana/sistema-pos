@@ -3,6 +3,7 @@
 import type { NuevaVentaDetalle, VentaDetalle } from './entidades';
 import { RepositorioBase, ahora, nuevoId } from './base';
 import { aColumnaCantidad, aColumnaExacta, aColumnaMonto, desdeColumnaDecimal } from '../decimal-columns';
+import { VENTA_SIN_ANULACION } from './ventas';
 
 /** Fila cruda de la tabla `venta_detalle`. */
 interface FilaVentaDetalle {
@@ -116,8 +117,9 @@ export class RepositorioDeVentaDetalle extends RepositorioBase {
   }
 
   /**
-   * Las líneas de todas las ventas COMPLETADAS de un rango, para el reporte de
-   * ventas por producto.
+   * Las líneas de todas las ventas NO ANULADAS de un rango, para el reporte de
+   * ventas por producto. La anulada queda fuera por `VENTA_SIN_ANULACION`, nunca
+   * por `ventas.estado` (docs/ANULACION-DE-VENTA.md §1.3).
    *
    * SE UNE CON `ventas` PORQUE LA FECHA ES DE LA VENTA, no de la línea.
    * `venta_detalle.creado_en` existe y sería más cómodo, pero es el instante en
@@ -125,17 +127,17 @@ export class RepositorioDeVentaDetalle extends RepositorioBase {
    * las dos fechas dejarían de coincidir y el reporte contaría la línea en un
    * día distinto del de su propia venta. La fecha del hecho es la de la venta.
    *
-   * Igual que en `RepositorioDeVentas.listarCompletadasEnRango`: el filtro se
+   * Igual que en `RepositorioDeVentas.listarNoAnuladasEnRango`: el filtro se
    * hace en SQL, la SUMA nunca. `cantidad` y `subtotal_impreso` son TEXT
    * canónico y un `SUM()` los pasaría por punto flotante.
    */
-  public listarDeVentasCompletadasEnRango(desdeIso: string, hastaIso: string): VentaDetalle[] {
+  public listarDeVentasNoAnuladasEnRango(desdeIso: string, hastaIso: string): VentaDetalle[] {
     const filas = this.base
       .prepare(
         `SELECT vd.* FROM venta_detalle vd
            JOIN ventas v ON v.id = vd.venta_id
           WHERE v.fecha >= ? AND v.fecha <= ?
-            AND v.estado = 'completada'
+            AND ${VENTA_SIN_ANULACION}
           ORDER BY v.fecha, vd.orden_linea`,
       )
       .all(desdeIso, hastaIso) as FilaVentaDetalle[];

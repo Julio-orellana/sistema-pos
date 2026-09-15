@@ -22,6 +22,7 @@ import { crearRepositorios, type Repositorios } from '@main/database/repositorie
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ServicioDeReportes } from '../servicio-de-reportes';
 
 let base: Database;
@@ -72,6 +73,7 @@ beforeEach(() => {
     limitesDescuento: repos.limitesDescuento,
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
     ahora: (): number => reloj,
   });
   reportes = new ServicioDeReportes({
@@ -197,19 +199,28 @@ describe('Tarea 1 — El resumen de ventas de un período', () => {
     expect(reportes.resumenDeVentas({ clase: 'hoy' }).cantidadDeVentas).toBe(1);
   });
 
-  it('una venta ANULADA no entra en el reporte', () => {
-    // Hoy nada anula ventas, pero el filtro va desde ahora. Se anula a mano,
-    // que es lo único que existe, para comprobar que el filtro está puesto.
+  it('una venta ANULADA no entra en el reporte, y la decide su fila de anulación, no ventas.estado', () => {
+    // Se inserta la fila de anulación directo por el repositorio: acá se prueba
+    // el FILTRO del reporte, no el servicio de anulación, que tiene sus pruebas.
     const total = vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
     vender(HOY_TARDE, [{ productoId: idFrijol, cantidad: '1' }]);
     expect(total).toBe('12.00');
 
     const primera = repos.ventas.listarPorRango('2000-01-01', '2100-01-01')[0];
-    repos.ventas.anular(primera?.id ?? '');
+    repos.anulacionesDeVenta.crear({
+      ventaId: primera?.id ?? '',
+      solicitadaPor: idCajera,
+      autorizadaPor: idJimmy,
+      autorizadaVia: 'presencial',
+      motivo: 'prueba del filtro del reporte',
+      fecha: new Date(HOY_TARDE).toISOString(),
+    });
 
     const resumen = reportes.resumenDeVentas({ clase: 'hoy' });
     expect(resumen.cantidadDeVentas).toBe(1);
     expect(resumen.totalVendido).toBe('9.00');
+    // La fila de la venta dice 'completada' igual: el reporte no la mira.
+    expect(repos.ventas.obtenerPorId(primera?.id ?? '')?.estado).toBe('completada');
   });
 });
 

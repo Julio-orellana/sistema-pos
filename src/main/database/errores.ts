@@ -33,7 +33,15 @@ export type CodigoErrorDeNegocio =
   // Impresora de la terminal (§4.43).
   | 'IMPRESORAS_NO_LISTADAS'
   | 'IMPRESORA_NO_INSTALADA'
-  | 'PRUEBA_NO_VIGENTE';
+  | 'PRUEBA_NO_VIGENTE'
+  // Anulación de una venta (docs/ANULACION-DE-VENTA.md). Todos se detectan
+  // ANTES de pedir el PIN, salvo que la base los atrape como última red.
+  | 'VENTA_YA_ANULADA'
+  | 'CAJA_DE_LA_VENTA_CERRADA'
+  | 'VOUCHER_NO_COINCIDE'
+  | 'UNIDAD_CAMBIADA'
+  | 'CONTADORES_INCONSISTENTES'
+  | 'ANULACION_INMUTABLE';
 
 /**
  * Error de negocio. Lleva un mensaje pensado para mostrarse en pantalla y
@@ -134,6 +142,19 @@ const REGLAS: readonly ReglaDeTraduccion[] = [
     coincide: (error) => contiene(error.message, 'recibos.numero_recibo'),
   },
   {
+    // Va ANTES que la bitácora: el disparador de la 033 no dice «inmutable» a
+    // propósito, pero la regla específica tiene que ganar igual.
+    codigo: 'ANULACION_INMUTABLE',
+    mensaje: 'Una anulación de venta no se puede modificar ni borrar.',
+    coincide: (error) => contiene(error.message, 'anulación de venta no se puede'),
+  },
+  {
+    // El servicio lo comprueba antes; esta es la última red del UNIQUE.
+    codigo: 'VENTA_YA_ANULADA',
+    mensaje: 'Esa venta ya estaba anulada.',
+    coincide: (error) => contiene(error.message, 'anulaciones_de_venta.venta_id'),
+  },
+  {
     codigo: 'AUDITORIA_INMUTABLE',
     mensaje: 'La bitácora de auditoría no se puede modificar ni borrar.',
     coincide: (error) => contiene(error.message, 'inmutable'),
@@ -208,6 +229,26 @@ export function errorDeConflictoDeInventario(
     'CONFLICTO_DE_INVENTARIO',
     `El inventario de ${nombreDelProducto} cambió mientras se cobraba. ` +
       'No se registró la venta. Revisá la cantidad y volvé a cobrar.',
+    causaTecnica,
+  );
+}
+
+/**
+ * El conflicto del comparar-y-cambiar AL ANULAR (docs/ANULACION-DE-VENTA.md §2.5).
+ *
+ * Es el mismo código que el de la venta, con otro texto: el de la venta dice
+ * «mientras se cobraba» y «no se registró la venta», que acá sería falso. Rige
+ * la misma política de §4.3: cero reintentos, se revierte todo y decide quien
+ * pidió.
+ */
+export function errorDeConflictoDeInventarioAlAnular(
+  nombreDelProducto: string,
+  causaTecnica: string,
+): ErrorDeNegocio {
+  return new ErrorDeNegocio(
+    'CONFLICTO_DE_INVENTARIO',
+    `El inventario de ${nombreDelProducto} cambió mientras se anulaba. ` +
+      'La venta no se anuló. Volvé a intentarlo.',
     causaTecnica,
   );
 }

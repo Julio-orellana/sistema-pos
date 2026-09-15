@@ -46,6 +46,7 @@ import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import {
   limpiarLimitesDeDescuento,
   sembrarLimitesDeDescuento,
@@ -608,6 +609,24 @@ app.whenReady().then(
       limitesDescuento: repositorios.limitesDescuento,
       cajaSesiones: repositorios.cajaSesiones,
       auditoria: repositorios.auditoria,
+      // Solo si el asiento de un conflicto de inventario no se puede escribir (§4.3).
+      log: logTecnico,
+    });
+
+    // La anulación de una venta también recibe la CONEXIÓN: reponer inventario,
+    // bajar contadores, escribir la anulación, su asiento y su lote es una sola
+    // transacción (docs/ANULACION-DE-VENTA.md §2.2).
+    const servicioDeAnulacionDeVenta = new ServicioDeAnulacionDeVenta({
+      base: baseDeDatos,
+      ventas: repositorios.ventas,
+      ventaDetalle: repositorios.ventaDetalle,
+      productos: repositorios.productos,
+      cajaSesiones: repositorios.cajaSesiones,
+      recibos: repositorios.recibos,
+      usuarios: repositorios.usuarios,
+      anulaciones: repositorios.anulacionesDeVenta,
+      auditoria: repositorios.auditoria,
+      log: logTecnico,
     });
 
     // Modo semilla: siembra o limpia el catálogo de ejemplo y sale, sin abrir
@@ -845,6 +864,7 @@ app.whenReady().then(
       usuarios: repositorios.usuarios,
       caja,
       venta: servicioDeVenta,
+      anulacionDeVenta: servicioDeAnulacionDeVenta,
       gestionDeUsuarios: servicioDeUsuarios,
       negocio: servicioDeNegocio,
       recibos: servicioDeRecibos,

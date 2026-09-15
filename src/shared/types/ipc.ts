@@ -115,6 +115,14 @@ export const CANALES_IPC = {
    * dentro de una sola transacción.
    */
   ventaCobrar: 'venta:cobrar',
+  /**
+   * Anula una venta ya registrada (docs/ANULACION-DE-VENTA.md). Se llama DOS
+   * veces, como el cobro con descuento excedente: la primera SIN PIN valida
+   * todo y devuelve la vista previa; la segunda CON el PIN de un administrador
+   * ejecuta. Si algo impide la anulación —caja cerrada, voucher que no
+   * coincide, unidad cambiada— la primera ya lo dice y no se pide el PIN.
+   */
+  ventaAnular: 'venta:anular',
 
   // --- Gestión de usuarios --------------------------------------------------
   /**
@@ -995,6 +1003,101 @@ export const esquemaCobro = z.object({
 
 /** Payload de cobro, ya validado. */
 export type PedidoDeCobro = z.infer<typeof esquemaCobro>;
+
+/**
+ * Largo máximo del motivo de una anulación EN EL PUENTE. No es la regla: la
+ * regla —hasta 200 caracteres— la aplica el servicio, con un mensaje que lo
+ * dice. Esto solo frena un payload absurdo.
+ */
+const LARGO_MAXIMO_MOTIVO_DE_ANULACION_EN_EL_PUENTE = 1000;
+
+/** Largo máximo de un PIN que llega por el puente. El formato lo decide `@shared/pin`. */
+const LARGO_MAXIMO_PIN_EN_EL_PUENTE = 20;
+
+/**
+ * Pedido de anulación de una venta (docs/ANULACION-DE-VENTA.md §4.3).
+ *
+ * NO LLEVA quién la pide: sale de la sesión del proceso principal. Y el PIN va
+ * en `null` en el primer pedido, que solo valida y arma la vista previa.
+ */
+export const esquemaPedidoDeAnulacion = z.object({
+  ventaId: z.uuid(),
+  motivo: z.string().max(LARGO_MAXIMO_MOTIVO_DE_ANULACION_EN_EL_PUENTE),
+  /** El voucher de la venta ORIGINAL, si fue con tarjeta; `null` en efectivo (§3.3). */
+  voucher: z.string().max(LARGO_MAXIMO_BOLETA).nullable(),
+  pin: z.string().min(1).max(LARGO_MAXIMO_PIN_EN_EL_PUENTE).nullable(),
+});
+
+/** Pedido de anulación, ya validado. */
+export type PedidoDeAnulacionIpc = z.infer<typeof esquemaPedidoDeAnulacion>;
+
+/** Lo que se muestra antes de pedir el PIN. Nunca lleva el teórico de la caja (§3.4). */
+export interface VistaPreviaDeAnulacionIpc {
+  readonly ventaId: string;
+  /** `null` si la venta no llegó a tener recibo. */
+  readonly numeroRecibo: number | null;
+  readonly fecha: string;
+  readonly vendidaPor: PersonaIpc;
+  readonly cajaAbiertaPor: PersonaIpc;
+  readonly formaPago: FormaPagoIpc;
+  /** El voucher, solo con tarjeta. */
+  readonly numBoleta: string | null;
+  readonly total: string;
+  readonly lineas: readonly {
+    readonly productoId: string;
+    readonly nombreSnap: string;
+    readonly unidadSnap: string;
+    readonly cantidad: string;
+    readonly productoActivo: boolean;
+  }[];
+  /** Nombres de los productos desactivados hoy: se reponen igual y no se reactivan. */
+  readonly productosDesactivados: readonly string[];
+  readonly avisoDeDevolucion: string;
+}
+
+/** Una anulación ya hecha. */
+export interface AnulacionRegistradaIpc {
+  readonly id: string;
+  readonly ventaId: string;
+  readonly fecha: string;
+  readonly solicitadaPor: string;
+  readonly autorizadaPor: string;
+  readonly autorizadaVia: 'presencial' | 'remoto';
+  readonly motivo: string;
+  readonly numeroRecibo: number | null;
+  readonly formaPago: FormaPagoIpc;
+  readonly total: string;
+  /** El total si fue en efectivo; `0.00` con tarjeta. */
+  readonly efectivoQueDejaDeContar: string;
+  readonly productos: readonly {
+    readonly productoId: string;
+    readonly nombreSnap: string;
+    readonly unidadSnap: string;
+    readonly cantidad: string;
+    readonly productoActivo: boolean;
+    readonly saldoAnterior: string;
+    readonly saldoNuevo: string;
+  }[];
+}
+
+/**
+ * Resultado de pedir una anulación que PASÓ las validaciones.
+ *
+ * `codigo` es `REQUIERE_AUTORIZACION` (primer pedido, sin PIN),
+ * `ANULACION_CORRECTA`, o el código de una autorización rechazada
+ * (`PIN_INCORRECTO`, `AUTORIZACION_BLOQUEADA`…). Una anulación que NO pasa las
+ * validaciones llega como error (`ok: false`), con su código y su mensaje.
+ */
+export interface ResultadoDeAnulacionIpc {
+  readonly anulada: boolean;
+  readonly codigo: string;
+  readonly mensaje: string;
+  readonly vistaPrevia: VistaPreviaDeAnulacionIpc;
+  /** Segundos para reintentar, cuando el candado del PIN está cerrado. */
+  readonly segundosParaReintentar: number | null;
+  /** La anulación hecha, o `null` si todavía no se anuló. */
+  readonly anulacion: AnulacionRegistradaIpc | null;
+}
 
 /** Una venta que quedó registrada. */
 export interface VentaRegistrada {
@@ -1944,6 +2047,12 @@ export interface ApiPos {
      * exceso para mostrarlos, y la segunda con el PIN del administrador.
      */
     cobrar(pedido: PedidoDeCobro): Promise<RespuestaIpc<ResultadoDeCobro>>;
+    /**
+     * Anula una venta ya registrada. Se llama DOS veces: la primera con `pin`
+     * en `null`, que valida y devuelve la vista previa, y la segunda con el PIN
+     * de un administrador, que ejecuta.
+     */
+    anular(pedido: PedidoDeAnulacionIpc): Promise<RespuestaIpc<ResultadoDeAnulacionIpc>>;
   };
 
   /**

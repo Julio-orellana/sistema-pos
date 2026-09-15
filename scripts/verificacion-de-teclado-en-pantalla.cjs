@@ -1,7 +1,7 @@
 /**
  * verificacion-de-teclado-en-pantalla.cjs — Todo campo donde se escribe abre
  * el teclado en pantalla, y la salida controlada sigue protegida igual que
- * antes. Manejando la aplicación REAL (CLAUDE.md §4.45, 2026-09-15).
+ * antes. Manejando la aplicación REAL (CLAUDE.md §4.46, 2026-09-15).
  *
  * Nace de un hallazgo en la app: el diálogo «Salida de administrador» pedía el
  * PIN en un `<input>` nativo, y en la pantalla táctil de la tienda no había

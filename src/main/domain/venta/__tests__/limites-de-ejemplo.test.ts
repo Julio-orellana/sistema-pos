@@ -21,6 +21,7 @@ import { crearRepositorios, type Repositorios } from '@main/database/repositorie
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import type { Rol } from '@main/database/repositories/entidades';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
+import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ServicioDeVenta } from '../servicio-de-venta';
 import {
   TOPES_SEMBRADOS,
@@ -163,6 +164,7 @@ describe('Con los topes sembrados, un descuento dentro del límite deja de pedir
       limitesDescuento: repos.limitesDescuento,
       cajaSesiones: repos.cajaSesiones,
       auditoria: repos.auditoria,
+      log: new LogTecnicoSilencioso(),
     });
 
     const idQuienVende = repos.usuarios.crear({

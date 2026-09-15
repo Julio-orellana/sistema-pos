@@ -82,6 +82,16 @@ export type TablaSincronizable =
   | 'ventas'
   | 'venta_detalle'
   | 'recibos'
+  /*
+    La anulación de una venta (docs/ANULACION-DE-VENTA.md §7.1). Se ENCOLA desde
+    el núcleo local, dentro de la transacción, como toda operación de negocio.
+    PERO SU PUERTA EN LA NUBE TODAVÍA NO EXISTE: la función
+    `sincronizar_anulacion_de_venta`, la migración `0033` y la entrada del
+    enrutador son del prompt de sincronización. Hasta entonces, contra una nube
+    real este lote detendría la cola (§7.5 del diseño): una versión con el
+    núcleo de anulación no se instala en una terminal conectada.
+  */
+  | 'anulaciones_de_venta'
   | 'auditoria_log';
 
 /**
@@ -130,9 +140,9 @@ export function armarPayload(
   /*
     El nombre de la tabla se interpola en el SQL, que normalmente sería una
     puerta a inyección. Acá no lo es, y conviene decir por qué en vez de
-    dejarlo a la confianza: `TablaSincronizable` es una unión cerrada de doce
-    literales, así que el compilador rechaza cualquier otro valor, y ninguna de
-    las doce viene de una entrada del usuario. El `id` sí va ligado como
+    dejarlo a la confianza: `TablaSincronizable` es una unión cerrada de
+    literales, así que el compilador rechaza cualquier otro valor, y ninguno
+    viene de una entrada del usuario. El `id` sí va ligado como
     parámetro, como corresponde.
   */
   const fila = base.prepare(`SELECT * FROM ${tabla} WHERE id = ?`).get(id) as
