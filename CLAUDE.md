@@ -6496,9 +6496,11 @@ comentario, y ahora vigila `cierre_de_caja_ajena` y
 ampliación no puede entrar sin tocar la prueba que la prohíbe.
 
 > **Lo que queda fuera, dicho en voz alta:**
-> - **El diálogo de salida no tiene teclado en pantalla**: es un campo que se
+> - ~~**El diálogo de salida no tiene teclado en pantalla**: es un campo que se
 >   escribe con teclado físico. No es nuevo ni de este cambio, pero con el PIN
->   dictado por teléfono en una pantalla táctil conviene revisarlo.
+>   dictado por teléfono en una pantalla táctil conviene revisarlo.~~
+>   **RESUELTO EL 2026-09-15 (§4.45)**: se encontró probando la app, y la
+>   auditoría que siguió encontró 21 campos más en la misma situación.
 > - **Quien recibe el PIN remoto dictado puede, hasta que se cambie, cerrar la
 >   aplicación** además de autorizar diferencias y descuentos. Es ordenado y
 >   auditado; si deja de haber confianza en quien lo escuchó, se cambia el PIN
@@ -6945,6 +6947,149 @@ Ahora se compara sin distinguir mayúsculas.
 - **La presentación.** No se pidió pulido: el detalle usa listas de definición
   sin estilo propio.
 
+### 4.45 Todo campo donde se escribe pasa por el teclado en pantalla (2026-09-15)
+
+**El hallazgo.** Probando la app, el diálogo «Salida de administrador» pedía el
+PIN sin abrir ningún teclado en pantalla. En la tienda no hay teclado físico
+garantizado: ese diálogo era inutilizable.
+
+#### La causa raíz, confirmada con el historial
+
+1. `ModalDeSalida.tsx` nació el 2026-09-04 (`2866a0e`) con un
+   `<input type="password">` nativo. `TecladoNumerico` llegó el 2026-09-06
+   (`4276e83`) y el alfanumérico el 2026-09-14 (`0959a18`).
+2. El diálogo se tocó dos veces después (`999ef96` y `04d1f46`, PIN remoto) y
+   nadie migró el campo.
+3. §4.39 arregló los campos que Jimmy nombró (caja, productos, categorías) y
+   no recorrió el resto. §4.41 anotó «el diálogo de salida no tiene teclado» y
+   quedó en nota.
+4. **Aunque se hubiera migrado, no habría andado:** `<ModalDeSalida />` estaba
+   montado FUERA de `<ProveedorDeTeclado>`, y fuera del proveedor un
+   `CampoDeTexto` se degrada en silencio a un campo común.
+5. **Nada fallaba al agregar un `<input>` suelto.** Esa es la causa de fondo.
+
+#### La auditoría: 22 campos sin teclado, en 19 sitios del código
+
+Salida del detector estructural corrido contra el código anterior (`432723b`):
+
+| # | Sitio | Campo |
+|---|---|---|
+| 1 | `ModalDeSalida.tsx:94` | PIN de salida (password) |
+| 2 | `PantallaDeConfiguracionInicial.tsx:88` | nombre del primer administrador |
+| 3 | `CuadriculaDeProductos.tsx:123` | buscador de la pantalla de venta (search) |
+| 4–5 | `DialogoDeCobro.tsx:369, 426` | valor del descuento, número de boleta |
+| 6–7 | `PantallaDeUsuarios.tsx:192, 228` | nombre, PIN del alta (password) |
+| 8–9 | `PantallaDeLimites.tsx:205, 220` | porcentaje, monto fijo |
+| 10–13 | `PantallaDeNegocio.tsx:143` (un `map`) | nombre comercial, dirección, teléfono, NIT |
+| 14–15 | `PantallaDeNube.tsx:275, 289` | correo (email), contraseña (password) |
+| 16–17 | `PantallaDeRestauracion.tsx:276, 289` | correo (email), contraseña (password) |
+| 18 | `PantallaDeRestauracion.tsx:331` | fecha del robo (datetime-local) |
+| 19–20 | `PantallaDeReportes.tsx:175, 186` | desde, hasta (date) |
+| 21–22 | `PantallaDeHistorialDeCajas.tsx:173, 184` | desde, hasta (date) |
+
+Ya tenían teclado: todos los PIN con `TecladoNumerico` (ingreso, configuración
+inicial, caja ajena, diferencia, descuento excedente, cambiar PIN, PIN remoto,
+saltar lote, PIN de restauración), conteo de caja, cantidad del ticket, y los
+`CampoDeTexto` de productos, categorías y ajuste de inventario. Fuera de
+alcance porque no reciben texto: `<select>`, radio y checkbox. El diálogo de
+anulación de venta no existe (solo su diseño).
+
+#### El arreglo: estructural
+
+| Qué | Dónde |
+|---|---|
+| **Única puerta para pedir texto** | `components/TecladoEnPantalla.tsx`: `CampoDeTexto` y `CampoDeFecha`. Un PIN que se confirma solo sigue con `TecladoNumerico`. |
+| **Prueba estructural** | `src/main/__tests__/todo-campo-usa-el-teclado.test.ts`. Recorre el árbol sintáctico (compilador de TypeScript) de todo `src/renderer/src` y falla nombrando archivo y línea ante un `<input>` que no sea radio/checkbox con tipo literal, un `<textarea>`, un `contentEditable` o un `createElement('input')`. Exige además que en `App.tsx` el `ProveedorDeTeclado` sea el ÚNICO hijo de `<main>`. Lista de excepciones vacía, con motivo obligatorio. |
+| **El diálogo de salida** | `TecladoNumerico` en modo PIN, sin ningún campo nativo. Un teclado físico sigue sirviendo (dígitos, ←, Enter, Escape). Al abrirse cierra el teclado alfanumérico si había un formulario a medio escribir: ese teclado va por encima de todo modal y taparía las teclas del PIN. **No se tocó nada del proceso principal**: `git diff 432723b -- src/main src/shared src/preload` sale vacío. |
+| **Correo y contraseña** | Capa de símbolos («#@» / «abc», `FILAS_DE_SIMBOLOS`): la capa de letras no tenía `@`. `oculto` hace el campo `password` y la vista del teclado muestra puntos. `mayusculaInicial={false}` para correo, contraseña, boleta y buscador. |
+| **Fechas** | `CampoDeFecha` conserva el control nativo y llama a `showPicker()` al tocar cualquier parte del campo. Antes Chromium solo abría el calendario tocando el iconito. `inputMode="none"`. |
+
+**La razón de las fechas, para que se pueda discutir:** elegir un día en un
+calendario es mejor en pantalla táctil que escribir `2026-09-15`. Lo que falta
+verificar es que el calendario se use bien con el dedo en Windows (ver abajo).
+Si no, la alternativa es un `CampoDeTexto` con disposición de fecha.
+
+#### Dos defectos que encontró la app real y ninguna prueba veía
+
+1. **EL TOQUE QUE ABRE EL TECLADO LO CERRABA** (existía desde §4.39, en todo
+   `CampoDeTexto` de la franja baja de la pantalla). El `mousedown` abre el
+   teclado, que queda debajo del dedo. El `mouseup` cae en el teclado, y el
+   navegador manda el `click` al ancestro común (`<main>`), que el cierre por
+   «tocar fuera» leía como un toque fuera. Registrado en la app real, ventana
+   de 1024×720:
+
+   ```
+   mousedown→restauracion-correo scrollY=0 · focus→restauracion-correo scrollY=0 ·
+   mouseup→teclado-en-pantalla scrollY=0 · click→MAIN scrollY=0
+   ```
+
+   Arreglo: el proveedor escucha SIEMPRE el comienzo del gesto
+   (`pointerdown`/`mousedown`), y si empezó sobre un campo o sobre el teclado,
+   su `click` no cierra. Prueba puntual en `teclado-en-pantalla.test.ts`;
+   falsificada quitando esa condición, cae exactamente esa prueba.
+   **Por qué no lo vio `verify:pantallas:caja`:** sus campos quedaban arriba
+   en la ventana de 1100×900 que pide. Salir de la pantalla completa en macOS
+   ignoró ese `setSize` y dejó 1024×720.
+2. **Con pantalla baja, el diálogo de cobro quedaba con los botones bajo el
+   teclado, sin forma de desplazarlos.** `.capa-modal--arriba` ahora se
+   desplaza y deja espacio al pie. Medido: `scrollTop 0→56`, el botón pasa de
+   `y=395.5` (tapado, el teclado empieza en `394.5`) a `y=339.5`.
+
+#### Verificado en la app real (macOS): `npm run verify:pantallas:teclado`, 36 de 36
+
+Toca los 22 campos uno por uno con los dedos del arnés, escribe con las teclas
+en pantalla y lee el campo. Recorre los caminos de salida y el candado. La
+nube apunta a `http://127.0.0.1:9`, un puerto local cerrado: no se tocó ningún
+proyecto de Supabase. Extracto crudo:
+
+```
+#16 Restauración · correo: teclado=abierto disposición=texto type=text inputmode=none valor="caja@pos" vista="caja@pos"
+#17 Restauración · contraseña: teclado=abierto disposición=texto type=password inputmode=none valor="•••••••" vista="•••••••"
+#18 Restauración · fecha del robo: type=datetime-local inputmode=none showPicker llamadas=1 errores=[]
+#7 Usuarios · PIN del alta: teclado=abierto disposición=entero type=password inputmode=none valor="••••" vista="••••"
+C1 · atajo Ctrl+Shift+Alt+Q (sendInputEvent): diálogo=visible campos nativos=0 teclas del PIN=1 log «origen: atajo_de_teclado» antes=0 después=1 proceso vivo=true
+B · el diálogo de salida CIERRA el teclado alfanumérico del formulario
+SONDA [con el diálogo de salida abierto] con el proceso 28174 al frente (POS = 28174): {"valorCrudo":0,"banderasActivas":[],"bloqueaForceQuit":false,"bloqueaCmdTab":false}
+AppleScript Ctrl+Shift+Option+Q: codigo=0 salida="enviada" → diálogo=visible, origen atajo_de_teclado 1→2, proceso vivo=true
+AppleScript Cmd+Q: codigo=0 salida="enviada" → diálogo=1 solicitudes cierre_del_sistema 0→1 proceso vivo=true
+C2 · app.quit(): diálogo=visible campos nativos=0 origen cierre_del_sistema 1→2 proceso vivo=true
+C3 · ventana.close(): diálogo=visible campos nativos=0 origen cierre_del_sistema 2→3 proceso vivo=true
+C4 · botón de la barra de estado: diálogo=visible origen boton_de_interfaz 0→1 proceso vivo=true
+intento 1 con 1111: mensaje="PIN incorrecto." bloqueos_de_autorizacion=[{"intentos_fallidos":1,"bloqueado_hasta":null}]
+intento 2 con 2222: mensaje="PIN incorrecto." bloqueos_de_autorizacion=[{"intentos_fallidos":2,"bloqueado_hasta":null}]
+intento 3 con 3333: mensaje="Demasiados intentos. Autorización bloqueada 30 segundos." bloqueos_de_autorizacion=[{"intentos_fallidos":0,"bloqueado_hasta":"2026-09-15T16:24:34.647Z"}]
+PIN CORRECTO durante el bloqueo: mensaje="Autorización bloqueada temporalmente. Volvé a intentar en 30 segundos." proceso vivo=true
+PIN correcto pasado el bloqueo: el proceso terminó con 0 a los 101 ms
+auditoria_log: salida_controlada_autorizada | usuario cd9a5abd-… | {"origen":"boton_de_interfaz","detalle":"PIN correcto","autorizadaVia":"presencial"}
+```
+
+**Un dato que no se había medido antes:** con `Menu.setApplicationMenu(null)`,
+un Cmd+Q REAL de macOS sí llega a `before-quit` (`cierre_del_sistema 0→1`).
+Hasta hoy eso estaba razonado, no medido.
+
+#### Pruebas de Vitest nuevas, y falsificaciones
+
+| Archivo | Pruebas | Falsificación |
+|---|---|---|
+| `todo-campo-usa-el-teclado.test.ts` | 12 | Contra `432723b`: marca los 19 sitios y `ModalDeSalida` fuera del proveedor. Con un `<input type="text">` agregado a `PantallaDeImpresora.tsx`: falla nombrando `components/PantallaDeImpresora.tsx:217`. Con `ModalDeSalida` sacado del proveedor: falla con `["ModalDeSalida","ProveedorDeTeclado"]`. |
+| `modal-de-salida.test.ts` | 14 | Con el diálogo de `432723b` caen 11. Sobreviven las 3 que no dependen del campo. |
+| `teclado-en-pantalla.test.ts` | +12 (22) | Sin la condición del gesto cae «EL TOQUE QUE LO ABRE NO LO CIERRA». |
+| `teclas.test.ts` | +3 | — |
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre. En particular: que el calendario de Chromium se
+  use cómodo con el dedo, que `inputMode="none"` impida el teclado táctil de
+  Windows, y el atajo con teclado latinoamericano.
+- **Que el calendario se VEA.** El popup de fecha no es parte del DOM:
+  Playwright no lo puede capturar. Lo medido es que `showPicker()` se llamó
+  una vez y no lanzó.
+- **Alt+F4 y el Administrador de tareas.** En macOS se ejercitó la misma
+  puerta (`ventana.close()`) y la sonda de Presentation Options.
+- **`ensayo:restauracion` y `verify:pantallas:restauracion`** no se volvieron a
+  correr: hablan con el proyecto de pruebas de Supabase. Sus `fill()` siguen
+  siendo válidos sobre `CampoDeTexto`.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -7213,6 +7358,10 @@ Ahora se compara sin distinguir mayúsculas.
 | **El historial de cajas lee lo guardado y NO recalcula el corte; la corrección de un recuento sellado sale del asiento `reconteo_de_cierre_autorizado`.** | Recalcular teórico y diferencia; agregar columnas a `caja_sesiones` para el reconteo | Recalcular haría que una regla nueva cambiara un corte viejo. Una columna exigiría migración en las dos nubes, y si el conteo final cuadra el CHECK de la 008 obliga a dejar la autorización vacía: el asiento es la única constancia. Un asiento ilegible se muestra como aviso, no se esconde. §4.44. | Prompt 67 — 2026-09-15 |
 | **El asiento `reconteo_de_cierre_autorizado` se escribe siempre que un cierre con sellos CUADRA, no solo cuando cambió lo contado; y el mensaje distingue «cambió lo contado» de «cambió lo esperado».** | Seguir condicionándolo a `huboReconteo`; guardar el autorizante en `caja_cerrada.autorizadaPor` | Medido: con un sello, una venta en efectivo en el medio y el mismo número reconfirmado, el cierre exigía PIN y no dejaba escrito quién lo tecleó. `caja_cerrada.autorizadaPor` refleja las columnas de la diferencia de `caja_sesiones` y cambiarle el significado confundiría a quien ya la lee; el asiento de reconteo es donde §4.39 dice que está. Las dos causas son distintas y se registran por separado. §4.39. | Prompt 68 — 2026-09-15 |
 | **Los filtros del historial son por día de APERTURA en hora de Guatemala y por quien ABRIÓ.** | Filtrar por día de cierre; filtrar por quien abrió o cerró | Una caja se identifica por su apertura, que existe también en las abiertas. Contar a quien cerró mezclaría en el filtro de Jimmy las cajas ajenas que solo cerró. Se reutiliza `resolverPeriodo`, para que un día signifique lo mismo que en los reportes (§4.15). §4.44. | Prompt 67 — 2026-09-15 |
+| **Ningún archivo del renderer dibuja un `<input>`, `<textarea>` ni `contentEditable` fuera de `TecladoEnPantalla.tsx`; lo hace cumplir una prueba sobre el árbol sintáctico, y `ProveedorDeTeclado` es el único hijo de `<main>`.** | Parchar los 22 campos uno por uno; una regla de ESLint; buscar `<input` con una expresión regular | El diálogo de salida quedó sin teclado porque agregar un campo suelto no hacía fallar nada: es el mismo hueco que se cerró con «todo asiento pasa por el envoltorio». Una regla de ESLint exigiría un plugin propio para lo que el compilador de TypeScript ya parsea en una prueba. Con expresiones regulares, un `<input>` citado en un comentario da falso positivo. Radio y checkbox se admiten con el tipo literal: se tocan y no reciben texto. §4.45. | Prompt 69 — 2026-09-15 |
+| **El PIN de salida se teclea con `TecladoNumerico`, el mismo patrón de todas las autorizaciones, sin tocar el proceso principal.** | Un `CampoDeTexto` oculto con disposición entera | Es un PIN que se confirma, igual que el ingreso y las autorizaciones, y `TecladoNumerico` no tiene ningún campo que un teclado de Windows pueda reclamar. El teclado físico se conserva escuchando el diálogo. El candado y las tres vías viven en `controlled-exit.ts`, que no cambió. §4.45. | Prompt 69 — 2026-09-15 |
+| **Las fechas conservan el control nativo y abren el calendario con `showPicker()` al tocar el campo.** | Escribir la fecha con el teclado en pantalla; un calendario propio | Elegir un día tocando es mejor que teclear `AAAA-MM-DD`, y un calendario propio sería mucho código para lo que Chromium ya trae. El riesgo es que no está medido en Windows táctil; si resulta incómodo, se cambia `CampoDeFecha` y la prueba estructural garantiza que es el único lugar. §4.45. | Prompt 69 — 2026-09-15 |
+| **CORREGIDO: el cierre del teclado por «tocar fuera» mira dónde EMPEZÓ el gesto, no solo dónde terminó el `click`.** | Cerrar solo en `click` según su destino, como desde §4.39 | Medido en la app real: el teclado aparece bajo el dedo en el `mousedown`, el `click` va al ancestro común y el teclado se cerraba en el mismo toque que lo abría, en todo campo de la franja baja. `pointerdown` no sirve como disparador de cierre (§4.39, mueve el botón); sirve como marca de dónde empezó el gesto. §4.45. | Prompt 69 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -7256,7 +7405,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
 | 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. La interpretación sobre los diálogos se cerró en el Prompt 59: tampoco lo muestran al rol venta (§4.40.3). |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
-| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
+| 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.45)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
@@ -7436,6 +7585,9 @@ npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en v
                          # PIN correcto que revela y espera (confirmar o cancelar). AL FINAL
                          # sale de la aplicación con el PIN REMOTO y lee el asiento (§4.41).
                          # Deja capturas y lee la base al final (§4.39).
+npm run verify:pantallas:teclado  # la app real: toca los 22 campos que no tenían teclado y escribe con él; los
+                         # caminos de salida (atajo real y sintético, Cmd+Q real, app.quit, close, botón)
+                         # siguen pidiendo PIN; el candado de intentos; la sonda de macOS (§4.45).
 npm run verify:pantallas:historial-de-cajas  # la app real: cinco cajas armadas por los canales reales
                          # (diferencia autorizada, exacta por denominación, cerrada por otra persona,
                          # recuento corregido, abierta); la cajera no llega; filtros y detalle (§4.44).
