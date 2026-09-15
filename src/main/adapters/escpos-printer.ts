@@ -8,6 +8,15 @@
  *
  *   · Windows —la plataforma de producción—: un puerto (`\\.\USB001`) o el
  *     recurso compartido de una impresora instalada (`\\equipo\TERMICA`).
+ *
+ *     CORREGIDO EL 2026-09-15: el ejemplo `\\.\USB001` es PROBABLEMENTE
+ *     INCORRECTO y NUNCA SE MIDIÓ EN HARDWARE REAL. Lo encontró la
+ *     investigación previa a construir la pantalla de impresora, y lo
+ *     confirmaron fuentes externas independientes: `USB001` es un puerto de
+ *     la cola de impresión, no un dispositivo que se abra como archivo. Este
+ *     proveedor queda SOLO para leer el formato viejo de `impresora.json`; lo
+ *     actual es imprimir por la cola de Windows en RAW (`cola-de-windows.ts`,
+ *     CLAUDE.md §4.43).
  *   · Linux: `/dev/usb/lp0`.
  *   · macOS, que es solo el entorno de desarrollo, no expone un dispositivo
  *     equivalente; acá se apunta a un archivo para poder inspeccionar los bytes.

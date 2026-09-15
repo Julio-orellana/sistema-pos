@@ -2053,12 +2053,28 @@ Qué se hizo para que el riesgo sea el menor posible:
 { "dispositivo": "\\.\USB001" }
 ```
 
+> **CORREGIDO EL 2026-09-15: ESE EJEMPLO ES PROBABLEMENTE INCORRECTO Y NUNCA SE
+> MIDIÓ EN HARDWARE REAL.** Lo encontró la investigación previa a construir la
+> pantalla de impresora, y lo confirmaron además fuentes externas
+> independientes. `USB001` es un **puerto de la cola de impresión** de Windows,
+> no un dispositivo que se abra como archivo. Escribir bytes en `\\.\USB001` con
+> `node:fs` probablemente nunca funcionó. Además, el controlador `usbprint.sys`
+> se queda con las impresoras USB, así que una librería USB tampoco era la
+> salida: exigiría reemplazar ese controlador y rompería la cola.
+>
+> **Desde el 2026-09-15 el archivo guarda el NOMBRE de la impresora instalada**
+> (`{ "impresora": "POS-80" }`) y los bytes van por la cola de Windows en RAW.
+> Hay pantalla para elegirla. El formato viejo se sigue leyendo, por
+> compatibilidad hacia atrás, pero la pantalla ya no lo ofrece. Ver §4.43. Lo de
+> abajo describe el estado ANTERIOR.
+
 Es estado operativo de una máquina —dos cajas podrían tener la térmica en
 puertos distintos— y esa tabla se espeja en la nube. Es el mismo criterio que ya
 se aplicó a `bloqueos_de_autorizacion` (§4.4). **Sin archivo no hay impresora, y
-eso NO es un error**: es el estado normal hoy. No hay pantalla para configurarlo
+eso NO es un error**: es el estado normal hoy. ~~No hay pantalla para configurarlo
 porque configurar una impresora que nadie vio sería adivinar qué opciones
-ofrecerle a Jimmy.
+ofrecerle a Jimmy.~~ **Desde el 2026-09-15 sí hay pantalla** (§4.43): lista las
+impresoras que Windows ya tiene instaladas, así que no adivina ninguna opción.
 
 #### Un fallo de impresión es TÉCNICO, no un hecho del negocio
 
@@ -6568,6 +6584,144 @@ i3.
 > la cierra quien la abrió. Se arregla instalando una versión posterior. En
 > Windows no se probó, como siempre.
 
+### 4.43 La impresora se elige en una pantalla y se imprime por la cola de Windows (2026-09-15)
+
+**Qué se pidió.** Una pantalla solo para administradores que liste las
+impresoras, guarde la elegida, la pruebe y la quite. Y que, cuando la prueba
+falla, distinga «no se pudo conectar» de «se conectó pero no entendió los
+comandos».
+
+**Tres decisiones de Julio, previas al código:** imprimir por la cola de
+Windows en RAW con PowerShell (no con un módulo nativo); confirmar a mano cómo
+salió el ticket de prueba; y corregir el ejemplo `\\.\USB001` de §4.14.
+
+#### Por qué la cola de Windows, y por qué PowerShell
+
+La vía documentada por Microsoft para mandar bytes crudos a una impresora es la
+del spooler: `OpenPrinter → StartDocPrinter` con tipo de dato `"RAW"` →
+`StartPagePrinter → WritePrinter → EndPagePrinter → EndDocPrinter`. Con `RAW`
+el controlador no toca los bytes, así que llegan nuestros comandos ESC/POS
+(página de códigos, corte). Por eso en Windows la impresora tiene que estar
+**instalada** (con el controlador «Generic / Text Only» si el fabricante no
+trae uno): la guía para la tienda está en `docs/GUIA-IMPRESORA.md`.
+
+Un módulo nativo obligaría a compilar para Electron y para Windows, que §4.37
+evitó. PowerShell 5.1 viene con Windows 10 y 11, y `Add-Type` declara las
+funciones de `winspool.drv`. El script vive en `cola-de-windows.ts`.
+
+#### `-Command` contra `-File`: qué dice la documentación (NO medido en Windows)
+
+Julio pidió confirmarlo explícitamente y no asumirlo. Lo que sigue sale de la
+documentación de Microsoft. **No se midió en ninguna máquina Windows.**
+
+| Pregunta | Qué dice la documentación | Consecuencia acá |
+|---|---|---|
+| ¿Cuál es la política por omisión en un Windows de escritorio? | `Restricted`: permite comandos individuales pero no scripts, e impide correr todo archivo de script (`.ps1`, `.psm1`, `.ps1xml`, perfiles). | Con `-File enviar.ps1` el envío **se bloquearía** en una instalación de fábrica. |
+| ¿`-Command` está alcanzado por esa política? | No: `-Command` ejecuta texto como si se tecleara, y la política gobierna la carga de archivos de script. | El envío corre con `-Command`. **Es la diferencia real entre las dos**, y es la que decidió la vía. |
+| ¿`-ExecutionPolicy Bypass` lo arregla todo? | Fija la política solo para ese proceso, y **no le gana a una política puesta por directiva de grupo**. Además, la política «no es un límite de seguridad». | Se pasa `Bypass` solo para la consulta optativa del trabajo (`Get-PrintJob`/`Get-Printer`), cuyo módulo carga archivos de formato. Si una directiva lo impide, esa consulta devuelve `null` y el envío no cambia. |
+| ¿Hay algo que bloquee aunque se use `-Command`? | Sí: el **modo de lenguaje restringido** (`ConstrainedLanguage`), que imponen AppLocker o WDAC, no deja que `Add-Type` cargue C# ni llame a la API de Win32. | Ahí el envío falla con clase `entorno` y el mensaje nombra el modo restringido. **No se puede resolver desde la aplicación**: es configuración de la computadora. |
+| ¿Cómo se evita que las comillas rompan la línea? | `-EncodedCommand` existe para comandos con comillas complicadas. | Se eligió otra forma con el mismo efecto: el texto de `-Command` **no lleva ninguna comilla doble**, y el script, el nombre de la impresora y los bytes viajan en variables de entorno. Hay prueba de que el comando no tiene `"`. |
+
+Fuentes: [about_Execution_Policies](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies),
+[about_PowerShell_exe](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_powershell_exe),
+[about_Language_Modes](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_language_modes),
+[Send raw data to a printer by using the Win32 API](https://learn.microsoft.com/troubleshoot/windows/win32/win32-raw-data-to-printer),
+[WritePrinter](https://learn.microsoft.com/windows/win32/printdocs/writeprinter).
+
+#### Lo que la computadora puede saber, y lo que no
+
+Una térmica ESC/POS **no contesta nada**. La computadora solo sabe si Windows
+aceptó el trabajo. Por eso cada envío se clasifica en cinco clases, cada una con
+su título y el detalle técnico al lado (etapa, código Win32, bytes, estado del
+trabajo, modo de lenguaje):
+
+| Clase | Cuándo | Qué ve la persona |
+|---|---|---|
+| `no_encontrada` | `OpenPrinter` falla con 1801 | «No se encontró la impresora» |
+| `no_se_pudo_enviar` | falla abrir, empezar, escribir o terminar, o se escribieron menos bytes | «No se pudo conectar con la impresora» |
+| `trabajo_con_error` | Windows aceptó, pero el trabajo o la impresora dicen `Offline`, `PaperOut`, `Error`… | «La impresora recibió el ticket pero reporta un problema» |
+| `entorno` | PowerShell no arrancó, no terminó en 12 s, no devolvió JSON, o está restringido | «Esta computadora no pudo ejecutar el envío» |
+| `enviado` | todo lo anterior salió bien | «Ticket de prueba enviado» y **tres preguntas** |
+
+**«Se conectó pero rechazó el comando» no lo puede detectar ningún software.**
+Solo lo detecta quien tiene el papel en la mano. Por eso, con `enviado`, la
+pantalla pregunta: «Sí, salió bien», «Salió con símbolos raros o sin cortar» o
+«No salió nada». La segunda queda en `impresora.json` como `envio: enviado` +
+`confirmacion: ilegible`, y en la bitácora técnica como «SEÑAL: el modelo podría
+no ser compatible con los comandos ESC/POS usados». Es un problema distinto de
+no poder conectarse, y tiene otro arreglo.
+
+#### El archivo y el proveedor
+
+```json
+{ "impresora": "POS-80", "ultimaPrueba": { "impresora": "POS-80", "fecha": "…", "envio": "enviado", "confirmacion": "ilegible" } }
+```
+
+- Se escribe a un temporal y se renombra. Un archivo roto se lee como «sin
+  impresora» y se anota: el punto de venta arranca igual.
+- Quitar la impresora borra el archivo si no hay prueba que conservar. Si la
+  hay, deja solo la prueba.
+- `ImpresoraSegunElArchivo` vuelve a leer el archivo **en cada recibo**, así
+  que guardar o quitar vale para el próximo recibo sin reiniciar.
+- Guardar exige que el nombre esté en la lista del sistema **en ese momento**.
+- El diagnóstico dice «Sin impresora configurada — los recibos solo se generan
+  en PDF» o «Impresora configurada: X». Nunca el nombre de una clase.
+- La lista sale de `webContents.getPrintersAsync()`. En macOS eso es CUPS (en
+  esta Mac aparece `EPSON_L3560_Series`), y en Windows es la lista de impresoras
+  instaladas (**no medido**).
+
+**Impresoras simuladas.** Con `POS_IMPRESORAS_SIMULADAS=<carpeta>` la aplicación
+lista dos impresoras falsas, y la que «recibe» escribe los bytes en un archivo.
+`index.ts` solo mira esa variable con `app.isPackaged === false`, y una prueba
+exige que la lea en un solo lugar y con esa condición.
+
+#### Verificado, y dónde
+
+| Qué | Cómo | Resultado |
+|---|---|---|
+| El envío, la clasificación, `-Command` sin `-File`, el límite de tiempo | `cola-de-windows.test.ts`, con un proceso de mentira | 22 de 22 |
+| Lista sin hardware, persistencia tras reiniciar, prueba sin impresora, confirmación, `structuredClone`, quitar sin romper los recibos (con `ServicioDeRecibos` real) | `servicio-de-impresora.test.ts` | 35 de 35 |
+| Los seis canales con guard y esquema | `impresora-guard.test.ts` | 8 de 8 |
+| Los seis canales clonables con servicios reales | `todo-canal-responde-algo-serializable.test.ts` | 62 canales, 86 llamadas, todas `ok` |
+| La pantalla | `pantalla-de-impresora.test.ts` | 10 de 10 |
+| La aplicación real, macOS | `npm run verify:pantallas:impresora` | 14 de 14 |
+
+**Falsificado**, una mutación a la vez: quitar sin borrar la impresora (caen 3),
+confirmar sin guardar la respuesta (caen 2), guardar sin exigir que esté
+instalada (cae 1), PowerShell con `-File enviar.ps1` (cae 1), y probar sin
+elegir en silencio (cae 1).
+
+Salida cruda de la aplicación real (2026-09-15, macOS):
+
+```
+OK    SIN IMPRESORA el estado lo dice con palabras, sin nombres de clases
+mensaje al probar sin elegir: "Primero elegí una impresora de la lista. Sin impresora elegida no hay adónde mandar el ticket de prueba."
+resultado de la desconectada: clase=trabajo_con_error titulo="La impresora recibió el ticket pero reporta un problema"
+bytes del ticket de prueba (282): primeros 8 = 1b401b7402504f53; últimos 8 = 0a1b64031d564200
+log-tecnico: [impresion] Ticket de prueba a Termica-simulada: la persona contestó «ilegible». SEÑAL: el modelo podría no ser compatible con los comandos ESC/POS usados.
+impresora.json tras guardar: {"impresora": "Termica-simulada", "ultimaPrueba": {…, "envio": "enviado", "confirmacion": "ilegible"}}
+OK    TRAS REINICIAR la aplicación la impresora sigue configurada y marcada en la lista
+venta con impresora: {"numeroRecibo":1,…,"pdfGenerado":true,"impreso":true,"mensajeDeImpresion":"Recibo enviado a la impresora."}
+venta sin impresora: {"numeroRecibo":2,…,"pdfGenerado":true,"impreso":false,"mensajeDeImpresion":"No hay impresora configurada. El recibo quedó en PDF."}
+14 comprobaciones, 0 fallidas.
+```
+
+#### Lo que NO se verificó, y ningún entorno de desarrollo puede verificar
+
+- **Que el ticket salga legible en la impresora de Jimmy.** Es la pregunta que
+  ninguna prueba contesta. La contesta la persona con los tres botones.
+- **Que el script de PowerShell corra en Windows.** Todo lo de `-Command`,
+  `Restricted`, `ConstrainedLanguage` y `Add-Type` es documentación, no
+  medición. En esta Mac el enviador real ni siquiera arranca: devuelve
+  `entorno` con «solo funciona en Windows».
+- **Cuánto tarda PowerShell en el i3.** El límite de 12 s y la espera de 1,5 s
+  para leer el trabajo son estimaciones.
+- **Que `getPrintersAsync()` liste en Windows lo mismo que el Panel de
+  control.**
+- **Que 1801 sea el código real** de un nombre inexistente en esa máquina.
+- **Qué pasa con una impresora compartida en red** (`\\equipo\impresora`). No
+  se probó.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -6828,6 +6982,10 @@ i3.
 | **La 0031 y la 0032 se aplican a `pos-pruebas-descartable` y NO al real.** | Aplicarlas a los dos; esperar al instalador nuevo | Decisión de Julio. El real no sincroniza activamente hoy y su momento se decide con el plan de entrega. Se asume que la cola de la instalación de prueba de Jimmy se detiene hasta que instale una versión con la 031 y la 032. §4.40.4. | Prompt 59 — 2026-09-15 |
 | **Cerrar con autorización son dos pasos: el PIN correcto revela el monto y deja una autorización PENDIENTE en el proceso principal; la caja se cierra con una segunda confirmación, y cancelar la retira.** | Mostrar el monto antes del PIN, como el descuento; cerrar con el PIN y mostrar el monto después; guardar la autorización en la ventana | Pedido de Julio. Antes del PIN no se puede mostrar: es lo que la cajera no debe ver. Cerrar primero dejaría aprobar sin ver. En la ventana, cancelar no la retiraría y quedaría usable desde la consola. Atada al turno, la sesión, el conteo y el monto mostrado; dos minutos y un solo uso. §4.40.5. | Prompt 60 — 2026-09-15 |
 | **`POS_COMPILAR_SIN_NUBE=1` compila sin la nube incrustada; lo usan los arneses de pantalla.** | Borrar `.env.empaquetado` antes de verificar; incrustar solo en `dist` | Desde §4.38 toda compilación apuntaba al proyecto de pruebas y `verify:pantallas` medía otra cosa. La variable no cambia el empaquetado. Mover la incrustación solo a `dist` sería lo más limpio y cambia cómo compila `npm run dev`: queda para decidir. | Prompt 57 — 2026-09-14 |
+| **CORREGIDO: `\\.\USB001` era probablemente incorrecto y nunca se midió en hardware real. La térmica se imprime por la cola de Windows en RAW, con PowerShell.** | Seguir escribiendo en la ruta con `node:fs`; una librería USB (libusb); un módulo nativo con `winspool` | La investigación previa a la pantalla, confirmada por fuentes externas independientes: `USB001` es un puerto del spooler, no un archivo; `usbprint.sys` se queda con la impresora USB y libusb exigiría reemplazarlo, rompiendo la cola. Un módulo nativo obliga a compilar para Windows (§4.37). Julio eligió PowerShell. §4.14 y §4.43. | Prompt 65 — 2026-09-15 |
+| **PowerShell se invoca con `-Command`, nunca con `-File`, y el comando no lleva comillas dobles.** | Un archivo `.ps1`; `-EncodedCommand` | Según la documentación de Microsoft (no medido), la política por omisión `Restricted` bloquea archivos de script pero no comandos. El script, el nombre y los bytes van en variables de entorno para que armar la línea de comandos no pueda romper nada. `ConstrainedLanguage` bloquea igual y se informa como `entorno`. §4.43. | Prompt 65 — 2026-09-15 |
+| **Después de un ticket de prueba aceptado, la persona contesta cómo salió, y «símbolos raros o sin cortar» se guarda como señal de incompatibilidad ESC/POS, distinta de un fallo de conexión.** | Dar por buena la impresora si Windows aceptó el trabajo | Una térmica ESC/POS no contesta: ningún software puede saber si entendió los comandos. §4.43. | Prompt 65 — 2026-09-15 |
+| **`impresora.json` guarda el NOMBRE de la impresora; el formato viejo con `dispositivo` se sigue leyendo pero la pantalla ya no lo ofrece.** | Migrar el archivo viejo; dejar de leerlo | Dejar de leerlo cambiaría en silencio a solo PDF una terminal que alguien configuró a mano. Guardar desde la pantalla lo reemplaza. §4.43. | Prompt 65 — 2026-09-15 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -6858,7 +7016,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? **Y quién tiene en la práctica el rol `administrativo`: solo el dueño, o también un encargado de confianza?** | Define la matriz de permisos (RBAC). Desde el Prompt 21 se pueden crear usuarios de los dos roles desde la pantalla, así que la pregunta dejó de ser teórica: el día que Jimmy le dé el rol administrativo a alguien más, hay que revisar el tope de descuento. **Y de esto depende el tope de descuento del rol administrativo**, que hoy se siembra en 100 % asumiendo que lo tiene el dueño (§4.13): si lo tuviera un empleado, ese 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere, y el número habría que revisarlo. | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? ¿Hace falta autorización de administrador para bajar inventario, como la hay para un descuadre de caja? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. **Ya hay un hueco concreto esperándola:** `ServicioDeProductos.ajustarInventario` solo SUMA y rechaza cualquier cantidad no positiva, a propósito, para no convertir la recepción de mercadería en una vía de bajar inventario sin controles. El módulo de mermas tiene que traer su propia regla de autorización. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
-| 9 | **Modelo y marca de la impresora térmica. LLEGA EL JUEVES.** | El adaptador ESC/POS **ya está implementado**, pero **contra el estándar más común y sin probar contra hardware real**: solo comandos del núcleo, codificación CP850, sin código de barras ni imagen. **Hay que confirmar compatibilidad exacta con el modelo real el día que llegue.** Ver §4.14. Falta además decidir cómo se configura el puerto en la máquina de la tienda: hoy es un archivo `impresora.json` puesto a mano, y con el modelo a la vista se decide si hace falta una pantalla. | Abierto — **es lo próximo que hace falta del cliente**, junto con el catálogo |
+| 9 | **Modelo y marca de la impresora térmica. LLEGA EL JUEVES.** | El adaptador ESC/POS **ya está implementado**, pero **contra el estándar más común y sin probar contra hardware real**: solo comandos del núcleo, codificación CP850, sin código de barras ni imagen. **Hay que confirmar compatibilidad exacta con el modelo real el día que llegue.** Ver §4.14. ~~Falta además decidir cómo se configura el puerto~~ **Desde el 2026-09-15 hay pantalla** «Impresora de recibos» (§4.43), que imprime por la cola de Windows en RAW. **Con la impresora en la mano falta:** instalarla en Windows (`docs/GUIA-IMPRESORA.md`), elegirla en la pantalla, imprimir el ticket de prueba y contestar cómo salió. Que el ticket salga legible es lo único que ningún entorno de desarrollo puede verificar. | Abierto — **es lo próximo que hace falta del cliente**, junto con el catálogo |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
 | 13 | **El catálogo real de Jimmy.** Nombres, categorías, precios, unidades e inventario inicial de verdad. Iba a entregarlo al día siguiente del Prompt 15. | Mientras no llegue, la tienda corre con el catálogo de ejemplo (`npm run seed:ejemplo`), que está marcado con el prefijo `[Ejemplo] ` justamente para que nadie lo confunda con el real. El día que llegue: `npm run seed:limpiar` y cargar el verdadero. | Abierto — **es lo próximo que hace falta del cliente** |
 | 14 | ~~¿Qué debe ordenar los íconos de la pantalla de venta: `contador_ventas` o `cantidad_vendida`?~~ | — | **RESUELTO (Prompt 20): ordena `contador_ventas`, y no se cambia nada.** Julio lo decidió sin necesidad de consultarlo con Jimmy: contar VECES es la única medida comparable entre productos, porque las libras de maíz y las unidades de huevo no se suman en un mismo número. `cantidad_vendida` existe para **reportes futuros**, no para el orden de los íconos. |
@@ -6932,9 +7090,10 @@ negocio:
   propias reglas de autorización.
 - No hay log de auditoría: los puntos donde debería escribirse ya están
   marcados con `TODO(auditoria)` en el controlador de salida.
-- **Sí existe** el adaptador real de impresión (`EscPosPrinterProvider`), con su
-  implementación segura por defecto intacta: sin `impresora.json` configurado se
-  usa `NullPrinterProvider` y el recibo queda solo en PDF. No hay adaptador real
+- **Sí existe** la impresión térmica real, por la cola de Windows en RAW, y la
+  pantalla «Impresora de recibos» para elegirla, probarla y quitarla (§4.43).
+  Sin `impresora.json` el recibo queda solo en PDF. No está probada en Windows
+  ni contra la impresora de Jimmy. No hay adaptador real
   de Supabase: ahí sigue solo el contrato y la implementación simulada.
 - **La APLICACIÓN todavía no habla con la nube, pero su diseño está aprobado y
   cuatro fases están construidas.** El diseño completo vive en
@@ -7044,6 +7203,9 @@ npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en v
                          # PIN correcto que revela y espera (confirmar o cancelar). AL FINAL
                          # sale de la aplicación con el PIN REMOTO y lee el asiento (§4.41).
                          # Deja capturas y lee la base al final (§4.39).
+npm run verify:pantallas:impresora  # la app real con impresoras SIMULADAS: estado, prueba sin elegir,
+                         # desconectada, la que recibe (bytes ESC/POS), confirmación «ilegible»,
+                         # guardar, reinicio, venta con impresora y venta después de quitarla (§4.43).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
@@ -7102,7 +7264,7 @@ Archivos que la aplicación usa en `<userData>` y que conviene conocer:
 | `pos-agricola.db` | La base de datos de la tienda. |
 | `recibos/` | Los PDF de los comprobantes emitidos. |
 | `fotos-de-productos/` | Las fotos del catálogo. |
-| `impresora.json` | Dónde está la térmica. **Si no existe, no hay impresión** y el recibo queda solo en PDF, que es el estado normal hoy. |
+| `impresora.json` | El NOMBRE de la impresora de Windows y la última prueba (§4.43). **Si no existe, no hay impresión** y el recibo queda solo en PDF. |
 | `log-tecnico.log` | Bitácora TÉCNICA: fallos de impresión y de PDF. No es `auditoria_log`. |
 | `restauracion.json` | El puesto de control de una restauración a medias (§4.35). **Si existe, la aplicación arranca en la pantalla de restauración** y no en la de ingreso. Se borra solo al terminar; nunca guarda una credencial. |
 
