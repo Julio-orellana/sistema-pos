@@ -358,7 +358,8 @@ sonda con el código anterior (432723b), conflicto forzado en cada paso:
 **Qué hace ahora.** El conflicto sale de la transacción envuelto en
 `ConflictoAlVender`, que es interno del servicio. Con la transacción ya
 revertida, `registrar` escribe el asiento con `conBandejaDeSalida` y relanza el
-MISMO `ErrorDeNegocio` de siempre. El cajero ve exactamente lo mismo que antes:
+MISMO `ErrorDeNegocio` de siempre. *(Desde el 2026-09-15 esa escritura pasa por
+la puerta compartida con la anulación; ver «Una sola forma», más abajo.)* El cajero ve exactamente lo mismo que antes:
 código, mensaje y causa técnica. Hay pruebas con los textos literales y con el
 sobre de IPC.
 
@@ -368,7 +369,7 @@ sobre de IPC.
 | `usuario_id` | Quien vendía |
 | `entidad_tipo` / `entidad_id` | `productos` / el producto que falló. **No `ventas`**: la venta nunca existió, y un id de venta revertida apuntaría a la nada |
 | `fecha` | El instante de la venta intentada |
-| `valor_nuevo` | `{ operacion: 'venta', productoId, nombre, comparacion, saldoQueSeLeyo, cantidadVendidaQueSeLeyo, momento }` |
+| `valor_nuevo` | ~~`{ operacion: 'venta', productoId, nombre, comparacion, saldoQueSeLeyo, cantidadVendidaQueSeLeyo, momento }`~~ **Desde el 2026-09-15, la forma única compartida con la anulación:** `{ operacion: 'venta', ventaId: null, productoId, nombre, comparacion, saldoQueSeLeyo, cantidadVendidaQueSeLeyo, causaTecnica }`. Ver «Una sola forma», abajo |
 | En la cola | Una sola fila, `auditoria_log`, en su propio lote. Un lote de puros asientos va a `sincronizar_asiento` (0027); no hizo falta migración |
 
 `comparacion` es `inventario_disponible` o `cantidad_vendida` y dice cuál de
@@ -376,11 +377,74 @@ los dos comparar-y-cambiar afectó cero filas. Van los dos valores leídos
 siempre: con solo `saldoQueSeLeyo`, un conflicto del paso 6 quedaría con el
 dato que no falló.
 
-> **LAS CLAVES NO COINCIDEN CON LAS DE LA ANULACIÓN, y hay que decidirlo.** La
+> ~~**LAS CLAVES NO COINCIDEN CON LAS DE LA ANULACIÓN, y hay que decidirlo.** La
 > anulación (§4.45) escribe la misma acción con `saldoLeido`,
 > `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Las dos
 > operaciones se escribieron a la vez, sin verse. Ningún código lee estos
-> asientos todavía, así que alinearlas no rompe nada; es el punto 23 de §6.2.
+> asientos todavía, así que alinearlas no rompe nada; es el punto 23 de §6.2.~~
+> **RESUELTO EL 2026-09-15**, con la decisión de Julio: una sola forma y una
+> sola puerta. Ver la subsección siguiente.
+
+#### Una sola forma para las dos operaciones, y una sola puerta (2026-09-15)
+
+**Lo que había, leído del código de `develop` (`cd93ee2`) antes de tocarlo:**
+
+| Dato | Venta (`servicio-de-venta.ts:556-571`) | Anulación (`servicio-de-anulacion.ts:678-696`) |
+|---|---|---|
+| qué comparación falló | `comparacion`: `inventario_disponible` / `cantidad_vendida` | `detalle`: `inventario` / `contadores` |
+| saldo leído | `saldoQueSeLeyo` | `saldoLeido` |
+| cantidad vendida leída | `cantidadVendidaQueSeLeyo` | `cantidadVendidaLeida` |
+| venta | no estaba | `ventaId` |
+| causa técnica | no estaba | `causaTecnica` |
+| instante | `momento` (repetía la columna `fecha`) | no estaba |
+| si el asiento no se podía escribir | el cajero recibía igual el conflicto | **el cajero recibía ese error en lugar del conflicto** (sin `try/catch`) |
+
+Antes de cambiar nada se buscó si ya había asientos escritos, porque
+`auditoria_log` es inmutable. En una copia de la base de trabajo real, en solo
+lectura, con el sha256 del original igual antes y después (`03ac99ec…`):
+
+```
+asientos conflicto_de_inventario: []
+en sync_cola: [{"n":0}]
+ultima migracion: [{"nombre":"034_superficie_anulacion_de_venta"}]
+```
+
+La instalación de Jimmy (`v1.0.0-prueba.1`) no trae ninguna de las dos
+operaciones; eso es razonamiento sobre versiones, no se consultó Supabase.
+
+**La forma única**, decidida por Julio: los nombres de la venta y sin `momento`.
+
+| Clave | Valor |
+|---|---|
+| `operacion` | `'venta'` o `'anulacion'` |
+| `ventaId` | La venta que se intentaba anular; **`null` en la venta**, que nunca existió |
+| `productoId`, `nombre` | El producto que falló |
+| `comparacion` | `inventario_disponible` o `cantidad_vendida`: el NOMBRE DE LA COLUMNA, sin traducir. Las dos operaciones comparan las mismas dos columnas |
+| `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo` | Los dos valores leídos, siempre |
+| `causaTecnica` | La misma que lleva el error que recibe el cajero |
+
+**Una sola puerta: `domain/venta/conflicto-de-inventario.ts`.**
+`dejarConstanciaDelConflictoDeInventario` escribe en su propia transacción y
+su propio lote, arma el valor con `valorDelConflictoDeInventario` y **no lanza
+nunca**: si la base falla, lo deja en la bitácora técnica con origen `[venta]`
+o `[anulacion]`. Los dos servicios la llaman. `ServicioDeAnulacionDeVenta`
+recibe `log`, obligatorio, como la venta. La acción ya no está en
+`ACCIONES_DE_VENTA` ni en `ACCIONES_DE_ANULACION`.
+
+**La prueba estructural** (`conflicto-de-inventario-una-sola-puerta.test.ts`)
+recorre el árbol sintáctico de `src/main` y `src/shared` y falla nombrando
+archivo y línea si la cadena `conflicto_de_inventario`, también dentro de
+plantillas o SQL, o la constante `ACCION_CONFLICTO_DE_INVENTARIO` aparece fuera
+de la puerta. Tiene sus controles: un comentario no cuenta.
+
+**Falsificado**, una mutación por vez y restaurando:
+
+| Mutación | Qué cae |
+|---|---|
+| La prueba estructural contra `develop` original (`cd93ee2`) | `servicio-de-anulacion.ts:91 nombra la cadena 'conflicto_de_inventario'` y `servicio-de-venta.ts:89 …` (y las 3 que exigen que la puerta exista) |
+| Agregar `conflictoDeInventario: 'conflicto_de_inventario'` a `ACCIONES_DE_ANULACION` | 1: `servicio-de-anulacion.ts:95 nombra la cadena 'conflicto_de_inventario'` |
+| Volver la anulación a su escritura original (forma vieja, sin envolver) | 6, entre ellas «dejan asientos con EXACTAMENTE las mismas claves» y la de la falla del asiento con `→ sin espacio en disco (simulado por la prueba)`: ese error le llegaba al cajero |
+| Una clave de más (`momento`) en la puerta | 5: las dos de la venta, las dos de la anulación y la de las mismas claves |
 
 **Si el asiento no se puede escribir, el cajero recibe IGUAL el conflicto.** La
 falla va a `log-tecnico.log` con origen `[venta]`. Por eso `ServicioDeVenta`
@@ -7512,6 +7576,7 @@ del reporte de §3.5, que no se construyó en este prompt.
 | **`RepositorioDeVentas.anular()` se elimina y las consultas filtran con `VENTA_SIN_ANULACION`; dos se renombran a «NoAnuladas».** | Dejar `anular()` sin uso; dejar los nombres «Completadas» | Es el camino que el diseño descarta (§1.3), y dejarlo invita a usarlo. «Completadas» afirmaría que filtra por `estado`, que dice 'completada' también en las anuladas. Dos pruebas estructurales lo fijan. §4.45. | Prompt 69 — 2026-09-15 |
 | **El lote de la anulación se encola desde el núcleo local aunque su puerta en la nube no exista todavía; y una versión con este núcleo no se instala en una terminal conectada.** | No encolar hasta el prompt de sincronización; encolar y cablear el enrutador ya | Encolar es el paso 8 de la transacción (§2.2), y no hacerlo dejaría anulaciones que nunca subirían sin que nada fallara. Cablear el enrutador sin la función de la nube no evita que la cola se detenga. La deriva anota la tabla en una lista que obliga a sacarla cuando llegue su espejo. §4.45. | Prompt 69 — 2026-09-15 |
 | **Un conflicto de inventario al vender deja el asiento `conflicto_de_inventario` DESPUÉS de revertir, en una transacción aparte y en su propio lote. Si el asiento no se puede escribir, el cajero recibe igual el conflicto y la falla va a la bitácora técnica.** Hasta esta fecha §4.3 afirmaba que quedaba registrado y NO estaba implementado. | Escribirlo dentro de la transacción de la venta; corregir el texto de §4.3 en vez del código; dejar que una falla del asiento reemplace al conflicto; `log` opcional en `ServicioDeVenta` | Adentro, el `ROLLBACK` se lo lleva con la venta, que es lo que pasaba: medido con el código anterior, después del conflicto la bitácora solo tenía `caja_abierta`. Corregir solo el texto habría quitado la única evidencia de una premisa rota. Que la falla del asiento reemplazara al conflicto le mostraría al cajero «La operación no pudo completarse» en vez del producto que falló. El `log` es obligatorio para que ningún sitio la deje sin rastro. `entidad_tipo` es `productos` porque la venta nunca existió. **No cubre un segundo escritor en otra conexión**: con `BEGIN` a secas eso da `SQLITE_BUSY_SNAPSHOT` (medido); ver puntos 22 y 23 de §6.2. §4.3. | 2026-09-15 (número de prompt por confirmar) |
+| **El asiento `conflicto_de_inventario` tiene UNA sola forma, que arma y escribe UNA sola puerta (`conflicto-de-inventario.ts`), con una prueba estructural que falla si la acción aparece fuera de ella; la anulación envuelve la escritura igual que la venta.** | Alinear a mano los dos servicios; dejar las dos formas y documentarlas; los nombres de la anulación (`saldoLeido`, `detalle`) | La venta y la anulación se escribieron a la vez, sin verse, y quedaron con cinco claves distintas para lo mismo. Alinear a mano deja abierto el hueco para el tercero. Nombres de la venta y sin `momento`, por decisión de Julio: `momento` repetía la columna `fecha`. `comparacion` es el nombre de la columna que las dos comparan. Sin envolver, una falla del asiento de la anulación le llegaba al cajero en lugar del conflicto (falsificado). Se pudo cambiar porque no había ningún asiento escrito: `auditoria_log` es inmutable. §4.3. | 2026-09-15 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -7555,7 +7620,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 20 | **En una instalación NUEVA, ¿un asiento de auditoría anterior al primer usuario debería impedir restaurar?** | Hoy sí, y se descubrió sin buscarlo (§4.35): en una terminal recién creada no hay ningún administrador, así que la salida controlada se niega con `SIN_ADMINISTRADORES` —correcto, §4.1— y deja un asiento `salida_controlada_rechazada`. `auditoria_log` es una de las once tablas que la restauración exige VACÍAS, así que **pulsar el botón de salir una vez deja esa instalación sin poder restaurar**: «Esta instalación ya tiene datos», con el botón deshabilitado y sin que nadie haya cargado nada. Se sale borrando la carpeta de datos, que en la tienda significa volver a instalar. Son dos reglas correctas que se cruzan; las salidas posibles son dejarlo así (y decirlo en la pantalla, que hoy no lo explica), que `baseVacia()` ignore los asientos escritos antes de que exista el primer usuario, o que la salida controlada no audite cuando no hay a quién pedirle PIN —esta última **no**, porque perdería un hecho—. Toca una precondición de seguridad, así que se decide, no se improvisa. | Abierto — molesta el día que alguien toque ese botón antes de restaurar |
 | 21 | ~~¿El efectivo teórico se muestra MIENTRAS el cajero cuenta, o se cuenta a ciegas?~~ | — | **RESUELTO (Prompt 58, §4.40): las dos cosas.** Solo el rol administrativo lo recibe, y el paso de conteo no lo muestra a nadie. La interpretación sobre los diálogos se cerró en el Prompt 59: tampoco lo muestran al rol venta (§4.40.3). |
 | 22 | **¿La transacción de negocio debe abrir `BEGIN IMMEDIATE`, como dice §4.3, o se corrige el texto?** | Hoy `enTransaccionDeNegocio` abre `BEGIN` a secas. Medido el 2026-09-15: si otra conexión escribe entre la lectura y el comparar-y-cambiar, la venta falla con `SQLITE_BUSY_SNAPSHOT` en el acto, la ventana ve «La operación no pudo completarse.» y no queda asiento de conflicto. Con `.immediate()` la otra conexión es la que espera y falla. Afecta a las ocho operaciones de negocio, no solo a la venta. Hoy la instancia única lo hace improbable; importa si se abre el punto 10. §4.3. | Abierto — decisión técnica de Julio |
-| 23 | **¿Qué claves lleva `valor_nuevo` del asiento `conflicto_de_inventario`?** | La venta escribe `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo`, `comparacion` y `momento`. La anulación (§4.45) escribe `saldoLeido`, `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Es la misma acción con dos formas. Ningún código lee estos asientos, así que alinearlas no rompe nada, pero un auditor que filtre por la acción va a encontrar las dos. §4.3. | Abierto — de bajo riesgo |
+| 23 | ~~**¿Qué claves lleva `valor_nuevo` del asiento `conflicto_de_inventario`?**~~ | ~~La venta escribe `saldoQueSeLeyo`, `cantidadVendidaQueSeLeyo`, `comparacion` y `momento`. La anulación (§4.45) escribe `saldoLeido`, `cantidadVendidaLeida`, `detalle`, `causaTecnica` y `ventaId`. Es la misma acción con dos formas. Ningún código lee estos asientos, así que alinearlas no rompe nada, pero un auditor que filtre por la acción va a encontrar las dos. §4.3.~~ | **RESUELTO (2026-09-15, decisión de Julio): una sola forma y una sola puerta.** Nombres de la venta, sin `momento`, con `ventaId` (null en la venta) y `causaTecnica`. La escribe solo `conflicto-de-inventario.ts`, y una prueba estructural lo exige. No había ningún asiento escrito con ninguna de las dos formas (§4.3). |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** y **desde la 3.c también `npm run diagnostico:imagen`**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
