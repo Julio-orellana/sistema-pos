@@ -26,11 +26,12 @@ export const ARCHIVO_DE_LOG = 'log-tecnico.log';
 /**
  * De dónde vino el evento, para poder filtrar el archivo con un `grep`.
  *
- * `venta`: el asiento de un conflicto de inventario que la base no pudo guardar
- * (CLAUDE.md §4.3). El hecho del negocio va a `auditoria_log`; acá solo queda
- * que ESE asiento faltó y por qué.
+ * `venta` y `anulacion`: el asiento de un conflicto de inventario que la base
+ * no pudo guardar (CLAUDE.md §4.3), según qué operación se revirtió. El hecho
+ * del negocio va a `auditoria_log`; acá solo queda que ESE asiento faltó y por
+ * qué.
  */
-export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion' | 'venta';
+export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion' | 'venta' | 'anulacion';
 
 /** Escribe una línea en la bitácora técnica. */
 export interface LogTecnico {

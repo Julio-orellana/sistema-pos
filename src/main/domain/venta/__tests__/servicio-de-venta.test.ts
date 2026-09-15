@@ -796,14 +796,19 @@ describe('EL CONFLICTO DE INVENTARIO DEJA CONSTANCIA, después de revertir (§4.
     expect(asiento.entidadId).toBe(maiz);
     expect(asiento.valorAnterior).toBeNull();
     expect(asiento.fecha).toBe(MOMENTO);
+    // LA FORMA ÚNICA (conflicto-de-inventario.ts): exacta, sin claves de más.
+    // Sin `momento` desde el 2026-09-15: el instante es la columna `fecha`.
     expect(JSON.parse(asiento.valorNuevo ?? 'null')).toEqual({
       operacion: 'venta',
+      ventaId: null,
       productoId: maiz,
       nombre: 'Maíz blanco',
       comparacion: 'inventario_disponible',
       saldoQueSeLeyo: '50.000',
       cantidadVendidaQueSeLeyo: '0.000',
-      momento: MOMENTO,
+      causaTecnica:
+        `El comparar-y-cambiar de inventario del producto ${maiz} afectó 0 filas: ` +
+        'el saldo cambió desde que se leyó (50.000).',
     });
   });
 
@@ -885,12 +890,15 @@ describe('EL CONFLICTO DE INVENTARIO DEJA CONSTANCIA, después de revertir (§4.
     expect(asientos[0]?.usuarioId).toBe(idCajera);
     expect(JSON.parse(asientos[0]?.valorNuevo ?? 'null')).toEqual({
       operacion: 'venta',
+      ventaId: null,
       productoId: maiz,
       nombre: 'Maíz blanco',
       comparacion: 'cantidad_vendida',
       saldoQueSeLeyo: '50.000',
       cantidadVendidaQueSeLeyo: '0.000',
-      momento: MOMENTO,
+      causaTecnica:
+        `El comparar-y-cambiar de la cantidad vendida del producto ${maiz} afectó 0 filas: ` +
+        'el acumulado cambió desde que se leyó (0.000).',
     });
     const nuevas = filasNuevasDeLaCola(antes);
     expect(nuevas.map((fila) => [fila.entidad_tipo, fila.entidad_id])).toEqual([

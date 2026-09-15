@@ -79,6 +79,11 @@ import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
 import type { RepositorioDeVentaDetalle } from '@main/database/repositories/venta-detalle';
 import type { RepositorioDeVentas } from '@main/database/repositories/ventas';
+import type { LogTecnico } from '@main/log-tecnico';
+import {
+  dejarConstanciaDelConflictoDeInventario,
+  type ComparacionEnConflicto,
+} from './conflicto-de-inventario';
 import { unidadDe } from './servicio-de-venta';
 
 /** Acciones de la anulación que quedan en la bitácora (§6.1). */
@@ -87,8 +92,8 @@ export const ACCIONES_DE_ANULACION = {
   ventaAnulada: 'venta_anulada',
   /** Un intento de autorizar la anulación que no se aceptó. Suelto. */
   anulacionRechazada: 'anulacion_de_venta_rechazada',
-  /** El comparar-y-cambiar falló y se revirtió todo. Suelto, después de revertir. */
-  conflictoDeInventario: 'conflicto_de_inventario',
+  // El conflicto de inventario NO está acá desde el 2026-09-15: su acción y su
+  // única forma viven en `conflicto-de-inventario.ts`, compartidas con la venta.
 } as const;
 
 /** Largo máximo del motivo: el mismo tope del ajuste de inventario (§12, decisión 7). */
@@ -179,6 +184,12 @@ export interface DependenciasDeAnulacion {
   readonly usuarios: RepositorioDeUsuarios;
   readonly anulaciones: RepositorioDeAnulacionesDeVenta;
   readonly auditoria: RepositorioDeAuditoria;
+  /**
+   * Bitácora técnica: donde queda el asiento de un conflicto que la base no
+   * pudo guardar. OBLIGATORIA, como en la venta: opcional, un sitio que se
+   * olvidara de pasarla dejaría esa falla sin rastro.
+   */
+  readonly log: LogTecnico;
   /** Reloj inyectable. */
   readonly ahora?: () => number;
 }
@@ -218,7 +229,12 @@ interface PlanDeAnulacion {
 class ConflictoAlAnular extends Error {
   public constructor(
     public readonly producto: ProductoAReponer,
-    public readonly detalle: 'inventario' | 'contadores',
+    /**
+     * La columna cuyo comparar-y-cambiar falló. Hasta el 2026-09-15 se llamaba
+     * `detalle` y valía `'inventario'` o `'contadores'`: son las mismas dos
+     * columnas que compara la venta, y ahora se nombran igual.
+     */
+    public readonly comparacion: ComparacionEnConflicto,
     public readonly causaTecnica: string,
   ) {
     super(causaTecnica);
@@ -239,6 +255,7 @@ export class ServicioDeAnulacionDeVenta {
   private readonly usuarios: RepositorioDeUsuarios;
   private readonly anulaciones: RepositorioDeAnulacionesDeVenta;
   private readonly auditoria: RepositorioDeAuditoria;
+  private readonly log: LogTecnico;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeAnulacion) {
@@ -251,6 +268,7 @@ export class ServicioDeAnulacionDeVenta {
     this.usuarios = dependencias.usuarios;
     this.anulaciones = dependencias.anulaciones;
     this.auditoria = dependencias.auditoria;
+    this.log = dependencias.log;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
 
@@ -322,7 +340,7 @@ export class ServicioDeAnulacionDeVenta {
           if (!repuso) {
             throw new ConflictoAlAnular(
               aReponer,
-              'inventario',
+              'inventario_disponible',
               'El comparar-y-cambiar de la reposición del producto ' +
                 `${aReponer.producto.id} afectó 0 filas: el saldo cambió desde que se leyó ` +
                 `(${cantidadACadena(aReponer.producto.inventarioDisponible)}).`,
@@ -341,7 +359,8 @@ export class ServicioDeAnulacionDeVenta {
           if (!bajaron) {
             throw new ConflictoAlAnular(
               aReponer,
-              'contadores',
+              // El UPDATE de los contadores compara `cantidad_vendida` con lo leído.
+              'cantidad_vendida',
               'El comparar-y-cambiar de los contadores del producto ' +
                 `${aReponer.producto.id} afectó 0 filas: la cantidad vendida cambió desde que se leyó ` +
                 `(${cantidadACadena(aReponer.producto.cantidadVendida)}).`,
@@ -442,6 +461,8 @@ export class ServicioDeAnulacionDeVenta {
       // La transacción ya se revirtió entera. RECIÉN AHORA, en una aparte, queda
       // el asiento: en esta arquitectura un conflicto no debería poder pasar, y
       // cada vez que pasa es evidencia de un segundo escritor (§4.3, §2.5).
+      // Si el asiento no se puede escribir, la puerta NO lanza: el error que
+      // sigue es el conflicto, igual que en la venta.
       this.registrarConflicto(pedido.ventaId, solicitadaPor, error, momento);
       throw errorDeConflictoDeInventarioAlAnular(error.producto.producto.nombre, error.causaTecnica);
     }
@@ -668,39 +689,34 @@ export class ServicioDeAnulacionDeVenta {
     return recortado;
   }
 
-  /** Asiento del conflicto, en su PROPIA transacción, después de revertir (§2.5). */
+  /**
+   * Asiento del conflicto, después de revertir (§2.5), por la ÚNICA puerta
+   * (`conflicto-de-inventario.ts`), la misma que usa la venta.
+   *
+   * Hasta el 2026-09-15 este método escribía el asiento por su cuenta, con otra
+   * forma (`detalle`, `saldoLeido`, `cantidadVendidaLeida`) y SIN envolverlo: si
+   * la base fallaba acá, el cajero recibía ese error en lugar del conflicto.
+   */
   private registrarConflicto(
     ventaId: string,
     solicitadaPor: string,
     conflicto: ConflictoAlAnular,
     fecha: string,
   ): void {
-    conBandejaDeSalida(this.base, () => {
-      const asiento = this.auditoria.registrar({
+    dejarConstanciaDelConflictoDeInventario(
+      { base: this.base, auditoria: this.auditoria, log: this.log },
+      {
         usuarioId: solicitadaPor,
-        accion: ACCIONES_DE_ANULACION.conflictoDeInventario,
-        entidadTipo: 'productos',
-        entidadId: conflicto.producto.producto.id,
-        // La operación es un DATO del asiento, no otra acción: cuando se corrija
-        // el hueco de la venta (§0.4), la venta usará la misma acción con
-        // `operacion: 'venta'` (criterio de §4.1).
-        valorNuevo: {
+        conflicto: {
           operacion: 'anulacion',
           ventaId,
-          productoId: conflicto.producto.producto.id,
-          nombre: conflicto.producto.producto.nombre,
-          detalle: conflicto.detalle,
-          saldoLeido: cantidadACadena(conflicto.producto.producto.inventarioDisponible),
-          cantidadVendidaLeida: cantidadACadena(conflicto.producto.producto.cantidadVendida),
+          producto: conflicto.producto.producto,
+          comparacion: conflicto.comparacion,
           causaTecnica: conflicto.causaTecnica,
         },
         fecha,
-      });
-      return {
-        resultado: undefined,
-        entradas: [{ tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const }],
-      };
-    });
+      },
+    );
   }
 
   /** Una persona con el nombre de hoy, o un nombre que dice que no se encontró. */

@@ -626,6 +626,7 @@ app.whenReady().then(
       usuarios: repositorios.usuarios,
       anulaciones: repositorios.anulacionesDeVenta,
       auditoria: repositorios.auditoria,
+      log: logTecnico,
     });
 
     // Modo semilla: siembra o limpia el catálogo de ejemplo y sale, sin abrir

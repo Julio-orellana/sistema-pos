@@ -22,7 +22,8 @@ import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import type { UsuarioEnSesion } from '@main/domain/usuarios/sesion';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
-import { LogTecnicoSilencioso } from '@main/log-tecnico';
+import { LogTecnicoSilencioso, type LogTecnico, type OrigenTecnico } from '@main/log-tecnico';
+import { hayTransaccionDeNegocioEnCurso } from '@main/database/transaccion-en-curso';
 import { ServicioDeReportes } from '@main/domain/reportes/servicio-de-reportes';
 import { FlujoDeAnulacionDeVenta } from '@main/ipc/anulacion-de-venta';
 import type { PedidoDeAnulacionIpc, ResultadoDeAnulacionIpc } from '@shared/types/ipc';
@@ -44,6 +45,16 @@ let productos: ServicioDeProductos;
 let reportes: ServicioDeReportes;
 let autenticacion: ServicioDeAutenticacion;
 let anulacion: ServicioDeAnulacionDeVenta;
+let bitacoraTecnica: BitacoraQueGuarda;
+
+/** Bitácora técnica que guarda las líneas en memoria, para leerlas en las pruebas. */
+class BitacoraQueGuarda implements LogTecnico {
+  public readonly lineas: string[] = [];
+
+  public registrar(origen: OrigenTecnico, mensaje: string): void {
+    this.lineas.push(`[${origen}] ${mensaje}`);
+  }
+}
 let flujo: FlujoDeAnulacionDeVenta;
 
 let idJimmy: string;
@@ -190,6 +201,7 @@ beforeEach(() => {
     auditoria: repos.auditoria,
     bloqueosDeAutorizacion: repos.bloqueosDeAutorizacion,
   });
+  bitacoraTecnica = new BitacoraQueGuarda();
   anulacion = new ServicioDeAnulacionDeVenta({
     base,
     ventas: repos.ventas,
@@ -200,6 +212,7 @@ beforeEach(() => {
     usuarios: repos.usuarios,
     anulaciones: repos.anulacionesDeVenta,
     auditoria: repos.auditoria,
+    log: bitacoraTecnica,
     ahora: (): number => reloj,
   });
   flujo = new FlujoDeAnulacionDeVenta({ anulacion, autenticacion });
@@ -660,9 +673,19 @@ describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (�
     expect(conflicto).toHaveLength(1);
     expect(conflicto[0]?.usuario_id).toBe(idAna);
     expect(conflicto[0]?.entidad_id).toBe(idFrijol);
-    expect(JSON.parse(conflicto[0]?.valor_nuevo ?? '{}')).toEqual(
-      expect.objectContaining({ operacion: 'anulacion', ventaId, productoId: idFrijol, detalle: 'inventario', saldoLeido: '49.000' }),
-    );
+    // LA FORMA ÚNICA (conflicto-de-inventario.ts), exacta: la misma que la venta.
+    expect(JSON.parse(conflicto[0]?.valor_nuevo ?? '{}')).toEqual({
+      operacion: 'anulacion',
+      ventaId,
+      productoId: idFrijol,
+      nombre: 'Frijol negro',
+      comparacion: 'inventario_disponible',
+      saldoQueSeLeyo: '49.000',
+      cantidadVendidaQueSeLeyo: '1.000',
+      causaTecnica:
+        `El comparar-y-cambiar de la reposición del producto ${idFrijol} afectó 0 filas: ` +
+        'el saldo cambió desde que se leyó (49.000).',
+    });
     const encolado = base
       .prepare("SELECT c.entidad_tipo FROM sync_cola c JOIN auditoria_log a ON a.id = c.entidad_id WHERE a.accion = 'conflicto_de_inventario'")
       .all();
@@ -681,7 +704,18 @@ describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (�
     }
     expect(repos.productos.obtenerPorId(idMaiz)).toEqual(antes);
     expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toBeNull();
-    expect(campos(asientos('conflicto_de_inventario')[0]?.valor_nuevo).detalle).toBe('contadores');
+    expect(campos(asientos('conflicto_de_inventario')[0]?.valor_nuevo)).toEqual({
+      operacion: 'anulacion',
+      ventaId,
+      productoId: idMaiz,
+      nombre: 'Maíz blanco',
+      comparacion: 'cantidad_vendida',
+      saldoQueSeLeyo: '98.000',
+      cantidadVendidaQueSeLeyo: '2.000',
+      causaTecnica:
+        `El comparar-y-cambiar de los contadores del producto ${idMaiz} afectó 0 filas: ` +
+        'la cantidad vendida cambió desde que se leyó (2.000).',
+    });
   });
 
   it('CERO reintentos: después del conflicto, volver a pedir con el PIN funciona, y el PIN hay que teclearlo otra vez', () => {
@@ -711,6 +745,95 @@ describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (�
 
     expect(error.codigo).toBe('CONTADORES_INCONSISTENTES');
     expect(fotoDeLaBase()).toEqual(antes);
+  });
+});
+
+// ===========================================================================
+describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulación escriben lo mismo (2026-09-15)', () => {
+  /** Las claves de la forma única, en el orden en que se escriben. */
+  const CLAVES_DE_LA_FORMA_UNICA = [
+    'operacion',
+    'ventaId',
+    'productoId',
+    'nombre',
+    'comparacion',
+    'saldoQueSeLeyo',
+    'cantidadVendidaQueSeLeyo',
+    'causaTecnica',
+  ];
+
+  it('un conflicto al VENDER y uno al ANULAR dejan asientos con EXACTAMENTE las mismas claves, en la misma base', () => {
+    // Una venta cuyo comparar-y-cambiar de inventario falla.
+    const original = repos.productos.descontarSiSigueIgual.bind(repos.productos);
+    repos.productos.descontarSiSigueIgual = (): boolean => false;
+    try {
+      expect(errorDe(() => vender([{ productoId: idMaiz, cantidad: '1' }])).codigo).toBe('CONFLICTO_DE_INVENTARIO');
+    } finally {
+      repos.productos.descontarSiSigueIgual = original;
+    }
+
+    // Una anulación cuyo comparar-y-cambiar de inventario falla.
+    const ventaId = vender([{ productoId: idFrijol, cantidad: '1' }]);
+    const reponer = repos.productos.reponerSiSigueIgual.bind(repos.productos);
+    repos.productos.reponerSiSigueIgual = (): boolean => false;
+    try {
+      expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY)).codigo).toBe('CONFLICTO_DE_INVENTARIO');
+    } finally {
+      repos.productos.reponerSiSigueIgual = reponer;
+    }
+
+    const escritos = asientos('conflicto_de_inventario').map((asiento) => campos(asiento.valor_nuevo));
+    expect(escritos.map((valor) => valor.operacion)).toEqual(['venta', 'anulacion']);
+    for (const valor of escritos) {
+      expect(Object.keys(valor)).toEqual(CLAVES_DE_LA_FORMA_UNICA);
+    }
+    expect(escritos[0]?.ventaId).toBeNull();
+    expect(escritos[1]?.ventaId).toBe(ventaId);
+    // Ninguna de las claves de la forma vieja de cada lado.
+    for (const vieja of ['momento', 'detalle', 'saldoLeido', 'cantidadVendidaLeida']) {
+      expect(escritos.some((valor) => vieja in valor), vieja).toBe(false);
+    }
+  });
+
+  it('si el asiento NO se puede escribir al ANULAR, el cajero recibe IGUAL el conflicto y la falla queda en la bitácora técnica', () => {
+    const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
+    const antes = repos.productos.obtenerPorId(idMaiz);
+    // Una falla REAL de la base al insertar el asiento, la misma que usa la
+    // prueba de la venta. Hasta el 2026-09-15 esta escritura no estaba
+    // envuelta y el cajero recibía este error en lugar del conflicto.
+    base.exec(`
+      CREATE TRIGGER prueba_asiento_de_conflicto_falla
+      BEFORE INSERT ON auditoria_log
+      WHEN NEW.accion = 'conflicto_de_inventario'
+      BEGIN
+        SELECT RAISE(ABORT, 'sin espacio en disco (simulado por la prueba)');
+      END;
+    `);
+    const original = repos.productos.reponerSiSigueIgual.bind(repos.productos);
+    repos.productos.reponerSiSigueIgual = (): boolean => false;
+    let error: ErrorDeNegocio;
+    try {
+      error = errorDe(() => pedir(ventaId, PIN_DE_JIMMY));
+    } finally {
+      repos.productos.reponerSiSigueIgual = original;
+    }
+
+    expect(error.codigo).toBe('CONFLICTO_DE_INVENTARIO');
+    expect(error.mensajeParaElUsuario).toBe(
+      'El inventario de Maíz blanco cambió mientras se anulaba. La venta no se anuló. Volvé a intentarlo.',
+    );
+    expect(asientos('conflicto_de_inventario')).toEqual([]);
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toBeNull();
+    expect(repos.productos.obtenerPorId(idMaiz)).toEqual(antes);
+    expect(hayTransaccionDeNegocioEnCurso()).toBe(false);
+
+    expect(bitacoraTecnica.lineas).toHaveLength(1);
+    const linea = bitacoraTecnica.lineas[0]!;
+    expect(linea.startsWith('[anulacion] ')).toBe(true);
+    expect(linea).toContain('conflicto_de_inventario');
+    expect(linea).toContain(idMaiz);
+    expect(linea).toContain(ventaId);
+    expect(linea).toContain('sin espacio en disco (simulado por la prueba)');
   });
 });
 

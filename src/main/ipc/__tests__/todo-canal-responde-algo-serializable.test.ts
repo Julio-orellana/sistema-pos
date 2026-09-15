@@ -270,6 +270,7 @@ function dependenciasSobre(
       usuarios: repos.usuarios,
       anulaciones: repos.anulacionesDeVenta,
       auditoria: repos.auditoria,
+      log: new LogTecnicoSilencioso(),
     }),
     gestionDeUsuarios: new ServicioDeUsuarios({ base, usuarios: repos.usuarios, auditoria: repos.auditoria }),
     negocio: new ServicioDeConfiguracionDeNegocio({ base, configuracion: repos.configuracionNegocio, auditoria: repos.auditoria }),
