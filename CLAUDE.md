@@ -6124,6 +6124,19 @@ hay que autorizar. No hay tercer caso.
 > este caso, su autorizante no está escrito en ninguna parte y no se puede
 > reconstruir. Se reconoce en la bitácora por `caja_cerrada` con
 > `huboReconteo: false`, `conteosSellados > 0` y `diferencia "0.00"`.
+>
+> **BUSCADO EL 2026-09-15, en solo lectura: CERO cierres afectados.**
+>
+> | Base | Cierres | Con el campo `conteosSellados` | Con el patrón | Por qué no puede haber |
+> |---|---|---|---|---|
+> | `pos-pruebas-descartable` (`ztidrshifrblhfraiowg`), solo `SELECT` | 3 (del 2026-09-15, 01:45 a 02:00 UTC), los tres con diferencia `0.00` y sin autorizante | 0 | **0** | Los subió la instalación de Jimmy, `v1.0.0-prueba.1`, que no tiene sellos: `conteo_de_cierre_sellado` no aparece en ese tag. 0 asientos de sello y 0 de reconteo en el proyecto. |
+> | Base de trabajo de esta Mac (`~/Library/Application Support/pos-agricola/pos-agricola.db`), consultada sobre una copia; sha256 del original igual antes y después | 1 (del 2026-09-08) | 0 | **0** | Anterior a los sellos (`0959a18`, 2026-09-14). |
+>
+> El filtro se probó contra cinco casos armados, en Postgres y en JavaScript:
+> marca el defecto y no marca el reconteo que ya funcionaba, el cierre sin
+> sellos, el sello que sigue con diferencia ni un asiento anterior a los sellos.
+> `pos-jimmy-cano` no se consultó. Según §4.4 tenía 0 filas de negocio al
+> 2026-09-14; eso no se volvió a medir.
 
 Salida cruda del escenario de Jimmy en la aplicación real (teórico Q527.50,
 cuenta Q500, corrige a Q527.50):
