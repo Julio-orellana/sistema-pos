@@ -482,6 +482,25 @@ async function main() {
     );
 
     await teclearPin(PIN);
+    // §4.40.5: el PIN correcto NO cierra. Revela y espera la confirmación.
+    await prueba('revelacion-de-autorizacion').waitFor({ timeout: ESPERA_CORTA });
+    const estadoTrasElPinDeJimmy = leerBase('SELECT estado FROM caja_sesiones WHERE id = ?', turno.id)[0].estado;
+    const reveladoAJimmy = {
+      esperado: await texto('revelacion-esperado'),
+      diferencia: await texto('revelacion-diferencia'),
+      confirmaciones: await prueba('confirmacion-de-cierre').count(),
+    };
+    comprobar(
+      'EL PIN CORRECTO NO CIERRA: revela lo autorizado (esperado Q527.50, sin diferencia) y la caja SIGUE ABIERTA en la base',
+      'abierta; Q527.50; sin diferencia; 0 confirmaciones',
+      `${estadoTrasElPinDeJimmy}; ${reveladoAJimmy.esperado}; ${reveladoAJimmy.diferencia}; ${String(reveladoAJimmy.confirmaciones)} confirmaciones`,
+      estadoTrasElPinDeJimmy === 'abierta' &&
+        reveladoAJimmy.esperado.includes('527.50') &&
+        /sin diferencia/.test(reveladoAJimmy.diferencia) &&
+        reveladoAJimmy.confirmaciones === 0,
+    );
+    await capturar('4c-pin-correcto-revela-y-espera');
+    await prueba('confirmar-cierre-autorizado').click();
     await prueba('confirmacion-de-cierre').waitFor({ timeout: ESPERA_CORTA });
 
     // =======================================================================
@@ -759,6 +778,20 @@ async function main() {
     );
     await capturar('7b2-cajera-dialogo-de-diferencia-sin-esperado');
 
+    // Un PIN EQUIVOCADO en ese diálogo: nunca llega a mostrar ningún monto.
+    await teclearPin('9999');
+    await prueba('mensaje-de-caja').waitFor({ timeout: ESPERA_CORTA });
+    const cuerpoPinMaloCajera = await ventana.locator('body').innerText();
+    comprobar(
+      'UN PIN INCORRECTO NUNCA MUESTRA NINGÚN MONTO: sigue el diálogo, sin revelación, sin 204.25 ni «Debería haber»',
+      'aviso de PIN; 0 revelaciones; sin 204.25; sin «Debería haber»',
+      `«${await texto('mensaje-de-caja')}»; ${String(await prueba('revelacion-de-autorizacion').count())} revelaciones; ` +
+        `204.25 ${cuerpoPinMaloCajera.includes('204.25') ? 'PRESENTE' : 'ausente'}; «Debería haber» ${cuerpoPinMaloCajera.includes('Debería haber') ? 'PRESENTE' : 'ausente'}`,
+      (await prueba('revelacion-de-autorizacion').count()) === 0 &&
+        !cuerpoPinMaloCajera.includes('204.25') &&
+        !cuerpoPinMaloCajera.includes('Debería haber'),
+    );
+
     // Por el canal, con la sesión de la cajera y el MISMO conteo (el mismo par
     // no vuelve a sellar): la respuesta cruda del proceso principal.
     const crudoDiferencia = await ventana.evaluate(async () =>
@@ -811,8 +844,49 @@ async function main() {
     );
     await capturar('7b3-cajera-reconteo-igual-que-diferencia');
 
-    // Autoriza un administrador con su PIN, en la sesión de la cajera.
+    // Autoriza un administrador con su PIN, en la sesión de la cajera. El PIN
+    // correcto REVELA lo autorizado y espera (§4.40.5).
+    const [filaDelTurnoCajera] = leerBase("SELECT id FROM caja_sesiones WHERE estado = 'abierta'");
     await teclearPin(PIN);
+    await prueba('revelacion-de-autorizacion').waitFor({ timeout: ESPERA_CORTA });
+    const reveladoALaCajera = {
+      esperado: await texto('revelacion-esperado'),
+      quien: await texto('revelacion-quien-autoriza'),
+      estado: leerBase('SELECT estado FROM caja_sesiones WHERE id = ?', filaDelTurnoCajera.id)[0].estado,
+    };
+    anotar(`revelación en la sesión de la CAJERA tras el PIN del administrador: ${JSON.stringify(reveladoALaCajera)}`);
+    comprobar(
+      'EN LA SESIÓN DE LA CAJERA, el PIN del administrador revela el esperado para que vea qué aprueba, y la caja sigue abierta',
+      'Q204.25; quién autoriza; abierta',
+      `${reveladoALaCajera.esperado}; «${reveladoALaCajera.quien}»; ${reveladoALaCajera.estado}`,
+      reveladoALaCajera.esperado.includes('204.25') &&
+        reveladoALaCajera.quien.includes('Jimmy de verificación') &&
+        reveladoALaCajera.estado === 'abierta',
+    );
+    await capturar('7b4-cajera-revelacion-tras-pin-del-administrador');
+
+    // CANCELAR: no cierra, y la autorización muere en el proceso principal.
+    await prueba('cancelar-cierre-autorizado').click();
+    await prueba('autorizacion-de-diferencia').waitFor({ timeout: ESPERA_CORTA });
+    const confirmarDesdeLaConsola = await ventana.evaluate(async () =>
+      window.pos.caja.confirmarCierreAutorizado({ modo: 'simple', monto: '204.25' }),
+    );
+    anotar(`tras CANCELAR, window.pos.caja.confirmarCierreAutorizado(Q204.25) desde la consola: ${JSON.stringify(confirmarDesdeLaConsola)}`);
+    const estadoTrasCancelar = leerBase('SELECT estado FROM caja_sesiones WHERE id = ?', filaDelTurnoCajera.id)[0].estado;
+    comprobar(
+      'CANCELAR no cierra y retira la autorización: confirmar desde la consola después no cierra nada',
+      'vuelve al diálogo; AUTORIZACION_NO_VIGENTE; cerrada=false; caja abierta en la base',
+      `diálogo ${String(await prueba('autorizacion-de-diferencia').count())}; ${confirmarDesdeLaConsola.datos.codigo}; cerrada=${String(confirmarDesdeLaConsola.datos.cerrada)}; ${estadoTrasCancelar}`,
+      (await prueba('autorizacion-de-diferencia').count()) === 1 &&
+        confirmarDesdeLaConsola.datos.codigo === 'AUTORIZACION_NO_VIGENTE' &&
+        confirmarDesdeLaConsola.datos.cerrada === false &&
+        estadoTrasCancelar === 'abierta',
+    );
+
+    // Otra vez el PIN, y esta vez sí: «Sí, cerrar la caja».
+    await teclearPin(PIN);
+    await prueba('revelacion-de-autorizacion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('confirmar-cierre-autorizado').click();
     await prueba('confirmacion-de-cierre').waitFor({ timeout: ESPERA_CORTA });
     const teoricoParaLaCajera = await texto('cierre-efectivo-teorico');
     comprobar(
