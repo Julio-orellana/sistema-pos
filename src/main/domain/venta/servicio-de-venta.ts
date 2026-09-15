@@ -683,7 +683,11 @@ export class ServicioDeVenta {
  * Un producto por peso siempre tiene `unidad_peso` —lo exige un CHECK del
  * esquema—, así que el respaldo de la derecha no debería usarse nunca; está
  * para no imprimir `null` en un recibo si alguna vez lo hiciera.
+ *
+ * La usa también la anulación, para comparar la foto `unidad_snap` con la
+ * unidad de hoy (docs/ANULACION-DE-VENTA.md §2.3): tiene que ser EXACTAMENTE el
+ * mismo cálculo, o una unidad que no cambió parecería cambiada.
  */
-function unidadDe(producto: Producto): string {
+export function unidadDe(producto: Producto): string {
   return producto.tipoMedida === 'peso' ? (producto.unidadPeso ?? 'lb') : 'unidad';
 }

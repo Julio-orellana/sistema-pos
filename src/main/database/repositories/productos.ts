@@ -258,6 +258,37 @@ export class RepositorioDeProductos extends RepositorioBase {
     saldoQueSeLeyo: Decimal | string,
     saldoNuevo: Decimal | string,
   ): boolean {
+    return this.fijarInventarioSiSigueIgual(id, saldoQueSeLeyo, saldoNuevo);
+  }
+
+  /**
+   * COMPARAR-Y-CAMBIAR de la REPOSICIÓN al anular una venta
+   * (docs/ANULACION-DE-VENTA.md §2.2, paso 4).
+   *
+   * Es el mismo `UPDATE` que el descuento, con la suma en vez de la resta: el
+   * saldo nuevo lo calcula quien llama con Decimal.js, SUMANDO lo vendido al
+   * saldo de HOY que leyó dentro de su transacción (§2.1). Nunca vuelve al saldo
+   * que guardó el asiento de la venta: eso borraría los ajustes y las ventas que
+   * pasaron en el medio.
+   *
+   * Tiene nombre propio y no reusa `descontarSiSigueIgual` en quien llama:
+   * leer «descontar» en el código de una reposición sería mentir sobre lo que
+   * hace. Por dentro es la misma sentencia.
+   */
+  public reponerSiSigueIgual(
+    id: string,
+    saldoQueSeLeyo: Decimal | string,
+    saldoNuevo: Decimal | string,
+  ): boolean {
+    return this.fijarInventarioSiSigueIgual(id, saldoQueSeLeyo, saldoNuevo);
+  }
+
+  /** El comparar-y-cambiar de §4.3, compartido por el descuento y la reposición. */
+  private fijarInventarioSiSigueIgual(
+    id: string,
+    saldoQueSeLeyo: Decimal | string,
+    saldoNuevo: Decimal | string,
+  ): boolean {
     return this.ejecutar(() => {
       const resultado = this.base
         .prepare(
@@ -324,6 +355,57 @@ export class RepositorioDeProductos extends RepositorioBase {
         )
         .run({
           id,
+          cantidad_nueva: aColumnaCantidad(cantidadNueva),
+          cantidad_leida: aColumnaCantidad(cantidadQueSeLeyo),
+          actualizado_en: ahora(),
+        });
+      return resultado.changes === 1;
+    });
+  }
+
+  /**
+   * Des-anota una venta anulada: `veces` menos y tanta cantidad menos
+   * (docs/ANULACION-DE-VENTA.md §2.4). Es el espejo de `registrarVentaDeProducto`.
+   *
+   * LOS DOS CONTADORES BAJAN EN UN SOLO UPDATE, por la misma razón que suben
+   * juntos: que sea imposible mover uno sin el otro (§4.13).
+   *
+   * `veces` es cuántas líneas de ese producto tenía la venta, porque cada línea
+   * sumó uno al registrarse. Hoy la venta rechaza el mismo producto dos veces,
+   * así que vale 1; se pasa igual para que el día que no sea así el contador no
+   * quede corrido.
+   *
+   * La condición `contador_ventas >= @veces` impide bajarlo de cero, y la de
+   * `cantidad_vendida` es el comparar-y-cambiar: si el acumulado cambió desde
+   * que se leyó, no toca nada. La cantidad nueva se calcula afuera con
+   * Decimal.js; `columna - :cantidad` sería punto flotante (§4.3).
+   *
+   * El comentario de la migración 015 dice que `cantidad_vendida` «nunca baja».
+   * Este es el camino propio que ese comentario anunciaba para las devoluciones;
+   * la aclaración está en CLAUDE.md.
+   *
+   * Devuelve `false` si no afectó exactamente una fila.
+   */
+  public anularVentaDeProducto(
+    id: string,
+    veces: number,
+    cantidadQueSeLeyo: Decimal | string,
+    cantidadNueva: Decimal | string,
+  ): boolean {
+    return this.ejecutar(() => {
+      const resultado = this.base
+        .prepare(
+          `UPDATE productos
+              SET contador_ventas = contador_ventas - @veces,
+                  cantidad_vendida = @cantidad_nueva,
+                  actualizado_en = @actualizado_en
+            WHERE id = @id
+              AND cantidad_vendida = @cantidad_leida
+              AND contador_ventas >= @veces`,
+        )
+        .run({
+          id,
+          veces,
           cantidad_nueva: aColumnaCantidad(cantidadNueva),
           cantidad_leida: aColumnaCantidad(cantidadQueSeLeyo),
           actualizado_en: ahora(),
