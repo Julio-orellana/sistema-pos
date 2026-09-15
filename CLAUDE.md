@@ -6439,6 +6439,78 @@ ampliación no puede entrar sin tocar la prueba que la prohíbe.
 > - En Windows no se probó, como siempre.
 
 
+### 4.42 Jimmy no pudo cerrar la caja que abrió otro: un defecto real, no un texto (2026-09-15)
+
+**El reporte.** Jimmy no encontró forma de cerrar una caja abierta por otro
+usuario. Antes de tocar código se diagnosticó con la app real.
+
+**NO era una instalación de un solo usuario.** Leído de
+`pos-pruebas-descartable` (`ztidrshifrblhfraiowg`), que es donde sube esa
+instalación: hay dos usuarios, Jimmy (`administrativo`) y julio (`venta`).
+Jimmy inició sesión a las 01:49:10 UTC con la caja de julio abierta desde las
+01:47:15. Esa caja la cerró julio mismo a las 01:52:10, después de volver a
+entrar. No hay ningún `caja_cerrada` de Jimmy sobre una caja de julio. Esa
+instalación corría `v1.0.0-prueba.1` (`f71cd01`).
+
+**La causa, medida en la app real de `v1.0.0-prueba.1`** (un worktree del tag,
+compilado, con el mismo escenario: julio abre, sale, entra Jimmy):
+
+```
+botón confirmar-caja: «Cerrar turno (requiere autorización)» disabled=true      (antes de contar)
+después de escribir Q100, confirmar-caja: «…» disabled=false
+main stderr: Error occurred in handler for 'caja:cerrar': Error: An object could not be cloned.
+window.pos.caja.cerrar(Q100) SIN PIN, llamado desde la consola -> SIN RESPUESTA DEL CANAL en 5000 ms
+2.5 s después: confirmar-caja «…» disabled=true; mensaje-de-caja=(ninguno); dialogo=0
+```
+
+1. Cuando la caja es de otra persona y todavía no hay PIN,
+   `ServicioDeCaja.intentarCerrar` devuelve un aviso que trae la `sesion` de
+   dominio adentro.
+2. El manejador de `caja:cerrar` de esa versión la devolvía con
+   `{ ...aviso, … }`.
+3. Los montos de la sesión son objetos Decimal, y **decimal.js les pone
+   `constructor` como propiedad propia** (`x.constructor = Decimal`, línea 4301
+   de `node_modules/decimal.js/decimal.js`). Es una función, y el puente IPC no
+   clona funciones.
+4. **Medido con Electron 44: la llamada no se rechaza, queda pendiente para
+   siempre.** La pantalla tampoco atrapaba nada, así que el botón quedó
+   deshabilitado sin ningún mensaje y el diálogo del PIN nunca apareció.
+
+Solo pasaba en el cierre de una caja AJENA. La caja propia no toca esa rama.
+
+**Por qué no lo vio nadie.** Las pruebas de Vitest llaman al flujo directo, sin
+cruzar el puente IPC, y ningún recorrido de la app real cerraba una caja ajena.
+
+**En el código actual ya no estaba, y fue sin querer.** El commit `0959a18`
+(2026-09-14 22:28, después del tag) armó la respuesta campo por campo
+«sin la sesión de dominio» por otra razón. Con eso el defecto desapareció sin
+que nadie supiera que existía. Medido con el mismo escenario sobre el código
+actual: el diálogo aparece, el PIN cierra, y `caja_sesiones` queda
+`cerrada`, `abrio=julio`, `cerro=Jimmy`.
+
+**Lo que se hizo ahora, para que no vuelva ni vuelva a ser silencioso:**
+
+| Qué | Dónde | Falsificado |
+|---|---|---|
+| Toda respuesta del cierre (caja ajena y propia, en todos sus pasos) pasa por `structuredClone` | `cierre-de-caja.test.ts`, con un control de que un Decimal suelto no se clona | Metiendo `sesion` en la respuesta: caen 2 pruebas con `DataCloneError: function Decimal` |
+| Las llamadas de la pantalla de caja pasan por `llamarAlProcesoPrincipal`: un rechazo **o 15 s sin respuesta** se convierten en un mensaje y el botón vuelve a estar disponible | `llamar-al-proceso-principal.ts` y `pantalla-de-caja.test.ts` | Quitando el `catch` caen 2 pruebas. **En la app real**, con la `sesion` metida a propósito: el mensaje aparece a unos 15 s del clic, el botón queda habilitado y la caja sigue `abierta` |
+| El aviso dice «Esta caja la abrió **julio**. Vas a necesitar el PIN de un administrador para cerrarla», y en qué orden: primero se cuenta, el PIN se pide al tocar «Cerrar turno», y si quien mira es administrador sirve el suyo | `PantallaDeCaja.tsx` | Visto en la app real, en el resumen y en el paso de contar |
+| El escenario completo quedó en `verify:pantallas:caja`: la cajera abre, el administrador ve el aviso, el botón abre el diálogo en menos de 10 s, el PIN cierra y la base dice quién cerró | `scripts/verificacion-de-caja-y-teclado.cjs` | Esta sección del arnés no se falsificó aparte. El mismo recorrido se falsificó con el guion de diagnóstico |
+
+**El catch solo no alcanzaba, y se descubrió falsificando.** La primera
+versión envolvía las llamadas en `try/catch`. En la app real no cambió nada,
+porque la llamada no se rechaza. Por eso existe el límite de 15 s.
+
+**La pantalla de venta NO nombra el PIN, a propósito.** Se probó cambiar su
+texto a «con el PIN de un administrador» y lo frenó una prueba existente. Esa
+pantalla no debe sugerir que un PIN desbloquea vender en el turno ajeno (§4.12).
+Se dejó como estaba.
+
+> **LA INSTALACIÓN DE JIMMY SIGUE CON EL DEFECTO.** Mientras corra
+> `v1.0.0-prueba.1`, una caja ajena no se puede cerrar desde la pantalla; solo
+> la cierra quien la abrió. Se arregla instalando una versión posterior. En
+> Windows no se probó, como siempre.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -6540,6 +6612,7 @@ ampliación no puede entrar sin tocar la prueba que la prohíbe.
 | **AMPLIACIÓN DECIDIDA, NO CORRECCIÓN: `descuento_excedente` acepta también el PIN remoto.** La superficie propia y su candado independiente siguen exactamente igual; lo único que cambia es qué PIN acepta. | Dejarla como estaba y que el cliente espere a que Jimmy vuelva a la tienda; ampliar de paso las otras dos superficies «por coherencia» | **LA FILA DE ARRIBA NO ESTABA EQUIVOCADA.** Decía que ampliar el alcance del PIN remoto exigía una decisión explícita, y el código lo repetía en un comentario. **Julio tomó esa decisión el 2026-09-11**, con un motivo de negocio concreto: Jimmy no siempre está en la tienda y un cliente parado en el mostrador no puede esperar a que vuelva. Es el mecanismo previsto funcionando —el valor por omisión fue «no», la ampliación tuvo que pedirse, y se pidió— y por eso se anota como ampliación y no como reversión. **EL PRINCIPIO DE ALCANCE MÍNIMO POR OMISIÓN SIGUE VIGENTE PARA CUALQUIER AMPLIACIÓN FUTURA NO SOLICITADA**, y se acotó a propósito: `salida_controlada` y `cierre_de_caja_ajena` siguen sin aceptarlo, con pruebas que lo comprueban en el mismo archivo que comprueba la ampliación, para que ninguna sesión futura lea esto como permiso para conceder la próxima sin pedirla. La contrapartida se asume a sabiendas: autorizar por teléfono es aprobar un descuento sin ver el ticket, y lo que juega en contra es que queda registrado con autorizante, vía y asiento de auditoría, y que la alternativa real no era «autorizarlo mirando» sino «no poder vender». | Prompt 26 — 2026-09-11 |
 | **AMPLIACIÓN DECIDIDA, NO CORRECCIÓN, POR SEGUNDA VEZ: `salida_controlada` acepta también el PIN remoto.** Su candado sigue exactamente igual; lo único que cambia es qué PIN acepta, y el asiento registra la vía en `autorizadaVia`. | Dejarla como estaba y que la computadora quede encendida si no hay un administrador; ampliar de paso `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` «por coherencia» | **LA FILA QUE DECÍA QUE NO LO ACEPTABA NO ESTABA EQUIVOCADA.** El PIN remoto se pidió para autorizar diferencias por teléfono, y dárselo a cerrar la aplicación lo ampliaba más allá de lo pedido; el valor por omisión era «no» y ampliarlo exigía una decisión explícita. **Julio la tomó el 2026-09-15**, con un motivo concreto: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. Es la segunda vez que el mecanismo funciona como se diseñó —la primera fue el descuento— y no una excepción por conveniencia. **EL PRINCIPIO DE ALCANCE MÍNIMO SIGUE VIGENTE**: `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo, con pruebas en el mismo archivo. Se reutilizó la verificación dual existente cambiando UNA entrada de `ACEPTA_PIN_REMOTO`, sin lógica nueva. La contrapartida: quien recibe el PIN remoto dictado puede, hasta que se cambie, también cerrar la aplicación; cerrar es ordenado y queda auditado con su vía. §4.41. | Prompt 61 — 2026-09-15 |
 | **NO se separa el PIN remoto por superficie. Un solo PIN remoto por administrador sigue autorizando la diferencia, el descuento y la salida.** Evaluado y descartado a propósito. | Un PIN remoto distinto para cada superficie que lo acepta, para que dictar uno no conceda los otros | Julio lo decidió el 2026-09-15, después de leer la contrapartida de la fila anterior. **El control real ya existe**: si cambia a quién se le dicta el PIN remoto, o deja de haber confianza en quien lo escuchó, el administrador lo cambia en cualquier momento desde «PIN de autorización remota», y el anterior deja de servir para todo a la vez. Un PIN por superficie duplicaría ese mecanismo sin agregar un control distinto: habría que dictar, recordar y cambiar tres códigos en vez de uno. **Si alguien lo reconsidera, esto ya se pensó**: lo que cambiaría la respuesta es que las superficies pasen a tener responsables distintos, no la cantidad de superficies. §4.41. | Prompt 62 — 2026-09-15 |
+| **Toda llamada de la pantalla de caja al proceso principal tiene límite: un rechazo o 15 s sin respuesta se muestran como mensaje. Y toda respuesta del cierre se prueba con `structuredClone`.** | Solo el `try/catch`; confiar en que el manejador ya no manda objetos de dominio | En `v1.0.0-prueba.1` el cierre de una caja ajena mandaba la `sesion` con montos Decimal; decimal.js les pone `constructor` como propiedad propia y el puente IPC no clona funciones. **Medido con Electron 44: la llamada queda pendiente para siempre, no se rechaza.** Por eso el `catch` solo no cambió nada en la app real. Quince segundos quedan muy por encima de la operación más lenta (verificar un PIN con scrypt). Ya se había arreglado sin saberlo en `0959a18`; la prueba de clonado es lo que impide que vuelva. §4.42. | Prompt 63 — 2026-09-15 |
 | **Qué superficie acepta el PIN remoto pasa a ser una TABLA (`ACEPTA_PIN_REMOTO`), no un argumento de quien llama.** | Dejar el parámetro `aceptaPinRemoto` en cada llamada; un `if` por superficie dentro del servicio | La verificación dual —probar los PIN normales, después los remotos, y reportar cuál coincidió— **nunca estuvo duplicada**: vive en `autorizarComoAdministrador` desde el Prompt 13. Lo que sí estaba repetido era la POLÍTICA: los cuatro lugares que autorizan escribían `{ aceptaPinRemoto: true/false }` a mano al lado del nombre de la superficie. Dos datos que tienen que concordar siempre, decididos en archivos distintos, es una discrepancia esperando a ocurrir: alcanzaba con copiar un bloque y cambiar el nombre de la superficie sin tocar el booleano para que una superficie empezara a aceptar un PIN que la documentación dice que no acepta, **sin que nada fallara**. Con la tabla, quien llama no tiene dónde contradecir la política, y `Record<SuperficieDeAutorizacion, boolean>` obliga a decidir explícitamente qué acepta cada superficie nueva. Al hacer el cambio, el compilador marcó los cuatro llamados, que es exactamente la señal que se buscaba. **Cada superficie conserva su propio candado**: compartir qué PIN aceptan no es compartir contador, y hay pruebas nuevas del par `cierre_con_diferencia` ↔ `descuento_excedente`, un caso que antes no podía existir porque solo una superficie aceptaba el remoto. | Prompt 26 — 2026-09-11 |
 | **`ventas.descuento_autorizado_via` registra CÓMO se autorizó un descuento, y va siempre con el autorizante** (migración 017 y su espejo 0017). El asiento de auditoría también lleva la vía. | Deducir la vía de otro dato; no registrarla y quedarse solo con quién autorizó | Mientras la superficie aceptaba un solo PIN, la respuesta era siempre «presencial» y la columna habría sido ruido. Desde que acepta los dos, **«Jimmy autorizó Q40» dejó de ser una sola cosa**: autorizarlo frente al mostrador viendo el ticket y autorizarlo por teléfono sin verlo son dos hechos distintos, y es exactamente lo que un auditor va a querer separar. No se puede deducir de ningún otro dato guardado. La columna de la venta guarda el ESTADO final y el asiento guarda el HECHO, igual que con el cierre de caja. El par autorizante/vía se hace inseparable en las **tres** capas: un solo objeto en el tipo (`AutorizacionDeDescuento`, imposible construir uno sin el otro), el servicio descarta las dos mitades juntas cuando el descuento no excedía, y el CHECK de la base rechaza la fila. | Prompt 26 — 2026-09-11 |
 | **El CHECK de coherencia NO copia la forma de la migración 007: los `IS NOT NULL` van ADELANTE.** | Copiar literalmente `(via IS NULL AND por IS NULL) OR (via IN (...) AND por IS NOT NULL)`, que es la forma que ya estaba en el proyecto | **Se midió antes de escribir la migración, y la forma de la 007 NO rechaza un autorizante sin vía.** El motivo es la lógica de tres valores de SQL: con `via` en NULL, `via IN ('presencial','remoto')` no da FALSO sino NULL, la segunda rama entera da NULL, y **un CHECK pasa cuando su expresión da NULL**; solo falla cuando da FALSO. Así que `por` lleno con `via` vacía entraba sin protestar, justo la mitad que el comentario de la 007 decía proteger. En `caja_sesiones` el hueco está tapado por otra vía —el CHECK de la migración 008 exige `diferencia_autorizada_via IS NOT NULL` de forma explícita— así que **no hay ningún dato mal guardado hoy**, pero la forma de la 007 por sí sola es más débil de lo que aparenta. Acá no hay una segunda restricción que salve, así que se escribe con los `IS NOT NULL` adelante, que cortocircuitan a FALSO. Verificado con las ocho combinaciones, incluidos los dos UPDATE que romperían el par. | Prompt 26 — 2026-09-11 |
