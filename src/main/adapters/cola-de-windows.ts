@@ -15,15 +15,28 @@
  * obliga a compilar para Electron y para Windows (§4.37). PowerShell 5.1 viene
  * con Windows 10 y 11, y `Add-Type` declara las funciones de `winspool.drv`.
  *
- * POR QUÉ `-Command` Y NO UN ARCHIVO `.ps1`. La política de ejecución por
- * omisión de un Windows de escritorio es `Restricted`, que según Microsoft
+ * POR QUÉ `-EncodedCommand` Y NO UN ARCHIVO `.ps1`. La política de ejecución
+ * por omisión de un Windows de escritorio es `Restricted`, que según Microsoft
  * «permite comandos individuales, pero no scripts» e «impide ejecutar todos los
  * archivos de script». `-File` corre un archivo; `-Command` corre texto como si
- * se tecleara. El texto del comando no lleva comillas dobles, para que la forma
- * en que Windows arma la línea de comandos no pueda romperlo: solo decodifica
- * el script, que viaja en una variable de entorno, y lo ejecuta con
- * `Invoke-Expression`. Detalle y fuentes en CLAUDE.md §4.43. Lo que dice la
- * documentación NO se midió en Windows.
+ * se tecleara, y `-EncodedCommand` es ese mismo texto en base64 (UTF-16LE).
+ *
+ * EL NOMBRE DE LA IMPRESORA NUNCA ES CÓDIGO. El script es una CONSTANTE de este
+ * archivo y viaja entero como argumento de `-EncodedCommand`. El nombre y los
+ * bytes van en variables de entorno, y el script los lee con `$env:`, que
+ * PowerShell trata como un valor y no vuelve a interpretar. No hay
+ * `Invoke-Expression` ni ningún texto convertido en código al ejecutar: es el
+ * mismo principio de las funciones SECURITY DEFINER de la sincronización, donde
+ * el payload nunca se arma como texto SQL.
+ *
+ * Por qué no los otros dos caminos. Los argumentos que siguen a `-Command` se
+ * UNEN en un solo texto y se interpretan como código, así que pasar el nombre
+ * ahí sería justo lo que se quiere evitar. `-File` con argumentos sí los pasa
+ * como valores, pero corre un archivo de script, que es lo que la política
+ * alcanza. Además, en base64 cada argumento es solo letras, dígitos, `+`, `/`
+ * e `=`: la forma en que Windows arma la línea de comandos no tiene nada que
+ * escapar. Detalle y fuentes en CLAUDE.md §4.43. Lo que dice la documentación
+ * NO se midió en Windows.
  *
  * LO QUE ESTO NO PUEDE SABER. Una térmica ESC/POS no contesta: que Windows
  * acepte el trabajo no dice que el ticket salió legible. Eso lo confirma la
@@ -182,11 +195,13 @@ try {
 `;
 
 /**
- * El texto que va en `-Command`. Sin comillas dobles, a propósito: solo
- * decodifica el script de la variable de entorno y lo ejecuta.
+ * El script en la forma que pide `-EncodedCommand`: base64 de UTF-16LE. Se
+ * calcula una vez, de la constante, y no depende de ningún dato del envío.
  */
-export const COMANDO_DE_POWERSHELL =
-  "Invoke-Expression ([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($env:POS_IMPRESION_SCRIPT)))";
+export const COMANDO_CODIFICADO = Buffer.from(SCRIPT_DE_ENVIO_RAW, 'utf16le').toString('base64');
+
+/** Las únicas variables de entorno que el envío le agrega a PowerShell. Son DATOS. */
+export const VARIABLES_DEL_ENVIO = ['POS_IMPRESION_NOMBRE', 'POS_IMPRESION_DATOS'] as const;
 
 /** Los argumentos de `powershell.exe`. Se exportan para que una prueba los fije. */
 export const ARGUMENTOS_DE_POWERSHELL: readonly string[] = [
@@ -197,8 +212,8 @@ export const ARGUMENTOS_DE_POWERSHELL: readonly string[] = [
   // grupo la puede anular, y en ese caso la consulta devuelve `null`.
   '-ExecutionPolicy',
   'Bypass',
-  '-Command',
-  COMANDO_DE_POWERSHELL,
+  '-EncodedCommand',
+  COMANDO_CODIFICADO,
 ];
 
 /**
@@ -270,7 +285,6 @@ export class EnviadorPorPowerShell implements EnviadorRaw {
         proceso = this.lanzar('powershell.exe', ARGUMENTOS_DE_POWERSHELL, {
           env: {
             ...this.entorno,
-            POS_IMPRESION_SCRIPT: Buffer.from(SCRIPT_DE_ENVIO_RAW, 'utf8').toString('base64'),
             POS_IMPRESION_NOMBRE: nombreDeImpresora,
             POS_IMPRESION_DATOS: Buffer.from(bytes).toString('base64'),
           },

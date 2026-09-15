@@ -14,10 +14,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ARGUMENTOS_DE_POWERSHELL,
-  COMANDO_DE_POWERSHELL,
+  COMANDO_CODIFICADO,
   ERROR_WIN32_NOMBRE_DE_IMPRESORA_INVALIDO,
   EnviadorPorPowerShell,
   SCRIPT_DE_ENVIO_RAW,
+  VARIABLES_DEL_ENVIO,
   clasificarEnvio,
   envioFallidoPorEntorno,
   interpretarSalidaDePowerShell,
@@ -67,14 +68,16 @@ const OK: ResultadoDelEnvioRaw = {
 
 // ===========================================================================
 describe('Qué se le pide a PowerShell', () => {
-  it('se llama a powershell.exe con -Command, y NUNCA con -File ni un archivo .ps1', () => {
-    expect(ARGUMENTOS_DE_POWERSHELL).toContain('-Command');
+  it('se llama a powershell.exe con -EncodedCommand, y NUNCA con -Command, -File ni un archivo .ps1', () => {
+    expect(ARGUMENTOS_DE_POWERSHELL).not.toContain('-Command');
     expect(ARGUMENTOS_DE_POWERSHELL).not.toContain('-File');
     expect(ARGUMENTOS_DE_POWERSHELL.some((a) => a.toLowerCase().includes('.ps1'))).toBe(false);
-    // -Command es el penúltimo y su texto el último: todo lo que sigue a
-    // -Command se interpreta como el comando.
-    expect(ARGUMENTOS_DE_POWERSHELL.at(-2)).toBe('-Command');
-    expect(ARGUMENTOS_DE_POWERSHELL.at(-1)).toBe(COMANDO_DE_POWERSHELL);
+    expect(ARGUMENTOS_DE_POWERSHELL.at(-2)).toBe('-EncodedCommand');
+    expect(ARGUMENTOS_DE_POWERSHELL.at(-1)).toBe(COMANDO_CODIFICADO);
+  });
+
+  it('lo que va en -EncodedCommand es EXACTAMENTE el script constante, en UTF-16LE', () => {
+    expect(Buffer.from(COMANDO_CODIFICADO, 'base64').toString('utf16le')).toBe(SCRIPT_DE_ENVIO_RAW);
   });
 
   it('sin perfil y sin preguntas: -NoProfile y -NonInteractive', () => {
@@ -82,10 +85,28 @@ describe('Qué se le pide a PowerShell', () => {
     expect(ARGUMENTOS_DE_POWERSHELL).toContain('-NonInteractive');
   });
 
-  it('el texto del comando NO lleva comillas dobles, para que Windows no pueda partirlo al armar la línea', () => {
-    expect(COMANDO_DE_POWERSHELL).not.toContain('"');
-    expect(COMANDO_DE_POWERSHELL).toContain('$env:POS_IMPRESION_SCRIPT');
-    expect(COMANDO_DE_POWERSHELL).toContain('Invoke-Expression');
+  it('la línea de comandos cabe en el límite de Windows (32 767 caracteres)', () => {
+    const linea = ['powershell.exe', ...ARGUMENTOS_DE_POWERSHELL].join(' ');
+    expect(linea.length).toBeLessThan(32_767);
+  });
+
+  it('el script NO convierte texto en código al ejecutar: ni Invoke-Expression, ni iex, ni ScriptBlock::Create', () => {
+    expect(SCRIPT_DE_ENVIO_RAW).not.toMatch(/Invoke-Expression/iu);
+    expect(SCRIPT_DE_ENVIO_RAW).not.toMatch(/\biex\b/iu);
+    expect(SCRIPT_DE_ENVIO_RAW).not.toMatch(/ScriptBlock\]::Create/iu);
+    expect(SCRIPT_DE_ENVIO_RAW).not.toMatch(/Invoke-Command/iu);
+  });
+
+  it('el nombre se lee UNA vez de su variable y solo se usa como valor', () => {
+    expect(SCRIPT_DE_ENVIO_RAW.match(/\$env:POS_IMPRESION_NOMBRE/gu)?.length).toBe(1);
+    expect(SCRIPT_DE_ENVIO_RAW).toContain('$nombre = $env:POS_IMPRESION_NOMBRE');
+    // Los tres usos de $nombre son argumentos de una llamada, nunca parte de un texto que se ejecute.
+    const usos = SCRIPT_DE_ENVIO_RAW.split('\n').filter((l) => l.includes('$nombre')).map((l) => l.trim());
+    expect(usos).toHaveLength(4);
+    expect(usos[0]).toBe('$nombre = $env:POS_IMPRESION_NOMBRE');
+    expect(usos[1]).toContain('[PosImpresionRaw]::Enviar($nombre, $datos)');
+    expect(usos[2]).toContain('Get-PrintJob -PrinterName $nombre -ID $trabajo');
+    expect(usos[3]).toContain('Get-Printer -Name $nombre -ErrorAction Stop');
   });
 
   it('el script es la secuencia RAW del spooler: OpenPrinter, StartDocPrinter con "RAW", StartPagePrinter, WritePrinter', () => {
@@ -102,28 +123,83 @@ describe('Qué se le pide a PowerShell', () => {
   });
 
   it('el nombre y los bytes viajan en variables de entorno, no dentro del texto del comando', async () => {
-    let visto: Lanzamiento | null = null;
-    const enviador = new EnviadorPorPowerShell({
-      plataforma: 'win32',
-      entorno: { PATH: 'x' },
-      lanzar: lanzadorQueAnota((l) => {
-        visto = l;
-        l.proceso.stdout.emit('data', Buffer.from(`${JSON.stringify(OK)}\n`));
-        l.proceso.emit('close', 0);
-      }),
-    });
     const bytes = new Uint8Array([0x1b, 0x40, 0x41]);
-    await enviador.enviar('POS-80 "con comillas"', bytes);
-
-    const lanzamiento = visto as Lanzamiento | null;
-    expect(lanzamiento?.comando).toBe('powershell.exe');
-    expect(lanzamiento?.opciones.windowsHide).toBe(true);
-    expect(lanzamiento?.opciones.env.POS_IMPRESION_NOMBRE).toBe('POS-80 "con comillas"');
-    expect(lanzamiento?.opciones.env.POS_IMPRESION_DATOS).toBe(Buffer.from(bytes).toString('base64'));
-    expect(Buffer.from(lanzamiento?.opciones.env.POS_IMPRESION_SCRIPT ?? '', 'base64').toString('utf8')).toBe(SCRIPT_DE_ENVIO_RAW);
-    expect(lanzamiento?.opciones.env.PATH).toBe('x');
-    expect(lanzamiento?.argumentos.join(' ')).not.toContain('POS-80');
+    const lanzamiento = await lanzarCon('POS-80', bytes, { PATH: 'x' });
+    expect(lanzamiento.comando).toBe('powershell.exe');
+    expect(lanzamiento.opciones.windowsHide).toBe(true);
+    expect(lanzamiento.opciones.env.POS_IMPRESION_NOMBRE).toBe('POS-80');
+    expect(lanzamiento.opciones.env.POS_IMPRESION_DATOS).toBe(Buffer.from(bytes).toString('base64'));
+    expect(lanzamiento.opciones.env.PATH).toBe('x');
+    // Lo único que el envío agrega al entorno son sus dos variables de datos.
+    expect(Object.keys(lanzamiento.opciones.env).filter((k) => k.startsWith('POS_')).sort()).toEqual([...VARIABLES_DEL_ENVIO].sort());
   });
+});
+
+/** Lanza un envío con un proceso de mentira que contesta OK, y devuelve cómo se lanzó. */
+async function lanzarCon(nombre: string, bytes: Uint8Array, entorno: NodeJS.ProcessEnv = {}): Promise<Lanzamiento> {
+  const visto: { lanzamiento: Lanzamiento | null } = { lanzamiento: null };
+  const enviador = new EnviadorPorPowerShell({
+    plataforma: 'win32',
+    entorno,
+    lanzar: lanzadorQueAnota((l) => {
+      visto.lanzamiento = l;
+      l.proceso.stdout.emit('data', Buffer.from(`${JSON.stringify(OK)}\n`));
+      l.proceso.emit('close', 0);
+    }),
+  });
+  await enviador.enviar(nombre, bytes);
+  if (visto.lanzamiento === null) {
+    throw new Error('No se lanzó ningún proceso.');
+  }
+  return visto.lanzamiento;
+}
+
+// ===========================================================================
+describe('Un nombre de impresora hostil NO altera el comando ni ejecuta nada distinto', () => {
+  /*
+    Mismo principio que las funciones SECURITY DEFINER de la sincronización:
+    el dato nunca se arma como texto de código. Si el nombre llegara a la línea
+    de comandos o al script, cualquiera de estos cambiaría lo que corre.
+  */
+  const NOMBRES_HOSTILES = [
+    'POS-80 "con comillas"',
+    "POS'; Remove-Item C:\\ -Recurse; '",
+    'POS"; Start-Process calc; "',
+    'POS`; calc`',
+    'POS $(Start-Process calc)',
+    'a;b;c',
+    'POS & calc & rem',
+    'POS | Out-File C:\\pwned.txt',
+    'POS\n; calc',
+    '@\'\n; calc\n\'@',
+  ];
+  const bytes = new Uint8Array([0x1b, 0x40]);
+
+  it('control: con un nombre común, la línea de comandos es la esperada', async () => {
+    const lanzamiento = await lanzarCon('POS-80', bytes);
+    expect(lanzamiento.argumentos).toEqual(ARGUMENTOS_DE_POWERSHELL);
+  });
+
+  for (const nombre of NOMBRES_HOSTILES) {
+    it(`${JSON.stringify(nombre)}: los argumentos son idénticos a los de un nombre común y el nombre solo está en su variable`, async () => {
+      const comun = await lanzarCon('POS-80', bytes);
+      const hostil = await lanzarCon(nombre, bytes);
+
+      expect(hostil.comando).toBe('powershell.exe');
+      expect(hostil.argumentos).toEqual(comun.argumentos);
+      // Cada argumento es de un alfabeto sin espacios, comillas, ; ni `:
+      // no hay nada que Windows tenga que escapar al armar la línea.
+      for (const argumento of hostil.argumentos) {
+        expect(argumento).toMatch(/^[-A-Za-z0-9+/=]+$/u);
+      }
+      // El script que corre es la constante, byte a byte, y no contiene el nombre.
+      const script = Buffer.from(hostil.argumentos.at(-1) ?? '', 'base64').toString('utf16le');
+      expect(script).toBe(SCRIPT_DE_ENVIO_RAW);
+      expect(script.includes(nombre)).toBe(false);
+      // El nombre llega sin tocar, como dato.
+      expect(hostil.opciones.env.POS_IMPRESION_NOMBRE).toBe(nombre);
+    });
+  }
 });
 
 // ===========================================================================
