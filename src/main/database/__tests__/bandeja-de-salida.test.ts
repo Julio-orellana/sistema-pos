@@ -171,6 +171,7 @@ beforeEach(() => {
     limitesDescuento: repos.limitesDescuento,
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
   });
   categorias = new ServicioDeCategorias({
     base,

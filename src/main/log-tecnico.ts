@@ -23,8 +23,14 @@ import { join } from 'node:path';
 /** Nombre del archivo dentro de la carpeta de datos de la aplicación. */
 export const ARCHIVO_DE_LOG = 'log-tecnico.log';
 
-/** De dónde vino el evento, para poder filtrar el archivo con un `grep`. */
-export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion';
+/**
+ * De dónde vino el evento, para poder filtrar el archivo con un `grep`.
+ *
+ * `venta`: el asiento de un conflicto de inventario que la base no pudo guardar
+ * (CLAUDE.md §4.3). El hecho del negocio va a `auditoria_log`; acá solo queda
+ * que ESE asiento faltó y por qué.
+ */
+export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion' | 'venta';
 
 /** Escribe una línea en la bitácora técnica. */
 export interface LogTecnico {

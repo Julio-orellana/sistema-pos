@@ -22,6 +22,7 @@ import { crearRepositorios, type Repositorios } from '@main/database/repositorie
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ServicioDeReportes } from '../servicio-de-reportes';
 
 let base: Database;
@@ -72,6 +73,7 @@ beforeEach(() => {
     limitesDescuento: repos.limitesDescuento,
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
     ahora: (): number => reloj,
   });
   reportes = new ServicioDeReportes({

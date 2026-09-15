@@ -16,6 +16,11 @@
  * está en CLAUDE.md §4.3 y no se improvisa acá: se revierte todo, se le dice
  * al cajero QUÉ producto falló, y decide él. Reintentar en silencio podría
  * cobrar contra un inventario que nadie revisó, con el cliente enfrente.
+ *
+ * Y QUEDA CONSTANCIA: después de revertir, en una transacción aparte, se
+ * escribe el asiento `conflicto_de_inventario` y se encola solo. §4.3 lo
+ * prometía desde el Prompt 7 y hasta el 2026-09-15 no se escribía: el error se
+ * lanzaba dentro de la transacción y nadie escribía nada después.
  */
 
 import type { Database } from 'better-sqlite3';
@@ -36,8 +41,14 @@ import {
   sumarLista,
 } from '@shared/money';
 import { ErrorDeNegocio, errorDeConflictoDeInventario } from '@main/database/errores';
-import { encolarLote, entradasDe, type EntradaDelLote } from '@main/database/bandeja-de-salida';
+import {
+  conBandejaDeSalida,
+  encolarLote,
+  entradasDe,
+  type EntradaDelLote,
+} from '@main/database/bandeja-de-salida';
 import { enTransaccionDeNegocio } from '@main/database/transaccion-en-curso';
+import type { LogTecnico } from '@main/log-tecnico';
 import type {
   FormaPago,
   PrecioEspecial,
@@ -68,7 +79,46 @@ export const ACCIONES_DE_VENTA = {
   ventaRegistrada: 'venta_registrada',
   /** Un administrador autorizó un descuento que excedía el tope del rol. */
   descuentoAutorizado: 'descuento_autorizado',
+  /**
+   * Un comparar-y-cambiar de `productos` afectó cero filas y la venta se
+   * revirtió (CLAUDE.md §4.3). La operación viaja como DATO del asiento
+   * (`operacion: 'venta'`) y no como otra acción: la anulación va a usar esta
+   * misma acción con `operacion: 'anulacion'` (docs/ANULACION-DE-VENTA.md
+   * §6.1). Es el criterio de §4.1: el origen es un dato, no un hecho distinto.
+   */
+  conflictoDeInventario: 'conflicto_de_inventario',
 } as const;
+
+/** Cuál de los dos comparar-y-cambiar de `productos` afectó cero filas. */
+type ComparacionEnConflicto = 'inventario_disponible' | 'cantidad_vendida';
+
+/** Lo que hace falta saber de un conflicto para escribir su asiento. */
+interface ConflictoDetectado {
+  /** El producto tal como se leyó DENTRO de la transacción que se revirtió. */
+  readonly producto: Producto;
+  readonly comparacion: ComparacionEnConflicto;
+}
+
+/**
+ * Un conflicto de inventario, tal como sale de la transacción revertida.
+ *
+ * NUNCA LLEGA A LA VENTANA. Lleva adentro el `ErrorDeNegocio` que sí llega —el
+ * de siempre, armado en el mismo lugar y con el mismo texto— y los datos del
+ * asiento que `registrar` escribe DESPUÉS de revertir. Viaja como una clase
+ * propia para que `registrar` lo reconozca por su tipo, sin comparar códigos
+ * ni textos, y sin una variable que la transacción tenga que ir llenando.
+ */
+class ConflictoAlVender extends Error {
+  public readonly conflicto: ConflictoDetectado;
+  public readonly paraElCajero: ErrorDeNegocio;
+
+  public constructor(conflicto: ConflictoDetectado, paraElCajero: ErrorDeNegocio) {
+    super(paraElCajero.causaTecnica);
+    this.name = 'ConflictoAlVender';
+    this.conflicto = conflicto;
+    this.paraElCajero = paraElCajero;
+  }
+}
 
 /** Una línea del ticket, tal como llega desde la pantalla. */
 export interface LineaParaRegistrar {
@@ -140,6 +190,13 @@ export interface DependenciasDeVenta {
   readonly limitesDescuento: RepositorioDeLimitesDescuento;
   readonly cajaSesiones: RepositorioDeCajaSesiones;
   readonly auditoria: RepositorioDeAuditoria;
+  /**
+   * Bitácora TÉCNICA. Solo se usa si el asiento de un conflicto de inventario
+   * no se puede escribir: el cajero recibe el conflicto igual y la falla queda
+   * acá, no en silencio. OBLIGATORIA a propósito: opcional, un sitio que se
+   * olvidara de pasarla dejaría esa falla sin rastro y nada lo avisaría.
+   */
+  readonly log: LogTecnico;
   /** Reloj inyectable, para que las pruebas fijen la fecha de vigencia. */
   readonly ahora?: () => number;
 }
@@ -174,6 +231,7 @@ export class ServicioDeVenta {
   private readonly limitesDescuento: RepositorioDeLimitesDescuento;
   private readonly cajaSesiones: RepositorioDeCajaSesiones;
   private readonly auditoria: RepositorioDeAuditoria;
+  private readonly log: LogTecnico;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeVenta) {
@@ -185,6 +243,7 @@ export class ServicioDeVenta {
     this.limitesDescuento = dependencias.limitesDescuento;
     this.cajaSesiones = dependencias.cajaSesiones;
     this.auditoria = dependencias.auditoria;
+    this.log = dependencias.log;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
 
@@ -233,6 +292,8 @@ export class ServicioDeVenta {
         // ---- 4. Descontar inventario, línea por línea -----------------------
         // Va DESPUÉS de todas las validaciones y ANTES de insertar nada: si una
         // línea falla, la transacción se revierte y ninguna otra queda tocada.
+        // El conflicto sale envuelto para que su asiento se escriba DESPUÉS de
+        // revertir (ver el `catch` de abajo); el cajero recibe el error de adentro.
         for (const linea of resueltas) {
           const bajo = this.productos.descontarSiSigueIgual(
             linea.producto.id,
@@ -240,11 +301,14 @@ export class ServicioDeVenta {
             linea.saldoNuevo,
           );
           if (!bajo) {
-            throw errorDeConflictoDeInventario(
-              linea.producto.nombre,
-              'El comparar-y-cambiar de inventario del producto ' +
-                `${linea.producto.id} afectó 0 filas: el saldo cambió desde que se leyó ` +
-                `(${cantidadACadena(linea.producto.inventarioDisponible)}).`,
+            throw new ConflictoAlVender(
+              { producto: linea.producto, comparacion: 'inventario_disponible' },
+              errorDeConflictoDeInventario(
+                linea.producto.nombre,
+                'El comparar-y-cambiar de inventario del producto ' +
+                  `${linea.producto.id} afectó 0 filas: el saldo cambió desde que se leyó ` +
+                  `(${cantidadACadena(linea.producto.inventarioDisponible)}).`,
+              ),
             );
           }
         }
@@ -330,11 +394,14 @@ export class ServicioDeVenta {
             linea.cantidadVendidaNueva,
           );
           if (!anotado) {
-            throw errorDeConflictoDeInventario(
-              linea.producto.nombre,
-              'El comparar-y-cambiar de la cantidad vendida del producto ' +
-                `${linea.producto.id} afectó 0 filas: el acumulado cambió desde que se leyó ` +
-                `(${cantidadACadena(linea.producto.cantidadVendida)}).`,
+            throw new ConflictoAlVender(
+              { producto: linea.producto, comparacion: 'cantidad_vendida' },
+              errorDeConflictoDeInventario(
+                linea.producto.nombre,
+                'El comparar-y-cambiar de la cantidad vendida del producto ' +
+                  `${linea.producto.id} afectó 0 filas: el acumulado cambió desde que se leyó ` +
+                  `(${cantidadACadena(linea.producto.cantidadVendida)}).`,
+              ),
             );
           }
         }
@@ -444,7 +511,82 @@ export class ServicioDeVenta {
         };
       });
 
-    return transaccion();
+    try {
+      return transaccion();
+    } catch (error) {
+      if (!(error instanceof ConflictoAlVender)) {
+        throw error;
+      }
+      /*
+        LA TRANSACCIÓN YA SE REVIRTIÓ: better-sqlite3 hace el ROLLBACK antes de
+        volver a lanzar, y `enTransaccionDeNegocio` ya bajó la señal. Recién
+        ahora se puede escribir algo que quede. Escrito adentro, el asiento se
+        habría revertido con la venta.
+
+        Después se lanza el MISMO error de negocio que se armó al detectar el
+        conflicto: el cajero ve lo de siempre, con el producto nombrado.
+      */
+      this.dejarConstanciaDelConflicto(usuarioId, error.conflicto, momento);
+      throw error.paraElCajero;
+    }
+  }
+
+  /**
+   * El asiento `conflicto_de_inventario`, en su PROPIA transacción y en su
+   * propio lote de la cola.
+   *
+   * Un lote de puros asientos es el que el enrutador manda a
+   * `sincronizar_asiento` (migración 0027), así que sube sin ninguna función
+   * nueva. `entidad_tipo` es `productos` y no `ventas`: la venta nunca existió,
+   * y un id de venta revertida apuntaría a la nada.
+   *
+   * SI EL ASIENTO NO SE PUEDE ESCRIBIR, NO LANZA. El cajero tiene que recibir el
+   * conflicto igual, no un «La operación no pudo completarse» que tape el
+   * motivo verdadero. La falla va a la bitácora técnica (§4.14), que es donde
+   * queda lo que la base no pudo guardar. No es un caso que se espere —haría
+   * falta que la base falle justo después de revertir, por ejemplo con el disco
+   * lleno—, pero si pasa no puede cambiar lo que ve el cajero.
+   */
+  private dejarConstanciaDelConflicto(
+    usuarioId: string,
+    conflicto: ConflictoDetectado,
+    momento: string,
+  ): void {
+    const { producto, comparacion } = conflicto;
+    try {
+      conBandejaDeSalida(this.base, () => {
+        const asiento = this.auditoria.registrar({
+          usuarioId,
+          accion: ACCIONES_DE_VENTA.conflictoDeInventario,
+          entidadTipo: 'productos',
+          entidadId: producto.id,
+          valorNuevo: {
+            operacion: 'venta',
+            productoId: producto.id,
+            nombre: producto.nombre,
+            comparacion,
+            // Los dos valores que se leyeron dentro de la transacción revertida.
+            // Van los dos siempre: `comparacion` dice cuál no coincidió.
+            saldoQueSeLeyo: cantidadACadena(producto.inventarioDisponible),
+            cantidadVendidaQueSeLeyo: cantidadACadena(producto.cantidadVendida),
+            momento,
+          },
+          fecha: momento,
+        });
+        return {
+          resultado: undefined,
+          entradas: [{ tabla: 'auditoria_log' as const, id: asiento.id, operacion: 'insertar' as const }],
+        };
+      });
+    } catch (falla) {
+      const detalle = falla instanceof Error ? falla.message : String(falla);
+      this.log.registrar(
+        'venta',
+        `No se pudo escribir el asiento ${ACCIONES_DE_VENTA.conflictoDeInventario} del producto ` +
+          `${producto.id} (${producto.nombre}), comparación ${comparacion}, venta de ${usuarioId} ` +
+          `del ${momento}: ${detalle}. La venta no se registró y el cajero recibió el conflicto igual.`,
+      );
+    }
   }
 
   /**

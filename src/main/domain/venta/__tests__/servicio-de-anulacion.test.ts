@@ -22,6 +22,7 @@ import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import type { UsuarioEnSesion } from '@main/domain/usuarios/sesion';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeProductos } from '@main/domain/catalogo/servicio-de-productos';
+import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ServicioDeReportes } from '@main/domain/reportes/servicio-de-reportes';
 import { FlujoDeAnulacionDeVenta } from '@main/ipc/anulacion-de-venta';
 import type { PedidoDeAnulacionIpc, ResultadoDeAnulacionIpc } from '@shared/types/ipc';
@@ -167,6 +168,7 @@ beforeEach(() => {
     limitesDescuento: repos.limitesDescuento,
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
   });
   productos = new ServicioDeProductos({
     base,

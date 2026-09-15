@@ -122,6 +122,7 @@ export function sembrarTerminalDeOrigen(base: Database, carpetaDeDatos: string):
     limitesDescuento: repos.limitesDescuento,
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
   });
   const carpetaDeRecibos = join(carpetaDeDatos, 'recibos');
   mkdirSync(carpetaDeRecibos, { recursive: true });

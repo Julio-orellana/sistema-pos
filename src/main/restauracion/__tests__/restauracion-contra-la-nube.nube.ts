@@ -46,6 +46,7 @@ import { reiniciarSenalDeTransaccion } from '@main/database/transaccion-en-curso
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
 import { AlmacenDeCredencial } from '@main/sincronizacion/credencial';
 import { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
@@ -199,6 +200,7 @@ beforeAll(async () => {
     limitesDescuento: reposA.limitesDescuento,
     cajaSesiones: reposA.cajaSesiones,
     auditoria: reposA.auditoria,
+    log: new LogTecnicoSilencioso(),
   });
   idVentaPosterior = venta.registrar(terminal.ids.jimmy, 'administrativo', {
     lineas: [{ productoId: terminal.ids.frijol, cantidad: '1' }],

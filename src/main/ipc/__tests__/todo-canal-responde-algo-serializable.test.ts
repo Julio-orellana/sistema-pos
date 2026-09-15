@@ -258,6 +258,7 @@ function dependenciasSobre(
       limitesDescuento: repos.limitesDescuento,
       cajaSesiones: repos.cajaSesiones,
       auditoria: repos.auditoria,
+      log: new LogTecnicoSilencioso(),
     }),
     anulacionDeVenta: new ServicioDeAnulacionDeVenta({
       base,

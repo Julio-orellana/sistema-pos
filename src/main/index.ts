@@ -609,6 +609,8 @@ app.whenReady().then(
       limitesDescuento: repositorios.limitesDescuento,
       cajaSesiones: repositorios.cajaSesiones,
       auditoria: repositorios.auditoria,
+      // Solo si el asiento de un conflicto de inventario no se puede escribir (§4.3).
+      log: logTecnico,
     });
 
     // La anulación de una venta también recibe la CONEXIÓN: reponer inventario,

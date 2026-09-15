@@ -38,6 +38,7 @@ import {
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import {
   durante,
@@ -252,6 +253,7 @@ beforeEach(() => {
     limitesDescuento: repos.limitesDescuento,
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
   });
   categorias = new ServicioDeCategorias({
     base,
