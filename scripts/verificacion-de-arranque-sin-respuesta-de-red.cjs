@@ -18,8 +18,16 @@
  *   B. PAQUETES DESCARTADOS: la nube apunta a https://10.255.255.1, una
  *      dirección privada a la que el SYN sale y nunca vuelve nada.
  *   C. AUTH CONTESTA, LA SUBIDA NO: un servidor que entrega un token (falso,
- *      sin firma válida) y se calla en todo lo demás, para que el primer ciclo
- *      del trabajador mande un lote a una nube que nunca responde.
+ *      sin firma válida) y contesta el health de Auth como lo firma Supabase
+ *      (200, `sb-project-ref`, cuerpo de GoTrue), y se calla en todo lo demás.
+ *      El primer ciclo del trabajador manda un lote a una nube que nunca
+ *      responde. HAY CONEXIÓN: la barra tiene que decir «problema al
+ *      sincronizar», nunca «sin conexión» (§4.51).
+ *   E. AUTH DIO EL TOKEN Y DESPUÉS LA NUBE CALLA ENTERA: el mismo servidor de
+ *      C pero SIN contestar el health. Hay token en memoria, como cuando la red
+ *      se cae a mitad del día, y la subida no contesta. NO hay conexión: la
+ *      barra tiene que decir «sin conexión», nunca «problema al sincronizar».
+ *      Es el caso que mirar solo el token confundiría.
  *   D. NUBE REAL (solo con --con-nube-de-pruebas): `pos-pruebas-descartable`,
  *      con la credencial de terminal de `.env.nube-pruebas` y SIN filas
  *      pendientes, así que no se sube ni una fila. Es el caso normal: se tiene
@@ -44,7 +52,10 @@
  *   - si el proceso principal contesta el IPC, al principio y mientras la
  *     petición de red sigue colgada;
  *   - qué dejó la bitácora técnica, con la hora de cada renglón;
- *   - qué dice la barra de estado al final.
+ *   - qué dijo la barra de estado durante toda la espera (se lee cada 250 ms y
+ *     se anota cada cambio con su hora) y qué dice al final. La barra se
+ *     refresca sola cada 20 s, así que en C y en E se espera a que aparezca el
+ *     texto esperado, con un tope, en vez de leerla una sola vez a ciegas.
  *
  * Código 0 si todo pasa, 1 si alguna comprobación falla, 2 si faltó algo.
  */
@@ -77,6 +88,14 @@ const MOSTRADA_EN_BITACORA_EN_MENOS_DE_MS = 11_000;
 const PRIMERA_PANTALLA_EN_MENOS_DE_MS = 12_000;
 /** Lo máximo que puede tardar el proceso principal en contestar un IPC trivial. */
 const IPC_EN_MENOS_DE_MS = 1_000;
+/** El texto que la barra tiene que mostrar en C, exacto (§4.51). */
+const TEXTO_DE_C = 'Nube: problema al sincronizar — 2 pendientes';
+/**
+ * Hasta cuándo, contado desde el lanzamiento, se espera el texto de la barra en
+ * C y en E: primer ciclo a los 30 s de mostrar la ventana, 30 s de límite de la
+ * subida, hasta 8 s del health y hasta 20 s del sondeo de la barra, con margen.
+ */
+const TOPE_PARA_LA_BARRA_MS = 115_000;
 
 const comprobaciones = [];
 const INICIO = Date.now();
@@ -144,8 +163,22 @@ function tokenFalso() {
   ].join('.');
 }
 
-/** Contesta el refresco de Auth con un token y se calla en todo lo demás. */
-async function levantarNubeQueSoloDaTokens() {
+/**
+ * La referencia del proyecto que la aplicación espera en `sb-project-ref`. La
+ * saca del primer pedazo del host (`index.ts`), así que para
+ * `http://127.0.0.1:PUERTO` es «127».
+ */
+const REFERENCIA_DEL_SERVIDOR_LOCAL = '127';
+
+/**
+ * Contesta el refresco de Auth con un token y se calla en todo lo demás.
+ *
+ * Con `contestaSalud`, contesta además `GET /auth/v1/health` como lo contesta
+ * Supabase: 200, `sb-project-ref` con la referencia que la aplicación espera y
+ * el cuerpo de GoTrue (medido en §4.24). Es lo que la capa 2 de §5.2 exige para
+ * creer que se llega a la nube de este proyecto.
+ */
+async function levantarNubeQueContestaAuth({ contestaSalud }) {
   const colgadas = new Set();
   const peticiones = [];
   const servidor = http.createServer((pedido, respuesta) => {
@@ -156,6 +189,15 @@ async function levantarNubeQueSoloDaTokens() {
         respuesta.writeHead(200, { 'Content-Type': 'application/json' });
         respuesta.end(JSON.stringify({ access_token: tokenFalso(), refresh_token: 'refresco-rotado', expires_in: 900 }));
       });
+      return;
+    }
+    if (contestaSalud && pedido.method === 'GET' && pedido.url.startsWith('/auth/v1/health')) {
+      pedido.resume();
+      respuesta.writeHead(200, {
+        'Content-Type': 'application/json',
+        'sb-project-ref': REFERENCIA_DEL_SERVIDOR_LOCAL,
+      });
+      respuesta.end(JSON.stringify({ version: 'v2.196.0', name: 'GoTrue', description: 'GoTrue is a user registration and authentication API' }));
       return;
     }
     // Todo lo demás: se lee el pedido y no se contesta nunca.
@@ -236,7 +278,12 @@ async function preparar(datos, entornoDeNube, { tokenDeRefresco, conPendientes }
 }
 
 /** Segundo arranque: el que se mide. */
-async function medirArranque(nombre, datos, entornoDeNube, { esperaDespuesMs, conPendientes }) {
+async function medirArranque(
+  nombre,
+  datos,
+  entornoDeNube,
+  { esperaDespuesMs, conPendientes, barraEsperada = null, barraHastaMs = 0 },
+) {
   anotar(`--- ${nombre}: arranque medido ---`);
   const lanzadoEn = Date.now();
   const { app, salida } = await lanzar(datos, entornoDeNube);
@@ -269,6 +316,28 @@ async function medirArranque(nombre, datos, entornoDeNube, { esperaDespuesMs, co
   );
 
   const ventana = await app.firstWindow();
+
+  /*
+    TODO lo que la barra de nube dijo, con la hora de cada cambio. Se lee cada
+    250 ms desde que existe la ventana hasta que se va a salir: así «nunca dijo
+    X» se comprueba sobre toda la espera, no sobre una sola lectura al final.
+  */
+  const barrasVistas = [];
+  let muestreando = true;
+  const muestreo = (async () => {
+    while (muestreando) {
+      const texto = await ventana
+        .locator('[data-prueba="barra-nube"]')
+        .innerText({ timeout: 250 })
+        .catch(() => null);
+      if (texto !== null && barrasVistas.at(-1)?.texto !== texto) {
+        barrasVistas.push({ ms: Date.now() - lanzadoEn, texto });
+        anotar(`${nombre}: la barra cambió a los ${String(Date.now() - lanzadoEn)} ms: «${texto}»`);
+      }
+      await esperar(250);
+    }
+  })();
+
   const pantallaEsperada = conPendientes ? 'pantalla-de-ingreso' : 'pantalla-de-configuracion-inicial';
   let pantallaEnMs = null;
   try {
@@ -311,6 +380,24 @@ async function medirArranque(nombre, datos, entornoDeNube, { esperaDespuesMs, co
     ipcAMitad.ok && ipcAMitad.ms < IPC_EN_MENOS_DE_MS,
   );
   await esperar(esperaDespuesMs - Math.floor(esperaDespuesMs / 2));
+
+  // Si se espera un texto, se espera a que la barra lo diga AHORA (se refresca
+  // cada 20 s), con un tope contado desde el lanzamiento. Se mira el ÚLTIMO
+  // texto y no «alguno de los vistos»: la primera versión de este guion miraba
+  // cualquiera, y en E dio por bueno un «sin conexión» de los primeros 510 ms
+  // aunque a los 75 s la barra decía «Nube: 2 pendientes» (corrida del
+  // 2026-09-17, 13:59 UTC). Una comprobación que pasa en falso es peor que
+  // ninguna.
+  if (barraEsperada !== null) {
+    while (
+      Date.now() - lanzadoEn < barraHastaMs &&
+      !(barrasVistas.at(-1)?.texto ?? '').includes(barraEsperada)
+    ) {
+      await esperar(250);
+    }
+  }
+  muestreando = false;
+  await muestreo;
 
   const barra = await ventana
     .locator('[data-prueba="barra-nube"]')
@@ -358,7 +445,12 @@ async function medirArranque(nombre, datos, entornoDeNube, { esperaDespuesMs, co
   );
 
   await salir(app);
-  return { visibleEnMs, pantallaEnMs, barra, lineas: lineasDeEsteArranque, salida: salida(), lanzadoEn };
+  return { visibleEnMs, pantallaEnMs, barra, barrasVistas, lineas: lineasDeEsteArranque, salida: salida(), lanzadoEn };
+}
+
+/** Todos los textos que mostró la barra, en orden, para la salida cruda. */
+function barrasEnUnRenglon(medido) {
+  return medido.barrasVistas.map((vista) => `+${String(vista.ms)} ms «${vista.texto}»`).join(' → ');
 }
 
 function lineaCon(lineas, texto) {
@@ -398,7 +490,12 @@ async function main() {
     anotar(`A. NUBE MUDA en ${muda.url} (acepta TCP y nunca contesta); datos en ${datos}`);
     const entorno = { POS_NUBE_URL: muda.url, POS_NUBE_LLAVE_PUBLICABLE: 'llave-de-verificacion', POS_SYNC_PROVIDER: 'supabase' };
     await preparar(datos, entorno, { tokenDeRefresco: 'refresco-de-verificacion', conPendientes: true });
-    const medido = await medirArranque('A', datos, entorno, { esperaDespuesMs: 40_000, conPendientes: true });
+    const medido = await medirArranque('A', datos, entorno, {
+      esperaDespuesMs: 40_000,
+      conPendientes: true,
+      barraEsperada: 'sin conexión',
+      barraHastaMs: TOPE_PARA_LA_BARRA_MS,
+    });
     anotar(`A: conexiones abiertas contra la nube muda al final: ${String(muda.conexiones())}`);
     const agotada = lineaCon(medido.lineas, 'Auth no contestó a la renovación de la sesión');
     comprobar(
@@ -414,6 +511,12 @@ async function main() {
       medido.barra,
       medido.barra.includes('sin conexión'),
     );
+    comprobar(
+      'A: sin conexión, la barra NUNCA dijo «problema al sincronizar» en toda la espera',
+      'ningún texto con «problema al sincronizar»',
+      barrasEnUnRenglon(medido),
+      !medido.barrasVistas.some((vista) => vista.texto.includes('problema al sincronizar')),
+    );
     muda.cerrar();
   }
 
@@ -424,7 +527,12 @@ async function main() {
     anotar(`B. PAQUETES DESCARTADOS: la nube apunta a ${url}; datos en ${datos}`);
     const entorno = { POS_NUBE_URL: url, POS_NUBE_LLAVE_PUBLICABLE: 'llave-de-verificacion', POS_SYNC_PROVIDER: 'supabase' };
     await preparar(datos, entorno, { tokenDeRefresco: 'refresco-de-verificacion', conPendientes: true });
-    const medido = await medirArranque('B', datos, entorno, { esperaDespuesMs: 40_000, conPendientes: true });
+    const medido = await medirArranque('B', datos, entorno, {
+      esperaDespuesMs: 40_000,
+      conPendientes: true,
+      barraEsperada: 'sin conexión',
+      barraHastaMs: TOPE_PARA_LA_BARRA_MS,
+    });
     const agotada = lineaCon(medido.lineas, 'Auth no contestó a la renovación de la sesión');
     comprobar(
       'B: la renovación hacia una dirección que descarta paquetes TERMINA sola y queda en la bitácora',
@@ -439,16 +547,27 @@ async function main() {
       medido.barra,
       medido.barra.includes('sin conexión'),
     );
+    comprobar(
+      'B: SIN CONEXIÓN REAL la barra NUNCA dijo «problema al sincronizar» en toda la espera (lo que la distingue de C)',
+      'ningún texto con «problema al sincronizar»',
+      barrasEnUnRenglon(medido),
+      !medido.barrasVistas.some((vista) => vista.texto.includes('problema al sincronizar')),
+    );
   }
 
   // ----- C. Auth contesta, la subida no ----------------------------------------
   if (correr('C')) {
-    const nube = await levantarNubeQueSoloDaTokens();
+    const nube = await levantarNubeQueContestaAuth({ contestaSalud: true });
     const datos = mkdtempSync(join(tmpdir(), 'pos-arranque-subida-muda-'));
-    anotar(`C. AUTH CONTESTA Y LA SUBIDA NO, en ${nube.url}; datos en ${datos}`);
+    anotar(`C. AUTH CONTESTA (token y health) Y LA SUBIDA NO, en ${nube.url}; datos en ${datos}`);
     const entorno = { POS_NUBE_URL: nube.url, POS_NUBE_LLAVE_PUBLICABLE: 'llave-de-verificacion', POS_SYNC_PROVIDER: 'supabase' };
     await preparar(datos, entorno, { tokenDeRefresco: 'refresco-de-verificacion', conPendientes: true });
-    const medido = await medirArranque('C', datos, entorno, { esperaDespuesMs: 75_000, conPendientes: true });
+    const medido = await medirArranque('C', datos, entorno, {
+      esperaDespuesMs: 75_000,
+      conPendientes: true,
+      barraEsperada: TEXTO_DE_C,
+      barraHastaMs: TOPE_PARA_LA_BARRA_MS,
+    });
     for (const peticion of nube.peticiones) {
       console.info(`    nube de mentira recibió: ${peticion}`);
     }
@@ -462,6 +581,65 @@ async function main() {
       noContesto !== null,
     );
     anotar(`C: ese renglón quedó a los ${String(msDesde(noContesto, medido.lanzadoEn))} ms del lanzamiento`);
+    const medida = lineaCon(medido.lineas, 'después del fallo, la nube de este proyecto SÍ contesta');
+    comprobar(
+      'C: después del fallo, el trabajador comprobó la capa 2 y la nube SÍ contestó',
+      'renglón «después del fallo, la nube de este proyecto SÍ contesta…»',
+      medida ?? '(ninguno)',
+      medida !== null,
+    );
+    comprobar(
+      `C: al final, la barra dice EXACTAMENTE «${TEXTO_DE_C}»`,
+      `«${TEXTO_DE_C}» antes de los ${String(TOPE_PARA_LA_BARRA_MS / 1000)} s`,
+      `final «${medido.barra}»; recorrido: ${barrasEnUnRenglon(medido)}`,
+      medido.barra === TEXTO_DE_C,
+    );
+    comprobar(
+      'C: CON CONEXIÓN la barra NUNCA dijo «sin conexión» en toda la espera (lo que la distingue de B)',
+      'ningún texto con «sin conexión»',
+      barrasEnUnRenglon(medido),
+      !medido.barrasVistas.some((vista) => vista.texto.includes('sin conexión')),
+    );
+    nube.cerrar();
+  }
+
+  // ----- E. Auth dio el token y después la nube calla entera ----------------------
+  if (correr('E')) {
+    const nube = await levantarNubeQueContestaAuth({ contestaSalud: false });
+    const datos = mkdtempSync(join(tmpdir(), 'pos-arranque-nube-que-calla-'));
+    anotar(`E. AUTH DA EL TOKEN, DESPUÉS NI EL HEALTH NI LA SUBIDA CONTESTAN, en ${nube.url}; datos en ${datos}`);
+    const entorno = { POS_NUBE_URL: nube.url, POS_NUBE_LLAVE_PUBLICABLE: 'llave-de-verificacion', POS_SYNC_PROVIDER: 'supabase' };
+    await preparar(datos, entorno, { tokenDeRefresco: 'refresco-de-verificacion', conPendientes: true });
+    const medido = await medirArranque('E', datos, entorno, {
+      esperaDespuesMs: 75_000,
+      conPendientes: true,
+      barraEsperada: 'sin conexión',
+      barraHastaMs: TOPE_PARA_LA_BARRA_MS,
+    });
+    for (const peticion of nube.peticiones) {
+      console.info(`    nube de mentira recibió: ${peticion}`);
+    }
+    const renovada = lineaCon(medido.lineas, 'access token renovado');
+    comprobar('E: la sesión se renovó (hay token en memoria)', 'renglón «access token renovado»', renovada ?? '(ninguno)', renovada !== null);
+    const medida = lineaCon(medido.lineas, 'después del fallo, no se llega a la nube');
+    comprobar(
+      'E: después del fallo, el trabajador comprobó la capa 2 y NO se llegó a la nube',
+      'renglón «después del fallo, no se llega a la nube: …»',
+      medida ?? '(ninguno)',
+      medida !== null,
+    );
+    comprobar(
+      'E: con token pero sin nube, al final la barra dice «sin conexión»',
+      '«Nube: sin conexión — 2 pendientes»',
+      `final «${medido.barra}»; recorrido: ${barrasEnUnRenglon(medido)}`,
+      medido.barra === 'Nube: sin conexión — 2 pendientes',
+    );
+    comprobar(
+      'E: con token pero sin nube, la barra NUNCA dijo «problema al sincronizar» (mirar solo el token la habría confundido)',
+      'ningún texto con «problema al sincronizar»',
+      barrasEnUnRenglon(medido),
+      !medido.barrasVistas.some((vista) => vista.texto.includes('problema al sincronizar')),
+    );
     nube.cerrar();
   }
 
