@@ -16,6 +16,10 @@
  *   · un tope de descuento con su id FIJO por rol (028 / 0028);
  *   · una caja CERRADA con diferencia autorizada y arqueo por denominaciones,
  *     y otra que queda ABIERTA;
+ *   · en la caja abierta, una venta ANULADA con el servicio real de anulación
+ *     —con su recibo, que se conserva— y otra que sigue activa: la base
+ *     restaurada tiene que saber cuál es cuál sin tocar `ventas.estado`
+ *     (docs/ANULACION-DE-VENTA.md §8);
  *   · los datos del negocio.
  */
 
@@ -36,6 +40,7 @@ import { AlmacenDeFotos } from '@main/domain/catalogo/almacen-de-fotos';
 import { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
 import { ServicioDeLimitesDeDescuento } from '@main/domain/venta/servicio-de-limites-de-descuento';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { CifradoDePrueba } from '@main/domain/usuarios/__tests__/ayuda-totp';
@@ -71,6 +76,12 @@ export interface TerminalDeOrigen {
     readonly ventaConTarjeta: string;
     readonly reciboCombinado: string;
     readonly reciboConTarjeta: string;
+    /** En la caja abierta: la venta que se anuló, su recibo y su fila de anulación. */
+    readonly ventaAnulada: string;
+    readonly reciboDeLaAnulada: string;
+    readonly anulacion: string;
+    /** En la caja abierta: una venta que NO se anuló. */
+    readonly ventaActiva: string;
   };
   /** Ruta relativa de la foto del maíz, y sus bytes. */
   readonly fotoDelMaiz: { readonly rutaRelativa: string; readonly objeto: string; readonly bytes: Buffer };
@@ -264,6 +275,45 @@ export function sembrarTerminalDeOrigen(base: Database, carpetaDeDatos: string):
   }
   const cajaAbierta = caja.abrir(jimmy.id, { modo: 'simple', monto: '250.00' });
 
+  // --- En la caja abierta: una venta ANULADA y otra activa -------------------
+  // La anulación exige la caja de la venta abierta (§2.2 del diseño), así que va
+  // en la de Jimmy. Se anula con el servicio REAL, y su lote es el que la
+  // terminal manda a `sincronizar_anulacion_de_venta`.
+  const ventaAnulada = venta.registrar(jimmy.id, 'administrativo', {
+    lineas: [
+      { productoId: frijol.id, cantidad: '4' },
+      { productoId: huevos.id, cantidad: '6' },
+    ],
+    descuento: null,
+    formaPago: 'efectivo',
+    numBoleta: null,
+  });
+  void recibos.emitir(ventaAnulada.venta.id);
+  const reciboDeLaAnulada = repos.recibos.obtenerPorVenta(ventaAnulada.venta.id)?.id ?? '';
+  const anulaciones = new ServicioDeAnulacionDeVenta({
+    base,
+    ventas: repos.ventas,
+    ventaDetalle: repos.ventaDetalle,
+    productos: repos.productos,
+    cajaSesiones: repos.cajaSesiones,
+    recibos: repos.recibos,
+    usuarios: repos.usuarios,
+    anulaciones: repos.anulacionesDeVenta,
+    auditoria: repos.auditoria,
+    log: new LogTecnicoSilencioso(),
+  });
+  const anulada = anulaciones.anular(
+    { ventaId: ventaAnulada.venta.id, motivo: 'El cliente devolvió la mercadería', voucher: null },
+    jimmy.id,
+    { autorizadaPor: jimmy.id, via: 'presencial' },
+  );
+  const ventaActiva = venta.registrar(jimmy.id, 'administrativo', {
+    lineas: [{ productoId: huevos.id, cantidad: '2' }],
+    descuento: null,
+    formaPago: 'efectivo',
+    numBoleta: null,
+  });
+
   return {
     repos,
     ids: {
@@ -279,6 +329,10 @@ export function sembrarTerminalDeOrigen(base: Database, carpetaDeDatos: string):
       ventaConTarjeta: ventaConTarjeta.venta.id,
       reciboCombinado,
       reciboConTarjeta,
+      ventaAnulada: ventaAnulada.venta.id,
+      reciboDeLaAnulada,
+      anulacion: anulada.anulacion.id,
+      ventaActiva: ventaActiva.venta.id,
     },
     fotoDelMaiz: { rutaRelativa: rutaFotoMaiz, objeto: rutaFotoMaiz.split('/').pop() ?? '', bytes: PNG_DE_UN_PIXEL },
     fotoDeLosHuevos: { rutaRelativa: rutaFotoHuevos, objeto: rutaFotoHuevos.split('/').pop() ?? '' },

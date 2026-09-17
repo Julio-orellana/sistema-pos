@@ -131,7 +131,7 @@ const MS_POR_SEGUNDO = 1000;
 /** Las once del quetzal, sembradas por la 004 local y la 0004 de la nube. */
 const DENOMINACIONES_ESPERADAS = 11;
 
-/** Las tablas que tienen que estar vacías para poder restaurar: las doce, menos la de fila fija. */
+/** Las tablas que tienen que estar vacías para poder restaurar: las trece, menos la de fila fija. */
 const TABLAS_QUE_DEBEN_ESTAR_VACIAS: readonly TablaRestaurable[] = ORDEN_DE_RESTAURACION.filter(
   (tabla) => tabla !== 'configuracion_negocio',
 );
@@ -941,6 +941,10 @@ export class ServicioDeRestauracion {
    * Una venta se restaura CON sus líneas y su recibo, que quedaron excluidos
    * con ella; una fila hija sola exige que su padre ya esté —si no, SQLite lo
    * rechaza por la llave foránea y se explica—.
+   *
+   * **La anulación de una venta NO se restaura junto con su venta**, aunque
+   * las dos hayan quedado excluidas: es otro hecho, con otro autor
+   * (ANULACION-DE-VENTA.md §8). Se acepta aparte, y exige la venta restaurada.
    */
   public async aceptarExcluida(tabla: string, id: string): Promise<ProgresoDeRestauracion> {
     const { cliente, puesto } = this.exigirEnRevision();
@@ -1200,6 +1204,8 @@ function resumenDeFila(tabla: TablaRestaurable, fila: FilaParaSqlite): string {
       return `${texto('producto_nombre_snap')} × ${texto('cantidad')} de la venta ${texto('venta_id')}`;
     case 'recibos':
       return `recibo N.º ${texto('numero_recibo')} de la venta ${texto('venta_id')}`;
+    case 'anulaciones_de_venta':
+      return `anulación de la venta ${texto('venta_id')} el ${texto('fecha')}: ${texto('motivo')}`;
     case 'auditoria_log':
       return `asiento ${texto('accion')} sobre ${texto('entidad_tipo')}`;
   }

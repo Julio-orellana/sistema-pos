@@ -10,8 +10,10 @@
  *      credencial de terminal: `SesionDeNube`, `SupabaseSyncProvider`,
  *      `SubidorDeFotos` y `TrabajadorDeSincronizacion`, los de la aplicación.
  *   2. Anota la hora, espera, y sube una SEGUNDA tanda —una caja nueva, una
- *      venta más, un usuario editado— para que exista «lo que la nube recibió
- *      después del robo».
+ *      venta más, un usuario editado, y la ANULACIÓN de una venta anterior al
+ *      robo— para que exista «lo que la nube recibió después del robo». La
+ *      primera tanda ya trae una venta anulada ANTES del robo, así que las dos
+ *      anulaciones suben por `sincronizar_anulacion_de_venta` (0035) de verdad.
  *   3. RESTAURA en una base nueva con `ClienteDeRestauracionHttp` y la
  *      credencial de restauración, con motivo «robo» y esa hora.
  *   4. Compara: ids fila por fila contra la nube, decimales byte a byte contra
@@ -24,7 +26,7 @@
  * código, y cada ciclo del trabajador. El resumen va encima de la evidencia,
  * nunca en lugar de ella.
  *
- * ANTES DE CORRER: las once tablas de negocio del proyecto de pruebas tienen
+ * ANTES DE CORRER: las doce tablas de negocio del proyecto de pruebas tienen
  * que estar VACÍAS (por SQL, como siempre: `auditoria_log` no se vacía por
  * PostgREST). Con filas viejas, los UNIQUE de `usuarios.nombre` o
  * `recibos.numero_recibo` detendrían la cola por el 23505 del punto 19 de
@@ -46,6 +48,7 @@ import { reiniciarSenalDeTransaccion } from '@main/database/transaccion-en-curso
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
 import { AlmacenDeCredencial } from '@main/sincronizacion/credencial';
@@ -136,6 +139,8 @@ let reposA: Repositorios;
 let sesionDeTerminal: SesionDeNube;
 let fechaDelRobo: string;
 let idVentaPosterior = '';
+/** La anulación que se sube DESPUÉS del robo, de una venta que es de ANTES. */
+let idAnulacionPosterior = '';
 let idCajaPosterior = '';
 let restauracion: ServicioDeRestauracion;
 let clienteDeRestauracion: ClienteEnvuelto;
@@ -186,6 +191,26 @@ beforeAll(async () => {
     ventas: reposA.ventas,
     auditoria: reposA.auditoria,
   });
+  // ANTES de cerrarla, se anula la venta activa de la tanda 1: una venta de antes
+  // del robo con una anulación de después (ANULACION-DE-VENTA.md §8). Con eso la
+  // caja vuelve a esperar sus Q250 de apertura.
+  const anulaciones = new ServicioDeAnulacionDeVenta({
+    base: origen.base,
+    ventas: reposA.ventas,
+    ventaDetalle: reposA.ventaDetalle,
+    productos: reposA.productos,
+    cajaSesiones: reposA.cajaSesiones,
+    recibos: reposA.recibos,
+    usuarios: reposA.usuarios,
+    anulaciones: reposA.anulacionesDeVenta,
+    auditoria: reposA.auditoria,
+    log: new LogTecnicoSilencioso(),
+  });
+  idAnulacionPosterior = anulaciones.anular(
+    { ventaId: terminal.ids.ventaActiva, motivo: 'Anulación posterior al robo', voucher: null },
+    terminal.ids.jimmy,
+    { autorizadaPor: terminal.ids.jimmy, via: 'presencial' },
+  ).anulacion.id;
   // La caja abierta de la tanda 1 se cierra primero: una sola abierta en todo el sistema.
   const cierre = caja.intentarCerrar(terminal.ids.cajaAbierta, { modo: 'simple', monto: '250.00' }, { usuarioQueCierra: terminal.ids.jimmy });
   if (!cierre.cerrada) throw new Error(`no cerró la caja abierta: ${cierre.mensaje}`);
@@ -208,7 +233,7 @@ beforeAll(async () => {
     formaPago: 'efectivo',
     numBoleta: null,
   }).venta.id;
-  anotar('--- SUBIDA 2: lo posterior al robo (usuario editado, caja nueva, una venta) ---');
+  anotar('--- SUBIDA 2: lo posterior al robo (usuario editado, una anulación, caja nueva, una venta) ---');
   await subirTodo(reposA, carpetaA, sesionDeTerminal);
   sesionDeTerminal.detener();
 
@@ -353,10 +378,28 @@ describe('La restauración contra pos-pruebas-descartable', () => {
     expect(porClave.get(`caja_sesiones/${idCajaPosterior}`)?.excluida).toBe(false);
     expect(porClave.get(`usuarios/${terminal.ids.ana}`)?.excluida).toBe(false);
     expect(porClave.get(`productos/${terminal.ids.frijol}`)?.excluida).toBe(false);
+    // La anulación de después del robo queda EXCLUIDA; los huevos que repuso, restaurados y listados.
+    expect(porClave.get(`anulaciones_de_venta/${idAnulacionPosterior}`)?.excluida).toBe(true);
+    expect(porClave.get(`productos/${terminal.ids.huevos}`)?.excluida).toBe(false);
     // Y nada de la primera tanda aparece.
+    expect(porClave.has(`anulaciones_de_venta/${terminal.ids.anulacion}`)).toBe(false);
     expect(porClave.has(`ventas/${terminal.ids.ventaCombinada}`)).toBe(false);
     expect(porClave.has(`usuarios/${terminal.ids.jimmy}`)).toBe(false);
     expect(destino.base.prepare('SELECT count(*) AS n FROM ventas WHERE id = ?').get(idVentaPosterior)).toEqual({ n: 0 });
+  });
+
+  it('LA VENTA ANULADA ANTES DEL ROBO LLEGA ANULADA, y la anulada DESPUÉS vuelve a contar: ventas.estado es «completada» en las dos', () => {
+    const anulacionRestaurada = filaPorId(destino.base, 'anulaciones_de_venta', terminal.ids.anulacion);
+    expect(anulacionRestaurada).toEqual(filaPorId(origen.base, 'anulaciones_de_venta', terminal.ids.anulacion));
+    expect(filaPorId(destino.base, 'anulaciones_de_venta', idAnulacionPosterior)).toBeUndefined();
+    const estado = (id: string): unknown => filaPorId(destino.base, 'ventas', id)?.estado;
+    expect(estado(terminal.ids.ventaAnulada)).toBe('completada');
+    expect(estado(terminal.ids.ventaActiva)).toBe('completada');
+    const conAnulacion = (id: string): number =>
+      (destino.base.prepare('SELECT count(*) AS n FROM anulaciones_de_venta WHERE venta_id = ?').get(id) as { n: number }).n;
+    expect(conAnulacion(terminal.ids.ventaAnulada)).toBe(1);
+    expect(conAnulacion(terminal.ids.ventaActiva)).toBe(0);
+    anotar(`  anulada antes del robo: ${terminal.ids.ventaAnulada} -> ${String(conAnulacion(terminal.ids.ventaAnulada))} fila; anulada después: ${terminal.ids.ventaActiva} -> ${String(conAnulacion(terminal.ids.ventaActiva))} filas (excluida)`);
   });
 
   it('aceptar la venta excluida la restaura con su línea y su recibo, y la verificación sigue cuadrando', async () => {

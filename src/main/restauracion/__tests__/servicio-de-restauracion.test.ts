@@ -25,6 +25,9 @@ import { reiniciarSenalDeTransaccion } from '@main/database/transaccion-en-curso
 import { observarLotesEncolados } from '@main/database/bandeja-de-salida';
 import { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
+import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
+import { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
+import { ErrorDeNegocio } from '@main/database/errores';
 import { LogTecnicoSilencioso } from '@main/log-tecnico';
 
 import { AlmacenDelPuestoDeControl, ARCHIVO_DEL_PUESTO_DE_CONTROL } from '../puesto-de-control';
@@ -113,16 +116,17 @@ afterEach(() => {
 
 // ===========================================================================
 describe('La terminal de origen tiene lo que el diseño pide', () => {
-  it('dos usuarios, uno bloqueado con sus asientos sueltos; tres productos; dos ventas; dos cajas; un tope con id fijo', () => {
+  it('dos usuarios, uno bloqueado con sus asientos sueltos; tres productos; cuatro ventas, UNA ANULADA; dos cajas; un tope con id fijo', () => {
     expect(contar(origen.base, 'usuarios')).toBe(2);
     expect(terminal.repos.usuarios.obtenerPorId(terminal.ids.ana)?.bloqueadoHasta).not.toBeNull();
     const acciones = (origen.base.prepare('SELECT accion FROM auditoria_log').all() as { accion: string }[]).map((a) => a.accion);
     expect(acciones).toContain('usuario_bloqueado');
     expect(acciones.filter((a) => a === 'ingreso_fallido')).toHaveLength(2);
     expect(contar(origen.base, 'productos')).toBe(3);
-    expect(contar(origen.base, 'ventas')).toBe(2);
-    expect(contar(origen.base, 'venta_detalle')).toBe(3);
-    expect(contar(origen.base, 'recibos')).toBe(2);
+    expect(contar(origen.base, 'ventas')).toBe(4);
+    expect(contar(origen.base, 'venta_detalle')).toBe(6);
+    expect(contar(origen.base, 'recibos')).toBe(3);
+    expect(ids(origen.base, 'anulaciones_de_venta')).toEqual([terminal.ids.anulacion]);
     expect(contar(origen.base, 'caja_sesiones')).toBe(2);
     expect(contar(origen.base, 'caja_sesion_denominaciones')).toBe(2);
     expect(contar(origen.base, 'precios_especiales')).toBe(1);
@@ -255,7 +259,7 @@ describe('Una restauración completa, por falla, contra la nube de mentira', () 
   it('pdf_path llega IDÉNTICA a la del origen: es relativa (recibos/<nombre>.pdf) y no depende de la máquina; impreso queda en 0', async () => {
     await restaurarEntera(crearNube());
     const restauradas = filas(destino.base, 'recibos');
-    expect(restauradas).toHaveLength(2);
+    expect(restauradas).toHaveLength(3);
     for (const fila of restauradas) {
       const original = filas(origen.base, 'recibos').find((f) => f.id === fila.id);
       expect(fila.pdf_path).toBe(original?.pdf_path);
@@ -311,6 +315,187 @@ describe('Una restauración completa, por falla, contra la nube de mentira', () 
   it('las filas restauradas NO se encolan: sync_cola sigue vacía después de la transferencia', async () => {
     await restaurarEntera(crearNube());
     expect(reposB.syncCola.contarPendientes()).toBe(0);
+  });
+});
+
+// ===========================================================================
+describe('UNA VENTA ANULADA EN LA NUBE SE RESTAURA ANULADA, sin tocar ventas.estado (ANULACION-DE-VENTA.md §8)', () => {
+  function servicioDeCajaDe(base: Database, repos: Repositorios): ServicioDeCaja {
+    return new ServicioDeCaja({
+      base,
+      cajaSesiones: repos.cajaSesiones,
+      denominaciones: repos.denominaciones,
+      desglose: repos.desgloseDeCaja,
+      ventas: repos.ventas,
+      auditoria: repos.auditoria,
+    });
+  }
+
+  function anulacionesDe(base: Database, repos: Repositorios): ServicioDeAnulacionDeVenta {
+    return new ServicioDeAnulacionDeVenta({
+      base,
+      ventas: repos.ventas,
+      ventaDetalle: repos.ventaDetalle,
+      productos: repos.productos,
+      cajaSesiones: repos.cajaSesiones,
+      recibos: repos.recibos,
+      usuarios: repos.usuarios,
+      anulaciones: repos.anulacionesDeVenta,
+      auditoria: repos.auditoria,
+      log: new LogTecnicoSilencioso(),
+    });
+  }
+
+  /** El código del ErrorDeNegocio que lanza `operacion`, o null si no lanza. */
+  function codigoDe(operacion: () => unknown): string | null {
+    try {
+      operacion();
+      return null;
+    } catch (error) {
+      return error instanceof ErrorDeNegocio ? error.codigo : `no es de negocio: ${String(error)}`;
+    }
+  }
+
+  it('la fila de anulaciones_de_venta llega con el MISMO id y byte a byte igual a la de origen', async () => {
+    await restaurarEntera(crearNube());
+    expect(filas(destino.base, 'anulaciones_de_venta')).toEqual(filas(origen.base, 'anulaciones_de_venta'));
+    expect(ids(destino.base, 'anulaciones_de_venta')).toEqual([terminal.ids.anulacion]);
+  });
+
+  it('la venta anulada y la activa quedan las dos con estado «completada», igual que en el origen: lo que las distingue es la fila de anulación', async () => {
+    await restaurarEntera(crearNube());
+    const estado = (base: Database, id: string): unknown => (base.prepare('SELECT estado FROM ventas WHERE id = ?').get(id) as { estado: string }).estado;
+    expect(estado(destino.base, terminal.ids.ventaAnulada)).toBe('completada');
+    expect(estado(destino.base, terminal.ids.ventaActiva)).toBe('completada');
+    expect(estado(origen.base, terminal.ids.ventaAnulada)).toBe('completada');
+    expect(reposB.anulacionesDeVenta.obtenerPorVenta(terminal.ids.ventaAnulada)?.id).toBe(terminal.ids.anulacion);
+    expect(reposB.anulacionesDeVenta.obtenerPorVenta(terminal.ids.ventaActiva)).toBeNull();
+  });
+
+  it('el sistema restaurado la trata como ANULADA: el efectivo esperado de la caja abierta es el mismo que en el origen, y no la cuenta', async () => {
+    await restaurarEntera(crearNube());
+    const cajaOrigen = terminal.repos.cajaSesiones.obtenerPorId(terminal.ids.cajaAbierta);
+    const cajaRestaurada = reposB.cajaSesiones.obtenerPorId(terminal.ids.cajaAbierta);
+    if (cajaOrigen === null || cajaRestaurada === null) throw new Error('falta la caja abierta');
+    const esperadoOrigen = servicioDeCajaDe(origen.base, terminal.repos).montoEsperadoDe(cajaOrigen).toFixed(2);
+    const esperadoRestaurado = servicioDeCajaDe(destino.base, reposB).montoEsperadoDe(cajaRestaurada).toFixed(2);
+    const activa = reposB.ventas.obtenerPorId(terminal.ids.ventaActiva);
+    expect(esperadoRestaurado).toBe(esperadoOrigen);
+    // Q250 de apertura más la venta activa; la anulada, no.
+    expect(esperadoRestaurado).toBe(cajaRestaurada.montoInicial.plus(activa?.total ?? 0).toFixed(2));
+  });
+
+  it('anularla otra vez en la terminal restaurada se rechaza con VENTA_YA_ANULADA; la venta activa de la misma caja SÍ se puede anular', async () => {
+    await restaurarEntera(crearNube());
+    const anulaciones = anulacionesDe(destino.base, reposB);
+    expect(codigoDe(() => anulaciones.prepararAnulacion({ ventaId: terminal.ids.ventaAnulada, motivo: 'otra vez', voucher: null }))).toBe(
+      'VENTA_YA_ANULADA',
+    );
+    expect(codigoDe(() => anulaciones.prepararAnulacion({ ventaId: terminal.ids.ventaActiva, motivo: 'el cliente la devolvió', voucher: null }))).toBeNull();
+  });
+
+  describe('con motivo ROBO: la anulación se excluye por su recibido_en, como toda tabla de solo inserción', () => {
+    const FECHA_DEL_ROBO = '2026-09-12T12:00:00.000Z';
+    const DESPUES_DEL_ROBO = '2026-09-12T15:30:00.123456+00:00';
+
+    async function restaurarConRobo(recibidoEn: ReadonlyMap<string, string>): Promise<ServicioDeRestauracion> {
+      const servicio = crearServicio(crearNube({ recibidoEn }));
+      await servicio.iniciar({ correo: CORREO, contrasena: CONTRASENA, motivo: 'robo', fechaDelRobo: FECHA_DEL_ROBO });
+      await servicio.esperarACorrida();
+      return servicio;
+    }
+
+    /** La venta anulada, con sus hijas, marcada como posterior al robo. */
+    function ventaAnuladaPosterior(): [string, string][] {
+      const lineas = (origen.base.prepare('SELECT id FROM venta_detalle WHERE venta_id = ?').all(terminal.ids.ventaAnulada) as { id: string }[]).map(
+        (l): [string, string] => [`venta_detalle/${l.id}`, DESPUES_DEL_ROBO],
+      );
+      return [[`ventas/${terminal.ids.ventaAnulada}`, DESPUES_DEL_ROBO], [`recibos/${terminal.ids.reciboDeLaAnulada}`, DESPUES_DEL_ROBO], ...lineas];
+    }
+
+    /** Los productos que la anulación repuso: la nube los ACTUALIZÓ al recibirla, así que su recibido_en también es posterior. */
+    function productosDeLaAnulacionPosteriores(): [string, string][] {
+      return [
+        [`productos/${terminal.ids.frijol}`, DESPUES_DEL_ROBO],
+        [`productos/${terminal.ids.huevos}`, DESPUES_DEL_ROBO],
+      ];
+    }
+
+    it('VENTA ANTERIOR, ANULACIÓN POSTERIOR: la venta se restaura VÁLIDA y vuelve a contar en el efectivo esperado; la anulación queda excluida y listada', async () => {
+      const servicio = await restaurarConRobo(
+        new Map([[`anulaciones_de_venta/${terminal.ids.anulacion}`, DESPUES_DEL_ROBO], ...productosDeLaAnulacionPosteriores()]),
+      );
+      const anomalia = servicio.progreso().anomalias.find((a) => a.tabla === 'anulaciones_de_venta');
+      expect(anomalia).toMatchObject({ id: terminal.ids.anulacion, excluida: true, aceptada: false });
+      expect(anomalia?.resumen).toMatch(/anulación de la venta/);
+      expect(reposB.ventas.obtenerPorId(terminal.ids.ventaAnulada)).not.toBeNull();
+      expect(reposB.anulacionesDeVenta.obtenerPorVenta(terminal.ids.ventaAnulada)).toBeNull();
+
+      // El ladrón no puede sacar una venta legítima del corte restaurado.
+      const caja = reposB.cajaSesiones.obtenerPorId(terminal.ids.cajaAbierta);
+      if (caja === null) throw new Error('falta la caja abierta');
+      const anulada = reposB.ventas.obtenerPorId(terminal.ids.ventaAnulada);
+      const activa = reposB.ventas.obtenerPorId(terminal.ids.ventaActiva);
+      expect(servicioDeCajaDe(destino.base, reposB).montoEsperadoDe(caja).toFixed(2)).toBe(
+        caja.montoInicial.plus(anulada?.total ?? 0).plus(activa?.total ?? 0).toFixed(2),
+      );
+
+      expect(servicio.progreso().verificacion?.conteos.find((c) => c.tabla === 'anulaciones_de_venta')).toEqual({
+        tabla: 'anulaciones_de_venta',
+        nube: 1,
+        local: 0,
+        excluidas: 1,
+        coincide: true,
+      });
+      expect(servicio.progreso().verificacion?.ok).toBe(true);
+    });
+
+    it('LO QUE §8 NO RESUELVE, MEDIDO: los productos que esa anulación repuso se restauran CON la reposición aplicada (se listan, no se excluyen), y por eso volver a anular la venta se rechaza con CONTADORES_INCONSISTENTES', async () => {
+      const servicio = await restaurarConRobo(
+        new Map([[`anulaciones_de_venta/${terminal.ids.anulacion}`, DESPUES_DEL_ROBO], ...productosDeLaAnulacionPosteriores()]),
+      );
+      const productosListados = servicio.progreso().anomalias.filter((a) => a.tabla === 'productos');
+      expect(productosListados.map((a) => a.id).sort()).toEqual([terminal.ids.frijol, terminal.ids.huevos].sort());
+      expect(productosListados.every((a) => !a.excluida)).toBe(true);
+      // Inventario y contadores llegan como los dejó la anulación excluida: iguales a los del origen.
+      for (const id of [terminal.ids.frijol, terminal.ids.huevos]) {
+        expect(filas(destino.base, 'productos').find((f) => f.id === id)).toEqual(filas(origen.base, 'productos').find((f) => f.id === id));
+      }
+      expect(codigoDe(() => anulacionesDe(destino.base, reposB).prepararAnulacion({ ventaId: terminal.ids.ventaAnulada, motivo: 'x', voucher: null }))).toBe(
+        'CONTADORES_INCONSISTENTES',
+      );
+    });
+
+    it('VENTA Y ANULACIÓN, LAS DOS POSTERIORES: las dos quedan excluidas y listadas', async () => {
+      const servicio = await restaurarConRobo(new Map([...ventaAnuladaPosterior(), [`anulaciones_de_venta/${terminal.ids.anulacion}`, DESPUES_DEL_ROBO]]));
+      const excluidas = servicio.progreso().anomalias.filter((a) => a.excluida).map((a) => a.tabla);
+      expect(excluidas).toContain('ventas');
+      expect(excluidas).toContain('anulaciones_de_venta');
+      expect(reposB.ventas.obtenerPorId(terminal.ids.ventaAnulada)).toBeNull();
+      expect(contar(destino.base, 'anulaciones_de_venta')).toBe(0);
+      expect(servicio.progreso().verificacion?.ok).toBe(true);
+    });
+
+    it('«restaurar igual» la anulación sin su venta se RECHAZA explicando el orden, y no escribe nada', async () => {
+      const servicio = await restaurarConRobo(new Map([...ventaAnuladaPosterior(), [`anulaciones_de_venta/${terminal.ids.anulacion}`, DESPUES_DEL_ROBO]]));
+      await expect(servicio.aceptarExcluida('anulaciones_de_venta', terminal.ids.anulacion)).rejects.toThrow(/primero restaurá la venta/);
+      expect(contar(destino.base, 'anulaciones_de_venta')).toBe(0);
+    });
+
+    it('aceptar la venta NO trae su anulación (es otro hecho, con otro autor); aceptarla aparte después sí, y la venta queda ANULADA', async () => {
+      const servicio = await restaurarConRobo(new Map([...ventaAnuladaPosterior(), [`anulaciones_de_venta/${terminal.ids.anulacion}`, DESPUES_DEL_ROBO]]));
+      await servicio.aceptarExcluida('ventas', terminal.ids.ventaAnulada);
+      expect(reposB.ventas.obtenerPorId(terminal.ids.ventaAnulada)).not.toBeNull();
+      expect(reposB.anulacionesDeVenta.obtenerPorVenta(terminal.ids.ventaAnulada)).toBeNull();
+      expect(servicio.progreso().anomalias.find((a) => a.tabla === 'anulaciones_de_venta')?.aceptada).toBe(false);
+
+      await servicio.aceptarExcluida('anulaciones_de_venta', terminal.ids.anulacion);
+      expect(reposB.anulacionesDeVenta.obtenerPorVenta(terminal.ids.ventaAnulada)?.id).toBe(terminal.ids.anulacion);
+      expect(codigoDe(() => anulacionesDe(destino.base, reposB).prepararAnulacion({ ventaId: terminal.ids.ventaAnulada, motivo: 'x', voucher: null }))).toBe(
+        'VENTA_YA_ANULADA',
+      );
+      expect(servicio.progreso().verificacion?.ok).toBe(true);
+    });
   });
 });
 
@@ -505,7 +690,7 @@ describe('Anomalías por recibido_en, con motivo ROBO (§6.5)', () => {
     const verificacion = servicio.progreso().verificacion;
     expect(verificacion?.ok).toBe(true);
     const ventas = verificacion?.conteos.find((c) => c.tabla === 'ventas');
-    expect(ventas).toEqual({ tabla: 'ventas', nube: 2, local: 1, excluidas: 1, coincide: true });
+    expect(ventas).toEqual({ tabla: 'ventas', nube: 4, local: 3, excluidas: 1, coincide: true });
     const [mes] = verificacion?.ventasPorMes ?? [];
     expect(mes?.coincide).toBe(true);
     expect(mes?.excluidas).toBe(String(terminal.repos.ventas.obtenerPorId(terminal.ids.ventaCombinada)?.total.toFixed(2)));
@@ -527,11 +712,11 @@ describe('Anomalías por recibido_en, con motivo ROBO (§6.5)', () => {
     await servicio.aceptarExcluida('ventas', terminal.ids.ventaCombinada);
     const progreso = servicio.progreso();
     expect(reposB.ventas.obtenerPorId(terminal.ids.ventaCombinada)).not.toBeNull();
-    expect(contar(destino.base, 'venta_detalle')).toBe(3);
+    expect(contar(destino.base, 'venta_detalle')).toBe(6);
     expect(reposB.recibos.obtenerPorId(terminal.ids.reciboCombinado)).not.toBeNull();
     const aceptadas = progreso.anomalias.filter((a) => a.aceptada).map((a) => a.tabla).sort();
     expect(aceptadas).toEqual(['recibos', 'venta_detalle', 'ventas']);
-    expect(progreso.verificacion?.conteos.find((c) => c.tabla === 'ventas')).toEqual({ tabla: 'ventas', nube: 2, local: 2, excluidas: 0, coincide: true });
+    expect(progreso.verificacion?.conteos.find((c) => c.tabla === 'ventas')).toEqual({ tabla: 'ventas', nube: 4, local: 4, excluidas: 0, coincide: true });
     expect(progreso.verificacion?.ok).toBe(true);
     const asiento = destino.base.prepare('SELECT * FROM auditoria_log WHERE accion = ?').get(ACCIONES_DE_RESTAURACION.filaRestauradaAMano) as
       | Record<string, unknown>
@@ -617,7 +802,8 @@ describe('PIN nuevo y cierre de la restauración', () => {
     const detalle = JSON.parse(asiento?.valor_nuevo ?? '{}') as { proyecto: string; restauradoPor: string; filasPorTabla: Record<string, number> };
     expect(detalle.proyecto).toBe(URL_DEL_PROYECTO);
     expect(detalle.restauradoPor).toBe(CORREO);
-    expect(detalle.filasPorTabla.ventas).toBe(2);
+    expect(detalle.filasPorTabla.ventas).toBe(4);
+    expect(detalle.filasPorTabla.anulaciones_de_venta).toBe(1);
     // Lo que se decidió durante la restauración viaja a la nube; lo restaurado no.
     const pendientes = destino.base.prepare('SELECT entidad_tipo, operacion FROM sync_cola WHERE sincronizado_en IS NULL ORDER BY creado_en').all() as { entidad_tipo: string; operacion: string }[];
     expect(pendientes.filter((p) => p.entidad_tipo === 'auditoria_log')).toHaveLength(3);

@@ -7,6 +7,10 @@
  * 2026-09-14 (`pg_constraint`, `contype = 'f'`), copiadas acá tal cual. Si
  * una migración futura agrega una llave que el orden no respeta, esta prueba
  * lo dice con nombre.
+ *
+ * Las tres de `anulaciones_de_venta` (0033) se leyeron el 2026-09-17 del
+ * catálogo de un Postgres 17 LOCAL con las migraciones del repositorio
+ * aplicadas, no de Supabase: la 0033 todavía no está en ningún proyecto.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,7 +25,7 @@ import {
   type LlaveForaneaLocal,
 } from '../orden-de-restauracion';
 
-/** Las quince llaves foráneas del catálogo de Postgres, leídas el 2026-09-14. */
+/** Las dieciocho llaves foráneas del catálogo de Postgres: quince leídas el 2026-09-14, y las tres de la 0033. */
 const LLAVES_DEL_CATALOGO_DE_POSTGRES: readonly LlaveForaneaLocal[] = [
   { tabla: 'productos', columna: 'categoria_id', referencia: 'categorias' },
   { tabla: 'precios_especiales', columna: 'producto_id', referencia: 'productos' },
@@ -38,6 +42,9 @@ const LLAVES_DEL_CATALOGO_DE_POSTGRES: readonly LlaveForaneaLocal[] = [
   { tabla: 'auditoria_log', columna: 'usuario_id', referencia: 'usuarios' },
   { tabla: 'caja_sesion_denominaciones', columna: 'caja_sesion_id', referencia: 'caja_sesiones' },
   { tabla: 'caja_sesion_denominaciones', columna: 'denominacion_id', referencia: 'denominaciones' },
+  { tabla: 'anulaciones_de_venta', columna: 'venta_id', referencia: 'ventas' },
+  { tabla: 'anulaciones_de_venta', columna: 'solicitada_por', referencia: 'usuarios' },
+  { tabla: 'anulaciones_de_venta', columna: 'autorizada_por', referencia: 'usuarios' },
 ];
 
 const clave = (llave: LlaveForaneaLocal): string => `${llave.tabla}.${llave.columna} -> ${llave.referencia}`;
@@ -49,7 +56,7 @@ afterEach(() => {
 });
 
 describe('El orden respeta las llaves foráneas', () => {
-  it('contra las quince llaves leídas del catálogo de Postgres: sin violaciones', () => {
+  it('contra las dieciocho llaves del catálogo de Postgres: sin violaciones', () => {
     expect(violacionesDelOrden(LLAVES_DEL_CATALOGO_DE_POSTGRES)).toEqual([]);
   });
 
@@ -59,7 +66,7 @@ describe('El orden respeta las llaves foráneas', () => {
     expect(comprobarOrdenContraLasLlaves(prueba.base)).toEqual([]);
   });
 
-  it('el esquema local declara EXACTAMENTE las mismas quince llaves que Postgres: el espejo es fiel', () => {
+  it('el esquema local declara EXACTAMENTE las mismas dieciocho llaves que Postgres: el espejo es fiel', () => {
     const prueba = crearBaseMigrada();
     limpiar = prueba.limpiar;
     const locales = llavesForaneasLocales(prueba.base).map(clave).sort();
@@ -74,6 +81,12 @@ describe('El orden respeta las llaves foráneas', () => {
     expect(ORDEN_DE_RESTAURACION.indexOf('ventas')).toBeLessThan(ORDEN_DE_RESTAURACION.indexOf('venta_detalle'));
     expect(ORDEN_DE_RESTAURACION.indexOf('ventas')).toBeLessThan(ORDEN_DE_RESTAURACION.indexOf('recibos'));
     expect(ORDEN_DE_RESTAURACION.indexOf('categorias')).toBeLessThan(ORDEN_DE_RESTAURACION.indexOf('productos'));
+  });
+
+  it('anulaciones_de_venta va después de ventas y antes de auditoria_log', () => {
+    expect(ORDEN_DE_RESTAURACION.indexOf('ventas')).toBeLessThan(ORDEN_DE_RESTAURACION.indexOf('anulaciones_de_venta'));
+    expect(ORDEN_DE_RESTAURACION.indexOf('usuarios')).toBeLessThan(ORDEN_DE_RESTAURACION.indexOf('anulaciones_de_venta'));
+    expect(ORDEN_DE_RESTAURACION.indexOf('anulaciones_de_venta')).toBeLessThan(ORDEN_DE_RESTAURACION.indexOf('auditoria_log'));
   });
 });
 
@@ -103,9 +116,9 @@ describe('La comprobación MUERDE', () => {
 });
 
 describe('Las tablas que se pueden EXCLUIR sin romper una llave de lo legítimo', () => {
-  it('son cinco, todas de solo inserción en la nube, y todas están en el orden', () => {
+  it('son seis, todas de solo inserción en la nube, y todas están en el orden', () => {
     expect([...TABLAS_QUE_SOLO_SE_INSERTAN].sort()).toEqual(
-      ['auditoria_log', 'caja_sesion_denominaciones', 'recibos', 'venta_detalle', 'ventas'].sort(),
+      ['anulaciones_de_venta', 'auditoria_log', 'caja_sesion_denominaciones', 'recibos', 'venta_detalle', 'ventas'].sort(),
     );
     for (const tabla of TABLAS_QUE_SOLO_SE_INSERTAN) {
       expect(ORDEN_DE_RESTAURACION).toContain(tabla);

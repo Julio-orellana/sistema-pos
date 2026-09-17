@@ -9,7 +9,8 @@
  * Postgres de `pos-pruebas-descartable` el 2026-09-14 (`pg_constraint` con
  * `contype = 'f'`): quince llaves foráneas, que son exactamente las mismas que
  * declara el esquema local (`PRAGMA foreign_key_list`), porque SQLite es el
- * espejo de Postgres tabla por tabla.
+ * espejo de Postgres tabla por tabla. La 0033 (2026-09-17) suma las tres de
+ * `anulaciones_de_venta`, y son dieciocho.
  *
  *   productos                  → categorias
  *   precios_especiales         → productos
@@ -21,6 +22,8 @@
  *                                          descuento_autorizado_por)
  *   venta_detalle              → ventas, productos
  *   recibos                    → ventas
+ *   anulaciones_de_venta       → ventas, usuarios (solicitada_por,
+ *                                          autorizada_por)
  *   auditoria_log              → usuarios
  *
  * El orden de abajo lo respeta, y **no se da por bueno para siempre**: el
@@ -55,6 +58,10 @@ export const ORDEN_DE_RESTAURACION = [
   'ventas',
   'venta_detalle',
   'recibos',
+  // Después de `ventas` y de `usuarios`, que referencia. Una venta restaurada
+  // con su fila acá queda ANULADA en la base restaurada: la regla es la misma en
+  // las tres copias, y `ventas.estado` no se toca (ANULACION-DE-VENTA.md §8).
+  'anulaciones_de_venta',
   'auditoria_log',
 ] as const;
 
@@ -78,6 +85,10 @@ export const TABLAS_QUE_SOLO_SE_INSERTAN: readonly TablaRestaurable[] = [
   'venta_detalle',
   'recibos',
   'caja_sesion_denominaciones',
+  // `sincronizar_anulacion_de_venta` la escribe con `ignorar` y su trigger
+  // prohíbe UPDATE y DELETE (0033, 0035): una anulación posterior al robo es una
+  // anulación INSERTADA después del robo, y ninguna fila la referencia.
+  'anulaciones_de_venta',
   'auditoria_log',
 ];
 

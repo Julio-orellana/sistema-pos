@@ -50,6 +50,7 @@ const NOMBRES_DE_TABLA: Readonly<Record<string, string>> = {
   ventas: 'ventas',
   venta_detalle: 'líneas de venta',
   recibos: 'recibos',
+  anulaciones_de_venta: 'anulaciones de venta',
   auditoria_log: 'asientos de auditoría',
 };
 
