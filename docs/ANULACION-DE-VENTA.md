@@ -714,7 +714,7 @@ anuló, con fecha, responsable y motivo. El papel lo dice en ese orden.
 | Qué | Cómo |
 |---|---|
 | El modelo del recibo | Gana `anulacion: { fecha, autorizadaPor, motivo } \| null`, leída de la tabla nueva. **No recalcula nada** (§4.14). |
-| El PDF | Se regenera **después** de confirmar la anulación, fuera de la transacción y sobre el mismo `pdf_path` (§4.14). Si falla, queda en la bitácora técnica y la anulación queda hecha. |
+| El PDF | Se regenera **después** de confirmar la anulación, fuera de la transacción y sobre el mismo `pdf_path` (§4.14). Si falla, queda en la bitácora técnica y la anulación queda hecha. **HECHO el 2026-09-17** (CLAUDE.md §4.59): la pantalla nació marcando el PDF recién al verlo o reimprimirlo, y Julio pidió cerrar esa brecha. Reusa la misma regeneración de la reimpresión, sin imprimir y sin marcar el papel como reimpresión. |
 | ¿Se imprime solo? | No. La confirmación ofrece un botón para imprimir el recibo marcado, por si el cliente quiere constancia. |
 | El historial de recibos | Muestra «Anulada» junto al número. |
 | Si la tienda pasa a facturar con FEL/SAT | Anular un documento tributario es un trámite legal propio, y esta decisión se revisa ese día (§6.2, punto 2). |

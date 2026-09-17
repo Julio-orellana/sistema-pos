@@ -9470,16 +9470,149 @@ Cada una con el archivo restaurado y su sha256 comparado después.
 
 #### 8. Lo que NO se hizo, dicho en voz alta
 
-- **El PDF no se regenera al anular.** §5.2 del diseño dice que se regenera
+- ~~**El PDF no se regenera al anular.** §5.2 del diseño dice que se regenera
   después de confirmar, fuera de la transacción. Acá la marca aparece en cuanto
   alguien **ve o reimprime** el recibo, que es lo que se pidió y lo que regenera
   el PDF desde las mismas filas; el archivo que ya estaba en el disco sigue sin
-  marca hasta esa reimpresión. Queda como el punto 46 de §6.2.
+  marca hasta esa reimpresión. Queda como el punto 46 de §6.2.~~
+  **CERRADO EL 2026-09-17, por decisión de Julio: ahora SÍ se regenera al
+  confirmar la anulación (§4.59).** El párrafo tachado describe lo que esta
+  pantalla hizo el primer día.
 - **El botón de imprimir el recibo marcado desde la confirmación** (§5.2)
   tampoco: la confirmación informa, y reimprimir está a un clic en la misma
   pantalla.
 - **El reporte de cobros con tarjeta** (§3.5) sigue pendiente, con su canal y su
   guard.
+- **Windows**, como siempre.
+
+### 4.59 El PDF del recibo se marca al anular, no al reimprimirlo (punto 46, cerrado el 2026-09-17)
+
+#### Qué decía antes, y qué se decidió ahora
+
+**Lo que este proyecto hizo el primer día de la pantalla (§4.58, punto 8):** la
+marca «VENTA ANULADA» aparecía en el PDF recién cuando alguien **veía o
+reimprimía** el recibo desde el historial. Quedó anotado como el punto 46 de
+§6.2, con estas palabras: «Mientras tanto, el archivo que quedó en el disco **no
+tiene la marca**, así que alguien que abra la carpeta de recibos y lea ese PDF no
+se entera de que la venta se anuló. Nadie lee esos PDF hoy más que por la
+pantalla; el día que se entreguen por otra vía —un respaldo, un correo— hay que
+cerrarlo».
+
+**Lo que decidió Julio el 2026-09-17:** cerrarlo ya, sin esperar a esa otra vía.
+El PDF del disco **nunca** debe quedar desactualizado, ni siquiera un momento.
+Es además lo que §5.2 del diseño decía desde el principio.
+
+#### Cómo quedó
+
+`ServicioDeRecibos.regenerarPdfDeLaVenta(ventaId)` reusa `producir`, que es **la
+misma regeneración de la reimpresión**: se arma el modelo desde las filas
+guardadas y se escribe encima del mismo archivo. No hay una segunda forma de
+generar un PDF en el servicio, y no debe haberla.
+
+Dos diferencias con reimprimir, las dos a propósito:
+
+| | Reimprimir | Regenerar al anular |
+|---|---|---|
+| ¿Manda el ticket a la térmica? | Sí | **No.** §5.2: anular no saca papel. Si alguien quiere el papel marcado, lo reimprime, que es un acto de una persona |
+| ¿El papel dice «REIMPRESIÓN»? | Sí | **No.** Nadie lo reimprimió: es el mismo recibo original, ahora anulado |
+
+`producir` recibe `imprimir`, que vale `true` salvo que se diga lo contrario, así
+que emitir y reimprimir no cambiaron en nada.
+
+**Se dispara en `FlujoDeAnulacionDeVenta`, no en el manejador IPC**, por la misma
+razón por la que el flujo existe (§4.45): lo que importa tiene que poder probarse
+contra SQLite real con los servicios reales. Va **después** de la transacción
+—escribir un PDF abre una ventana de Chromium, y eso no puede mantener abierta
+una escritura de SQLite (§4.14)— y **se espera**: si se disparara sin esperar,
+quien mirara el archivo justo después de ver la confirmación podría encontrarlo
+todavía sin marcar.
+
+`pedir` pasó a ser asincrónica, y con ella sus 64 llamadas en las pruebas. **Una
+sola puerta:** no se agregó un segundo método «pedir y además dejar el recibo al
+día», porque el día que alguien llamara al primero volvería el defecto.
+
+**Nunca lanza.** Una anulación ya confirmada no se puede caer porque el PDF no se
+pueda escribir: el fallo queda en la bitácora técnica y la venta sigue anulada.
+Si la venta no tiene recibo —la aplicación pudo caerse entre la venta y su
+emisión— no hay nada que regenerar y no pasa nada.
+
+#### La prueba que lo sostiene abre el ARCHIVO, no la pantalla
+
+En `verify:pantallas:anulacion`, después de confirmar la anulación y **sin que
+nadie reimprima**, se abre el PDF de la carpeta de recibos y se lee lo que dice
+adentro. Salida cruda:
+
+```
+PDF antes de anular: recibo-000001-2026-09-17T22-01-23-686Z.pdf · 75754 bytes · sha256 6c848d61a5faed3e
+OK    el lector abre el PDF del disco y lee lo que dice: es el recibo de esta venta
+OK    y todavía NO dice que esté anulada
+…
+PDF después de anular: 92065 bytes · sha256 3d66c07492d96fa2
+lo que dice el PDF del disco: ["** VENTA ANULADA **A  A     R N CA    TOTAL  E   "]
+OK    EL PDF DEL DISCO YA DICE «VENTA ANULADA» sin que nadie lo haya reimpreso
+OK    y dice también quién autorizó y por qué
+OK    el archivo es OTRO: se reescribió encima del mismo, en el momento de anular
+OK    NO dice «REIMPRESIÓN»: es el recibo original marcado, no una reimpresión
+OK    y CONSERVA las cifras del recibo original
+38 comprobaciones, 0 fallidas.
+```
+
+**LEER UN PDF NO ES BUSCAR UNA CADENA, Y ESO SE MIDIÓ.** Chromium escribe el
+texto como **glifos de una tipografía incrustada**, en hexadecimal y según el
+orden interno de cada subconjunto:
+
+```
+BT /F4 16 Tf 1 0 0 -1 55.15625 29 Tm
+<003E003100520050004500550048000300470048004F000300510048004A00520046004C00520040> Tj
+```
+
+Eso dice «[Nombre del negocio]». Un `grep` sobre el archivo no encuentra nada:
+medido, `bytes.includes('ANULADA')` da `false` en un PDF que sí la tiene. Por eso
+`scripts/texto-de-pdf.cjs` hace lo que hace cualquier lector de PDF —inflar los
+streams, leer los mapas `ToUnicode` del propio archivo y traducir los glifos—, y
+**el control está en la misma prueba**: antes de anular, el mismo lector tiene
+que encontrar «RECIBO DE VENTA» y el total. Sin ese control, «no dice VENTA
+ANULADA» pasaría igual con un lector roto.
+
+> **Dos defectos del lector, encontrados midiendo y anotados en su cabecera.**
+> El primero: buscar `stream` y avanzar un byte vuelve a encontrar esa palabra
+> dentro de `endstream`, y el recorrido se corre un stream —así se comió los seis
+> mapas `ToUnicode` y devolvía cero caracteres—. El segundo: Chromium dibuja los
+> renglones centrados **un glifo por `Tj`** y los alineados a la izquierda
+> **palabra por `Tj`**, así que con un separador entre cadenas «VENTA ANULADA»
+> queda como «V E N T A …» y sin separador el motivo queda como
+> «elclientedevolvió…». Se devuelven las dos lecturas.
+
+#### Falsificación
+
+Quitando la regeneración del paso de confirmación —y dejando intacto todo lo
+demás, incluida la reimpresión—, caen tres comprobaciones:
+
+```
+FALLA EL PDF DEL DISCO YA DICE «VENTA ANULADA» sin que nadie lo haya reimpreso
+      esperado: la marca dentro del archivo · real: NO la tiene (mal)
+FALLA y dice también quién autorizó y por qué
+      esperado: «Autorizó: Jimmy» y «el cliente devolvió el producto» · real: autorizó=false motivo=false
+FALLA el archivo es OTRO: se reescribió encima del mismo, en el momento de anular
+      esperado: sha256 distinto de 754313e3fdc93182, y más reciente · real: sha256 754313e3fdc93182 · 0 ms después
+38 comprobaciones, 3 fallidas.
+```
+
+Archivo restaurado y comprobado: sha256 `5e6c79c67917b2c1` antes y después.
+
+Y diez pruebas de Vitest sobre SQLite real, con el generador de PDF cambiado por
+uno que anota lo que le llega: que se regenere **una** vez sobre el **mismo**
+archivo, que el HTML lleve la marca con su fecha, su autorizante y su motivo, que
+conserve las cifras, que **no salga ningún ticket por la impresora**, que no diga
+«REIMPRESIÓN», que la vista previa y un PIN equivocado no regeneren nada, que una
+venta sin recibo se anule igual, y que un PDF que falla deje la anulación hecha y
+su rastro en la bitácora técnica.
+
+#### Lo que NO cambió
+
+- **La vista y la reimpresión siguen exactamente como estaban.** Esto SUMA un
+  disparo de la regeneración; no reemplaza el que ya había.
+- Los PDF de recibos **siguen sin subirse a la nube** (§4.33): esto es local.
 - **Windows**, como siempre.
 
 ## 5. Registro de decisiones técnicas
@@ -9797,10 +9930,11 @@ Cada una con el archivo restaurado y su sha256 comparado después.
 | **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
 | **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **La base rechaza una anulación con vía distinta de `'presencial'`: CHECK con nombre `anulaciones_de_venta_solo_presencial` en la 038 local y en la 0038 de la nube, que convive con el CHECK amplio de la columna en los dos lados. La 0038 va en la misma ronda que la 0033 y la 0035.** **REVIERTE la fila de `docs/ANULACION-DE-VENTA.md` §1.1.** | Dejar el CHECK amplio, como decía el diseño; estrechar la 0033 antes de su primera aplicación; en la nube, quitar el CHECK de la columna | Decisión de Julio. El «segundo lugar» que §4.9 eliminó podía ampliar un permiso en silencio; este falla cerrado, y una prueba exige que `ACEPTA_PIN_REMOTO` y la base digan lo mismo. Estrechar la 0033 dejaría la local y la nube distintas hasta la 038. En la nube se deja el CHECK amplio para que el espejo sea exacto y ampliar algún día sea la misma sentencia en los dos lados. Aplicarla junto con la 0033 no rompe a nadie: ninguna versión publicada escribe `'remoto'` (medido en los tags). §4.54. | 2026-09-17 (número de prompt por confirmar) |
+| **El PDF del recibo se regenera EN EL MOMENTO de confirmar la anulación, reusando la misma `producir` de la reimpresión, sin imprimir y sin marcarlo como reimpresión.** Cierra el punto 46. | Dejarlo como estaba —la marca al ver o reimprimir—; llamar a `reimprimir()`, que además saca un ticket; una segunda función de regeneración; dispararlo sin esperar | Decisión de Julio: el archivo del disco **nunca** debe quedar desactualizado, ni un momento, y es lo que §5.2 del diseño decía desde el principio. Llamar a `reimprimir()` habría sacado un ticket por la térmica que nadie pidió, contra lo que §5.2 dice con todas las letras, y habría marcado el papel como reimpresión cuando nadie lo reimprimió; por eso `producir` recibe `imprimir`, que vale `true` salvo que se diga lo contrario, y emitir y reimprimir no cambiaron en nada. Una segunda función de regeneración terminaría dibujando dos papeles distintos. **Se espera a que termine antes de contestarle a la ventana**: disparado sin esperar, quien mirara el archivo justo después de ver la confirmación podría encontrarlo sin marcar. Va en el flujo y no en el manejador, por la razón por la que el flujo existe (§4.45), y eso obligó a que `pedir` fuera asincrónica —con sus 64 llamadas en las pruebas—: **una sola puerta**, porque un segundo método «pedir y además dejar el recibo al día» devolvería el defecto el día que alguien llamara al primero. Nunca lanza: una anulación confirmada no se cae porque el disco esté lleno. §4.59. | 2026-09-17 (número de prompt por confirmar) |
 | **La anulación se pide desde el HISTORIAL DE RECIBOS, y el botón «Anular» solo se dibuja en las ventas de la caja que sigue abierta y sin anular. En las demás NO se dibuja nada, ni un botón deshabilitado.** | Un botón apagado con su explicación; un botón siempre visible que falle al tocarlo; una pantalla propia de anulaciones | El historial es donde el cajero ya busca la venta por su número cuando el cliente vuelve al mostrador (§4.3 del diseño), así que no hace falta una pantalla más ni enseñarle otro camino. **El botón apagado se descartó a propósito:** una venta de una caja ya cerrada no se va a poder anular NUNCA MÁS —el alcance del diseño es solo caja abierta—, así que un control gris prometería algo que no existe; y una venta ya anulada se explica mejor con su etiqueta, que dice cuándo, quién autorizó y por qué. Un botón que siempre se ve y falla al tocarlo es peor: convierte una regla del negocio en un error que aparece después de decidir. §4.58. | 2026-09-17 (número de prompt por confirmar) |
 | **Qué ventas se pueden anular lo contesta el SERVICIO (`sePuedeAnular`), con la MISMA copia de la regla que usa `leerYValidar`, y una prueba de acoplamiento lo exige.** | Que el proceso principal compare la caja abierta contra `venta.caja_sesion_id` al armar el historial; que la pantalla lo deduzca de los datos que ya recibe | Es la lección de §4.57 aplicada antes de que costara: dos copias de la misma regla se desincronizan con el primer cambio, y acá la discrepancia sería peor que un nombre feo —el historial ofrecería anular algo que el servicio después rechaza, o escondería el botón de algo que sí se puede—. La regla vive en `impedimentoParaAnular`, la llaman los dos, y la prueba recorre los estados exigiendo que las dos respuestas coincidan, con un control que impide que «coincidan» dos funciones rotas. **Cuesta una lectura por fila del historial** (la caja y la anulación de cada venta, las dos por llave primaria), sobre un listado que ya arma el modelo completo de cada recibo; no se midió en el i3. §4.58. | 2026-09-17 (número de prompt por confirmar) |
 | **El voucher de una venta con tarjeta se pide en el PRIMER paso del diálogo, junto al motivo, antes de la vista previa.** | Pedirlo después de la vista previa, o junto con el PIN | Es lo que decidió el diseño (§3.3, decisión 9) y lo que hace que un voucher que no coincide **no llegue a pedir el PIN**: se rechaza antes, sin consumir un intento del candado y sin escribir nada. Pedirlo más tarde invertiría ese orden y haría que alguien tecleara un PIN para una anulación que ya estaba rechazada. §4.58. | 2026-09-17 (número de prompt por confirmar) |
-| **El recibo de una venta anulada se MARCA al verlo o reimprimirlo, con la misma constante en el papel y en el PDF, y sin tocar una sola cifra.** | Emitir una nota de crédito con numeración propia; regenerar el PDF en el momento de anular | No se emite documento nuevo (§5.1): el recibo ya es una proforma, y un correlativo de anulaciones le daría apariencia fiscal a algo que la tienda no tiene base para emitir. La marca sale de `anulaciones_de_venta`, nunca de `ventas.estado`, que sigue diciendo `completada` (§1.1). **Que ninguna cifra cambie no se afirma: se compara el papel de antes contra el de después, renglón por renglón.** Lo que NO se hizo es regenerar el PDF del disco en el momento de anular (§5.2): la marca aparece al ver o reimprimir, que es lo que se pidió, y hasta entonces el archivo viejo sigue sin marca. Punto 46 de §6.2. §4.58. | 2026-09-17 (número de prompt por confirmar) |
+| **El recibo de una venta anulada se MARCA al verlo o reimprimirlo, con la misma constante en el papel y en el PDF, y sin tocar una sola cifra.** | Emitir una nota de crédito con numeración propia; regenerar el PDF en el momento de anular | No se emite documento nuevo (§5.1): el recibo ya es una proforma, y un correlativo de anulaciones le daría apariencia fiscal a algo que la tienda no tiene base para emitir. La marca sale de `anulaciones_de_venta`, nunca de `ventas.estado`, que sigue diciendo `completada` (§1.1). **Que ninguna cifra cambie no se afirma: se compara el papel de antes contra el de después, renglón por renglón.** ~~Lo que NO se hizo es regenerar el PDF del disco en el momento de anular (§5.2): la marca aparece al ver o reimprimir, que es lo que se pidió, y hasta entonces el archivo viejo sigue sin marca. Punto 46 de §6.2.~~ **SUPERADO el 2026-09-17: también se regenera al confirmar la anulación** (§4.59, y la fila de abajo). §4.58. | 2026-09-17 (número de prompt por confirmar) |
 | **El nombre LEGIBLE de cada tabla vive UNA sola vez, en `src/shared/nombres-de-tabla.ts`, y una prueba sobre el árbol sintáctico falla si un archivo del renderer o del proceso principal declara su propio mapa. Otra exige que el mapa cubra EXACTAMENTE las trece tablas.** | Corregir los dos mapas a mano cada vez, como el 2026-09-17; derivar `TablaSincronizable` o `ORDEN_DE_RESTAURACION` de este mapa; dejarlo solo en el compilador | El mapa estaba escrito a mano en las DOS pantallas que nombran tablas —sincronización y restauración—, en distinto orden y sin nada que las atara, y **agregar una tabla y olvidarse de una copia no hacía fallar nada**. Se desincronizaron con la primera tabla nueva: `anulaciones_de_venta` (§4.45) entró en un solo mapa y la pantalla de sincronización mostró el nombre TÉCNICO de una anulación pendiente a quien tenía que decidir si reintentaba o saltaba un lote detenido. Arreglarlos a mano (§4.53) dejó el defecto vivo para la próxima tabla. **No se invierten las dependencias de los tipos de dominio**: `TablaSincronizable` es una lista cerrada que obliga a preguntarse si algo es dato de negocio, y el orden de `ORDEN_DE_RESTAURACION` es el grafo de llaves foráneas; derivarlos de un mapa de etiquetas ataría dos cosas que se deciden por razones distintas. La cobertura se comprueba al revés —el mapa contra esas listas—, con **tres fuentes independientes**: la igualdad con `ORDEN_DE_RESTAURACION` en runtime, la presencia de `TIPO_DE_ENTRADA_DE_FOTO`, y una asignación de tipo que hace fallar `typecheck` si una tabla entra en `TablaSincronizable` y no en el mapa. **Dejarlo solo en el compilador no alcanzaba**: los dos mapas eran `Record<string, string>`, así que TypeScript nunca vio que faltara una clave. La auditoría recorrió `src/renderer` y `src/shared` y no encontró ningún otro mapa; `resumenDeFila` de la restauración describe la FILA y no la tabla, y su `switch` exhaustivo ya lo protege el compilador. §4.57. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
@@ -9868,7 +10002,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 43 | **La restauración deja viva la sesión de Auth cuando rechaza un usuario de otro rol.** | `cliente-de-restauracion.ts:188` lanza antes de guardar la sesión, así que `cerrarSesion()` no hace nada y el token de refresco sigue válido en GoTrue. Nadie lo guarda: solo existió en la respuesta. En el descartable hay una sesión así (`6c95f26f`, 2026-09-15 22:28:25 UTC), y el vaciado del 2026-09-17 no la toca: vive en el esquema `auth`, no en `public`. El arreglo sería cerrar esa sesión con su propio token antes de lanzar. | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** A evaluar antes de escalar a más clientes o sucursales |
 | 44 | **Una base que ya subió su historia a un proyecto no la vuelve a subir a otro.** | Leído en el código, no medido: `sync_cola` no guarda a qué proyecto subió cada lote, y nada reinicia `sincronizado_en` si cambia la nube incrustada. Si una base que sincronizó con `pos-pruebas-descartable` pasa a apuntar a `pos-jimmy-cano`, el real recibe solo lo nuevo, y el primer lote que nombre un usuario, una categoría o un producto viejo fallaría con `23503`. Importa si la tienda conserva su base de prueba al pasar a producción. **El 2026-09-17 se esquivó, no se resolvió:** la decisión para la base A fue arrancar con una carpeta de datos nueva (§4.55), justamente porque reencolar su historia no tiene mecanismo. | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** Hay que decidirlo antes del paso a producción si la tienda conserva su base |
 | 45 | **Protección estructural de UNA SOLA TERMINAL POR PROYECTO.** Que cada instalación tenga un id de terminal propio, que viaje en cada lote, y que la nube rechace el lote de una segunda terminal que no haya sido autorizada a reemplazar a la primera. | Hoy nada lo impide: la credencial de terminal es una sola por proyecto, los lotes no dicen de qué instalación vienen, y la sincronización es solo de subida, así que dos bases pueden escribir la misma nube sin enterarse una de la otra. Es lo que pasó el 2026-09-15 (§4.55). Mientras no exista, lo que lo evita es la regla operativa del recuadro de §4, que es humana y no del sistema. Toca el contrato con la nube —un campo más en cada lote y una comprobación en las siete funciones de escritura—, así que es diseño, no un parche. Se relaciona con el punto 10 (multi-sucursal) y con §1.5 del diseño (la terminal robada). | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** A evaluar antes de escalar a más clientes o sucursales |
-| 46 | **El PDF de una venta anulada solo se marca cuando alguien lo ve o lo reimprime.** | §5.2 del diseño dice que el PDF se regenera «después de confirmar la anulación, fuera de la transacción y sobre el mismo `pdf_path`». No se hizo: la marca aparece al ver o reimprimir desde el historial, que es lo que este prompt pidió y lo que regenera el PDF desde las mismas filas. Mientras tanto, el archivo que quedó en el disco al emitirse **no tiene la marca**, así que alguien que abra la carpeta de recibos y lea ese PDF no se entera de que la venta se anuló. Nadie lee esos PDF hoy más que por la pantalla; el día que se entreguen por otra vía —un respaldo, un correo— hay que cerrarlo. El cambio es acotado: llamar a la reimpresión desde el flujo, fuera de la transacción, y dejar la falla en la bitácora técnica si el PDF no se puede escribir. | Abierto — de bajo riesgo hoy |
+| 46 | ~~**El PDF de una venta anulada solo se marca cuando alguien lo ve o lo reimprime.**~~ | ~~§5.2 del diseño dice que el PDF se regenera «después de confirmar la anulación, fuera de la transacción y sobre el mismo `pdf_path`». No se hizo: la marca aparece al ver o reimprimir desde el historial, que es lo que este prompt pidió y lo que regenera el PDF desde las mismas filas. Mientras tanto, el archivo que quedó en el disco al emitirse **no tiene la marca**, así que alguien que abra la carpeta de recibos y lea ese PDF no se entera de que la venta se anuló. Nadie lee esos PDF hoy más que por la pantalla; el día que se entreguen por otra vía —un respaldo, un correo— hay que cerrarlo. El cambio es acotado: llamar a la reimpresión desde el flujo, fuera de la transacción, y dejar la falla en la bitácora técnica si el PDF no se puede escribir.~~ **RESUELTO EL 2026-09-17, por decisión de Julio: no se espera a esa otra vía.** El PDF se regenera en el mismo momento en que la anulación se confirma, reusando la misma `producir` de la reimpresión, sin imprimir y sin marcar el papel como reimpresión. La prueba abre el archivo del disco y lee lo que dice adentro. §4.59. | **Resuelto** — 2026-09-17 |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -10059,7 +10193,9 @@ npm run verify:pantallas:teclado  # la app real: toca los 22 campos que no tení
 npm run verify:pantallas:anulacion  # la app real: tres ventas (efectivo, tarjeta y una que NO se anula);
                          # vista previa, CANCELAR sin dejar rastro, reintentar, PIN equivocado, PIN correcto,
                          # confirmación con los montos ajustados, el recibo marcado, el voucher equivocado que
-                         # no llega al PIN, y la caja cerrada que quita el botón (§4.58).
+                         # no llega al PIN, y la caja cerrada que quita el botón (§4.58). Y ABRE EL PDF
+                         # del disco antes y después de anular, para comprobar que la marca queda escrita
+                         # sin que nadie reimprima nada (§4.59).
 npm run verify:pantallas:historial-de-cajas  # la app real: cinco cajas armadas por los canales reales
                          # (diferencia autorizada, exacta por denominación, cerrada por otra persona,
                          # recuento corregido, abierta); la cajera no llega; filtros y detalle (§4.44).
