@@ -14,12 +14,28 @@
  * REIMPRIMIR REGENERA desde las filas de la venta, nunca desde el PDF que está
  * en el disco. Es lo que permite que un recibo emitido antes de cargar los
  * datos de la tienda salga con el nombre y el NIT correctos.
+ *
+ * ---------------------------------------------------------------------------
+ * ES TAMBIÉN EL PUNTO DE ENTRADA DE LA ANULACIÓN
+ * ---------------------------------------------------------------------------
+ * Y no por comodidad: acá el cajero ya busca la venta por su número de recibo,
+ * que es el dato que tiene a mano cuando un cliente vuelve al mostrador
+ * (docs/ANULACION-DE-VENTA.md §4.3).
+ *
+ * EL BOTÓN «ANULAR» SOLO APARECE EN LAS VENTAS DE LA CAJA QUE SIGUE ABIERTA, y
+ * en las demás **no se dibuja en absoluto**, ni siquiera apagado. Una venta de
+ * una caja ya cerrada no se va a poder anular nunca más, así que un botón
+ * deshabilitado con su explicación prometería algo que no existe; y una venta
+ * ya anulada se marca con su etiqueta, que dice lo que pasó mejor que un botón
+ * gris. Quién puede y quién no lo decide el proceso principal en
+ * `sePuedeAnular`: esta pantalla dibuja lo que le llegó.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 
 import type { ReciboEnHistorialIpc, ReciboVistoIpc } from '@shared/types/ipc';
 import { formatearQuetzales } from '@shared/money';
+import { ModalDeAnulacion } from './ModalDeAnulacion';
 
 export function PantallaDeRecibos({
   alVolver,
@@ -32,6 +48,8 @@ export function PantallaDeRecibos({
   const [aviso, setAviso] = useState<string | null>(null);
   const [trabajando, setTrabajando] = useState(false);
   const [recarga, setRecarga] = useState(0);
+  /** El recibo cuya venta se está anulando, o `null` si no hay ninguno. */
+  const [anulando, setAnulando] = useState<ReciboEnHistorialIpc | null>(null);
 
   useEffect(() => {
     const control = new AbortController();
@@ -127,6 +145,11 @@ export function PantallaDeRecibos({
               >
                 <div className="lista__principal">
                   <span className="lista__nombre">Recibo No. {recibo.numeroRecibo}</span>
+                  {recibo.anulacion !== null && (
+                    <span className="etiqueta" data-prueba="recibo-anulada">
+                      Anulada
+                    </span>
+                  )}
                   {recibo.impreso && <span className="etiqueta">Impreso</span>}
                   {recibo.conDescuento && <span className="etiqueta">Con descuento</span>}
                   <span className="lista__detalle">
@@ -134,6 +157,12 @@ export function PantallaDeRecibos({
                     {recibo.lineas} {recibo.lineas === 1 ? 'producto' : 'productos'} ·{' '}
                     {recibo.formaPago === 'efectivo' ? 'Efectivo' : 'Tarjeta'}
                   </span>
+                  {recibo.anulacion !== null && (
+                    <span className="lista__detalle" data-prueba="recibo-anulacion-detalle">
+                      Anulada el {recibo.anulacion.fecha} {recibo.anulacion.hora} · autorizó{' '}
+                      {recibo.anulacion.autorizadaPor} · {recibo.anulacion.motivo}
+                    </span>
+                  )}
                 </div>
 
                 <span className="lista__nombre" data-prueba="recibo-total">
@@ -162,6 +191,23 @@ export function PantallaDeRecibos({
                   >
                     Reimprimir
                   </button>
+                  {/* Solo en las ventas de la caja abierta y sin anular. Ver la
+                      cabecera: en las demás no se dibuja ningún botón. */}
+                  {recibo.sePuedeAnular && (
+                    <button
+                      type="button"
+                      className="boton--secundario"
+                      data-prueba="recibo-anular"
+                      disabled={trabajando}
+                      onClick={() => {
+                        setMensaje(null);
+                        setAviso(null);
+                        setAnulando(recibo);
+                      }}
+                    >
+                      Anular
+                    </button>
+                  )}
                 </div>
               </li>
             ))}
@@ -181,6 +227,25 @@ export function PantallaDeRecibos({
         es el mismo texto que se le manda a la impresora, así que lo que se ve
         en pantalla y lo que sale del rollo no pueden diferir.
       */}
+      {anulando !== null && (
+        <ModalDeAnulacion
+          recibo={anulando}
+          alCancelar={() => {
+            setAnulando(null);
+          }}
+          alTerminar={(anulacion) => {
+            setAnulando(null);
+            setAviso(
+              `Venta del recibo ${String(anulacion.numeroRecibo ?? '')} anulada. ` +
+                `Deja de contar ${formatearQuetzales(anulacion.efectivoQueDejaDeContar)} en la caja.`,
+            );
+            // La lista se relee: esa fila pasa a decir «Anulada» y pierde su
+            // botón, y las demás pueden haber cambiado mientras tanto.
+            setRecarga((vuelta) => vuelta + 1);
+          }}
+        />
+      )}
+
       {abierto !== null && (
         <div className="capa-modal">
           <section className="modal modal--recibo" data-prueba="vista-de-recibo">
