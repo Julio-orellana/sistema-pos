@@ -61,18 +61,21 @@ export type ColorDeEstado = 'neutral' | 'ambar' | 'rojo';
  * «Sin color cuando está al día; ámbar con pendientes viejos; rojo cuando
  * está detenida o sin credencial.» — §3.3 del diseño, literal.
  *
- * Los estados que el diseño no menciona explícitamente (`pendientes`,
- * `sin_conexion`, `problema_al_sincronizar`) quedan neutrales: son
- * transitorios, y solo escalan a ámbar el día que los pendientes se vuelven
- * viejos. `problema_al_sincronizar` es neutral a propósito: hasta el
- * 2026-09-17 ese mismo caso se veía como `pendientes`, que es neutral, y
- * escalarlo sería una decisión aparte.
+ * Lo que el diseño no nombra, decidido después:
+ *
+ * - **`problema_al_sincronizar`: ámbar** (decisión de Julio, 2026-09-17,
+ *   §4.52). Hay conexión y algo puntual está fallando activamente —por
+ *   ejemplo, el proyecto de Supabase pausado—, así que es el estado más útil
+ *   de ver de reojo. Merece atención sin ser crítico.
+ * - **`sin_conexion` y `pendientes`: neutral.** Son pasivos: se resuelven
+ *   solos cuando vuelve la red, y escalan a ámbar recién cuando los pendientes
+ *   se vuelven viejos.
  */
 export function colorDeEstado(estado: EstadoDeSincronizacion): ColorDeEstado {
   if (estado === 'detenida' || estado === 'sin_credencial') {
     return 'rojo';
   }
-  if (estado === 'pendientes_viejos') {
+  if (estado === 'pendientes_viejos' || estado === 'problema_al_sincronizar') {
     return 'ambar';
   }
   return 'neutral';

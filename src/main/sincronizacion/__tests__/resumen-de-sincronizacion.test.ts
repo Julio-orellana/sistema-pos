@@ -317,11 +317,19 @@ describe('El color: FALSIFICADO contra la frase literal de §3.3', () => {
     que el diseño nombra, para que un estado nuevo agregado sin decidir su
     color no pase en silencio con `undefined`.
   */
-  it('al_dia, pendientes, sin_conexion y problema_al_sincronizar: neutral', () => {
+  it('al_dia, pendientes y sin_conexion: neutral (son pasivos: se resuelven solos)', () => {
     expect(colorDeEstado('al_dia')).toBe('neutral');
     expect(colorDeEstado('pendientes')).toBe('neutral');
     expect(colorDeEstado('sin_conexion')).toBe('neutral');
-    expect(colorDeEstado('problema_al_sincronizar')).toBe('neutral');
+  });
+
+  it('problema_al_sincronizar: ÁMBAR, el mismo de pendientes_viejos (decisión de Julio, 2026-09-17)', () => {
+    expect(colorDeEstado('problema_al_sincronizar')).toBe('ambar');
+    expect(colorDeEstado('problema_al_sincronizar')).toBe(colorDeEstado('pendientes_viejos'));
+  });
+
+  it('problema_al_sincronizar y sin_conexion NO se ven del mismo color', () => {
+    expect(colorDeEstado('problema_al_sincronizar')).not.toBe(colorDeEstado('sin_conexion'));
   });
 
   it('la lista recorre los siete estados, y cada uno tiene color y texto', () => {
