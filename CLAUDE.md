@@ -9191,6 +9191,122 @@ nació con su política.
 **Lo que NO se hizo, por pedido de Julio:** la batería destructiva (exige vaciar
 el proyecto), `verify:restauracion`, y nada contra `pos-jimmy-cano`.
 
+### 4.57 El nombre legible de una tabla, una sola vez (2026-09-17)
+
+**El defecto de patrón.** El mapa de nombre técnico a texto legible estaba
+escrito a mano en las DOS pantallas que nombran tablas, en distinto orden y sin
+nada que las atara:
+
+| Copia | Claves |
+|---|---|
+| `PantallaDeSincronizacion.tsx:26` | las 13 tablas **más `archivo_foto`** |
+| `PantallaDeRestauracion.tsx:41` | las 13 tablas |
+
+Se desincronizaron con la primera tabla nueva: al crearse
+`anulaciones_de_venta` (§4.45) solo se agregó a una, y **la pantalla de
+sincronización mostró el nombre TÉCNICO de una anulación pendiente** a quien
+tenía que decidir si reintentaba o saltaba un lote detenido. Se corrigieron los
+dos mapas a mano (§4.53) y el defecto quedó vivo para la próxima tabla:
+**agregar una tabla y olvidarse de una copia no hacía fallar nada.**
+
+**La auditoría, antes de tocar nada.** Se recorrieron `src/renderer` y
+`src/shared` buscando cualquier otro mapa o lista de nombres legibles por tabla:
+los `Record<…>` declarados, las etiquetas distintivas («líneas de venta»,
+«arqueos de caja», …) y los nombres técnicos de las trece tablas. **No hay
+ningún otro.** Los demás `Record` del renderer son de otra cosa —estados,
+roles, marcadores, denominaciones—, y el único candidato del proceso principal,
+`resumenDeFila` de `servicio-de-restauracion.ts:1182`, **no lo es**: describe la
+FILA y no la tabla, y su `switch` exhaustivo sobre `TablaRestaurable` ya lo
+protege el compilador.
+
+#### La fuente única, y por qué NO se invierten las dependencias
+
+`src/shared/nombres-de-tabla.ts`, en shared porque quien lo muestra es el
+renderer, que no puede importar del proceso principal. Trae las trece tablas
+—en el orden de `ORDEN_DE_RESTAURACION`, para poder leerlas una al lado de la
+otra— más `archivo_foto`, que no es una tabla sino el `entidad_tipo` con el que
+la cola encola una foto (§4.33) y que la pantalla de sincronización muestra
+junto a las tablas.
+
+**`TablaSincronizable` y `ORDEN_DE_RESTAURACION` NO se derivan de este mapa.**
+La primera es una lista cerrada que obliga a preguntarse si algo es dato de
+negocio, y el orden de la segunda es el grafo de llaves foráneas: derivarlas de
+un mapa de etiquetas ataría tres cosas que se deciden por razones distintas. La
+cobertura se comprueba **al revés**, con tres fuentes independientes.
+
+**Una clave desconocida se devuelve tal cual, sin fallar.** Lo que llega son
+datos que la base ya escribió, y un hueco en la pantalla se entiende menos que
+un nombre técnico. Que falte una etiqueta lo atrapa `npm test`, en desarrollo.
+
+#### Las dos redes, y por qué el compilador solo no alcanzaba
+
+`nombres-de-tabla-una-sola-fuente.test.ts`, 12 pruebas:
+
+- **Estructural.** Recorre el árbol sintáctico del renderer y del proceso
+  principal y falla, con archivo y línea, si alguien declara su propio mapa o su
+  propia función de nombre legible. Cuenta como mapa un literal de objeto con al
+  menos tres claves que son nombres de tabla y valores de texto, así que no da
+  falso positivo con `TABLAS_ADMITIDAS_POR_FUNCION` ni con `COLUMNAS_EXCLUIDAS`,
+  que tienen arrays por valor, ni con `TABLAS_QUE_VIAJAN` ni
+  `ORDEN_DE_RESTAURACION`, que son arrays. Tiene control de sus dos detectores.
+- **Cobertura.** Las claves, menos `archivo_foto`, son exactamente
+  `ORDEN_DE_RESTAURACION`; `TIPO_DE_ENTRADA_DE_FOTO` está entre ellas; y una
+  asignación `Readonly<Record<TablaSincronizable, string>>` hace fallar
+  `npm run typecheck` si una tabla entra en el tipo y no en el mapa.
+
+> **DEJARLO SOLO EN EL COMPILADOR NO HABRÍA SERVIDO, y esa es la razón de que el
+> defecto durara.** Los dos mapas estaban anotados `Readonly<Record<string,
+> string>>`, así que TypeScript nunca pudo ver que a uno le faltara una clave.
+
+#### Falsificado, una mutación por vez, restaurando y comprobando el sha256
+
+| Mutación | Qué cae |
+|---|---|
+| La prueba contra el código anterior (los dos mapas) | 2, nombrando `renderer/src/components/PantallaDeRestauracion.tsx:41 usuarios, categorias, …` y `…/PantallaDeSincronizacion.tsx:26 …, archivo_foto` |
+| Quitar `anulaciones_de_venta` del mapa | 3 en Vitest, y `typecheck` da «Property 'anulaciones_de_venta' is missing … but required in type 'Readonly<Record<TablaSincronizable, string>>'» |
+| Un mapa local nuevo en `PantallaDeReportes.tsx` | 1: `renderer/src/components/PantallaDeReportes.tsx:21 ventas, venta_detalle, productos` |
+| Una tabla nueva en `ORDEN_DE_RESTAURACION` sin su nombre | 1, nombrando `tabla_nueva_de_prueba` |
+| Un detector que nunca detecta nada | **los 2 controles**, que es lo que impide que las búsquedas pasen en falso |
+
+#### En la app real: el arnés no podía ver el defecto, y ahora sí
+
+`verify:pantallas` sembraba su lote bloqueante con `usuarios`, cuyo nombre
+legible **es la misma palabra** que el técnico: con esa tabla el arnés no podía
+distinguir si la traducción funcionaba. El lote de «reintentar ahora» pasó a ser
+de `venta_detalle` → «líneas de venta», y hay una comprobación que exige que el
+aviso del lote detenido diga el legible y **en ninguna parte** el técnico.
+
+Corrida del 2026-09-17 (macOS), **49 de 49**:
+
+```
+  OK    el lote detenido nombra la tabla en castellano, nunca con su nombre técnico
+        esperado: "líneas de venta", y en ninguna parte "venta_detalle"
+        real    : traduce
+```
+
+**Falsificado** dejando que el mapa devolviera el nombre técnico
+(`venta_detalle: 'venta_detalle'`): 49 comprobaciones, **1 fallida**, y el arnés
+imprime lo que se ve en pantalla —palabra por palabra el defecto original:
+
+```
+  FALLA el lote detenido nombra la tabla en castellano, nunca con su nombre técnico
+        real: NO traduce: "La cola está detenidaUn lote con venta_detalle quedó
+        detenido después de 1 intento. Nada detrás de él va a subir hasta que se
+        resuelva.…"
+```
+
+`npm run verify`: 109 archivos, 2477 pruebas, 0 errores de lint (los 4 avisos de
+`react-refresh` son los de siempre, en `MiniaturaDeProducto` y
+`TecladoEnPantalla`).
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **La pantalla de RESTAURACIÓN no se manejó en la app real**: su arnés
+  (`verify:pantallas:restauracion`) habla con el proyecto de pruebas de Supabase
+  y no se corrió. Lo que sí cubre Vitest es que usa la fuente única y que la
+  fuente cubre las trece tablas que esa pantalla puede nombrar.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -9506,6 +9622,7 @@ el proyecto), `verify:restauracion`, y nada contra `pos-jimmy-cano`.
 | **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
 | **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **La base rechaza una anulación con vía distinta de `'presencial'`: CHECK con nombre `anulaciones_de_venta_solo_presencial` en la 038 local y en la 0038 de la nube, que convive con el CHECK amplio de la columna en los dos lados. La 0038 va en la misma ronda que la 0033 y la 0035.** **REVIERTE la fila de `docs/ANULACION-DE-VENTA.md` §1.1.** | Dejar el CHECK amplio, como decía el diseño; estrechar la 0033 antes de su primera aplicación; en la nube, quitar el CHECK de la columna | Decisión de Julio. El «segundo lugar» que §4.9 eliminó podía ampliar un permiso en silencio; este falla cerrado, y una prueba exige que `ACEPTA_PIN_REMOTO` y la base digan lo mismo. Estrechar la 0033 dejaría la local y la nube distintas hasta la 038. En la nube se deja el CHECK amplio para que el espejo sea exacto y ampliar algún día sea la misma sentencia en los dos lados. Aplicarla junto con la 0033 no rompe a nadie: ninguna versión publicada escribe `'remoto'` (medido en los tags). §4.54. | 2026-09-17 (número de prompt por confirmar) |
+| **El nombre LEGIBLE de cada tabla vive UNA sola vez, en `src/shared/nombres-de-tabla.ts`, y una prueba sobre el árbol sintáctico falla si un archivo del renderer o del proceso principal declara su propio mapa. Otra exige que el mapa cubra EXACTAMENTE las trece tablas.** | Corregir los dos mapas a mano cada vez, como el 2026-09-17; derivar `TablaSincronizable` o `ORDEN_DE_RESTAURACION` de este mapa; dejarlo solo en el compilador | El mapa estaba escrito a mano en las DOS pantallas que nombran tablas —sincronización y restauración—, en distinto orden y sin nada que las atara, y **agregar una tabla y olvidarse de una copia no hacía fallar nada**. Se desincronizaron con la primera tabla nueva: `anulaciones_de_venta` (§4.45) entró en un solo mapa y la pantalla de sincronización mostró el nombre TÉCNICO de una anulación pendiente a quien tenía que decidir si reintentaba o saltaba un lote detenido. Arreglarlos a mano (§4.53) dejó el defecto vivo para la próxima tabla. **No se invierten las dependencias de los tipos de dominio**: `TablaSincronizable` es una lista cerrada que obliga a preguntarse si algo es dato de negocio, y el orden de `ORDEN_DE_RESTAURACION` es el grafo de llaves foráneas; derivarlos de un mapa de etiquetas ataría dos cosas que se deciden por razones distintas. La cobertura se comprueba al revés —el mapa contra esas listas—, con **tres fuentes independientes**: la igualdad con `ORDEN_DE_RESTAURACION` en runtime, la presencia de `TIPO_DE_ENTRADA_DE_FOTO`, y una asignación de tipo que hace fallar `typecheck` si una tabla entra en `TablaSincronizable` y no en el mapa. **Dejarlo solo en el compilador no alcanzaba**: los dos mapas eran `Record<string, string>`, así que TypeScript nunca vio que faltara una clave. La auditoría recorrió `src/renderer` y `src/shared` y no encontró ningún otro mapa; `resumenDeFila` de la restauración describe la FILA y no la tabla, y su `switch` exhaustivo ya lo protege el compilador. §4.57. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -9883,6 +10000,7 @@ src/shared/     código compartido main <-> renderer
   money.ts      aritmética exacta con Decimal.js
   descuento.ts  cálculo del descuento discrecional (lo usan las DOS capas)
   estado-de-sincronizacion.ts  los estados de la barra de nube, su color y su texto: UNA sola copia (§4.51)
+  nombres-de-tabla.ts  el nombre legible de cada tabla: UNA sola copia, y una prueba lo exige (§4.57)
   contrato-de-sincronizacion.ts  la versión de contrato y las listas cerradas de la 0023
   __tests__/    pruebas automatizadas
 scripts/        guiones de desarrollo: verify:pantallas, verify:nube y su seguro, y
