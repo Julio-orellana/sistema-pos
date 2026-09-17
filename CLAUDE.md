@@ -8104,6 +8104,212 @@ la 0032. Sí tiene el 2 y el 3.
 - Que la terminal de prueba suba de verdad a `pos-pruebas-descartable` desde el
   instalador. Lo medido es a qué proyecto apunta.
 
+### 4.50 La tienda: ninguna pantalla con la red del local (2026-09-17)
+
+**El reporte, primer hallazgo en el hardware y la red de Jimmy.** Con la red de
+la tienda conectada, la aplicación no llegó a mostrar ninguna pantalla, con CPU
+y disco en 0 %. Sin red, abría normal. La hipótesis que llegó con el reporte:
+una verificación de conexión al arrancar, sin límite de tiempo, contra una red
+que descarta paquetes en silencio.
+
+#### La hipótesis, contra el código: no se sostiene
+
+Leído en `develop` y en las tres etiquetas publicadas (`v1.0.0-prueba.1` =
+`f71cd01`; `v1.1.0-prueba` y `v1.1.0-produccion` = `5909f1b`):
+
+- **Nada espera la red antes de crear la ventana.** Entre `app.whenReady()` y
+  `crearVentanaPrincipal` hay UN solo `await`: el de `protocol.handle`, que lee
+  una foto del disco con `file:` y corre solo cuando la ventana la pide.
+
+  ```
+  == v1.0.0-prueba.1
+     await en línea 635:         return await net.fetch(pathToFileURL(absoluta).toString());
+     crearVentanaPrincipal en línea 831
+  == v1.1.0-prueba
+     await en línea 693:         return await net.fetch(pathToFileURL(absoluta).toString());
+     crearVentanaPrincipal en línea 898
+  ```
+
+- **Toda petición ya tenía su límite**, en las tres etiquetas y en `develop`:
+  en cada archivo, tantos `signal:` como llamadas de tipo `fetch`.
+- **La interfaz no pide nada a la red para dibujarse.** La CSP es
+  `default-src 'self'`. En el bundle compilado solo aparecen `http://www.w3.org`
+  (espacios de nombres de SVG) y `https://react.dev` (textos de error de React).
+- **Las impresoras se listan solo a pedido**, al abrir su pantalla.
+
+#### La auditoría, petición por petición
+
+| # | Petición | Dónde (línea del `signal`) | Pila | Límite | Cuándo corre |
+|---|---|---|---|---|---|
+| 1 | Renovación y login de Auth | `sincronizacion/auth-de-nube.ts:173` | `fetch` de Node: `index.ts:765` y `:836` pasan `undefined` (punto 32 de §6.2) | 20 s, `AbortController`, cubre el cuerpo | `sesionDeNube.arrancar()` al arrancar; al conectar; al restaurar |
+| 2 | Health (capa 2) | `sincronizacion/deteccion-de-conexion.ts:259` | `net.fetch` | 8 s | precondición de la restauración y `consultarEstado`; nunca al arrancar |
+| 3 | Latido | `sincronizacion/deteccion-de-conexion.ts:364` | `net.fetch` | 8 s | cada hora (`index.ts:1165`) |
+| 4 | Subida de un lote | `sincronizacion/supabase-sync-provider.ts:247` | `net.fetch` | 30 s | primer ciclo, 30 s después de mostrar la ventana |
+| 5 | Subida de una foto | `sincronizacion/subida-de-fotos.ts:157` | `net.fetch` | 60 s, `AbortSignal.timeout` | ciclo del trabajador |
+| 6 | Cierre de la sesión de restauración | `restauracion/cliente-de-restauracion.ts:235` | `net.fetch` | 30 s, `AbortSignal.timeout` | a pedido |
+| 7 | Lecturas y descarga de la restauración | `restauracion/cliente-de-restauracion.ts:301` | `net.fetch` | 30 s; 60 s la descarga (`:409`) | a pedido |
+| — | Foto del disco | `index.ts:707` | `net.fetch` sobre `file:` | no aplica | cuando la ventana pide una foto |
+| — | `net.isOnline()` | `index.ts:858`, `:1005`, `:1153`, `:1156` | lectura en memoria | no aplica | sondeo cada 30 s |
+
+`net.isOnline()` no bloquea: medido en 0 ms con Electron 44.2.0 en macOS. Y
+leído en Chromium: en Windows `GetCurrentConnectionType()` devuelve un valor
+guardado, bajo un candado. En Windows no se midió.
+
+#### Lo que sí había, y se cambió
+
+1. **La red arrancaba ANTES de que la ventana se viera**, sin esperarla. Medido
+   con el código anterior (escenario A, 2026-09-17 12:05Z):
+   `log-tecnico +461 ms: trabajador en marcha…` contra `ventana visible a los
+   683 ms`. Son dos relojes distintos: la bitácora y un sondeo de `isVisible()`
+   cada 50 ms. Y, como se descubrió después, en macOS ese sondeo no prueba
+   nada (ver abajo). Lo firme es la lectura del código: la red arrancaba en el
+   mismo turno en que se creaba la ventana, y la ventana se mostraba después,
+   con `ready-to-show`.
+2. **La ventana nacía escondida y SOLO `ready-to-show` la mostraba, sin
+   respaldo** (`main-window.ts`: `show: false` en la línea 98 y
+   `ventana.once('ready-to-show', …)` en la 123, iguales en las tres
+   etiquetas). Si ese aviso no llega:
+   - **En Windows la ventana queda escondida para siempre. Leído, no medido:**
+     en `shell/browser/native_window_views.cc` de Electron v44.2.0, con
+     `fullscreen: true` el constructor solo guarda el estado (líneas 465–471).
+     El comentario de las líneas 867–869 dice que esa situación «may arise
+     when app starts with fullscreen: true». Es la misma forma que el síntoma:
+     ninguna pantalla y la CPU quieta.
+   - **En macOS no se puede reproducir, y está medido.** Una ventana con
+     `show: false` y `fullscreen: true` se hace visible SOLA:
+
+     ```
+     [sonda +12290ms] show:false + fullscreen:true: isVisible 0ms:false 200ms:false 1000ms:true 3000ms:true; ready-to-show a los 153 ms; nunca se llamó show()
+     [sonda +16880ms] show:false + fullscreen:true + frame:false: isVisible 0ms:false 200ms:false 1000ms:true 3000ms:true; ready-to-show a los 138 ms; nunca se llamó show()
+     [sonda + 3133ms] show:false: isVisible 0ms:false 200ms:false 1000ms:false 3000ms:false; ready-to-show a los 134 ms; nunca se llamó show()
+     ```
+
+   **Que esto sea lo que pasó en la tienda NO está medido.** No se sabe qué de
+   esa red haría que `ready-to-show` no llegue. Es el punto 31 de §6.2.
+
+#### El arreglo
+
+| Pieza | Qué hace |
+|---|---|
+| `windows/mostrar-ventana.ts` (nuevo) | `mostrarCuandoEsteLista`: muestra y enfoca con `ready-to-show` **o a los 10 s**, lo que llegue primero. No muestra una ventana destruida. Resuelve la promesa recién cuando ya llamó a `show()`, y anota en la bitácora cómo se mostró. |
+| `windows/main-window.ts` | La ventana se crea escondida y ya no se muestra sola: lo decide quien arranca. Se quitó el parámetro `mostrarAlEstarLista`. La verificación de arranque simplemente no la muestra. |
+| `index.ts` | Todo lo que usa la red vive en `arrancarLoQueUsaLaRed`: el detector, el proveedor, el trabajador, el planificador, `sesionDeNube.arrancar()`, `powerMonitor`, el sondeo de `net.isOnline()` y el latido. Se llama UNA vez, en el `.then` de `mostrarCuandoEsteLista`, y no si la ventana se destruyó. La ventana de `activate` (macOS) se muestra igual, sin arrancar la red otra vez. |
+| `log-tecnico.ts` | Origen nuevo `arranque`: «ventana creada a los N ms del inicio del proceso (Electron lista a los X ms, base abierta a los Y ms)», «la interfaz terminó de cargar», «ventana mostrada… avisó que estaba lista» o «…SIN que avisara que estaba lista: no llegó «ready-to-show» en 10000 ms y se muestra igual», y «arranca lo que usa la red». |
+
+Los límites de las siete peticiones **no se tocaron** (punto 33 de §6.2).
+Ninguna corre ya antes de mostrar la ventana.
+
+#### Pruebas nuevas: 36, y cómo se falsificaron
+
+| Archivo | Pruebas | Qué exige |
+|---|---|---|
+| `windows/__tests__/mostrar-ventana.test.ts` | 7 | Con el aviso, se muestra y se cancela el temporizador. Sin aviso, se muestra justo a los 10 000 ms y NO a los 9 999. Un aviso tardío no la vuelve a mostrar. Una ventana destruida no se muestra. |
+| `__tests__/nada-de-red-antes-de-mostrar-la-ventana.test.ts` | 11 | Árbol sintáctico de `index.ts`. Toda llamada a `fetch`, `net.fetch/isOnline/request` o a los métodos que salen a la red está en la compuerta, en una dependencia inyectada o en la excepción de la foto del disco. La compuerta se llama una vez, en el `.then`. Tiene controles del detector. |
+| `__tests__/toda-peticion-de-red-lleva-limite.test.ts` | 8 | En `src/main` y `src/shared`, toda llamada de tipo `fetch` lleva un objeto literal con `signal` en la misma llamada, y ninguna usa `net.request` ni `http(s).request/get`. El control exige 7 peticiones con límite en 5 módulos. |
+| `sincronizacion/__tests__/red-que-nunca-contesta.test.ts` | 10 | Con un `fetch` que nunca contesta y otro que se calla a mitad del cuerpo, cada módulo sigue esperando 1 ms antes de su límite y TERMINA en el límite. El detector da «La nube no contestó en 8 s.», Auth da `{ok:false}` sin código HTTP y la subida da «sincronizar_lote_simple no contestó en 30 s.», clasificada como `transitorio`. |
+
+| Mutación (una por vez, archivo restaurado y sha256 comprobado) | Qué cayó |
+|---|---|
+| La prueba de la compuerta contra el `index.ts` de antes | Nombra las líneas 1021, 1029, 1091, 1094 y 1106 |
+| `sesionDeNube?.arrancar()` fuera de la compuerta | 2: `"src/main/index.ts:966 sesionDeNube?.arrancar()"` y el control |
+| La compuerta llamada fuera del `.then` | 1: «la compuerta se llama UNA sola vez, y en el .then de mostrarCuandoEsteLista» |
+| Sin el `signal` del health | `deteccion-de-conexion.ts:256 …` |
+| Auth sin `cancelacion.abort()` | 2: «SIN RESPUESTA…» y «CUERPO MUDO…», `expected false to be true` |
+
+#### En la aplicación real (macOS): `npm run verify:arranque:sin-respuesta-de-red`
+
+Corrida final, 2026-09-17 12:43Z, **32 de 32**, con `--con-nube-de-pruebas`:
+
+| Escenario | `show()` según la bitácora | Primera pantalla | Qué hizo la red | Barra |
+|---|---|---|---|---|
+| A. Nube que acepta TCP y calla | 452 ms del proceso | 621 ms | `+20583 ms: Auth no contestó a la renovación de la sesión: Supabase Auth no contestó en 20 s.` | «Nube: sin conexión — 2 pendientes» |
+| B. `https://10.255.255.1`, descarta paquetes | 362 ms | 518 ms | `+11005 ms: … No se pudo hablar con Supabase Auth: fetch failed` | «Nube: sin conexión — 2 pendientes» |
+| C. Auth contesta, la subida calla | 394 ms | 547 ms | `+534 ms: access token renovado`; `+60515 ms: ciclo: fallo_transitorio; … sincronizar_usuario no contestó en 30 s.` | «Nube: 2 pendientes» (punto 34) |
+| D. `pos-pruebas-descartable` real, cola vacía | 377 ms | 546 ms | `+812 ms: access token renovado` | «Nube: al día» |
+
+El IPC contestó en 2 a 7 ms al principio y a mitad de la espera, con la
+petición colgada. Extracto crudo de A:
+
+```
+    log-tecnico +   323 ms: [arranque] ventana creada a los 201 ms del inicio del proceso (Electron lista a los 83 ms, base abierta a los 86 ms)
+    log-tecnico +   549 ms: [arranque] la interfaz terminó de cargar a los 427 ms del inicio del proceso
+    log-tecnico +   573 ms: [arranque] ventana mostrada a los 452 ms del inicio del proceso: avisó que estaba lista
+    log-tecnico +   574 ms: [arranque] arranca lo que usa la red (sesión con la nube, sincronización, sondeo del enlace) a los 453 ms del inicio del proceso, con la ventana ya visible
+    log-tecnico +   589 ms: [sincronizacion] trabajador en marcha con SupabaseSyncProvider; primer ciclo en 30 s. Pendientes en la cola: 2 filas en 1 lotes.
+    log-tecnico + 20583 ms: [sincronizacion] Auth no contestó a la renovación de la sesión: Supabase Auth no contestó en 20 s.
+2026-09-17T12:44:21.405Z  A: conexiones abiertas contra la nube muda al final: 0
+```
+
+**El respaldo de 10 s, ejercido en la app real** con una mutación temporal que
+le esconde `ready-to-show` a la función (escenario B, 12:38Z):
+
+```
+    log-tecnico +   306 ms: [arranque] ventana creada a los 197 ms del inicio del proceso (Electron lista a los 82 ms, base abierta a los 85 ms)
+    log-tecnico +   439 ms: [arranque] la interfaz terminó de cargar a los 330 ms del inicio del proceso
+    log-tecnico + 10316 ms: [arranque] ventana mostrada a los 10207 ms del inicio del proceso SIN que avisara que estaba lista: no llegó «ready-to-show» en 10000 ms y se muestra igual
+    log-tecnico + 10318 ms: [arranque] arranca lo que usa la red (sesión con la nube, sincronización, sondeo del enlace) a los 10209 ms del inicio del proceso, con la ventana ya visible
+```
+
+**Falsificado en la app real.** Con la red arrancando antes de `show()`, cae:
+
+```
+FALLA B: en la bitácora, «ventana mostrada» está ANTES que todo renglón de red
+      real    : ventana mostrada en el renglón 5; primer renglón de red en el 2
+7 comprobaciones, 1 fallidas
+```
+
+Y el arnés final contra el código de `HEAD`, sin el arreglo, falla en las dos
+comprobaciones de la bitácora («no hay renglón «ventana mostrada»»). Eso solo
+prueba que esos renglones no existían antes.
+
+#### Tres cosas que aparecieron midiendo, dos de ellas contra mis propias herramientas
+
+1. **`isVisible()` no sirve en macOS** para saber si se llamó a `show()`. El
+   arnés decía «ventana visible a los 909 ms» con la mutación de arriba, y la
+   bitácora decía que `show()` llegó a los 10 207 ms. Es el efecto de la sonda
+   de pantalla completa. El arnés ahora exige el renglón «ventana mostrada»
+   (≤ 11 s) y dice en la cabecera por qué.
+2. **«Conexiones abiertas: 2» era un artefacto del servidor de prueba**, que
+   no leía sus sockets: un socket en pausa nunca emite `end`. Medido con
+   Electron 44.2.0, tres peticiones cortadas: 3 «abiertas» sin leer y 0
+   leyendo, con `net.fetch` y con el `fetch` de Node. Corregido en el arnés; la
+   corrida final da 0.
+3. **En B, Auth falla a los ~11 s con «fetch failed»**, antes de su límite de
+   20 s. Medido en las tres corridas: +10 854, +11 022 y +11 005 ms. La causa
+   probable es el tiempo de conexión propio de undici. Es inferencia, no se
+   leyó su código.
+
+#### Lo que se encontró de paso
+
+- **Una prueba de la anulación solo pasaba el 2026-09-15.**
+  `servicio-de-anulacion.test.ts` fijaba el reloj de los reportes y no el de la
+  venta, así que «hoy» miraba el 15 y la venta quedaba fechada con el reloj
+  real. Hoy falló `expected undefined to be 1`. Arreglado en un commit aparte.
+  Es el único caso: `reportes.test.ts` fija los dos relojes y la prueba de
+  canales no fija ninguno.
+- **`verify:pantallas:teclado` dio 35 comprobaciones y no 36**: el AppleScript
+  no logra traer el POS al frente para el Cmd+Q real («NO enviada: el POS no
+  quedó al frente»). **Da lo mismo con el código de `HEAD`**, así que es del
+  entorno de esta Mac hoy, no del cambio.
+
+#### Qué más se corrió
+
+`npm run verify`: 104 archivos, 2363 pruebas, 0 errores de lint.
+`verify:arranque`: código 0. `verify:pantallas`: 48 de 48.
+`verify:pantallas:caja`: 57 de 57. `verify:pantallas:teclado`: 35 de 35.
+
+#### Lo que NO se verificó
+
+- **Windows, que es donde pasó.** Ni el respaldo de 10 s, ni que la ventana
+  quede escondida sin `ready-to-show` (leído en Electron, no medido), ni
+  `net.isOnline()`.
+- **La causa en la tienda.** Punto 31 de §6.2: hace falta `log-tecnico.log` de
+  esa máquina, con una versión que tenga los renglones `[arranque]`.
+- **Qué se escribió en la nube:** nada. El escenario D inició sesión como
+  terminal en `pos-pruebas-descartable` (`ztidrshifrblhfraiowg`): un
+  `grant_type=password` desde el guion y una renovación desde la app, con la
+  cola vacía. Ninguna fila de negocio.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -8398,6 +8604,10 @@ la 0032. Sí tiene el 2 y el 3.
 | **El asistente, el desinstalador, los accesos directos y «Programas y características» dicen «Vixo POS»: se redefine `PRODUCT_NAME` en el `.nsh` y cambian `shortcutName`/`uninstallDisplayName`. El `.exe`, la carpeta de instalación y `productName` no cambian.** | Dejar solo `Caption`; renombrar el ejecutable | Pedido de Julio. En las plantillas NSIS esos tres valores son solo nombres visibles. Las rutas y la identidad salen de `PRODUCT_FILENAME`/`APP_FILENAME` y del GUID de `appId`, que no se tocan. Medido en los dos instaladores: mismo GUID que 1.0.0 y misma carpeta de instalación. §4.49. | Prompt 74 — 2026-09-15 |
 | **`POS_ARCHIVO_NUBE_EMPAQUETADO` elige el archivo de nube de una compilación; el de producción se arma con un archivo temporal que solo tiene URL, llave publicable y proveedor.** | Pisar `.env.empaquetado` con el real y restaurarlo | Si la compilación se cortara con el archivo pisado, el desarrollo quedaría apuntando al real. Si la variable apunta a un archivo que no existe, la compilación falla en vez de compilar sin nube. §4.49. | Prompt 74 — 2026-09-15 |
 | **La `0031` y la `0032` se aplican a `pos-jimmy-cano`, en ese orden, con el mismo texto que el descartable.** **SUPERA la fila del Prompt 59 que las dejaba solo en el descartable.** | Seguir esperando al plan de entrega; aplicarlas juntas en una sola migración | Decisión de Julio, después de revisar el SQL completo de los dos archivos. El real tiene 0 filas de negocio y ninguna terminal sube a él, así que no hay cola que detener; sin ellas, el instalador de producción 1.1.0 no puede sincronizar (punto 28). Una sola migración rompería la igualdad de `schema_migrations` con el descartable, que es lo que permite cotejar por md5. §4.4. | Prompt 75 — 2026-09-15 |
+| **NADA que use la red arranca antes de que la ventana se MUESTRE: todo va dentro de `arrancarLoQueUsaLaRed`, que se llama una sola vez en el `.then` de `mostrarCuandoEsteLista`. Una prueba sobre el árbol sintáctico de `index.ts` lo exige.** | Dejar el orden de antes (la red arrancaba al crear la ventana, sin esperarla); acortar los límites de cada petición; esperar la sesión con la nube antes de mostrar | Pedido de la tienda (2026-09-17). En el código publicado ninguna petición se esperaba antes de mostrar, pero la sesión y el trabajador arrancaban en el mismo turno en que se creaba la ventana, antes de `ready-to-show` (leído en el código; en macOS `isVisible()` no sirve para medirlo, §4.50). Con la compuerta, ninguna petición de red, colgada o no, puede competir con la primera pantalla, y agregar una nueva afuera hace fallar `npm test`. Acortar límites no cambia el orden. Esperar la nube antes de mostrar es justo lo que no puede pasar. §4.50. | 2026-09-17 (número de prompt por confirmar) |
+| **La ventana se muestra al llegar `ready-to-show` O a los 10 s, lo que ocurra primero (`mostrar-ventana.ts`).** | `show: true` desde el principio; mostrar solo con `ready-to-show`, como hasta la 1.1.0 | En las tres versiones publicadas la ventana nace escondida y solo `ready-to-show` la muestra. En Windows, una ventana escondida con `fullscreen: true` sigue escondida hasta `show()` (leído en `native_window_views.cc` de Electron 44.2.0, no medido), así que si ese aviso no llega nunca, no aparece ninguna pantalla y la CPU queda quieta: la misma forma que el síntoma de la tienda. **No está medido que esa sea la causa en la tienda.** En macOS no se puede reproducir: la ventana en pantalla completa se hace visible sola (medido). `show: true` dibujaría un cuadro vacío antes de la interfaz. 10 s son «unos pocos segundos». §4.50. | 2026-09-17 (número de prompt por confirmar) |
+| **Toda petición HTTP del proceso principal lleva `signal` en la MISMA llamada, y `net.request`, `http(s).request` y `http(s).get` están prohibidos; lo exige `toda-peticion-de-red-lleva-limite.test.ts`.** | Confiar en que cada módulo se acuerde; aceptar opciones armadas en una variable | Las siete peticiones que existen ya lo cumplían, pero porque alguien se acordó. Se midió que sin `signal` `net.fetch` queda colgado más de 25 s contra un servidor mudo. Unas opciones armadas afuera no se pueden comprobar sin seguir el flujo de datos, así que no cuentan. §4.50. | 2026-09-17 (número de prompt por confirmar) |
+| **La bitácora técnica gana el origen `arranque`: ventana creada, interfaz cargada, ventana mostrada (y si fue por el aviso o por el límite) y cuándo arranca la red, en ms desde el inicio del proceso.** | Dejarlo en la consola; no registrar nada | El `.exe` de la tienda no tiene consola, y la causa real del hallazgo no se conoce: con estos renglones, `log-tecnico.log` dice en qué paso del arranque se quedó. §4.50 y punto 31 de §6.2. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -8449,6 +8659,10 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 28 | ~~**El instalador de producción 1.1.0 no puede sincronizar con `pos-jimmy-cano` hasta aplicar la `0031` y la `0032` en el real.**~~ | Medido con `list_migrations`: el real terminaba en la 0029. La 1.1.0 sube columnas que el real no tenía y la cola se detenía en la primera venta (§4.49). **Aplicadas en el real el 2026-09-15, 20:59 UTC, con la aprobación de Julio; evidencia en §4.4.** Lo que sigue abierto: la anulación no tiene puerta en ninguna nube (§4.45), y la inscripción TOTP de Jimmy (punto 25). | Parcialmente resuelto — las migraciones ya no bloquean; la anulación y el punto 25 sí |
 | 29 | **`.env.nube-real` contiene las contraseñas de terminal y de restauración del real.** ~~Aunque su cabecera dice que no. Y su correo de terminal (`terminal@…`) no coincide con el de §4.38 (`terminal-1@…`).~~ | Está ignorado por git y no entró a ningún instalador (§4.49). **Corregido el 2026-09-15:** la cabecera dice qué guarda cada variable. `auth.users` se consultó con `SELECT`: el real tiene tres cuentas (`julioes134@outlook.es` con `restauracion`, `terminal-1@pos-jimmy-cano.invalid` con `terminal`, `terminal@pos-jimmy-cano.invalid` sin rol). La correcta es `terminal-1@` (confirmado por Julio); §4.38 estaba bien y el archivo guardaba la sobrante. El correo del archivo ya es `terminal-1@` y su clave la escribe Julio. Sigue abierto si esas contraseñas deben vivir en un archivo de la máquina de desarrollo. | Parcialmente resuelto — queda la decisión de Julio sobre el archivo |
 | 30 | **`terminal@pos-jimmy-cano.invalid` es una cuenta de Auth sobrante en `pos-jimmy-cano`: confirmada, sin `app_metadata.rol`, de origen desconocido** (probablemente un intento anterior de crear la de terminal). | No tiene ningún permiso: las funciones de sincronización y las políticas exigen un rol, y la aplicación rechaza conectar la terminal con ella (§4.23). No es sensible por sí sola, pero no puede quedar sin documentar. **No se borró ni se modificó**, por decisión de Julio. | Abierto — decidir si se elimina o se reutiliza |
+| 31 | **¿Por qué la aplicación no mostró ninguna pantalla con la red de la tienda de Jimmy? LA CAUSA REAL NO ESTÁ MEDIDA.** | Lo que se sabe (§4.50): ninguna versión publicada espera una petición de red antes de mostrar la ventana, y todas las peticiones ya tenían límite. La hipótesis de una verificación de conexión sin límite no se sostiene en el código. Lo que sí encaja con el síntoma es una ventana que nunca recibe `ready-to-show` (en Windows queda escondida para siempre; leído, no medido), pero no se sabe qué de esa red lo provocaría. **Para saberlo:** instalar una versión con el origen `[arranque]` y traer `%APPDATA%\POS Jimmy Cano\log-tecnico.log` después de un arranque con la red de la tienda, más la versión que tenía instalada. Si falta «ventana creada», se trabó antes (base de datos, disco). Si está «ventana creada» y falta «interfaz terminó de cargar», es la interfaz. Si dice «SIN que avisara que estaba lista», el respaldo de 10 s la mostró. Si no existe el archivo, no se llegó ni a escribir en la carpeta de datos. | Abierto — **hace falta el log de la tienda** |
+| 32 | **Auth habla por el `fetch` de Node, no por `net.fetch`, aunque el comentario de `index.ts` (~línea 824) dice lo contrario.** | Los dos `ClienteDeAuthHttp` de `index.ts` (líneas 765 y 836) reciben `undefined`, así que usan el `fetch` global (undici), que no toma el proxy de Windows; PostgREST y Storage sí van por `net.fetch`. Si la red de una tienda exige proxy, la sesión con la nube no se renovaría nunca, sin colgarse: 20 s de límite, y undici además corta la conexión a unos 10 s (medido: «fetch failed» a +10.8 s contra una IP que descarta paquetes). Cambiarlo es pasar `net.fetch`, pero cambia la pila de red de un camino medido y hay que probarlo en Windows. | Abierto — decisión técnica de Julio |
+| 33 | **¿Se bajan los límites de 20 s (Auth), 30 s (subida y restauración) y 60 s (fotos y descarga)?** | Julio pidió «unos pocos segundos». Ninguno corre ya antes de mostrar la ventana (§4.50), así que ninguno puede trabar la primera pantalla. Bajarlos acorta lo que tarda en decir «sin conexión» y, en una conexión lenta de la tienda, puede cortar peticiones que sí iban a contestar. No se tocaron. | Abierto — decisión de Julio |
+| 34 | **Si Auth contesta pero la subida no, la barra dice «Nube: 2 pendientes» y no «sin conexión».** | Medido en el escenario C de §4.50. El estado de la barra (§4.34) mira si hay token vigente, no si la última subida contestó, y el lote queda como transitorio y se reintenta. No es un cuelgue, pero la persona no ve que la nube no está contestando. | Abierto — de bajo riesgo |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -8638,6 +8852,12 @@ npm run verify:pantallas:historial-de-cajas  # la app real: cinco cajas armadas 
 npm run verify:pantallas:impresora  # la app real con impresoras SIMULADAS: estado, prueba sin elegir,
                          # desconectada, la que recibe (bytes ESC/POS), confirmación «ilegible»,
                          # guardar, reinicio, venta con impresora y venta después de quitarla (§4.43).
+npm run verify:arranque:sin-respuesta-de-red  # la app real contra redes que NUNCA contestan: nube que
+                         # acepta TCP y calla (A), IP que descarta paquetes (B), Auth que contesta y
+                         # subida que calla (C). Mide cuándo se llamó a show() según la bitácora, la
+                         # primera pantalla, el IPC y el orden ventana → red (§4.50).
+                         # Con `-- --con-nube-de-pruebas` suma D: pos-pruebas-descartable de verdad,
+                         # solo Auth y SIN filas pendientes. `-- --solo=AB` elige escenarios. ~5 min.
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
@@ -8697,7 +8917,7 @@ Archivos que la aplicación usa en `<userData>` y que conviene conocer:
 | `recibos/` | Los PDF de los comprobantes emitidos. |
 | `fotos-de-productos/` | Las fotos del catálogo. |
 | `impresora.json` | El NOMBRE de la impresora de Windows y la última prueba (§4.43). **Si no existe, no hay impresión** y el recibo queda solo en PDF. |
-| `log-tecnico.log` | Bitácora TÉCNICA: fallos de impresión y de PDF. No es `auditoria_log`. |
+| `log-tecnico.log` | Bitácora TÉCNICA: fallos de impresión y de PDF, sincronización y, desde el 2026-09-17, los hitos del arranque (`[arranque]`, §4.50). No es `auditoria_log`. **Es lo primero que hay que pedir si la aplicación no abre en una máquina.** |
 | `restauracion.json` | El puesto de control de una restauración a medias (§4.35). **Si existe, la aplicación arranca en la pantalla de restauración** y no en la de ingreso. Se borra solo al terminar; nunca guarda una credencial. |
 
 Los cuatro `seed:` arrancan el proceso principal sin abrir ventana, trabajan
@@ -8737,7 +8957,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
   adapters/     implementaciones reales: impresión térmica por ESC/POS
   recibo/       HTML a PDF con el Chromium que Electron ya trae
   log-tecnico.ts  bitácora de eventos técnicos; NO es la de auditoría
-  windows/      creación y bloqueos de la ventana kiosko
+  windows/      creación y bloqueos de la ventana kiosko, y cuándo se muestra (mostrar-ventana.ts)
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
   src/venta/    lógica pura del ticket en memoria (sin DOM, sin IPC)
 src/shared/     código compartido main <-> renderer
