@@ -10,7 +10,10 @@
 > misma ronda que la `0038`** (CLAUDE.md §4.56); en `pos-jimmy-cano`, no.
 > **Y desde el 2026-09-17 también están el recibo marcado (5) y la pantalla
 > (4.3), con su arnés en la aplicación real** (CLAUDE.md §4.58).
-> **Falta:** el reporte de cobros con tarjeta (3.5), la batería destructiva
+> **Y el 2026-09-17 el reporte de cobros con tarjeta (3.5) quedó SUPERADO: en
+> vez de una pantalla aparte, el historial de recibos filtra por método de pago
+> y muestra el voucher y su estado** (CLAUDE.md §4.60).
+> **Falta:** ~~el reporte de cobros con tarjeta (3.5),~~ la batería destructiva
 > contra `pos-pruebas-descartable` (10.3) y aplicar las migraciones de la nube
 > en el proyecto real.
 > Escrito el 2026-09-15. Ninguna migración de este documento se aplica a ningún
@@ -46,7 +49,8 @@
 11. [Lo que este diseño no hace](#11-lo-que-este-diseño-no-hace)
 12. [Decisiones que este diseño te pide](#12-decisiones-que-este-diseño-te-pide)
 
-Y, dentro de la sección 3, [3.5 El reporte de cobros con tarjeta](#35-el-reporte-de-cobros-con-tarjeta).
+Y, dentro de la sección 3, ~~[3.5 El reporte de cobros con tarjeta](#35-el-reporte-de-cobros-con-tarjeta)~~
+**(SUPERADA el 2026-09-17: lo hace el historial de recibos)**.
 
 ---
 
@@ -502,7 +506,9 @@ el sistema no tiene cómo verlo.**
    la venta original» y **no se llega a pedir el PIN**.
 4. **No hay tabla de vouchers ni columna nueva.** El voucher ya está guardado en
    la venta desde que se cobró. Para ver qué cobros con tarjeta quedaron
-   anulados hay un reporte de solo lectura (3.5).
+   anulados ~~hay un reporte de solo lectura (3.5)~~ **el historial de recibos
+   se filtra por método de pago y muestra el voucher con su estado (3.5,
+   superada el 2026-09-17)**.
 
 **Cómo se compara, con precisión:**
 
@@ -543,6 +549,37 @@ el sistema no tiene cómo verlo.**
 | Lo que ve el rol venta | Nada del teórico. La respuesta de la anulación nunca lo lleva (§4.40). |
 
 ### 3.5 El reporte de cobros con tarjeta
+
+> ## ~~SECCIÓN 3.5~~ SUPERADA EL 2026-09-17: LO HACE EL HISTORIAL DE RECIBOS
+>
+> **Decisión de Julio.** En vez de una pantalla de reportes aparte, el historial
+> de recibos —que ya existe y que ya es el punto de entrada de la anulación
+> (4.3)— gana un **filtro por método de pago** (Todas / Efectivo / Tarjeta) y
+> muestra, en cada venta con tarjeta, **su voucher y si está Activo o Anulado**.
+> Una sola pantalla con filtro es mejor que dos que muestran casi lo mismo, y
+> además el cajero ya busca ahí por número de recibo.
+>
+> **Qué de esta sección SIGUE VIGENTE, palabra por palabra:**
+>
+> | De 3.5 | Dónde vive ahora |
+> |---|---|
+> | Voucher, de `ventas.num_boleta` | La fila del historial, en `numBoleta` |
+> | **«Anulado» si existe su fila en `anulaciones_de_venta`; «Activo» si no** | Igual, derivado en cada consulta |
+> | **El estado no se guarda en ningún lado** y no lee `ventas.estado` (1.3) ni los asientos (6.3) | Igual |
+> | Fecha de anulación cuando está anulada | Igual, con la hora además |
+> | Recibo No., fecha y hora, total, quién vendió | Ya estaban en el historial desde que existe |
+>
+> **Qué CAMBIÓ respecto de lo que esta sección decidía, y por qué:**
+>
+> | De 3.5 | Qué quedó | Por qué |
+> |---|---|---|
+> | «Quién la ve: **rol administrativo**, como los otros tres reportes» | **Las filas y el voucher los ve cualquiera con sesión; los TOTALES, solo el rol administrativo** | El historial ya era de cualquiera con sesión, y el voucher ya sale impreso en el papel del cliente (§4.14): esconderlo no protegería nada. Lo que sí es «información de dueño» es cuánto entró, y por eso los totales sí llevan rol (§4.15, §4.40) |
+> | Canal nuevo `reportes:cobros-con-tarjeta`, y la prueba de guards de reportes pasa de 5 a 6 | **Ningún canal nuevo**: `recibos:listar` gana un payload con el filtro. Los guards de reportes siguen siendo 5 | No hace falta un canal para lo que otro ya devuelve |
+> | «Período: **ninguno, muestra todos**» | **Los 200 recibos más recientes**, que es lo que el historial ya traía | No se agregó un selector de período: no se pidió, y el historial nunca lo tuvo |
+> | «Totales: **no muestra sumas**» | **Sí los muestra**, pedidos explícitamente: efectivo, tarjeta y general, sumados con Decimal y nunca con `SUM()` | Se pidió. La regla de cómo sumarlos es la que esta misma fila ya anticipaba |
+> | Una consulta SQL propia con dos `LEFT JOIN` | **No se escribió**: el historial ya arma el modelo de cada recibo, que trae el voucher y la anulación | Una consulta más sería un segundo camino a los mismos datos |
+>
+> Lo que sigue es el texto ORIGINAL de la sección, que no se borra.
 
 Una sección de solo lectura en la pantalla de reportes, **«Cobros con tarjeta»**,
 junto a las tres que ya existen. Sirve para cotejar contra la terminal del banco
@@ -1044,7 +1081,9 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 - el candado es independiente de las otras cinco superficies y del ingreso, en
   los dos sentidos.
 
-**El reporte de cobros con tarjeta (3.5):**
+**~~El reporte de cobros con tarjeta (3.5)~~ EL HISTORIAL FILTRADO POR TARJETA
+(3.5, superada el 2026-09-17):** lo que sigue vale igual, con el filtro puesto
+en «Tarjeta» en vez de en una pantalla aparte.
 - lista **solo** las ventas con tarjeta, de la más reciente a la más vieja, con
   su voucher;
 - una venta anulada dice «Anulado» con su fecha, y una sin anular dice «Activo»;
@@ -1139,8 +1178,8 @@ fecha del robo.
   `venta_detalle` siguen con sus campos sin piso reservados para ese módulo
   (§4.2).
 - **Hablar con el banco** para una venta con tarjeta. El sistema no sabe si la
-  anulación se hizo en la terminal bancaria; el reporte de 3.5 sirve para
-  cotejarlo a mano.
+  anulación se hizo en la terminal bancaria; ~~el reporte de 3.5~~ **el
+  historial filtrado por «Tarjeta»** sirve para cotejarlo a mano.
 - **Guardar el voucher de la anulación bancaria.** Decisión 9: no hay tabla ni
   columna de vouchers.
 - **Un reporte de anulaciones por persona.** Recomiendo construirlo pronto: el

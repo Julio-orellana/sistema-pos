@@ -7323,7 +7323,7 @@ solo el núcleo local, que se usa de punta a punta por el canal
 | Sincronización a la nube (§7): la `0033`, la `0035`, el enrutador, el contrato | **Del lado de la terminal, hecho el 2026-09-17 (§4.53). La `0033` y la `0035`, ESCRITAS y SIN APLICAR en ningún proyecto** |
 | Restauración (§8) | **Hecho el 2026-09-17 (§4.53)** |
 | El recibo marcado (§5) y la pantalla, desde el historial de recibos (§4.3) | **Hecho el 2026-09-17 (§4.58)** |
-| El reporte de cobros con tarjeta (§3.5) | **No**. Prompt aparte |
+| ~~El reporte de cobros con tarjeta (§3.5)~~ | **SUPERADO el 2026-09-17**: lo hace el historial de recibos, con su filtro por método de pago (§4.60) |
 
 > **UNA VERSIÓN CON ESTE NÚCLEO NO SE INSTALA EN UNA TERMINAL CONECTADA A LA
 > NUBE.** El lote de la anulación se encola dentro de la transacción (§2.2,
@@ -9570,8 +9570,10 @@ Cada una con el archivo restaurado y su sha256 comparado después.
 - **El botón de imprimir el recibo marcado desde la confirmación** (§5.2)
   tampoco: la confirmación informa, y reimprimir está a un clic en la misma
   pantalla.
-- **El reporte de cobros con tarjeta** (§3.5) sigue pendiente, con su canal y su
-  guard.
+- ~~**El reporte de cobros con tarjeta** (§3.5) sigue pendiente, con su canal y
+  su guard.~~ **SUPERADO el 2026-09-17**: no se construyó como pantalla aparte;
+  el historial filtra por método de pago y muestra el voucher con su estado, sin
+  canal nuevo (§4.60).
 - **Windows**, como siempre.
 
 ### 4.59 El PDF del recibo se marca al anular, no al reimprimirlo (punto 46, cerrado el 2026-09-17)
@@ -9703,6 +9705,126 @@ su rastro en la bitácora técnica.
   disparo de la regeneración; no reemplaza el que ya había.
 - Los PDF de recibos **siguen sin subirse a la nube** (§4.33): esto es local.
 - **Windows**, como siempre.
+
+### 4.60 El historial filtra por método de pago, totaliza y muestra el voucher (2026-09-17)
+
+**Qué se pidió.** Que Jimmy pueda filtrar el historial de recibos por método de
+pago, ver los totales de lo filtrado y, en cada venta con tarjeta, su voucher y
+si está activa o anulada. **Esto reemplaza al reporte «Cobros con tarjeta»** que
+`docs/ANULACION-DE-VENTA.md` §3.5 había diseñado aparte y que nunca se
+construyó: una sola pantalla con filtro es mejor que dos que muestran casi lo
+mismo, y el cajero ya busca ahí por número de recibo.
+
+#### 1. El resumen de ventas YA estaba bien: no se tocó
+
+Era el punto 1 del pedido y la respuesta es que no hacía falta corregir nada.
+Verificado en la aplicación real **antes** de tocar una línea, con montos
+elegidos para que el punto flotante se viera:
+
+```
+armado (recibo, total): [{"recibo":1,"total":"1.10"},{"recibo":2,"total":"2.20"},{"recibo":3,"total":"4.40"},{"recibo":4,"total":"3.30"},{"recibo":5,"total":"6.60"}]
+--- RESUMEN DE VENTAS, texto visible ---
+HOY · 17/09/2026 · Q17.60 · Ventas registradas 5 · En efectivo (3) Q7.70 · Con tarjeta (2) Q9.90 · Descuentos aplicados (0) Q0.00
+--- lo que devuelve el canal, crudo ---
+{"totalVendido":"17.60","cantidadDeVentas":5,"totalEnEfectivo":"7.70","totalEnTarjeta":"9.90","ventasEnEfectivo":3,"ventasEnTarjeta":2,…}
+```
+
+`1.1 + 2.2 + 4.4` da **7.700000000000001** en punto flotante y `3.3 + 6.6` da
+**9.899999999999999**; la pantalla dice `Q7.70` y `Q9.90`.
+
+#### 2. UNA SOLA FUNCIÓN suma, y una prueba estructural lo sostiene
+
+El reparto por forma de pago vivía **suelto dentro de `resumenDeVentas`**
+(`servicio-de-reportes.ts:199-200`): dos `filter` y tres `sumarLista`. Copiarlo
+al historial habría dejado dos lugares contestando la misma pregunta, que es el
+defecto de patrón que este proyecto ya pagó con el nombre legible de las tablas
+(§4.57). Ahora vive en `domain/venta/totales-por-forma-de-pago.ts`, y
+`totales-por-forma-de-pago.test.ts` recorre el árbol sintáctico de `src/main`,
+`src/renderer` y `src/shared` y falla, con archivo y línea, si algún otro
+archivo vuelve a hacer un `.filter()` que compare `formaPago`. Tiene sus dos
+controles: uno que le da el defecto y otro que le da un `if` sobre UNA venta
+—que no es un reparto— y un comentario.
+
+#### 3. EL FILTRO VIAJA AL PROCESO PRINCIPAL, que también suma
+
+`recibos:listar` gana un payload (`{ formaPago: 'todas' | 'efectivo' |
+'tarjeta' }`) y devuelve un sobre: las filas ya filtradas, el filtro con que se
+armaron y los totales. **La ventana no filtra ni suma.** Si filtrara acá y
+sumara allá, o bien la ventana haría aritmética de punto flotante —lo que §4.15
+prohíbe— o los totales serían de otro conjunto que el que se ve.
+
+#### 4. DOS DESVIACIONES DEL PEDIDO, las dos dichas en voz alta
+
+| Lo que decía el pedido | Qué se hizo | Por qué |
+|---|---|---|
+| «Solo cuenta ventas con **`estado='completada'`** — mismo criterio que ya rige en el resto de los reportes» | **NO se mira `ventas.estado`.** Lo que decide es la ausencia de fila en `anulaciones_de_venta` | Las dos mitades de esa frase se contradicen **en este proyecto**: `ventas.estado` dice 'completada' TAMBIÉN en las anuladas (§4.45), y el criterio que rige en el resto de los reportes es `VENTA_SIN_ANULACION`, no el estado. **Lo delató una prueba que ya existía**: `anulacion-estructural.test.ts` recorre todo el código de producción y falla si alguna consulta decide por `ventas.estado` (§1.3 del diseño). La primera versión sí lo miraba y esa prueba se puso roja |
+| La línea de totales, sin decir quién la ve | **Las filas y el voucher los ve cualquiera con sesión; los TOTALES, solo el rol administrativo**, y lo decide el proceso principal | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo de la caja. El voucher, en cambio, **ya sale impreso en el papel del cliente**, así que esconderlo no protegería nada. Se dice la contrapartida: un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo, que es la misma distinción que §4.40 ya tomó. **Si Julio prefiere que la cajera los vea, es quitar una condición de `totalesParaLaVentana`** |
+
+#### 5. Lo anulado se informa aparte, no se esconde
+
+Una venta anulada **sigue en la lista** —el historial muestra todos los
+recibos— pero **no cuenta** en los totales: es plata que se le devolvió al
+cliente, y sumarla diría que entró un dinero que salió. Para que el número se
+pueda leer sin sumar las filas a mano, hay un renglón aparte con cuántas son y
+cuánto sumaban, con el mismo criterio del renglón de descuentos del reporte de
+ventas (§4.15).
+
+#### Verificado en la aplicación real: `npm run verify:pantallas:recibos`, 24 de 24
+
+Seis ventas de un producto a Q1.10 —tres en efectivo (1.10 + 2.20 + 4.40) y
+tres con tarjeta (3.30 + 6.60 + 2.20)—, una de ellas anulada por la interfaz.
+Salida cruda, recortada:
+
+```
+resumen de ventas en pantalla: {"total":"Q19.80","cantidad":"6","efectivo":"Q7.70","tarjeta":"Q12.10"}
+  OK   EL RESUMEN DE VENTAS trae el desglose efectivo/tarjeta y el total general
+  OK   y esos montos son EXACTOS: sumados con Number darían 7.700000000000001 y 12.099999999999998
+  OK   CON «EFECTIVO» quedan las tres en efectivo y NINGUNA con tarjeta
+fila de la venta que se va a anular: Recibo No. 6 · … · Tarjeta · Voucher B-0002 · Activo · Q2.20 · Ver · Reimprimir · Anular
+  OK   CADA VENTA CON TARJETA MUESTRA SU VOUCHER y dice «Activo»
+totales con el filtro en TARJETA: {"efectivo":"Q0.00","tarjeta":"Q12.10","general":"Q12.10","anulado":"(no está)"}
+  OK   LOS TOTALES SON DEL CONJUNTO FILTRADO: con «Tarjeta», el efectivo es cero
+  OK   EL BOTÓN «ANULAR» SIGUE APARECIENDO con el filtro en «Tarjeta»
+fila de la venta anulada: Recibo No. 6 · ANULADA · … · Voucher B-0002 · Anulado el 17/09/2026 17:20 · Anulada el 17/09/2026 17:20 · autorizó Jimmy · el cliente devolvió el producto
+esa venta en la base: {"estado":"completada","num_boleta":"B-0002","anulada_en":"2026-09-17T23:19:33.978Z"}
+  OK   el estado NO se guardó en ningún lado: `ventas.estado` sigue en «completada» (§1.3)
+totales con TODAS, ya anulada una: {"efectivo":"Q7.70","tarjeta":"Q9.90","general":"Q17.60","anulado":"Q2.20"}
+  OK   CON «TODAS» el general queda en Q17.60, que es 7.70 + 9.90 exacto
+resumen de ventas DESPUÉS de anular: {"total":"Q17.60","efectivo":"Q7.70","tarjeta":"Q9.90"}
+  OK   EL RESUMEN DE VENTAS Y EL HISTORIAL SIGUEN DICIENDO LO MISMO después de anular
+usuario en sesión ahora: Ana · venta
+la cajera ve: 6 filas, 3 vouchers, 0 líneas de totales
+  OK   PERO NO VE NINGÚN TOTAL: cuánto entró es información de dueño (§4.15, §4.40)
+window.pos.recibos.listar('todas') con la sesión de la CAJERA: null
+  OK   Y EL CANAL TAMPOCO SE LOS MANDA: llamado desde la consola, `totales` viene en null
+
+24 comprobaciones, 0 fallidas.
+```
+
+**Un defecto del arnés, encontrado y corregido.** La primera corrida marcó una
+falla que no era del producto: esperaba «Anulado el 17/9/2026» y la pantalla
+decía «17/09/2026». `toLocaleDateString` no rellena con cero; el arnés ahora
+pide los dos dígitos explícitamente.
+
+#### Falsificado, una mutación por vez, con el archivo restaurado y su sha256 comparado
+
+| Mutación | Qué cae |
+|---|---|
+| Sumar con `Number` en vez de Decimal | **23**: 6 de la función, 11 de los reportes —que es la prueba de que las dos pantallas comparten la función— y 3 del historial |
+| Los totales viajan a cualquier sesión, sin el guard de rol | 2 en Vitest, y **2 EN LA APP REAL**: la cajera ve `1 líneas de totales`, con `¿dice 17.60? true`, y el canal le devuelve el objeto entero |
+| Las anuladas CUENTAN en los totales | 2, entre ellas «lo anulado se decide por su FILA, nunca por `ventas.estado`» |
+| El manejador ignora el filtro y devuelve todo | 3 en Vitest, y **7 EN LA APP REAL**: con «Efectivo» se ven `6 filas, formas: Tarjeta, Tarjeta, Tarjeta, Efectivo…` |
+| El reporte vuelve a tener su propia copia del reparto | 2, nombrando `servicio-de-reportes.ts:206` y `:207` |
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **El rendimiento con años de ventas.** El historial sigue trayendo los 200
+  recibos más recientes y arma el modelo completo de cada uno; el filtro no
+  reduce ese trabajo, solo lo que se dibuja. No se midió en el i3.
+- **No se agregó selector de período.** El historial nunca lo tuvo y no se
+  pidió: los totales son de los 200 recibos más recientes que pasen el filtro,
+  no de un día ni de un mes. Conviene saberlo antes de leerlos como «lo de hoy».
 
 ## 5. Registro de decisiones técnicas
 
@@ -10025,6 +10147,10 @@ su rastro en la bitácora técnica.
 | **Qué ventas se pueden anular lo contesta el SERVICIO (`sePuedeAnular`), con la MISMA copia de la regla que usa `leerYValidar`, y una prueba de acoplamiento lo exige.** | Que el proceso principal compare la caja abierta contra `venta.caja_sesion_id` al armar el historial; que la pantalla lo deduzca de los datos que ya recibe | Es la lección de §4.57 aplicada antes de que costara: dos copias de la misma regla se desincronizan con el primer cambio, y acá la discrepancia sería peor que un nombre feo —el historial ofrecería anular algo que el servicio después rechaza, o escondería el botón de algo que sí se puede—. La regla vive en `impedimentoParaAnular`, la llaman los dos, y la prueba recorre los estados exigiendo que las dos respuestas coincidan, con un control que impide que «coincidan» dos funciones rotas. **Cuesta una lectura por fila del historial** (la caja y la anulación de cada venta, las dos por llave primaria), sobre un listado que ya arma el modelo completo de cada recibo; no se midió en el i3. §4.58. | 2026-09-17 (número de prompt por confirmar) |
 | **El voucher de una venta con tarjeta se pide en el PRIMER paso del diálogo, junto al motivo, antes de la vista previa.** | Pedirlo después de la vista previa, o junto con el PIN | Es lo que decidió el diseño (§3.3, decisión 9) y lo que hace que un voucher que no coincide **no llegue a pedir el PIN**: se rechaza antes, sin consumir un intento del candado y sin escribir nada. Pedirlo más tarde invertiría ese orden y haría que alguien tecleara un PIN para una anulación que ya estaba rechazada. §4.58. | 2026-09-17 (número de prompt por confirmar) |
 | **El recibo de una venta anulada se MARCA al verlo o reimprimirlo, con la misma constante en el papel y en el PDF, y sin tocar una sola cifra.** | Emitir una nota de crédito con numeración propia; regenerar el PDF en el momento de anular | No se emite documento nuevo (§5.1): el recibo ya es una proforma, y un correlativo de anulaciones le daría apariencia fiscal a algo que la tienda no tiene base para emitir. La marca sale de `anulaciones_de_venta`, nunca de `ventas.estado`, que sigue diciendo `completada` (§1.1). **Que ninguna cifra cambie no se afirma: se compara el papel de antes contra el de después, renglón por renglón.** ~~Lo que NO se hizo es regenerar el PDF del disco en el momento de anular (§5.2): la marca aparece al ver o reimprimir, que es lo que se pidió, y hasta entonces el archivo viejo sigue sin marca. Punto 46 de §6.2.~~ **SUPERADO el 2026-09-17: también se regenera al confirmar la anulación** (§4.59, y la fila de abajo). §4.58. | 2026-09-17 (número de prompt por confirmar) |
+| **El historial de recibos filtra por método de pago, totaliza lo filtrado y muestra el voucher con su estado. REEMPLAZA al reporte «Cobros con tarjeta» de §3.5 del diseño, que nunca se construyó.** | Construir §3.5 como una cuarta sección de la pantalla de reportes, tal como estaba diseñada; dejar las dos cosas | Decisión de Julio. Las dos pantallas mostrarían casi lo mismo —fecha, recibo, total, quién vendió— y el cajero ya busca por número de recibo en el historial, que además es el punto de entrada de la anulación (§4.3 del diseño). Lo que §3.5 aportaba de propio, el voucher y el estado derivado de la fila de anulación, se mueve tal cual. No hace falta canal nuevo: `recibos:listar` gana un payload con el filtro. §4.60 | 2026-09-17 (número de prompt por confirmar) |
+| **El reparto por forma de pago vive en UNA sola función (`totales-por-forma-de-pago.ts`), y una prueba estructural falla si otro archivo vuelve a hacer un `.filter()` sobre `formaPago`.** | Copiar los dos `filter` y los tres `sumarLista` del resumen de ventas al historial | Es literalmente lo que el pedido decía que no hiciera, y la razón vale más allá de este caso: dos lugares que contestan «cuánto entró y cómo se pagó» pueden empezar a contestarlo distinto —uno excluyendo las anuladas y el otro no— **sin que nada falle**. Es el defecto de patrón que ya costó una vuelta con el nombre legible de las tablas (§4.57), y se cierra igual: con una prueba que recorre el árbol sintáctico y sus dos controles. Falsificado: reintroducir la copia en el reporte hace caer 2 pruebas nombrando archivo y línea. §4.60 | 2026-09-17 (número de prompt por confirmar) |
+| **CORREGIDO SOBRE LA MARCHA: los totales del historial NO miran `ventas.estado`; lo que decide es la ausencia de fila en `anulaciones_de_venta`.** | Filtrar por `estado = 'completada'`, que es lo que el pedido decía literalmente | **Las dos mitades de esa instrucción se contradicen en este proyecto**, y la contradicción no es de matiz: `ventas.estado` dice `'completada'` TAMBIÉN en las anuladas (§4.45), así que filtrar por ahí no excluiría ninguna; y «el mismo criterio que ya rige en el resto de los reportes» es `VENTA_SIN_ANULACION`, que es justo el otro. **Lo delató una prueba que ya existía**: `anulacion-estructural.test.ts` recorre todo el código de producción y falla si alguna consulta vuelve a decidir por `ventas.estado` (§1.3 del diseño, con su control). La primera versión lo miraba «como red defensiva» y puso esa prueba en rojo. Se quitó, y con él la dependencia del repositorio de ventas que se había agregado solo para eso. Hay una prueba que fija la regla al revés: una venta marcada `'anulada'` a mano SIGUE contando. §4.60 | 2026-09-17 (número de prompt por confirmar) |
+| **A REVISAR — los TOTALES del historial solo viajan al rol administrativo; las filas y el voucher, a cualquiera con sesión.** | Mostrarle los totales a cualquiera con sesión, que es lo que el historial ya hacía con las filas; exigir rol administrativo para toda la pantalla, como §3.5 preveía | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo para que quien cuenta el cajón no copie el número en vez de contar. Exigir el rol para toda la pantalla sería peor: el historial existe para que **el cajero** reimprima con el cliente enfrente, y el voucher ya sale impreso en el papel de ese cliente. **La contrapartida, dicha en voz alta:** un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo. Lo decide el proceso principal y no la pantalla, por la razón medida en §4.40: el canal se llama desde la consola. **Es una decisión que el pedido no tomó, y se señala para que Julio la confirme o la cambie**: es quitar una condición. §4.60 | 2026-09-17 (número de prompt por confirmar) |
 | **El nombre LEGIBLE de cada tabla vive UNA sola vez, en `src/shared/nombres-de-tabla.ts`, y una prueba sobre el árbol sintáctico falla si un archivo del renderer o del proceso principal declara su propio mapa. Otra exige que el mapa cubra EXACTAMENTE las trece tablas.** | Corregir los dos mapas a mano cada vez, como el 2026-09-17; derivar `TablaSincronizable` o `ORDEN_DE_RESTAURACION` de este mapa; dejarlo solo en el compilador | El mapa estaba escrito a mano en las DOS pantallas que nombran tablas —sincronización y restauración—, en distinto orden y sin nada que las atara, y **agregar una tabla y olvidarse de una copia no hacía fallar nada**. Se desincronizaron con la primera tabla nueva: `anulaciones_de_venta` (§4.45) entró en un solo mapa y la pantalla de sincronización mostró el nombre TÉCNICO de una anulación pendiente a quien tenía que decidir si reintentaba o saltaba un lote detenido. Arreglarlos a mano (§4.53) dejó el defecto vivo para la próxima tabla. **No se invierten las dependencias de los tipos de dominio**: `TablaSincronizable` es una lista cerrada que obliga a preguntarse si algo es dato de negocio, y el orden de `ORDEN_DE_RESTAURACION` es el grafo de llaves foráneas; derivarlos de un mapa de etiquetas ataría dos cosas que se deciden por razones distintas. La cobertura se comprueba al revés —el mapa contra esas listas—, con **tres fuentes independientes**: la igualdad con `ORDEN_DE_RESTAURACION` en runtime, la presencia de `TIPO_DE_ENTRADA_DE_FOTO`, y una asignación de tipo que hace fallar `typecheck` si una tabla entra en `TablaSincronizable` y no en el mapa. **Dejarlo solo en el compilador no alcanzaba**: los dos mapas eran `Record<string, string>`, así que TypeScript nunca vio que faltara una clave. La auditoría recorrió `src/renderer` y `src/shared` y no encontró ningún otro mapa; `resumenDeFila` de la restauración describe la FILA y no la tabla, y su `switch` exhaustivo ya lo protege el compilador. §4.57. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
@@ -10150,8 +10276,11 @@ negocio:
   **aplicadas solo en `pos-pruebas-descartable`** (§4.56); y **desde el
   2026-09-17 la pantalla y el recibo marcado** (§4.58): se anula desde el
   historial de recibos, con el voucher antes de la vista previa y el PIN de un
-  administrador. **No existe todavía** el reporte de cobros con tarjeta (§3.5
-  del diseño). **Una versión que anula no se instala en una terminal conectada a
+  administrador. ~~**No existe todavía** el reporte de cobros con tarjeta (§3.5
+  del diseño).~~ **Y desde el 2026-09-17 el historial filtra por método de pago
+  y muestra, en cada venta con tarjeta, su voucher y si está Activo o Anulado,
+  que es lo que §3.5 iba a hacer en una pantalla aparte (§4.60).** **Una versión
+  que anula no se instala en una terminal conectada a
   una nube sin la 0033 y la 0035**, que hoy es `pos-jimmy-cano`.
 - **No existen las alertas de stock mínimo, los gráficos ni la exportación de
   reportes a un archivo.** El umbral de cada producto es una definición de
@@ -10302,6 +10431,11 @@ npm run verify:arranque:sin-respuesta-de-red  # la app real contra redes que NUN
                          # de verdad, solo Auth y SIN filas pendientes. F: credencial que no se descifra: «credencial
                          # dañada», en rojo, sin llamar a Auth (§4.52). Lee también el COLOR: C en ámbar;
                          # A, B y E sin color. `-- --solo=AB` elige. ~10 min.
+npm run verify:pantallas:recibos  # la app real: el filtro por método de pago, los totales del conjunto
+                         # filtrado con decimales feos (1.10+2.20+4.40 y 3.30+6.60+2.20), el voucher con
+                         # «Activo», una venta con tarjeta anulada por la interfaz que pasa a «Anulado el
+                         # <fecha>» y deja de contar, que el botón «Anular» sigue intacto con el filtro
+                         # puesto, y que la CAJERA ve las filas y el voucher pero ningún total (§4.60).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
