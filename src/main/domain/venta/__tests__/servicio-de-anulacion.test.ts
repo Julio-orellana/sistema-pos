@@ -184,6 +184,10 @@ beforeEach(() => {
     cajaSesiones: repos.cajaSesiones,
     auditoria: repos.auditoria,
     log: new LogTecnicoSilencioso(),
+    // El mismo reloj que los reportes: con el reloj real, la venta quedaba
+    // fechada HOY y el reporte de «hoy» miraba el 2026-09-15, así que la prueba
+    // solo pasaba ese día.
+    ahora: (): number => reloj,
   });
   productos = new ServicioDeProductos({
     base,
