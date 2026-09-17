@@ -49,6 +49,13 @@
  * temporizador cuyo vencimiento se pierda. `intentos` y `proximo_intento_en`
  * están en SQLite con `synchronous = FULL`, que sobrevive hasta un corte de
  * energía.
+ *
+ * La única cosa que sí queda en memoria es un DIAGNÓSTICO, no estado de la
+ * cola: lo que se midió de la conexión después del último fallo
+ * (`conexionTrasElUltimoFallo`). No decide qué se sube ni cuándo; solo le dice
+ * a la barra de estado si ese fallo fue por falta de conexión o no. Perderlo en
+ * un cierre forzado no cambia nada de la cola: el arranque siguiente
+ * simplemente no afirma nada hasta volver a fallar y medir.
  */
 
 import type { SyncProvider, CambioSincronizable } from '@shared/adapters';
@@ -56,6 +63,7 @@ import type { ElementoSyncCola } from '@main/database/repositories/entidades';
 import type { RepositorioDeSyncCola } from '@main/database/repositories/sync-cola';
 import { hayTransaccionDeNegocioEnCurso } from '@main/database/transaccion-en-curso';
 import type { PodaDeLaCola } from './poda-de-la-cola';
+import type { ConexionTrasUnFallo, FalloQueSeEstaMidiendo } from './resumen-de-sincronizacion';
 import {
   clasificarFallo,
   ESPERA_POR_ARCHIVO_AUSENTE_MS,
@@ -163,6 +171,25 @@ export interface DependenciasDelTrabajador {
    * que construirla.
    */
   readonly poda?: PodaDeLaCola;
+  /**
+   * La capa 2 de la detección de conexión (§5.2 del diseño), que se llama
+   * JUSTO DESPUÉS de un fallo TRANSITORIO de una subida.
+   *
+   * Existe para que la barra de estado no confunda «no hay conexión» con «hay
+   * conexión y la subida falla» (CLAUDE.md §4.51). El fallo solo no alcanza:
+   * una subida que no contesta en 30 s se ve igual con la red caída que con un
+   * servidor trabado. Preguntarle después a la nube si contesta sí los separa.
+   *
+   * No se llama ante un éxito, ni ante un 401 (lo que falta es una
+   * credencial), ni ante un fallo determinístico (la nube contestó y la cola
+   * se detiene), ni ante una foto ausente (no hubo petición). Opcional: sin
+   * nube configurada no hay a quién preguntarle, y el trabajador funciona
+   * igual que antes.
+   */
+  readonly comprobarConexionTrasFallo?: () => Promise<{
+    readonly hayNube: boolean;
+    readonly motivo: string;
+  }>;
 }
 
 /** Una fila de la cola, lista para viajar. */
@@ -196,10 +223,19 @@ export class TrabajadorDeSincronizacion {
   private readonly azar: () => number;
   private readonly registrar: (mensaje: string) => void;
   private readonly poda: PodaDeLaCola | null;
+  private readonly comprobarConexionTrasFallo:
+    | (() => Promise<{ readonly hayNube: boolean; readonly motivo: string }>)
+    | null;
   public readonly presupuesto: PresupuestoDeCiclo;
 
   /** `true` mientras hay un ciclo corriendo. Impide que se encimen dos. */
   private corriendo = false;
+
+  /** Diagnóstico, no estado de la cola: ver la cabecera y `conexionTrasElUltimoFallo`. */
+  private ultimaConexionTrasFallo: ConexionTrasUnFallo | null = null;
+
+  /** El fallo cuya conexión se está comprobando ahora mismo, si hay uno. */
+  private midiendo: FalloQueSeEstaMidiendo | null = null;
 
   public constructor(dependencias: DependenciasDelTrabajador) {
     this.cola = dependencias.cola;
@@ -208,12 +244,31 @@ export class TrabajadorDeSincronizacion {
     this.azar = dependencias.azar ?? Math.random;
     this.registrar = dependencias.registrar ?? ((): void => undefined);
     this.poda = dependencias.poda ?? null;
+    this.comprobarConexionTrasFallo = dependencias.comprobarConexionTrasFallo ?? null;
     this.presupuesto = { ...PRESUPUESTO_POR_DEFECTO, ...dependencias.presupuesto };
   }
 
   /** `true` si hay un ciclo en marcha ahora mismo. */
   public get estaCorriendo(): boolean {
     return this.corriendo;
+  }
+
+  /**
+   * Lo que se midió de la conexión después del último fallo transitorio, o
+   * `null` si en este arranque todavía no falló nada (o no hay a quién
+   * preguntarle). Lo lee el resumen de la barra de estado.
+   */
+  public get conexionTrasElUltimoFallo(): ConexionTrasUnFallo | null {
+    return this.ultimaConexionTrasFallo;
+  }
+
+  /**
+   * El fallo cuya conexión se está comprobando AHORA (puede tardar hasta 8 s),
+   * o `null`. Con esto la barra sigue mostrando la medición anterior del mismo
+   * lote mientras llega la nueva, en vez de quedarse un momento sin decir nada.
+   */
+  public get medicionEnCurso(): FalloQueSeEstaMidiendo | null {
+    return this.midiendo;
   }
 
   /**
@@ -472,7 +527,41 @@ export class TrabajadorDeSincronizacion {
       `lote ${loteId}: intento ${String(intentoNumero)} falló; ` +
         `se reintenta a partir de ${proximo}`,
     );
+    await this.medirLaConexionTrasElFallo(loteId, intentoNumero);
     return { motivo: 'fallo_transitorio', error: detalle, proximoIntentoEn: proximo };
+  }
+
+  /**
+   * Después de un fallo transitorio, pregunta si se llega a la nube y lo
+   * anota junto con el lote y el número de intento que falló.
+   *
+   * Va DESPUÉS de anotar el fallo en la cola, así que la medición es siempre
+   * posterior al fallo que describe. **No lanza nunca**: es un diagnóstico, y
+   * que falle no puede cambiar lo que pasa con la cola. Si falla, no se anota
+   * nada y la barra no afirma nada sobre ese fallo.
+   */
+  private async medirLaConexionTrasElFallo(loteId: string, intentos: number): Promise<void> {
+    if (this.comprobarConexionTrasFallo === null) {
+      return;
+    }
+    this.midiendo = { loteId, intentos };
+    try {
+      const veredicto = await this.comprobarConexionTrasFallo();
+      this.ultimaConexionTrasFallo = { loteId, intentos, hayNube: veredicto.hayNube };
+      this.registrar(
+        veredicto.hayNube
+          ? `lote ${loteId}: después del fallo, la nube de este proyecto SÍ contesta ` +
+              `(${veredicto.motivo}): hay conexión, lo que falló es la subida`
+          : `lote ${loteId}: después del fallo, no se llega a la nube: ${veredicto.motivo}`,
+      );
+    } catch (causa) {
+      this.registrar(
+        `lote ${loteId}: después del fallo no se pudo comprobar la conexión: ` +
+          (causa instanceof Error ? causa.message : String(causa)),
+      );
+    } finally {
+      this.midiendo = null;
+    }
   }
 
   private resumen(

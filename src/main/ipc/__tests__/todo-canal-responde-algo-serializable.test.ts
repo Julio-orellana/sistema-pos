@@ -323,11 +323,23 @@ function dependenciasSobre(
       base,
       cola: repos.syncCola,
       auditoria: repos.auditoria,
-      credencial: (): { hayCredencial: boolean; revocada: boolean; conectada: boolean } => {
+      credencial: (): {
+        hayCredencial: boolean;
+        revocada: boolean;
+        conectada: boolean;
+        yaSeIntentoConectar: boolean;
+      } => {
         const estado = sesionDeNube.estado();
-        return { hayCredencial: estado.hayCredencial, revocada: estado.revocada, conectada: estado.conectada };
+        return {
+          hayCredencial: estado.hayCredencial,
+          revocada: estado.revocada,
+          conectada: estado.conectada,
+          yaSeIntentoConectar: sesionDeNube.primerIntentoTerminado,
+        };
       },
       ejecutarCicloAhora: (): Promise<unknown> => Promise.resolve(null),
+      conexionTrasElUltimoFallo: (): null => null,
+      medicionEnCurso: (): null => null,
     }),
     restauracion:
       extra.restauracion ??

@@ -57,6 +57,7 @@ const TEXTO_DE_ESTADO: Readonly<Record<DetalleDeSincronizacionIpc['estado'], str
   sin_credencial: 'Sin conectar',
   pendientes_viejos: 'Con pendientes de más de 24 horas',
   sin_conexion: 'Sin conexión ahora mismo',
+  problema_al_sincronizar: 'Problema al sincronizar: la nube contesta, pero la última subida falló',
   pendientes: 'Con pendientes',
   al_dia: 'Al día',
 };

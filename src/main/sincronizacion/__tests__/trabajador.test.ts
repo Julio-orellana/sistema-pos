@@ -58,7 +58,12 @@ import {
 /** Lo que el proveedor va a contestar en la próxima llamada. */
 type Desenlace =
   | { readonly tipo: 'ok' }
-  | { readonly tipo: 'fallo'; readonly estadoHttp?: number; readonly mensaje: string }
+  | {
+      readonly tipo: 'fallo';
+      readonly estadoHttp?: number;
+      readonly mensaje: string;
+      readonly archivoAusente?: boolean;
+    }
   | { readonly tipo: 'excepcion'; readonly mensaje: string }
   /** Una promesa que nunca resuelve: modela que el proceso murió esperando. */
   | { readonly tipo: 'colgado' };
@@ -104,6 +109,7 @@ class ProveedorProgramable implements SyncProvider {
         errores: [desenlace.mensaje],
         simulado: true,
         ...(desenlace.estadoHttp === undefined ? {} : { estadoHttp: desenlace.estadoHttp }),
+        ...(desenlace.archivoAusente === true ? { archivoAusente: true } : {}),
       };
     }
     return {
@@ -461,6 +467,172 @@ describe('Un fallo transitorio reintenta con la espera correcta y respeta el ord
     expect(colaPendiente()[0]?.intentos).toBe(1);
     expect(colaPendiente()[0]?.bloqueante).toBe(0);
     expect(colaPendiente()[0]?.error).toContain('ECONNREFUSED');
+  });
+});
+
+// ===========================================================================
+// 2.b Después de un fallo transitorio, se MIDE la conexión (§4.51)
+// ===========================================================================
+
+describe('Después de un fallo TRANSITORIO, el trabajador pregunta si se llega a la nube (§4.51)', () => {
+  let llamadas: { intentosEnLaColaAlMedir: number | null }[];
+  let enCursoAlMedir: unknown[];
+  let bitacora: string[];
+  let loteDeLaCategoria: string;
+
+  /** Un trabajador con la comprobación programada y la bitácora capturada. */
+  function trabajadorQueMide(
+    respuesta: () => Promise<{ hayNube: boolean; motivo: string }>,
+  ): TrabajadorDeSincronizacion {
+    const trabajador: TrabajadorDeSincronizacion = new TrabajadorDeSincronizacion({
+      cola: repos.syncCola,
+      proveedor,
+      ahora,
+      azar: SIN_VARIACION,
+      presupuesto: { pausaEntreLotesMs: 0 },
+      registrar: (mensaje): void => {
+        bitacora.push(mensaje);
+      },
+      comprobarConexionTrasFallo: (): Promise<{ hayNube: boolean; motivo: string }> => {
+        // Lo que la cola dice EN EL MOMENTO de medir: la medición tiene que
+        // ser posterior al fallo que describe.
+        llamadas.push({ intentosEnLaColaAlMedir: repos.syncCola.intentosDeLotePendiente(loteDeLaCategoria) });
+        enCursoAlMedir.push(trabajador.medicionEnCurso);
+        return respuesta();
+      },
+    });
+    return trabajador;
+  }
+
+  beforeEach(() => {
+    llamadas = [];
+    enCursoAlMedir = [];
+    bitacora = [];
+    categorias.crear(idJimmy, { nombre: 'Medida', orden: 1 });
+    loteDeLaCategoria = colaPendiente()[0]?.lote_id ?? '';
+  });
+
+  it('SUBIDA QUE NO CONTESTA y la nube que SÍ contesta después: anota hayNube=true con el lote y su intento', async () => {
+    proveedor.programar({ tipo: 'excepcion', mensaje: 'sincronizar_lote_simple no contestó en 30 s.' });
+    const trabajador = trabajadorQueMide(() =>
+      Promise.resolve({ hayNube: true, motivo: 'Se llega a la nube de este proyecto.' }),
+    );
+
+    const resumen = await trabajador.ejecutarCiclo();
+
+    expect(resumen.motivo).toBe('fallo_transitorio');
+    expect(llamadas).toEqual([{ intentosEnLaColaAlMedir: 1 }]);
+    expect(trabajador.conexionTrasElUltimoFallo).toEqual({
+      loteId: loteDeLaCategoria,
+      intentos: 1,
+      hayNube: true,
+    });
+    expect(bitacora.some((renglon) => renglon.includes('después del fallo, la nube de este proyecto SÍ contesta'))).toBe(true);
+  });
+
+  it('un 503 y la nube que NO contesta después: anota hayNube=false y lo dice en la bitácora', async () => {
+    proveedor.programar({ tipo: 'fallo', estadoHttp: 503, mensaje: 'servicio no disponible' });
+    const trabajador = trabajadorQueMide(() =>
+      Promise.resolve({ hayNube: false, motivo: 'La nube no contestó en 8 s.' }),
+    );
+
+    await trabajador.ejecutarCiclo();
+
+    expect(trabajador.conexionTrasElUltimoFallo).toEqual({
+      loteId: loteDeLaCategoria,
+      intentos: 1,
+      hayNube: false,
+    });
+    expect(bitacora).toContain(
+      `lote ${loteDeLaCategoria}: después del fallo, no se llega a la nube: La nube no contestó en 8 s.`,
+    );
+  });
+
+  it('el segundo fallo del mismo lote se mide otra vez, con su nuevo número de intento', async () => {
+    proveedor.programar(
+      { tipo: 'fallo', estadoHttp: 503, mensaje: 'uno' },
+      { tipo: 'fallo', estadoHttp: 503, mensaje: 'dos' },
+    );
+    const trabajador = trabajadorQueMide(() => Promise.resolve({ hayNube: true, motivo: 'ok' }));
+
+    await trabajador.ejecutarCiclo();
+    reloj += 5_000;
+    await trabajador.ejecutarCiclo();
+
+    expect(llamadas).toEqual([{ intentosEnLaColaAlMedir: 1 }, { intentosEnLaColaAlMedir: 2 }]);
+    expect(trabajador.conexionTrasElUltimoFallo?.intentos).toBe(2);
+  });
+
+  it('MIENTRAS mide, dice qué fallo está midiendo; cuando termina, ya no', async () => {
+    proveedor.programar({ tipo: 'fallo', estadoHttp: 503, mensaje: 'sin servicio' });
+    const trabajador = trabajadorQueMide(() => Promise.resolve({ hayNube: true, motivo: 'ok' }));
+
+    await trabajador.ejecutarCiclo();
+
+    expect(enCursoAlMedir).toEqual([{ loteId: loteDeLaCategoria, intentos: 1 }]);
+    expect(trabajador.medicionEnCurso).toBeNull();
+  });
+
+  it('una subida que SALE BIEN no mide nada: no hubo fallo que explicar', async () => {
+    const trabajador = trabajadorQueMide(() => Promise.resolve({ hayNube: true, motivo: 'ok' }));
+
+    await trabajador.ejecutarCiclo();
+
+    expect(llamadas).toHaveLength(0);
+    expect(trabajador.conexionTrasElUltimoFallo).toBeNull();
+  });
+
+  it('un 401 no mide: lo que falta es una credencial, no conexión', async () => {
+    proveedor.programar({ tipo: 'fallo', estadoHttp: 401, mensaje: 'JWT expired' });
+    const trabajador = trabajadorQueMide(() => Promise.resolve({ hayNube: true, motivo: 'ok' }));
+
+    await trabajador.ejecutarCiclo();
+
+    expect(llamadas).toHaveLength(0);
+    expect(trabajador.conexionTrasElUltimoFallo).toBeNull();
+  });
+
+  it('un fallo determinístico no mide: la nube contestó, y la cola se detiene', async () => {
+    proveedor.programar({ tipo: 'fallo', estadoHttp: 422, mensaje: 'CHECK falló' });
+    const trabajador = trabajadorQueMide(() => Promise.resolve({ hayNube: true, motivo: 'ok' }));
+
+    await trabajador.ejecutarCiclo();
+
+    expect(llamadas).toHaveLength(0);
+    expect(trabajador.conexionTrasElUltimoFallo).toBeNull();
+  });
+
+  it('una foto que no está en el disco no mide: no hubo ninguna petición', async () => {
+    proveedor.programar({ tipo: 'fallo', mensaje: 'el archivo no está', archivoAusente: true });
+    const trabajador = trabajadorQueMide(() => Promise.resolve({ hayNube: true, motivo: 'ok' }));
+
+    await trabajador.ejecutarCiclo();
+
+    expect(llamadas).toHaveLength(0);
+    expect(trabajador.conexionTrasElUltimoFallo).toBeNull();
+  });
+
+  it('si la comprobación LANZA, el ciclo termina igual, la cola queda como estaba y no se anota nada', async () => {
+    proveedor.programar({ tipo: 'fallo', estadoHttp: 503, mensaje: 'sin servicio' });
+    const trabajador = trabajadorQueMide(() => Promise.reject(new Error('se rompió la sonda')));
+
+    const resumen = await trabajador.ejecutarCiclo();
+
+    expect(resumen.motivo).toBe('fallo_transitorio');
+    expect(colaPendiente()[0]?.intentos).toBe(1);
+    expect(colaPendiente()[0]?.bloqueante).toBe(0);
+    expect(trabajador.conexionTrasElUltimoFallo).toBeNull();
+    expect(trabajador.medicionEnCurso).toBeNull();
+    expect(bitacora.some((renglon) => renglon.includes('no se pudo comprobar la conexión: se rompió la sonda'))).toBe(true);
+  });
+
+  it('sin comprobación configurada (sin nube), un fallo deja la medición en null, como antes', async () => {
+    proveedor.programar({ tipo: 'fallo', estadoHttp: 503, mensaje: 'sin servicio' });
+    const trabajador = crearTrabajador();
+
+    await trabajador.ejecutarCiclo();
+
+    expect(trabajador.conexionTrasElUltimoFallo).toBeNull();
   });
 });
 

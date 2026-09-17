@@ -198,6 +198,8 @@ export class SesionDeNube {
   private revocadaDesde: string | null = null;
   /** El `exp` del último token que se llegó a tener, para la ventana de §1.5. */
   private ultimoExp: number | null = null;
+  /** Ver `primerIntentoTerminado`. */
+  private intentoDeArranqueTerminado = false;
 
   public constructor(dependencias: DependenciasDeLaSesionDeNube) {
     this.auth = dependencias.auth;
@@ -246,6 +248,22 @@ export class SesionDeNube {
           : null,
       filasPendientes: this.contarPendientes === null ? null : this.contarPendientes(),
     };
+  }
+
+  /**
+   * `true` cuando `arrancar` ya terminó su primer intento: consiguió un token,
+   * falló, o no había credencial que probar.
+   *
+   * **Existe para que «sin token» no se lea como «sin conexión» antes de
+   * haber preguntado.** Al abrir la aplicación todavía no hay access token
+   * porque la sesión arranca DESPUÉS de mostrar la ventana (§4.50), no porque
+   * falte la red. Medido el 2026-09-17: con Auth contestando bien, la barra
+   * decía «Nube: sin conexión — 2 pendientes» a los 514 ms, antes de que la
+   * renovación terminara, y lo sostenía hasta su siguiente consulta, 20 s
+   * después (§4.51). Vive en memoria: un arranque nuevo vuelve a no saber.
+   */
+  public get primerIntentoTerminado(): boolean {
+    return this.intentoDeArranqueTerminado;
   }
 
   /**
@@ -385,9 +403,11 @@ export class SesionDeNube {
         this.credencial.ultimoMotivo ??
         'No hay ninguna credencial guardada. Conectá la terminal desde la pantalla «Conectar con la nube».';
       this.registrar(this.motivo);
+      this.intentoDeArranqueTerminado = true;
       return;
     }
     await this.renovar();
+    this.intentoDeArranqueTerminado = true;
   }
 
   /**

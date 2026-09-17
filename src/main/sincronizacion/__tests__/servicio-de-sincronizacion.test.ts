@@ -22,7 +22,7 @@ import {
   ACCIONES_DE_SINCRONIZACION,
   ServicioDeSincronizacion,
 } from '../servicio-de-sincronizacion';
-import type { CredencialParaElResumen } from '../resumen-de-sincronizacion';
+import type { ConexionTrasUnFallo, CredencialParaElResumen } from '../resumen-de-sincronizacion';
 
 let base: Database;
 let limpiar: () => void;
@@ -33,6 +33,8 @@ let idJimmy: string;
 let ciclosPedidos: number;
 /** Lo que `credencial()` devuelve; las pruebas lo cambian según el caso. */
 let credencialActual: CredencialParaElResumen | null;
+/** Lo que el trabajador «midió» después del último fallo; las pruebas lo fijan. */
+let medicionActual: ConexionTrasUnFallo | null;
 
 beforeEach(() => {
   reiniciarSenalDeTransaccion();
@@ -41,7 +43,8 @@ beforeEach(() => {
   limpiar = prueba.limpiar;
   repos = crearRepositorios(base);
   ciclosPedidos = 0;
-  credencialActual = { hayCredencial: true, revocada: false, conectada: true };
+  credencialActual = { hayCredencial: true, revocada: false, conectada: true, yaSeIntentoConectar: true };
+  medicionActual = null;
 
   idJimmy = repos.usuarios.crear({
     nombre: 'Jimmy',
@@ -58,6 +61,8 @@ beforeEach(() => {
       ciclosPedidos += 1;
       return Promise.resolve(null);
     },
+    conexionTrasElUltimoFallo: (): ConexionTrasUnFallo | null => medicionActual,
+    medicionEnCurso: (): null => null,
   });
 });
 
@@ -115,6 +120,60 @@ describe('resumen(): lo liviano, sin nada sensible', () => {
     const loteId = encolarUsuario('Ana');
     bloquearLote(loteId, 'CHECK falló');
     expect(servicio.resumen().estado).toBe('detenida');
+  });
+});
+
+// ===========================================================================
+describe('La medición de después de un fallo llega al estado, y solo si es de ESE fallo (§4.51)', () => {
+  /** Un fallo transitorio anotado como lo anota el trabajador: intentos + 1. */
+  function fallarTransitorio(loteId: string): void {
+    repos.syncCola.registrarIntentoFallido(loteId, 'sincronizar_usuario no contestó en 30 s.', '2099-01-01T00:00:00.000Z');
+  }
+
+  it('con token, fallo medido y la nube que SÍ contesta: problema_al_sincronizar, en resumen y en detalle', () => {
+    const loteId = encolarUsuario('Ana');
+    fallarTransitorio(loteId);
+    medicionActual = { loteId, intentos: 1, hayNube: true };
+
+    expect(repos.syncCola.intentosDeLotePendiente(loteId)).toBe(1);
+    expect(servicio.resumen().estado).toBe('problema_al_sincronizar');
+    expect(servicio.detalle().estado).toBe('problema_al_sincronizar');
+  });
+
+  it('con token, fallo medido y la nube que NO contesta: sin_conexion, aunque haya token', () => {
+    const loteId = encolarUsuario('Ana');
+    fallarTransitorio(loteId);
+    medicionActual = { loteId, intentos: 1, hayNube: false };
+
+    expect(servicio.resumen().estado).toBe('sin_conexion');
+  });
+
+  it('si el lote VOLVIÓ a fallar después de medir, la medición es vieja y no se afirma nada: pendientes', () => {
+    const loteId = encolarUsuario('Ana');
+    fallarTransitorio(loteId);
+    medicionActual = { loteId, intentos: 1, hayNube: true };
+    fallarTransitorio(loteId);
+
+    expect(repos.syncCola.intentosDeLotePendiente(loteId)).toBe(2);
+    expect(servicio.resumen().estado).toBe('pendientes');
+  });
+
+  it('si el lote medido ya SUBIÓ, la medición no habla de nada pendiente: pendientes por el otro lote', () => {
+    const loteMedido = encolarUsuario('Ana');
+    fallarTransitorio(loteMedido);
+    medicionActual = { loteId: loteMedido, intentos: 1, hayNube: true };
+    encolarUsuario('Bea');
+    repos.syncCola.marcarLoteSincronizado(loteMedido);
+
+    expect(repos.syncCola.intentosDeLotePendiente(loteMedido)).toBeNull();
+    expect(servicio.resumen().estado).toBe('pendientes');
+  });
+
+  it('un fallo SIN medición (el arranque todavía no midió): pendientes, como hasta ahora', () => {
+    const loteId = encolarUsuario('Ana');
+    fallarTransitorio(loteId);
+
+    expect(servicio.resumen().estado).toBe('pendientes');
   });
 });
 

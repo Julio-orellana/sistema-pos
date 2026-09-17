@@ -37,8 +37,10 @@ import {
 } from '@main/database/repositories/sync-cola';
 import {
   calcularEstadoDeSincronizacion,
+  type ConexionTrasUnFallo,
   type CredencialParaElResumen,
   type EstadoDeSincronizacion,
+  type FalloQueSeEstaMidiendo,
 } from './resumen-de-sincronizacion';
 
 /** Nombres de acción para `auditoria_log`, propios de este servicio. */
@@ -95,6 +97,20 @@ export interface DependenciasDelServicioDeSincronizacion {
    * construcción deja de importar.
    */
   readonly ejecutarCicloAhora: () => Promise<unknown>;
+  /**
+   * Lo que el trabajador midió de la conexión después del último fallo
+   * transitorio (`TrabajadorDeSincronizacion.conexionTrasElUltimoFallo`), o
+   * `null`. Es lo que separa «sin conexión» de «problema al sincronizar»
+   * (CLAUDE.md §4.51).
+   *
+   * **Obligatoria a propósito**, y es una función por la misma razón que
+   * `ejecutarCicloAhora`: el trabajador se crea después de la ventana. Si
+   * fuera opcional, un sitio que se olvidara de pasarla dejaría la barra sin
+   * poder distinguir nunca los dos casos, sin que nada fallara.
+   */
+  readonly conexionTrasElUltimoFallo: () => ConexionTrasUnFallo | null;
+  /** El fallo que el trabajador está midiendo ahora (`medicionEnCurso`), o `null`. */
+  readonly medicionEnCurso: () => FalloQueSeEstaMidiendo | null;
   readonly ahora?: () => number;
 }
 
@@ -104,6 +120,8 @@ export class ServicioDeSincronizacion {
   private readonly auditoria: RepositorioDeAuditoria;
   private readonly credencial: () => CredencialParaElResumen | null;
   private readonly ejecutarCicloAhora: () => Promise<unknown>;
+  private readonly conexionTrasElUltimoFallo: () => ConexionTrasUnFallo | null;
+  private readonly medicionEnCurso: () => FalloQueSeEstaMidiendo | null;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDelServicioDeSincronizacion) {
@@ -112,7 +130,27 @@ export class ServicioDeSincronizacion {
     this.auditoria = dependencias.auditoria;
     this.credencial = dependencias.credencial;
     this.ejecutarCicloAhora = dependencias.ejecutarCicloAhora;
+    this.conexionTrasElUltimoFallo = dependencias.conexionTrasElUltimoFallo;
+    this.medicionEnCurso = dependencias.medicionEnCurso;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
+  }
+
+  /**
+   * La medición de después del último fallo, y los intentos que HOY tiene ese
+   * lote en la cola: juntos dicen si la medición sigue siendo de ese fallo.
+   */
+  private datosDeLaUltimaMedicion(): {
+    conexionTrasElUltimoFallo: ConexionTrasUnFallo | null;
+    intentosActualesDelLoteMedido: number | null;
+    medicionEnCurso: FalloQueSeEstaMidiendo | null;
+  } {
+    const medicion = this.conexionTrasElUltimoFallo();
+    return {
+      conexionTrasElUltimoFallo: medicion,
+      intentosActualesDelLoteMedido:
+        medicion === null ? null : this.cola.intentosDeLotePendiente(medicion.loteId),
+      medicionEnCurso: this.medicionEnCurso(),
+    };
   }
 
   /** Liviano, SIN guard de rol: lo consulta la barra de estado, siempre visible. */
@@ -127,6 +165,7 @@ export class ServicioDeSincronizacion {
       pendienteMasViejaDesde,
       hayLoteBloqueante: this.cola.obtenerLoteBloqueante() !== null,
       ahoraIso: new Date(this.ahora()).toISOString(),
+      ...this.datosDeLaUltimaMedicion(),
     });
 
     return {
@@ -150,6 +189,7 @@ export class ServicioDeSincronizacion {
       pendienteMasViejaDesde,
       hayLoteBloqueante: loteBloqueante !== null,
       ahoraIso: new Date(this.ahora()).toISOString(),
+      ...this.datosDeLaUltimaMedicion(),
     });
 
     return {

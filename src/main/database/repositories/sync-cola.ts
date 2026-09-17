@@ -390,6 +390,28 @@ export class RepositorioDeSyncCola extends RepositorioBase {
     return fila.total;
   }
 
+  /**
+   * Los `intentos` que hoy tiene un lote pendiente, o `null` si ese lote ya no
+   * tiene ninguna fila pendiente.
+   *
+   * Se lee la PRIMERA fila en el orden de subida, que es la misma de la que el
+   * trabajador toma el número de intento (`leerLote(...)[0]`). La usa el
+   * resumen de la barra para saber si lo que el trabajador midió después de un
+   * fallo sigue siendo de ESE fallo: si el lote volvió a fallar, sus intentos
+   * subieron y la medición ya es vieja.
+   */
+  public intentosDeLotePendiente(loteId: string): number | null {
+    const fila = this.base
+      .prepare(
+        `SELECT intentos FROM sync_cola
+          WHERE lote_id = ? AND sincronizado_en IS NULL
+          ORDER BY orden_en_lote
+          LIMIT 1`,
+      )
+      .get(loteId) as { readonly intentos: number } | undefined;
+    return fila === undefined ? null : fila.intentos;
+  }
+
   // =========================================================================
   // LECTURA PARA LA PANTALLA DE SINCRONIZACIÓN (Fase 4.a)
   // =========================================================================

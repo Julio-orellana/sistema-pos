@@ -23,7 +23,7 @@
  */
 
 /**
- * Los seis estados posibles. Es una lista en tiempo de ejecución, no solo un
+ * Los siete estados posibles. Es una lista en tiempo de ejecución, no solo un
  * tipo, para que las pruebas recorran TODOS: un estado nuevo agregado sin
  * texto o sin color no puede pasar en silencio.
  */
@@ -34,8 +34,18 @@ export const ESTADOS_DE_SINCRONIZACION = [
   'sin_credencial',
   /** Hay pendientes y el más viejo pasa el umbral de 24 h. */
   'pendientes_viejos',
-  /** Hay credencial pero no hay token vigente ahora mismo, y hay pendientes. */
+  /**
+   * Hay pendientes y no se llega a la nube: o no hay token vigente ahora
+   * mismo, o una subida falló y la comprobación que se hizo JUSTO DESPUÉS no
+   * llegó a la nube de este proyecto.
+   */
   'sin_conexion',
+  /**
+   * Hay pendientes, una subida falló, y la comprobación que se hizo JUSTO
+   * DESPUÉS sí llegó a la nube de este proyecto: hay conexión, lo que falla es
+   * otra cosa (el servidor, o esa subida puntual).
+   */
+  'problema_al_sincronizar',
   /** Hay pendientes, recientes, y nada más raro. */
   'pendientes',
   /** Sin pendientes. */
@@ -52,8 +62,11 @@ export type ColorDeEstado = 'neutral' | 'ambar' | 'rojo';
  * está detenida o sin credencial.» — §3.3 del diseño, literal.
  *
  * Los estados que el diseño no menciona explícitamente (`pendientes`,
- * `sin_conexion`) quedan neutrales por omisión: son normales y transitorios,
- * y solo escalan a ámbar el día que los pendientes se vuelven viejos.
+ * `sin_conexion`, `problema_al_sincronizar`) quedan neutrales: son
+ * transitorios, y solo escalan a ámbar el día que los pendientes se vuelven
+ * viejos. `problema_al_sincronizar` es neutral a propósito: hasta el
+ * 2026-09-17 ese mismo caso se veía como `pendientes`, que es neutral, y
+ * escalarlo sería una decisión aparte.
  */
 export function colorDeEstado(estado: EstadoDeSincronizacion): ColorDeEstado {
   if (estado === 'detenida' || estado === 'sin_credencial') {
@@ -84,6 +97,8 @@ export function textoDeBarraDeEstado(estado: EstadoDeSincronizacion, pendientes:
       return `Nube: ${String(pendientes)} pendientes (más de 24 h)`;
     case 'sin_conexion':
       return `Nube: sin conexión — ${String(pendientes)} pendientes`;
+    case 'problema_al_sincronizar':
+      return `Nube: problema al sincronizar — ${String(pendientes)} pendientes`;
     case 'pendientes':
       return `Nube: ${String(pendientes)} pendientes`;
     case 'al_dia':

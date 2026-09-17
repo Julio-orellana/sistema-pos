@@ -167,7 +167,7 @@ describe('El texto de la barra de nube vive en UN solo archivo', () => {
 
   it('la fuente única SÍ tiene los textos (si no, la búsqueda de arriba no probaría nada)', () => {
     const textos = textosDeNubeEn(arbolDe(join(RAIZ, 'shared', 'estado-de-sincronizacion.ts')));
-    expect(textos.length).toBeGreaterThanOrEqual(6);
+    expect(textos.length).toBeGreaterThanOrEqual(7);
   });
 
   it('la unión del contrato IPC es la de la fuente única, no una lista escrita a mano', () => {

@@ -404,6 +404,39 @@ describe('La sesión de la terminal contra Supabase Auth', () => {
       expect(auth.correosRecibidos).toEqual([]);
     });
 
+    it('ANTES de arrancar no hubo ningún intento; después, sí (con token, sin red o sin credencial)', async () => {
+      expect(sesion.primerIntentoTerminado).toBe(false);
+      await sesion.arrancar();
+      expect(sesion.primerIntentoTerminado).toBe(true);
+    });
+
+    it('MIENTRAS la primera renovación está en camino, el intento todavía no terminó', async () => {
+      credencial.guardar(REFRESCO_INICIAL);
+      let contestar: (resultado: ResultadoDeAuth) => void = () => undefined;
+      auth.refrescar = (tokenDeRefresco: string): Promise<ResultadoDeAuth> => {
+        auth.refrescosRecibidos.push(tokenDeRefresco);
+        return new Promise((resolver) => {
+          contestar = resolver;
+        });
+      };
+
+      const arranque = sesion.arrancar();
+      expect(sesion.estado().conectada).toBe(false);
+      expect(sesion.primerIntentoTerminado).toBe(false);
+
+      contestar({ ok: false, fallo: { mensaje: 'fetch failed' } });
+      await arranque;
+      expect(sesion.estado().conectada).toBe(false);
+      expect(sesion.primerIntentoTerminado).toBe(true);
+    });
+
+    it('con la renovación bien, el intento terminó y hay token', async () => {
+      credencial.guardar(REFRESCO_INICIAL);
+      await sesion.arrancar();
+      expect(sesion.estado().conectada).toBe(true);
+      expect(sesion.primerIntentoTerminado).toBe(true);
+    });
+
     it('si la nube no contesta al arrancar, la aplicación abre igual y reintenta', async () => {
       credencial.guardar(REFRESCO_INICIAL);
       auth.respuestasDeRefresco = [{ ok: false, fallo: { mensaje: 'fetch failed' } }];

@@ -88,7 +88,11 @@ import { PlanificadorDeSincronizacion } from '@main/sincronizacion/planificador'
 import { SesionDeNube } from '@main/sincronizacion/sesion-de-nube';
 import { SupabaseSyncProvider } from '@main/sincronizacion/supabase-sync-provider';
 import { ServicioDeSincronizacion } from '@main/sincronizacion/servicio-de-sincronizacion';
-import type { CredencialParaElResumen } from '@main/sincronizacion/resumen-de-sincronizacion';
+import type {
+  ConexionTrasUnFallo,
+  CredencialParaElResumen,
+  FalloQueSeEstaMidiendo,
+} from '@main/sincronizacion/resumen-de-sincronizacion';
 import { DetectorDeConexion } from '@main/sincronizacion/deteccion-de-conexion';
 import { ClienteDeAuthHttp } from '@main/sincronizacion/auth-de-nube';
 import { describirConfiguracionDeNube, leerConfiguracionDeNube } from '@main/configuracion-de-nube';
@@ -205,6 +209,13 @@ let controladorDeSalidaActivo: ControladorDeSalidaControlada | null = null;
  */
 /** El planificador vivo, para poder detenerlo en el cierre ordenado. */
 let planificadorDeSincronizacion: PlanificadorDeSincronizacion | null = null;
+
+/**
+ * El trabajador vivo, para que la barra de estado lea lo que midió de la
+ * conexión después del último fallo (CLAUDE.md §4.51). Se crea dentro de
+ * `arrancarLoQueUsaLaRed`, igual que el planificador.
+ */
+let trabajadorDeSincronizacion: TrabajadorDeSincronizacion | null = null;
 
 /**
  * La sesión con Supabase Auth, para dejar de renovar en el cierre ordenado.
@@ -806,10 +817,17 @@ app.whenReady().then(
           hayCredencial: estado.hayCredencial,
           revocada: estado.revocada,
           conectada: estado.conectada,
+          yaSeIntentoConectar: sesionDeNube.primerIntentoTerminado,
         };
       },
       ejecutarCicloAhora: (): Promise<unknown> =>
         planificadorDeSincronizacion?.ejecutarAhora() ?? Promise.resolve(null),
+      // Lo lee de la variable al momento de llamarla, por la misma razón que
+      // `ejecutarCicloAhora`: el trabajador todavía no existe en este punto.
+      conexionTrasElUltimoFallo: (): ConexionTrasUnFallo | null =>
+        trabajadorDeSincronizacion?.conexionTrasElUltimoFallo ?? null,
+      medicionEnCurso: (): FalloQueSeEstaMidiendo | null =>
+        trabajadorDeSincronizacion?.medicionEnCurso ?? null,
     });
 
     /*
@@ -1054,10 +1072,22 @@ app.whenReady().then(
               }),
             }),
       );
-      const trabajadorDeSincronizacion = new TrabajadorDeSincronizacion({
+      const trabajador = new TrabajadorDeSincronizacion({
         cola: repositorios.syncCola,
         proveedor: proveedorDeSincronizacion,
         registrar: anotarSincronizacion,
+        /*
+          Después de un fallo TRANSITORIO de una subida, la capa 2 de §5.2: ¿se
+          llega a la nube de este proyecto? Es lo que le permite a la barra de
+          estado distinguir «sin conexión» de «problema al sincronizar»
+          (§4.51). Sin nube configurada no hay a quién preguntarle.
+        */
+        ...(detectorDeConexion === null
+          ? {}
+          : {
+              comprobarConexionTrasFallo: (): Promise<{ hayNube: boolean; motivo: string }> =>
+                detectorDeConexion.comprobar(),
+            }),
         /*
           LA PODA de la cola (fase 4.c, riesgo 8.6). Corre dentro del ciclo del
           trabajador, así que la primera de cada arranque ocurre con el primer
@@ -1070,8 +1100,9 @@ app.whenReady().then(
           registrar: anotarSincronizacion,
         }),
       });
+      trabajadorDeSincronizacion = trabajador;
       planificadorDeSincronizacion = new PlanificadorDeSincronizacion({
-        trabajador: trabajadorDeSincronizacion,
+        trabajador,
         registrar: anotarSincronizacion,
       });
       // El único aviso de «hay algo que subir» sale de la bandeja de salida, que
