@@ -56,6 +56,7 @@ import type { RepositorioDeCategorias } from '@main/database/repositories/catego
 import type { RepositorioDeProductos } from '@main/database/repositories/productos';
 import type { RepositorioDeVentaDetalle } from '@main/database/repositories/venta-detalle';
 import type { RepositorioDeVentas } from '@main/database/repositories/ventas';
+import { totalesPorFormaDePago } from '@main/domain/venta/totales-por-forma-de-pago';
 import {
   ErrorDePeriodo,
   resolverPeriodo,
@@ -196,8 +197,13 @@ export class ServicioDeReportes {
     const periodo = this.periodo(pedido);
     const ventas = this.ventas.listarNoAnuladasEnRango(periodo.desdeIso, periodo.hastaIso);
 
-    const enEfectivo = ventas.filter((venta) => venta.formaPago === 'efectivo');
-    const conTarjeta = ventas.filter((venta) => venta.formaPago === 'tarjeta');
+    /*
+      EL REPARTO POR FORMA DE PAGO NO SE HACE ACÁ. Vive en una sola función
+      (`totales-por-forma-de-pago.ts`), que es la misma que usa el historial de
+      recibos: dos copias de este reparto podrían empezar a contestar distinto
+      la misma pregunta —cuánto entró y cómo se pagó— sin que nada fallara.
+    */
+    const totales = totalesPorFormaDePago(ventas);
 
     /*
       LOS DESCUENTOS SE INFORMAN, NO SE RESTAN. `ventas.total` ya viene con el
@@ -211,12 +217,12 @@ export class ServicioDeReportes {
 
     return {
       periodo,
-      totalVendido: montoACadena(sumarLista(ventas.map((venta) => venta.total))),
-      cantidadDeVentas: ventas.length,
-      totalEnEfectivo: montoACadena(sumarLista(enEfectivo.map((venta) => venta.total))),
-      totalEnTarjeta: montoACadena(sumarLista(conTarjeta.map((venta) => venta.total))),
-      ventasEnEfectivo: enEfectivo.length,
-      ventasEnTarjeta: conTarjeta.length,
+      totalVendido: totales.general,
+      cantidadDeVentas: totales.cantidadDeVentas,
+      totalEnEfectivo: totales.enEfectivo,
+      totalEnTarjeta: totales.enTarjeta,
+      ventasEnEfectivo: totales.ventasEnEfectivo,
+      ventasEnTarjeta: totales.ventasEnTarjeta,
       totalDeDescuentos: montoACadena(sumarLista(descuentos)),
       ventasConDescuento: descuentos.length,
     };
