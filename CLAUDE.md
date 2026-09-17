@@ -539,7 +539,7 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**LA `0033_anulaciones_de_venta` Y LA `0035_sincronizar_anulacion_de_venta` ESTÁN ESCRITAS DESDE EL 2026-09-17 Y NO APLICADAS EN NINGUNO DE LOS DOS PROYECTOS** (§4.53). Los dos siguen con las mismas 26.
+**LA `0033_anulaciones_de_venta`, LA `0035_sincronizar_anulacion_de_venta` Y LA `0038_anulacion_solo_presencial` ESTÁN ESCRITAS DESDE EL 2026-09-17 Y NO APLICADAS EN NINGUNO DE LOS DOS PROYECTOS** (§4.53, §4.54). La 0038 va en la misma ronda que las otras dos y después de ellas, por decisión de Julio. Los dos proyectos siguen con las mismas 26.
 
 **LA `0031_productos_precio_compra` Y LA `0032_venta_detalle_costo_unitario_snap` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-15 A LAS 05:09 UTC, Y NO EN `pos-jimmy-cano`** (§4.39, §4.40). Las aprobó Julio después de ver el SQL; el real espera a que se decida junto con el plan de entrega. **Consecuencia medida en el diseño, no en la tienda:** la instalación de Jimmy (`v1.0.0-prueba.1`, sin la 031 ni la 032) sube a ese proyecto, así que su próximo lote de productos o de venta va a ser rechazado por «le faltan columnas» y su cola se va a detener, visible, hasta que instale una versión con las dos migraciones locales, que reescriben los payloads pendientes; ahí «Reintentar ahora» sube todo. Evidencia en §4.40. Lo que sigue de este párrafo describe el estado ANTERIOR a ellas.
 
@@ -1356,7 +1356,7 @@ validación que vive en la interfaz se salta llamando al canal directamente.
 | `descuento_excedente` | **Sí**, desde el 2026-09-11 | Decisión explícita de Julio. Ver §4.13. |
 | `salida_controlada` | **Sí**, desde el 2026-09-15 — **ampliada por decisión explícita el 2026-09-15** | Hasta ese día **No**, con esta razón, que no estaba equivocada: el PIN remoto se pidió para una sola cosa, autorizar diferencias de caja por teléfono, y dárselo además a cerrar la aplicación lo ampliaba más allá de lo pedido. Julio decidió ampliarlo: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. **Se evaluó separar el PIN remoto por superficie y se decidió NO hacerlo** (Julio, 2026-09-15): cambiar el PIN remoto desde «PIN de autorización remota» ya es el control real si cambia a quién se le dicta, y un PIN por superficie duplicaría ese mecanismo. Ver §4.41. |
 | `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
-| `anulacion_de_venta` | **No**, desde que existe (2026-09-15) | El fraude que este PIN frena —cobrar en efectivo, anular y quedarse con el dinero— es el que un teléfono no puede verificar. Ver `docs/ANULACION-DE-VENTA.md` §4.2 y §4.45. |
+| `anulacion_de_venta` | **No**, desde que existe (2026-09-15) | El fraude que este PIN frena —cobrar en efectivo, anular y quedarse con el dinero— es el que un teléfono no puede verificar. Ver `docs/ANULACION-DE-VENTA.md` §4.2 y §4.45. **Desde la 038/0038 (2026-09-17) la base también rechaza una anulación con vía `remoto`, y una prueba exige que esta fila y la base digan lo mismo** (§4.54). |
 
 **LA POLÍTICA VIVE EN LA TABLA, NO EN QUIEN LLAMA.** Antes era un parámetro
 (`aceptaPinRemoto`) que cada uno de los cuatro lugares de autorización escribía
@@ -8837,6 +8837,144 @@ punto 40 de §6.2.**
   la tabla y las dos funciones «en la foto y no en la nube» hasta aplicarlas.
 - **Windows**, como siempre.
 
+### 4.54 La base rechaza una anulación autorizada a distancia (migraciones 038 / 0038, 2026-09-17)
+
+**Decisión de Julio.** La superficie `anulacion_de_venta` no acepta el código
+remoto, y desde estas migraciones la base tampoco acepta una fila que diga lo
+contrario. Revierte la fila de `docs/ANULACION-DE-VENTA.md` §1.1 que dejaba el
+CHECK amplio a propósito.
+
+| | Local, `038` | Nube, `0038` |
+|---|---|---|
+| Sentencia | `ALTER TABLE anulaciones_de_venta ADD CONSTRAINT anulaciones_de_venta_solo_presencial CHECK (autorizada_via = 'presencial')` | La misma sobre `public.anulaciones_de_venta`, más su `COMMENT ON CONSTRAINT` |
+| El CHECK amplio de la columna | Sigue: no tiene nombre, y quitarlo exigiría recrear la tabla | **Sigue a propósito**, aunque acá se podría quitar: el espejo queda exacto y volver a ampliar es la misma sentencia en los dos lados |
+| Estado | En el migrador: corre en toda base que se abra con esta versión | **Escrita, sin aplicar.** Va en la misma ronda que la 0033 y la 0035, después de ellas |
+
+**Por qué el argumento del «segundo lugar» no se sostenía acá.** El segundo
+lugar que §4.9 eliminó podía AMPLIAR un permiso sin que nada fallara. Este falla
+CERRADO: si alguien pusiera `anulacion_de_venta: true` sin una migración, el
+INSERT se rechaza y la transacción de la anulación se revierte entera. Si el CHECK
+se dispara, el cajero ve el genérico `DATO_INVALIDO`. No se agregó un código
+propio: solo puede pasar por un error de programación.
+
+**Pruebas:** `anulacion-solo-presencial.test.ts`, 11 pruebas.
+- Acepta `'presencial'` y rechaza `'remoto'` nombrando la restricción; los dos
+  CHECK conviven.
+- **La base y `ACEPTA_PIN_REMOTO` dicen lo mismo.** Tiene un control, y solo un
+  error de CHECK cuenta como rechazo.
+- Sobre una base con anulaciones presenciales, la 038 las conserva. Sobre una con
+  una fila `'remoto'`, falla, se revierte y la base queda en la 037.
+- La 0038 tiene el mismo nombre y la misma expresión, y no quita el CHECK de la
+  columna.
+
+**Falsificado**, una mutación a la vez, restaurando el archivo y comparando su
+sha256:
+
+| Mutación | Qué cayó |
+|---|---|
+| Sacar la 038 del migrador | 5 |
+| `anulacion_de_venta: true` sin migración | 3, una por capa: la prueba nueva, «el CÓDIGO REMOTO (6 dígitos) se rechaza en esta superficie…» de `servicio-de-anulacion.test.ts` y «las TRES que NO lo aceptan…» de `autenticacion.test.ts` |
+| La 0038 con otro nombre de restricción | 1 |
+| La 0038 quitando además el CHECK de la columna | 1 |
+
+**En el Postgres 17 LOCAL de ensayo** (no es Supabase), dentro de transacciones
+que terminan en `ROLLBACK`:
+
+```
+anulaciones_de_venta_autorizada_via_check | CHECK ((autorizada_via = ANY (ARRAY['presencial'::text, 'remoto'::text]))) | convalidated=true
+anulaciones_de_venta_motivo_check | CHECK (((length(btrim(motivo)) > 0) AND (length(motivo) <= 200))) | convalidated=true
+anulaciones_de_venta_solo_presencial | CHECK ((autorizada_via = 'presencial'::text)) | convalidated=true
+NOTICE:  INSERT remoto -> 23514 new row for relation "anulaciones_de_venta" violates check constraint "anulaciones_de_venta_solo_presencial"
+NOTICE:  INSERT presencial (ids inventados: el CHECK pasa y lo frena la llave foránea) -> 23503 insert or update on table "anulaciones_de_venta" violates foreign key constraint "anulaciones_de_venta_venta_id_fkey"
+(con una fila 'remoto' ya guardada) ERROR:  check constraint "anulaciones_de_venta_solo_presencial" of relation "anulaciones_de_venta" is violated by some row
+```
+
+**Sobre una COPIA de la base de trabajo de esta Mac.** El sha256 del original dio
+`20d980588e36753d` antes y después.
+
+```
+[copia] ANTES: últimas migraciones registradas: [{"orden":37,"nombre":"037_quitar_pin_remoto_hash","aplicada_en":"2026-09-17T16:39:42.705Z"},{"orden":36,…"2026-09-17T16:39:42.700Z"},{"orden":34,…"2026-09-15T15:43:32.112Z"}]
+[copia] migraciones al abrir: {"aplicadasAhora":["038_anulacion_solo_presencial"],…}
+[copia] integrity_check: [{"integrity_check":"ok"}]
+[copia] foreign_key_check: []
+[copia] DESPUÉS: filas: {"usuarios":2,"productos":6,"ventas":4,"venta_detalle":10,"cajas":4,"auditoria_log":55,"sync_cola":63,"anulaciones":0}
+[copia] INSERT remoto sobre la copia: "SQLITE_CONSTRAINT_CHECK CHECK constraint failed: anulaciones_de_venta_solo_presencial"
+[copia] INSERT presencial sobre la copia: "ENTRÓ"   (y después ROLLBACK: 0 anulaciones)
+```
+
+> **LA BASE DE TRABAJO YA TIENE LA 036 Y LA 037, y no se aplicaron desde esta
+> sesión.** Las dos tienen `aplicada_en` 2026-09-17T16:39:42Z, entre dos turnos
+> en que esta sesión solo leyó copias. Como pasó el 2026-09-15 con la 033 y la
+> 034, alguien abrió la aplicación sobre esa carpeta de datos. **Abrirla con esta
+> versión aplica la 038.** Si después hubiera que cambiar su SQL, el checksum
+> dejaría esa base sin abrir.
+
+### 4.55 El «Arroz» duplicado: dos bases locales subieron a la misma nube (diagnóstico, 2026-09-17)
+
+**El síntoma.** El 2026-09-15 la cola de la instalación de prueba se detuvo con
+`23505 Key (nombre)=(Arroz) already exists`, y Jimmy saltó el lote `8687f576`.
+Todo lo que sigue se leyó con `SELECT` en `pos-pruebas-descartable`
+(`ztidrshifrblhfraiowg`). **No se tocó nada en la nube.**
+
+**En la nube hay UNA sola fila «Arroz»** (`93109c61`): `productos_nombre_key`
+impide dos. La otra solo existe en una base local, y su id no se ve desde acá.
+
+**La causa: el 2026-09-15 subieron dos bases SQLite distintas**, con la misma
+credencial de terminal y los mismos usuarios. Horas en UTC; Guatemala es UTC−6.
+
+| Base | Qué es | Activa | Evidencia |
+|---|---|---|---|
+| **A** | La original: primer administrador «Jimmy» a las 01:34 | 01:34–02:03 (código de la 1.0.0) y 23:20–23:32 (código de la 1.1.0) | Sesión de Auth `d06c38f5`, creada 01:36:56, con tokens a las 01:48, 01:56, 01:57, 01:58 **y 23:20** (el mismo archivo de credencial). A las 23:20:33 subió un asiento de salida con `fecha` 02:03:32, que solo podía estar en su cola |
+| **B** | Restaurada desde la nube: `restauracion_completada` con `iniciadaEn` 22:29:09 y `filasPorTabla` con 1 producto (Frijol), 4 ventas y 29 asientos | 22:29–23:05 (código de la 1.1.0) | Sesión `a9193060`, creada 22:36:14, con tokens a las 22:47, 22:58 y 23:05. Sus asientos con `fecha` 22:30–22:34 llegaron juntos entre las 22:36:41 y las 22:36:45. Su ajuste de Frijol dice «inventario anterior 47.000» = los 83 de A menos sus cuatro ventas |
+
+- **B creó «Arroz» primero**: `producto_creado` `93109c61` a las 22:45:41, y dos
+  ventas de 5 y 2 lb.
+- **A creó otro «Arroz» a mano, con un id nuevo, entre las 23:21:52 y las
+  23:23:26.** La caja `52d86b49` de A subió a las 23:21:51. La categoría «Huevos»
+  (23:23:26) quedó detrás del lote bloqueado hasta el salto de las 23:27:44, y la
+  cola es FIFO (`sync-cola.ts:201`).
+- **A nunca supo del Arroz de B, ni de sus 8 ventas y 5 cajas**: la sincronización
+  es solo de subida (decisión 10). Por la misma razón, los recibos que subieron
+  de A son el 1 al 4, y en la nube ya existen hasta el 12.
+
+**Hipótesis, una por una:**
+- **(a) Un camino que crea un id nuevo para un producto que ya existe: descartada.**
+  - El único INSERT de productos en producción es `RepositorioDeProductos.crear`,
+    con `nuevoId()` (`productos.ts:71-77`).
+  - `exigirNombreLibre` (`servicio-de-productos.ts:335`) y el `UNIQUE` local de
+    `productos.nombre` impiden dos «Arroz» en una misma base.
+  - Ninguna migración recrea `productos`, y el único `DELETE` es el de los datos
+    de ejemplo.
+- **(b) Una restauración que perdió el id original: no como se planteaba.** Hubo
+  una restauración (B), pero cuando corrió no existía ningún Arroz. El problema
+  fue **seguir usando A después de restaurar B**.
+- **(c) Confirmada: dos terminales activas contra la misma nube**, que la
+  arquitectura no soporta (punto 10 de §6.2).
+
+**Lo que no se puede ver desde la nube.**
+- **Dónde corrió B.** Las cuatro sesiones de terminal del 15/09 salieron de la
+  misma IP pública (huella md5 `ba629c5c`). Es la misma IP que tenía esta Mac hoy
+  entre las 12:24 y las 12:46 UTC, en las corridas del escenario D (sesiones
+  `82b86369` y `1e965d2a`), y distinta de la de las 14:07 y 14:41 (`0f90dbfa`).
+  Una IP igual indica la misma salida a internet, no la misma máquina: B puede
+  ser otra cuenta de Windows, otra computadora de la misma red u otra cosa.
+- **El id del Arroz de A.**
+
+**Rastro menor.** Hay una sesión de terminal, `6c95f26f` (22:28:25), que nunca
+se refrescó. Encaja con la credencial de la terminal tecleada en la pantalla de
+restauración 42 s antes de la correcta. `cliente-de-restauracion.ts:188` rechaza
+el rol sin guardar la sesión, así que `cerrarSesion()` no la revoca (punto 43
+de §6.2).
+
+**Si A sigue en uso contra esta nube** (inferido del mecanismo, no medido):
+- su próxima venta emite el recibo 5, que ya existe en la nube → `23505` y la cola
+  se detiene;
+- cualquier lote de Frijol reescribe la fila de la nube con los valores de A
+  (inventario 139 → el de A; `precio_compra` 3.00 → `null`) **sin ningún error**;
+- si el Arroz de A vuelve a viajar (venta, edición o ajuste), el mismo `23505`.
+
+Qué hacer con los datos lo decide Julio: punto 42 de §6.2.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -9149,6 +9287,7 @@ punto 40 de §6.2.**
 | **La foto tiene que declarar EXACTAMENTE `FUNCIONES_DEL_CONTRATO`, y la lista de funciones de `verificacion-de-nube.cjs` tiene que ser igual a `FUNCIONES_DE_ESCRITURA`; las dos cosas las exigen pruebas.** | Seguir exigiendo solo las funciones de escritura, una por una | Una función fuera de la lista del contrato no aparece en la foto, y una prueba que itera la lista de la terminal no ve funciones de más. La copia del `.cjs` se había quedado sin `sincronizar_asiento` desde la 0027. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
 | **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
+| **La base rechaza una anulación con vía distinta de `'presencial'`: CHECK con nombre `anulaciones_de_venta_solo_presencial` en la 038 local y en la 0038 de la nube, que convive con el CHECK amplio de la columna en los dos lados. La 0038 va en la misma ronda que la 0033 y la 0035.** **REVIERTE la fila de `docs/ANULACION-DE-VENTA.md` §1.1.** | Dejar el CHECK amplio, como decía el diseño; estrechar la 0033 antes de su primera aplicación; en la nube, quitar el CHECK de la columna | Decisión de Julio. El «segundo lugar» que §4.9 eliminó podía ampliar un permiso en silencio; este falla cerrado, y una prueba exige que `ACEPTA_PIN_REMOTO` y la base digan lo mismo. Estrechar la 0033 dejaría la local y la nube distintas hasta la 038. En la nube se deja el CHECK amplio para que el espejo sea exacto y ampliar algún día sea la misma sentencia en los dos lados. Aplicarla junto con la 0033 no rompe a nadie: ninguna versión publicada escribe `'remoto'` (medido en los tags). §4.54. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -9211,6 +9350,9 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 37 | **Las fotos que fallan de forma transitoria también cuentan para «problema al sincronizar».** | La medición se hace para cualquier lote, de negocio o de archivo, salvo una foto ausente, que no sale a la red. Si Storage contesta 5xx y el health contesta, la barra dice «problema al sincronizar». Es verdad, pero es una foto y no una venta. | Abierto — confirmar si se quiere así |
 | 40 | **Una anulación posterior a un robo queda excluida al restaurar, pero los productos que repuso se restauran con la reposición aplicada.** | Medido sin red (§4.53): la venta queda válida y vuelve a contar en el efectivo esperado, que es lo que §8 del diseño pide. Pero el inventario queda con lo que el ladrón «devolvió» y los contadores bajados, y volver a anular esa venta da `CONTADORES_INCONSISTENTES`. Los productos aparecen en la lista de anomalías, porque la nube los actualizó después del robo. Qué hacer con ese inventario (ajustarlo a mano, que hoy solo suma; recalcular; dejarlo listado) es una decisión de negocio. | Abierto — decisión de Julio |
 | 41 | **Las pruebas de la anulación contra `pos-pruebas-descartable` chocan con la instalación de prueba de Jimmy.** | Leído con `SELECT` el 2026-09-17 a las 15:21 UTC: 2 usuarios (Jimmy, julio), 12 ventas, 82 asientos, última recepción 2026-09-15 23:32 UTC, y **una caja ABIERTA por Jimmy desde el 2026-09-15 23:21 UTC**, con 0 ventas. La nube admite una sola caja abierta, y una anulación exige su caja abierta: una prueba no puede abrir la suya sin que esa se cierre. La batería destructiva y `verify:restauracion` además exigen vaciar el proyecto, lo que borraría esos datos y detendría la cola de esa instalación en su próximo cierre. | Abierto — decisión de Julio |
+| 42 | **¿Qué base es la terminal de verdad, y qué se hace con lo que hoy tiene `pos-pruebas-descartable`?** El 2026-09-15 subieron ahí dos bases locales (§4.55): A, la original, y B, restaurada a las 22:29 UTC mientras A seguía existiendo. | La nube tiene una mezcla de las dos: el Arroz `93109c61` de B con dos ventas, las 8 ventas y las 5 cajas de B, y la caja abierta y el «Carton de Huevos» de A. A no sabe nada de lo de B, y su propio Arroz no está en la nube. Si A sigue en uso: el recibo 5 choca con `23505`, Frijol se reescribe en silencio y su Arroz vuelve a chocar. Hace falta saber dónde corrió B y si sus ventas fueron de prueba. **No se propone fusionar ni renombrar por SQL**: la nube tendría un segundo escritor que las terminales pisan. | Abierto — **decisión de Julio**, antes de volver a abrir cualquiera de las dos |
+| 43 | **La restauración deja viva la sesión de Auth cuando rechaza un usuario de otro rol.** | `cliente-de-restauracion.ts:188` lanza antes de guardar la sesión, así que `cerrarSesion()` no hace nada y el token de refresco sigue válido en GoTrue. Nadie lo guarda: solo existió en la respuesta. En el descartable hay una sesión así (`6c95f26f`, 2026-09-15 22:28:25 UTC). El arreglo sería cerrar esa sesión con su propio token antes de lanzar. | Abierto — de bajo riesgo |
+| 44 | **Una base que ya subió su historia a un proyecto no la vuelve a subir a otro.** | Leído en el código, no medido: `sync_cola` no guarda a qué proyecto subió cada lote, y nada reinicia `sincronizado_en` si cambia la nube incrustada. Si una base que sincronizó con `pos-pruebas-descartable` pasa a apuntar a `pos-jimmy-cano`, el real recibe solo lo nuevo, y el primer lote que nombre un usuario, una categoría o un producto viejo fallaría con `23503`. Importa si la tienda conserva su base de prueba al pasar a producción. | Abierto — decidir antes del paso a producción |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
