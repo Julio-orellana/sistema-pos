@@ -7245,7 +7245,8 @@ solo el núcleo local, que se usa de punta a punta por el canal
 | Canal `venta:anular`, en la prueba de clonado de todos los canales (§4.42) | **Hecho** |
 | Sincronización a la nube (§7): la `0033`, la `0035`, el enrutador, el contrato | **Del lado de la terminal, hecho el 2026-09-17 (§4.53). La `0033` y la `0035`, ESCRITAS y SIN APLICAR en ningún proyecto** |
 | Restauración (§8) | **Hecho el 2026-09-17 (§4.53)** |
-| El recibo marcado (§5), el reporte de cobros con tarjeta (§3.5), la pantalla | **No**. Prompts aparte |
+| El recibo marcado (§5) y la pantalla, desde el historial de recibos (§4.3) | **Hecho el 2026-09-17 (§4.58)** |
+| El reporte de cobros con tarjeta (§3.5) | **No**. Prompt aparte |
 
 > **UNA VERSIÓN CON ESTE NÚCLEO NO SE INSTALA EN UNA TERMINAL CONECTADA A LA
 > NUBE.** El lote de la anulación se encola dentro de la transacción (§2.2,
@@ -9307,6 +9308,180 @@ imprime lo que se ve en pantalla —palabra por palabra el defecto original:
   y no se corrió. Lo que sí cubre Vitest es que usa la fuente única y que la
   fuente cubre las trece tablas que esa pantalla puede nombrar.
 
+### 4.58 La pantalla de la anulación: el historial de recibos como puerta (2026-09-17)
+
+Cierra la sección 5 del diseño y la pantalla que faltaba de §4.3. El núcleo, el
+canal y la sincronización ya existían (§4.45, §4.53); lo que no existía era la
+forma de anular sin abrir la consola.
+
+#### 1. Dónde se entra, y qué se ofrece
+
+En el **historial de recibos**, que es donde el cajero ya busca la venta por su
+número cuando un cliente vuelve al mostrador.
+
+| Fila | Qué se dibuja |
+|---|---|
+| Venta de la caja que sigue abierta, sin anular | Botón **«Anular»** |
+| Venta de una caja ya cerrada | **Nada.** Ni el botón, ni un botón apagado |
+| Venta ya anulada | Etiqueta **«Anulada»**, con la fecha, quién autorizó y el motivo. Sin botón |
+
+**NO HAY BOTÓN DESHABILITADO CON SU EXPLICACIÓN, y es una decisión.** Una venta
+de una caja cerrada no se va a poder anular nunca más: un botón gris prometería
+algo que no existe. Y una venta ya anulada se explica mejor con su etiqueta —que
+dice cuándo, quién y por qué— que con un control apagado.
+
+#### 2. Los cuatro pasos del diálogo
+
+1. **Formulario** — el motivo, y el **voucher si la venta fue con tarjeta**. El
+   voucher va acá, antes de la vista previa, porque si no coincide la anulación
+   se rechaza y **no se llega a pedir el PIN** (§3.3 del diseño, decisión 9).
+2. **Vista previa** — el dinero que sale del cajón, el total, quién vendió, quién
+   abrió la caja, el motivo escrito, y **qué producto y cuánto vuelven al
+   inventario**, con los desactivados avisados. **No muestra el teórico de la
+   caja** (§3.4).
+3. **PIN** — de un administrador, siempre. La superficie no acepta el código
+   remoto, y el teclado usa el largo de siempre: cuatro dígitos.
+4. **Confirmación** — con los montos ya ajustados: el total anulado, lo que deja
+   de contar la caja y el saldo de cada producto, de antes y de ahora.
+
+**La pantalla no decide nada.** No valida el voucher, no mira la caja, no calcula
+un monto: todo lo contesta el proceso principal por el MISMO canal, llamado dos
+veces (`pin: null` y después con el PIN).
+
+#### 3. Una sola regla para ofrecer y para aceptar
+
+`ServicioDeAnulacionDeVenta.sePuedeAnular(ventaId)` es lo que llena
+`ReciboEnHistorialIpc.sePuedeAnular`, y **comparte con `leerYValidar` la única
+copia de la regla** (`impedimentoParaAnular`): la caja de la venta sigue abierta
+y la venta no está anulada. El historial no compara cajas por su cuenta, así que
+no puede ofrecer algo que el servicio después niegue.
+
+> **Lo que `sePuedeAnular` NO promete:** que la anulación vaya a salir. El
+> voucher, la unidad del producto y el motivo se comprueban al pedirla, y la caja
+> puede cerrarse en el medio. Es el filtro de la pantalla, no la autorización.
+
+Hay una prueba de acoplamiento que recorre los estados y exige que las dos
+respuestas coincidan siempre, con su control: si las tres formas posibles dieran
+todas lo mismo, dos funciones rotas «coincidirían» sin probar nada.
+
+#### 4. El recibo marcado
+
+El modelo gana `anulacion: { fecha, hora, autorizadaPor, motivo } | null`, leída
+de `anulaciones_de_venta` —nunca de `ventas.estado`, que sigue diciendo
+`completada`—, y las DOS salidas la imprimen: el texto de la térmica y el HTML
+del PDF, con la misma constante `MARCA_DE_VENTA_ANULADA`. **Ninguna cifra
+cambia.** Salida cruda de la aplicación real:
+
+```
+                RECIBO DE VENTA
+    Proforma, no válido como factura fiscal
+               ** REIMPRESIÓN **
+              ** VENTA ANULADA **
+Anulada: 17/09/2026 15:31
+Autorizó: Jimmy
+Motivo: el cliente devolvió el producto
+------------------------------------------------
+Recibo No.                                     1
+Fecha                           17/09/2026 15:31
+Cajero                                       Ana
+------------------------------------------------
+Maíz blanco
+  2 lb x 4.25                               8.50
+------------------------------------------------
+TOTAL                                       8.50
+```
+
+La prueba no se conforma con que la marca aparezca: compara los dos papeles
+renglón por renglón y exige que el de después contenga TODOS los del de antes, y
+exactamente cuatro líneas más. Cualquier cifra que cambiara aparecería como una
+línea que falta.
+
+#### 5. En la aplicación real: `npm run verify:pantallas:anulacion`, 31 de 31
+
+Un arnés propio, como los de caja, teclado, impresora e historial de cajas. El
+escenario se arma por los canales reales y la anulación se maneja con clics:
+Ana cobra tres ventas —una en efectivo, una con tarjeta y **una que no se va a
+anular**—, se pide anular, se ve la vista previa, **se cancela**, se reintenta,
+un PIN equivocado, el PIN de Jimmy, la confirmación, el recibo reimpreso, el
+voucher equivocado, el correcto, y al final la caja cerrada.
+
+```
+OK    las TRES ventas de la caja abierta ofrecen «Anular»
+OK    LA VISTA PREVIA dice cuánto hay que devolverle al cliente
+OK    LA VISTA PREVIA no muestra el efectivo teórico de la caja
+OK    CANCELAR ANTES DEL PIN no deja rastro: la base queda idéntica
+OK    UN PIN EQUIVOCADO lo dice y se queda en el teclado, sin anular
+OK    el PIN equivocado SÍ deja su asiento y suma un intento: es evidencia, a propósito (§6.1)
+OK    LA CONFIRMACIÓN muestra el inventario repuesto, con el saldo de antes y el de ahora
+OK    EL RECIBO REIMPRESO dice «VENTA ANULADA», con la fecha, quién autorizó y el motivo
+OK    UN VOUCHER EQUIVOCADO se rechaza con su mensaje
+OK    y NO aparece el teclado del PIN
+OK    no toca el candado ni escribe nada: la base queda idéntica
+OK    la venta que NO se anuló tampoco ofrece «Anular»: lo que la saca es la CAJA CERRADA
+OK    las filas de `ventas` NO se tocaron: las TRES siguen diciendo «completada» (§1.1)
+31 comprobaciones, 0 fallidas.
+```
+
+> **CANCELAR NO DEJA RASTRO; UN PIN EQUIVOCADO SÍ, Y ES A PROPÓSITO.** Son dos
+> cosas distintas y el arnés las separa: cerrar el diálogo antes de teclear un
+> PIN no escribe nada —se compara una foto de la base antes y después— y un PIN
+> tecleado y equivocado deja su asiento `anulacion_de_venta_rechazada` y suma un
+> intento al candado, porque probar PIN para anular una venta es evidencia del
+> mismo fraude que el control existe para frenar (§6.1).
+
+#### 6. UN DEFECTO DE MI PROPIO ARNÉS, encontrado al falsificarlo
+
+La primera versión del arnés **pasó 30 de 30 con la pantalla rota a propósito.**
+La mutación era la tentadora: que el historial ofreciera anular cualquier venta
+que no estuviera ya anulada, ignorando si su caja sigue abierta.
+
+La causa era del escenario, no de la mutación: al final del recorrido **todas**
+las ventas estaban anuladas, así que «no se ofrece porque la caja se cerró» y «no
+se ofrece porque ya está anulada» daban el mismo resultado y el arnés no podía
+distinguirlos. Se agregó una **tercera venta que nunca se anula**, y con ella la
+misma mutación hace fallar dos comprobaciones:
+
+```
+FALLA CON LA CAJA CERRADA ningún recibo ofrece «Anular»
+      esperado: 0 botones
+      real    : 1 botones
+FALLA la venta que NO se anuló tampoco ofrece «Anular»: lo que la saca es la CAJA CERRADA
+      esperado: 0 botones y ninguna etiqueta de anulada en esa fila
+      real    : botones=1 anulada=0
+31 comprobaciones, 2 fallidas.
+```
+
+Es la regla de siempre aplicada al arnés: una comprobación que nunca se vio
+fallar no prueba nada, y acá la que no probaba nada era mía.
+
+#### 7. Las otras falsificaciones, una por vez
+
+Cada una con el archivo restaurado y su sha256 comparado después.
+
+| Mutación | Qué cae |
+|---|---|
+| `sePuedeAnular` contesta siempre que sí | 4, entre ellas la de acoplamiento |
+| `sePuedeAnular` se hace su propia regla (mira solo si ya está anulada) | 3 |
+| La pantalla dibuja «Anular» en todas las filas | 1 |
+| Un pedido rechazado igual abre el teclado del PIN | 1: «UN VOUCHER EQUIVOCADO… NO abre el teclado del PIN» |
+| El modelo nunca lee la anulación | 3 |
+| El papel no imprime la marca | 2 |
+| El papel de una venta anulada cambia una cifra | 1: la comparación renglón por renglón |
+
+#### 8. Lo que NO se hizo, dicho en voz alta
+
+- **El PDF no se regenera al anular.** §5.2 del diseño dice que se regenera
+  después de confirmar, fuera de la transacción. Acá la marca aparece en cuanto
+  alguien **ve o reimprime** el recibo, que es lo que se pidió y lo que regenera
+  el PDF desde las mismas filas; el archivo que ya estaba en el disco sigue sin
+  marca hasta esa reimpresión. Queda como el punto 46 de §6.2.
+- **El botón de imprimir el recibo marcado desde la confirmación** (§5.2)
+  tampoco: la confirmación informa, y reimprimir está a un clic en la misma
+  pantalla.
+- **El reporte de cobros con tarjeta** (§3.5) sigue pendiente, con su canal y su
+  guard.
+- **Windows**, como siempre.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -9622,6 +9797,10 @@ imprime lo que se ve en pantalla —palabra por palabra el defecto original:
 | **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
 | **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **La base rechaza una anulación con vía distinta de `'presencial'`: CHECK con nombre `anulaciones_de_venta_solo_presencial` en la 038 local y en la 0038 de la nube, que convive con el CHECK amplio de la columna en los dos lados. La 0038 va en la misma ronda que la 0033 y la 0035.** **REVIERTE la fila de `docs/ANULACION-DE-VENTA.md` §1.1.** | Dejar el CHECK amplio, como decía el diseño; estrechar la 0033 antes de su primera aplicación; en la nube, quitar el CHECK de la columna | Decisión de Julio. El «segundo lugar» que §4.9 eliminó podía ampliar un permiso en silencio; este falla cerrado, y una prueba exige que `ACEPTA_PIN_REMOTO` y la base digan lo mismo. Estrechar la 0033 dejaría la local y la nube distintas hasta la 038. En la nube se deja el CHECK amplio para que el espejo sea exacto y ampliar algún día sea la misma sentencia en los dos lados. Aplicarla junto con la 0033 no rompe a nadie: ninguna versión publicada escribe `'remoto'` (medido en los tags). §4.54. | 2026-09-17 (número de prompt por confirmar) |
+| **La anulación se pide desde el HISTORIAL DE RECIBOS, y el botón «Anular» solo se dibuja en las ventas de la caja que sigue abierta y sin anular. En las demás NO se dibuja nada, ni un botón deshabilitado.** | Un botón apagado con su explicación; un botón siempre visible que falle al tocarlo; una pantalla propia de anulaciones | El historial es donde el cajero ya busca la venta por su número cuando el cliente vuelve al mostrador (§4.3 del diseño), así que no hace falta una pantalla más ni enseñarle otro camino. **El botón apagado se descartó a propósito:** una venta de una caja ya cerrada no se va a poder anular NUNCA MÁS —el alcance del diseño es solo caja abierta—, así que un control gris prometería algo que no existe; y una venta ya anulada se explica mejor con su etiqueta, que dice cuándo, quién autorizó y por qué. Un botón que siempre se ve y falla al tocarlo es peor: convierte una regla del negocio en un error que aparece después de decidir. §4.58. | 2026-09-17 (número de prompt por confirmar) |
+| **Qué ventas se pueden anular lo contesta el SERVICIO (`sePuedeAnular`), con la MISMA copia de la regla que usa `leerYValidar`, y una prueba de acoplamiento lo exige.** | Que el proceso principal compare la caja abierta contra `venta.caja_sesion_id` al armar el historial; que la pantalla lo deduzca de los datos que ya recibe | Es la lección de §4.57 aplicada antes de que costara: dos copias de la misma regla se desincronizan con el primer cambio, y acá la discrepancia sería peor que un nombre feo —el historial ofrecería anular algo que el servicio después rechaza, o escondería el botón de algo que sí se puede—. La regla vive en `impedimentoParaAnular`, la llaman los dos, y la prueba recorre los estados exigiendo que las dos respuestas coincidan, con un control que impide que «coincidan» dos funciones rotas. **Cuesta una lectura por fila del historial** (la caja y la anulación de cada venta, las dos por llave primaria), sobre un listado que ya arma el modelo completo de cada recibo; no se midió en el i3. §4.58. | 2026-09-17 (número de prompt por confirmar) |
+| **El voucher de una venta con tarjeta se pide en el PRIMER paso del diálogo, junto al motivo, antes de la vista previa.** | Pedirlo después de la vista previa, o junto con el PIN | Es lo que decidió el diseño (§3.3, decisión 9) y lo que hace que un voucher que no coincide **no llegue a pedir el PIN**: se rechaza antes, sin consumir un intento del candado y sin escribir nada. Pedirlo más tarde invertiría ese orden y haría que alguien tecleara un PIN para una anulación que ya estaba rechazada. §4.58. | 2026-09-17 (número de prompt por confirmar) |
+| **El recibo de una venta anulada se MARCA al verlo o reimprimirlo, con la misma constante en el papel y en el PDF, y sin tocar una sola cifra.** | Emitir una nota de crédito con numeración propia; regenerar el PDF en el momento de anular | No se emite documento nuevo (§5.1): el recibo ya es una proforma, y un correlativo de anulaciones le daría apariencia fiscal a algo que la tienda no tiene base para emitir. La marca sale de `anulaciones_de_venta`, nunca de `ventas.estado`, que sigue diciendo `completada` (§1.1). **Que ninguna cifra cambie no se afirma: se compara el papel de antes contra el de después, renglón por renglón.** Lo que NO se hizo es regenerar el PDF del disco en el momento de anular (§5.2): la marca aparece al ver o reimprimir, que es lo que se pidió, y hasta entonces el archivo viejo sigue sin marca. Punto 46 de §6.2. §4.58. | 2026-09-17 (número de prompt por confirmar) |
 | **El nombre LEGIBLE de cada tabla vive UNA sola vez, en `src/shared/nombres-de-tabla.ts`, y una prueba sobre el árbol sintáctico falla si un archivo del renderer o del proceso principal declara su propio mapa. Otra exige que el mapa cubra EXACTAMENTE las trece tablas.** | Corregir los dos mapas a mano cada vez, como el 2026-09-17; derivar `TablaSincronizable` o `ORDEN_DE_RESTAURACION` de este mapa; dejarlo solo en el compilador | El mapa estaba escrito a mano en las DOS pantallas que nombran tablas —sincronización y restauración—, en distinto orden y sin nada que las atara, y **agregar una tabla y olvidarse de una copia no hacía fallar nada**. Se desincronizaron con la primera tabla nueva: `anulaciones_de_venta` (§4.45) entró en un solo mapa y la pantalla de sincronización mostró el nombre TÉCNICO de una anulación pendiente a quien tenía que decidir si reintentaba o saltaba un lote detenido. Arreglarlos a mano (§4.53) dejó el defecto vivo para la próxima tabla. **No se invierten las dependencias de los tipos de dominio**: `TablaSincronizable` es una lista cerrada que obliga a preguntarse si algo es dato de negocio, y el orden de `ORDEN_DE_RESTAURACION` es el grafo de llaves foráneas; derivarlos de un mapa de etiquetas ataría dos cosas que se deciden por razones distintas. La cobertura se comprueba al revés —el mapa contra esas listas—, con **tres fuentes independientes**: la igualdad con `ORDEN_DE_RESTAURACION` en runtime, la presencia de `TIPO_DE_ENTRADA_DE_FOTO`, y una asignación de tipo que hace fallar `typecheck` si una tabla entra en `TablaSincronizable` y no en el mapa. **Dejarlo solo en el compilador no alcanzaba**: los dos mapas eran `Record<string, string>`, así que TypeScript nunca vio que faltara una clave. La auditoría recorrió `src/renderer` y `src/shared` y no encontró ningún otro mapa; `resumenDeFila` de la restauración describe la FILA y no la tabla, y su `switch` exhaustivo ya lo protege el compilador. §4.57. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
@@ -9689,6 +9868,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 43 | **La restauración deja viva la sesión de Auth cuando rechaza un usuario de otro rol.** | `cliente-de-restauracion.ts:188` lanza antes de guardar la sesión, así que `cerrarSesion()` no hace nada y el token de refresco sigue válido en GoTrue. Nadie lo guarda: solo existió en la respuesta. En el descartable hay una sesión así (`6c95f26f`, 2026-09-15 22:28:25 UTC), y el vaciado del 2026-09-17 no la toca: vive en el esquema `auth`, no en `public`. El arreglo sería cerrar esa sesión con su propio token antes de lanzar. | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** A evaluar antes de escalar a más clientes o sucursales |
 | 44 | **Una base que ya subió su historia a un proyecto no la vuelve a subir a otro.** | Leído en el código, no medido: `sync_cola` no guarda a qué proyecto subió cada lote, y nada reinicia `sincronizado_en` si cambia la nube incrustada. Si una base que sincronizó con `pos-pruebas-descartable` pasa a apuntar a `pos-jimmy-cano`, el real recibe solo lo nuevo, y el primer lote que nombre un usuario, una categoría o un producto viejo fallaría con `23503`. Importa si la tienda conserva su base de prueba al pasar a producción. **El 2026-09-17 se esquivó, no se resolvió:** la decisión para la base A fue arrancar con una carpeta de datos nueva (§4.55), justamente porque reencolar su historia no tiene mecanismo. | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** Hay que decidirlo antes del paso a producción si la tienda conserva su base |
 | 45 | **Protección estructural de UNA SOLA TERMINAL POR PROYECTO.** Que cada instalación tenga un id de terminal propio, que viaje en cada lote, y que la nube rechace el lote de una segunda terminal que no haya sido autorizada a reemplazar a la primera. | Hoy nada lo impide: la credencial de terminal es una sola por proyecto, los lotes no dicen de qué instalación vienen, y la sincronización es solo de subida, así que dos bases pueden escribir la misma nube sin enterarse una de la otra. Es lo que pasó el 2026-09-15 (§4.55). Mientras no exista, lo que lo evita es la regla operativa del recuadro de §4, que es humana y no del sistema. Toca el contrato con la nube —un campo más en cada lote y una comprobación en las siete funciones de escritura—, así que es diseño, no un parche. Se relaciona con el punto 10 (multi-sucursal) y con §1.5 del diseño (la terminal robada). | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** A evaluar antes de escalar a más clientes o sucursales |
+| 46 | **El PDF de una venta anulada solo se marca cuando alguien lo ve o lo reimprime.** | §5.2 del diseño dice que el PDF se regenera «después de confirmar la anulación, fuera de la transacción y sobre el mismo `pdf_path`». No se hizo: la marca aparece al ver o reimprimir desde el historial, que es lo que este prompt pidió y lo que regenera el PDF desde las mismas filas. Mientras tanto, el archivo que quedó en el disco al emitirse **no tiene la marca**, así que alguien que abra la carpeta de recibos y lea ese PDF no se entera de que la venta se anuló. Nadie lee esos PDF hoy más que por la pantalla; el día que se entreguen por otra vía —un respaldo, un correo— hay que cerrarlo. El cambio es acotado: llamar a la reimpresión desde el flujo, fuera de la transacción, y dejar la falla en la bitácora técnica si el PDF no se puede escribir. | Abierto — de bajo riesgo hoy |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -9739,14 +9919,16 @@ negocio:
   sigue existiendo para entornos de desarrollo nuevos, pero **ya no es la única
   forma de cambiarlos**. Lo que falta es el número real que quiera Jimmy: punto
   15 de la sección 6.2.
-- **Sí existe el NÚCLEO LOCAL de la anulación de una venta** (§4.45): las
+- **Sí existe la anulación de una venta, de punta a punta en la terminal**: las
   migraciones 033 y 034, el servicio con la reposición, el voucher y el PIN, los
-  asientos y el canal `venta:anular`. **Desde el 2026-09-17 también su
-  sincronización y su restauración del lado de la terminal** (§4.53), con la
-  `0033` y la `0035` escritas y **sin aplicar**. **No existen todavía** el
-  recibo marcado, el reporte de cobros con tarjeta ni la pantalla. **Una versión
-  que anula no se instala en una terminal conectada a una nube sin la 0033 y la
-  0035.**
+  asientos y el canal `venta:anular` (§4.45); su sincronización y su restauración
+  del lado de la terminal (§4.53), con la `0033` y la `0035` escritas y
+  **aplicadas solo en `pos-pruebas-descartable`** (§4.56); y **desde el
+  2026-09-17 la pantalla y el recibo marcado** (§4.58): se anula desde el
+  historial de recibos, con el voucher antes de la vista previa y el PIN de un
+  administrador. **No existe todavía** el reporte de cobros con tarjeta (§3.5
+  del diseño). **Una versión que anula no se instala en una terminal conectada a
+  una nube sin la 0033 y la 0035**, que hoy es `pos-jimmy-cano`.
 - **No existen las alertas de stock mínimo, los gráficos ni la exportación de
   reportes a un archivo.** El umbral de cada producto es una definición de
   negocio que falta: punto 18 de la sección 6.2.
@@ -9874,6 +10056,10 @@ npm run verify:pantallas:caja  # la app real: teclado en pantalla, teórico en v
 npm run verify:pantallas:teclado  # la app real: toca los 22 campos que no tenían teclado y escribe con él; los
                          # caminos de salida (atajo real y sintético, Cmd+Q real, app.quit, close, botón)
                          # siguen pidiendo PIN; el candado de intentos; la sonda de macOS (§4.46).
+npm run verify:pantallas:anulacion  # la app real: tres ventas (efectivo, tarjeta y una que NO se anula);
+                         # vista previa, CANCELAR sin dejar rastro, reintentar, PIN equivocado, PIN correcto,
+                         # confirmación con los montos ajustados, el recibo marcado, el voucher equivocado que
+                         # no llega al PIN, y la caja cerrada que quita el botón (§4.58).
 npm run verify:pantallas:historial-de-cajas  # la app real: cinco cajas armadas por los canales reales
                          # (diferencia autorizada, exacta por denominación, cerrada por otra persona,
                          # recuento corregido, abierta); la cajera no llega; filtros y detalle (§4.44).

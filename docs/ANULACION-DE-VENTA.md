@@ -5,9 +5,14 @@
 > CLAUDE.md §4.45). **Desde el 2026-09-17 también la sincronización (7) y la
 > restauración (8), del lado de la terminal**, con la `0033` y la `0035`
 > ESCRITAS y ensayadas en un Postgres 17 local, **y SIN APLICAR en ningún
-> proyecto** (CLAUDE.md §4.53). **Falta:** aplicarlas con la aprobación de
-> Julio y correr las pruebas contra `pos-pruebas-descartable` (10.3), el
-> recibo (5), el reporte de cobros con tarjeta (3.5) y la pantalla.
+> proyecto** (CLAUDE.md §4.53). **La `0033` y la `0035` se aplicaron en
+> `pos-pruebas-descartable` el 2026-09-17, con la aprobación de Julio y en la
+> misma ronda que la `0038`** (CLAUDE.md §4.56); en `pos-jimmy-cano`, no.
+> **Y desde el 2026-09-17 también están el recibo marcado (5) y la pantalla
+> (4.3), con su arnés en la aplicación real** (CLAUDE.md §4.58).
+> **Falta:** el reporte de cobros con tarjeta (3.5), la batería destructiva
+> contra `pos-pruebas-descartable` (10.3) y aplicar las migraciones de la nube
+> en el proyecto real.
 > Escrito el 2026-09-15. Ninguna migración de este documento se aplica a ningún
 > proyecto de Supabase —tampoco a `pos-pruebas-descartable`— sin que Julio vea
 > el SQL completo primero.
@@ -1083,7 +1088,13 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 
 ### 10.2 En la aplicación real (macOS; Windows sigue pendiente)
 
-Un arnés `verify:pantallas:anulacion` arma el escenario por los canales reales.
+**HECHO el 2026-09-17: `npm run verify:pantallas:anulacion`, 31 de 31**
+(CLAUDE.md §4.58). Arma el escenario por los canales reales y maneja la
+anulación con clics. Dos diferencias con lo que este documento planeaba, las dos
+anotadas allá: son **tres** ventas y no dos —la tercera no se anula nunca, y sin
+ella el arnés no distinguía «la caja se cerró» de «ya está anulada», medido—, y
+el paso 9 (el reporte de cobros con tarjeta) no está, porque ese reporte todavía
+no se construyó.
 
 1. Ana abre la caja y cobra una venta en efectivo y **dos con tarjeta**.
 2. Rosa pide anular la de efectivo desde el historial de recibos.
