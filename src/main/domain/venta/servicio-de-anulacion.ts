@@ -273,6 +273,28 @@ export class ServicioDeAnulacionDeVenta {
   }
 
   /**
+   * ¿Se puede ofrecer anular esta venta?
+   *
+   * Lo contesta la pantalla del historial de recibos para decidir si dibuja el
+   * botón «Anular», y **no dibuja uno deshabilitado**: una venta de una caja ya
+   * cerrada no se puede anular nunca más, así que ofrecerla apagada sería
+   * prometer algo que no va a poder hacerse.
+   *
+   * Contesta solo por las condiciones que no dependen de lo que teclee nadie
+   * (ver `impedimentoParaAnular`). Que devuelva `true` NO garantiza que la
+   * anulación vaya a salir: el voucher, la unidad del producto y el motivo se
+   * comprueban al pedirla, y la caja puede cerrarse en el medio. Es un filtro
+   * de la pantalla, no la autorización.
+   */
+  public sePuedeAnular(ventaId: string): boolean {
+    const venta = this.ventas.obtenerPorId(ventaId);
+    if (venta === null) {
+      return false;
+    }
+    return this.impedimentoParaAnular(venta, this.cajaDeLaVenta(venta)) === null;
+  }
+
+  /**
    * Valida sin PIN y arma la vista previa. No escribe nada.
    *
    * Lanza `ErrorDeNegocio` con el motivo si la anulación no se puede hacer: en
@@ -498,6 +520,51 @@ export class ServicioDeAnulacionDeVenta {
   // Piezas
   // -------------------------------------------------------------------------
 
+  /** La caja donde se registró la venta. No puede faltar: hay llave foránea. */
+  private cajaDeLaVenta(venta: Venta): CajaSesion {
+    const caja = this.cajaSesiones.obtenerPorId(venta.cajaSesionId);
+    if (caja === null) {
+      // No puede pasar: la llave foránea de `ventas.caja_sesion_id` lo impide.
+      throw new Error(`La venta ${venta.id} apunta a una caja inexistente: ${venta.cajaSesionId}.`);
+    }
+    return caja;
+  }
+
+  /**
+   * Lo que impide anular esta venta SIN QUE NADIE TECLEE NADA, o `null`.
+   *
+   * Son las dos condiciones que no dependen del pedido: la caja de la venta
+   * sigue abierta y la venta no está anulada todavía. El voucher, la unidad y
+   * el motivo dependen de lo que se teclee o de cómo esté el catálogo hoy, y
+   * por eso no están acá: se comprueban al pedir la anulación.
+   *
+   * ESTA ES LA ÚNICA COPIA DE ESA REGLA, y no es un detalle de estilo. La usan
+   * los dos lugares que la necesitan —`leerYValidar`, que lanza el error, y
+   * `sePuedeAnular`, que solo mira para decidir si la pantalla ofrece el
+   * botón—, así que no puede pasar que el historial ofrezca anular algo que el
+   * servicio después rechace, ni al revés. Hay una prueba que recorre los
+   * casos y exige que las dos respuestas coincidan siempre.
+   */
+  private impedimentoParaAnular(venta: Venta, caja: CajaSesion): ErrorDeNegocio | null {
+    if (caja.estado !== 'abierta') {
+      return new ErrorDeNegocio(
+        'CAJA_DE_LA_VENTA_CERRADA',
+        'La caja donde se registró esa venta ya se cerró. Una venta solo se anula mientras su caja sigue abierta.',
+        `La caja ${caja.id} de la venta ${venta.id} está ${caja.estado}.`,
+      );
+    }
+
+    if (this.anulaciones.obtenerPorVenta(venta.id) !== null) {
+      return new ErrorDeNegocio(
+        'VENTA_YA_ANULADA',
+        'Esa venta ya estaba anulada.',
+        `La venta ${venta.id} ya tiene una anulación.`,
+      );
+    }
+
+    return null;
+  }
+
   /**
    * Lee y valida todo, en el orden de §4.3: la venta existe, su caja está
    * abierta, no tiene anulación, el voucher coincide (con tarjeta), ninguna
@@ -516,25 +583,10 @@ export class ServicioDeAnulacionDeVenta {
       );
     }
 
-    const caja = this.cajaSesiones.obtenerPorId(venta.cajaSesionId);
-    if (caja === null) {
-      // No puede pasar: la llave foránea de `ventas.caja_sesion_id` lo impide.
-      throw new Error(`La venta ${venta.id} apunta a una caja inexistente: ${venta.cajaSesionId}.`);
-    }
-    if (caja.estado !== 'abierta') {
-      throw new ErrorDeNegocio(
-        'CAJA_DE_LA_VENTA_CERRADA',
-        'La caja donde se registró esa venta ya se cerró. Una venta solo se anula mientras su caja sigue abierta.',
-        `La caja ${caja.id} de la venta ${venta.id} está ${caja.estado}.`,
-      );
-    }
-
-    if (this.anulaciones.obtenerPorVenta(venta.id) !== null) {
-      throw new ErrorDeNegocio(
-        'VENTA_YA_ANULADA',
-        'Esa venta ya estaba anulada.',
-        `La venta ${venta.id} ya tiene una anulación.`,
-      );
+    const caja = this.cajaDeLaVenta(venta);
+    const impedimento = this.impedimentoParaAnular(venta, caja);
+    if (impedimento !== null) {
+      throw impedimento;
     }
 
     this.verificarVoucher(venta, pedido.voucher);
