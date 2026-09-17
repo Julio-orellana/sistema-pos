@@ -29,6 +29,7 @@ import type {
   UsuarioRestauradoIpc,
 } from '@shared/types/ipc';
 import { LARGO_DEL_PIN } from '@shared/pin';
+import { nombreLegibleDeTabla } from '@shared/nombres-de-tabla';
 import { CampoDeFecha, CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 
@@ -37,24 +38,6 @@ const INTERVALO_DE_SONDEO_MS = 700;
 
 /** Las fases en las que la pantalla sondea. */
 const FASES_EN_MARCHA = new Set<ProgresoDeRestauracionIpc['fase']>(['iniciando', 'tablas', 'archivos', 'verificacion']);
-
-const NOMBRES_DE_TABLA: Readonly<Record<string, string>> = {
-  usuarios: 'usuarios',
-  categorias: 'categorías',
-  configuracion_negocio: 'datos del negocio',
-  productos: 'productos',
-  precios_especiales: 'precios especiales',
-  limites_descuento: 'topes de descuento',
-  caja_sesiones: 'turnos de caja',
-  caja_sesion_denominaciones: 'arqueos de caja',
-  ventas: 'ventas',
-  venta_detalle: 'líneas de venta',
-  recibos: 'recibos',
-  anulaciones_de_venta: 'anulaciones de venta',
-  auditoria_log: 'asientos de auditoría',
-};
-
-const nombreDeTabla = (tabla: string): string => NOMBRES_DE_TABLA[tabla] ?? tabla;
 
 /**
  * La REFERENCIA del proyecto de Supabase, sacada de su URL: lo que el panel
@@ -386,7 +369,7 @@ export function PantallaDeRestauracion({ alTerminar, alVolver }: PantallaDeResta
             {progreso.tablas.map((tabla) => (
               <li key={tabla.tabla} className="lista__fila" data-prueba="restauracion-tabla" data-tabla={tabla.tabla}>
                 <div className="lista__principal">
-                  <span className="lista__nombre">{nombreDeTabla(tabla.tabla)}</span>
+                  <span className="lista__nombre">{nombreLegibleDeTabla(tabla.tabla)}</span>
                   <span className="lista__detalle">
                     {tabla.estado === 'esperando' && 'esperando'}
                     {tabla.estado === 'bajando' && `bajando ${String(tabla.filas)}${tabla.total === null ? '' : ` de ${String(tabla.total)}`}`}
@@ -449,7 +432,7 @@ export function PantallaDeRestauracion({ alTerminar, alVolver }: PantallaDeResta
   const usuariosAnomalos = progreso.usuarios.filter((u) => u.anomalo);
 
   const descripcion = (anomalia: AnomaliaDeRestauracionIpc): string =>
-    `${nombreDeTabla(anomalia.tabla)}: ${anomalia.resumen} · recibida en la nube el ${fechaLegible(anomalia.recibidoEn)}`;
+    `${nombreLegibleDeTabla(anomalia.tabla)}: ${anomalia.resumen} · recibida en la nube el ${fechaLegible(anomalia.recibidoEn)}`;
 
   if (usuarioParaPin !== null) {
     return (
@@ -497,7 +480,7 @@ export function PantallaDeRestauracion({ alTerminar, alVolver }: PantallaDeResta
             <dl className="datos">
               {verificacion.conteos.map((conteo) => (
                 <div className="dato" key={conteo.tabla}>
-                  <span className="dato__etiqueta">{nombreDeTabla(conteo.tabla)}</span>
+                  <span className="dato__etiqueta">{nombreLegibleDeTabla(conteo.tabla)}</span>
                   <span className="dato__valor">
                     nube {String(conteo.nube)} · acá {String(conteo.local)}
                     {conteo.excluidas > 0 && ` · excluidas ${String(conteo.excluidas)}`}
@@ -592,7 +575,7 @@ export function PantallaDeRestauracion({ alTerminar, alVolver }: PantallaDeResta
             </>
           )}
           {aceptadas.length > 0 && (
-            <p className="subtitulo">Restauradas a mano: {aceptadas.map((a) => `${nombreDeTabla(a.tabla)} ${a.resumen}`).join('; ')}.</p>
+            <p className="subtitulo">Restauradas a mano: {aceptadas.map((a) => `${nombreLegibleDeTabla(a.tabla)} ${a.resumen}`).join('; ')}.</p>
           )}
         </section>
       )}

@@ -20,29 +20,8 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { DetalleDeSincronizacionIpc } from '@shared/types/ipc';
+import { nombreLegibleDeTabla } from '@shared/nombres-de-tabla';
 import { TecladoNumerico } from './TecladoNumerico';
-
-/** Nombres de tabla a un texto más legible. Sin entrada, se muestra tal cual. */
-const NOMBRES_DE_TABLA: Readonly<Record<string, string>> = {
-  usuarios: 'usuarios',
-  categorias: 'categorías',
-  productos: 'productos',
-  precios_especiales: 'precios especiales',
-  limites_descuento: 'topes de descuento',
-  configuracion_negocio: 'datos del negocio',
-  caja_sesiones: 'turnos de caja',
-  caja_sesion_denominaciones: 'arqueos de caja',
-  ventas: 'ventas',
-  venta_detalle: 'líneas de venta',
-  recibos: 'recibos',
-  anulaciones_de_venta: 'anulaciones de venta',
-  auditoria_log: 'asientos de auditoría',
-  archivo_foto: 'fotos de producto',
-};
-
-function nombreLegibleDeTabla(entidadTipo: string): string {
-  return NOMBRES_DE_TABLA[entidadTipo] ?? entidadTipo;
-}
 
 /** Una fecha ISO, como la leería alguien parado en el mostrador. */
 function fechaLegible(iso: string | null): string {
