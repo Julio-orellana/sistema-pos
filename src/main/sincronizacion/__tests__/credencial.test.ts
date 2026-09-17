@@ -155,6 +155,14 @@ describe('El almacén de la credencial de la nube', () => {
       expect(almacen.ultimoMotivo).toMatch(/no está disponible/);
     });
 
+    it('SIN cifrado disponible el archivo NO se marca como dañado: puede estar perfecto y lo que falta es el llavero', () => {
+      writeFileSync(rutaEsperada(), cifrado.encryptString(TOKEN_DE_REFRESCO));
+
+      almacen.leer();
+
+      expect(almacen.ultimaLecturaIlegible).toBe(false);
+    });
+
     it('SIN archivo, la falta de cifrado no inventa un problema: no hay credencial y punto', () => {
       expect(almacen.leer()).toBeNull();
       expect(almacen.ultimoMotivo).toBeNull();
@@ -175,6 +183,7 @@ describe('El almacén de la credencial de la nube', () => {
 
       expect(almacen.leer()).toBeNull();
       expect(almacen.ultimoMotivo).toMatch(/no se pudo descifrar/);
+      expect(almacen.ultimaLecturaIlegible).toBe(true);
     });
 
     it('un archivo que descifra a cadena vacía se trata como si no hubiera credencial', () => {
@@ -183,6 +192,26 @@ describe('El almacén de la credencial de la nube', () => {
 
       expect(almacen.leer()).toBeNull();
       expect(almacen.ultimoMotivo).toMatch(/vacía/);
+      expect(almacen.ultimaLecturaIlegible).toBe(true);
+    });
+
+    it('sin archivo NO es una credencial dañada', () => {
+      almacen.leer();
+
+      expect(almacen.ultimaLecturaIlegible).toBe(false);
+    });
+
+    it('una lectura buena DESPUÉS de una ilegible vuelve a desmarcar', () => {
+      writeFileSync(rutaEsperada(), Buffer.from('basura que no descifra'));
+      const espia = vi.spyOn(cifrado, 'decryptString').mockImplementation(() => {
+        throw new Error('no se pudo descifrar');
+      });
+      almacen.leer();
+      espia.mockRestore();
+      almacen.guardar(TOKEN_DE_REFRESCO);
+
+      expect(almacen.leer()).toBe(TOKEN_DE_REFRESCO);
+      expect(almacen.ultimaLecturaIlegible).toBe(false);
     });
   });
 

@@ -149,6 +149,7 @@ export class AlmacenDeCredencial {
    * arranque de la aplicación.
    */
   public leer(): string | null {
+    this.ultimaLecturaIlegible = false;
     if (!existsSync(this.ruta)) {
       this.ultimoMotivo = null;
       return null;
@@ -160,10 +161,12 @@ export class AlmacenDeCredencial {
     try {
       const token = this.cifrado.decryptString(readFileSync(this.ruta));
       this.ultimoMotivo = token === '' ? 'La credencial guardada está vacía.' : null;
+      this.ultimaLecturaIlegible = token === '';
       return token === '' ? null : token;
     } catch (error) {
       const detalle = error instanceof Error ? error.message : String(error);
       this.ultimoMotivo = `La credencial guardada no se pudo descifrar en esta máquina: ${detalle}`;
+      this.ultimaLecturaIlegible = true;
       return null;
     }
   }
@@ -171,9 +174,21 @@ export class AlmacenDeCredencial {
   /** Por qué la última lectura devolvió `null`, o `null` si no había nada raro. */
   public ultimoMotivo: string | null = null;
 
+  /**
+   * `true` cuando la última lectura encontró el archivo y NO lo pudo usar: no
+   * se descifró, o descifrado estaba vacío. Es la credencial DAÑADA (§4.52):
+   * lo que hay que hacer es reconectar, no esperar a la red.
+   *
+   * **No incluye «el almacenamiento cifrado no está disponible»**: ahí el
+   * archivo puede estar perfecto y lo que falta es el llavero o DPAPI, y
+   * reconectar tampoco serviría, porque guardar exige el mismo cifrado.
+   */
+  public ultimaLecturaIlegible = false;
+
   /** Borra la credencial. No falla si no había ninguna. */
   public borrar(): void {
     rmSync(this.ruta, { force: true });
     this.ultimoMotivo = null;
+    this.ultimaLecturaIlegible = false;
   }
 }

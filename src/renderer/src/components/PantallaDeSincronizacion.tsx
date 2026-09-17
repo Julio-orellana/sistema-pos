@@ -54,6 +54,7 @@ function fechaLegible(iso: string | null): string {
 
 const TEXTO_DE_ESTADO: Readonly<Record<DetalleDeSincronizacionIpc['estado'], string>> = {
   detenida: 'Detenida',
+  credencial_danada: 'Credencial dañada: esta aplicación no puede leerla. Volvé a conectar la terminal',
   sin_credencial: 'Sin conectar',
   pendientes_viejos: 'Con pendientes de más de 24 horas',
   sin_conexion: 'Sin conexión ahora mismo',

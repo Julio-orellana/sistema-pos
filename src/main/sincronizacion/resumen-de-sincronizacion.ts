@@ -63,6 +63,11 @@ export interface CredencialParaElResumen {
    * no dice nada de la red: todavía no se preguntó (§4.51).
    */
   readonly yaSeIntentoConectar: boolean;
+  /**
+   * Hay un archivo de credencial y no se pudo usar: no se descifró o estaba
+   * vacío (`SesionDeNube.estado().credencialIlegible`, §4.52).
+   */
+  readonly ilegible: boolean;
 }
 
 /** Lo que hace falta para decidir el estado, ya leído de la base. */
@@ -132,7 +137,10 @@ export interface ConexionTrasUnFallo {
  *
  * El orden importa y está pensado así:
  *
- *   1. **Sin credencial primero, antes que «detenida».** Sin credencial nada
+ *   0. **Credencial dañada.** Hay archivo y no se pudo usar. Es la causa más
+ *      de fondo de todas, y sin distinguirla se veía como «sin conexión», que
+ *      manda a revisar el wifi cuando lo que hay que hacer es reconectar.
+ *   1. **Sin credencial, antes que «detenida».** Sin credencial nada
  *      va a subir pase lo que pase con ningún lote puntual: es la causa más
  *      de fondo, y mostrar «DETENIDA» insinuaría que reintentar alcanzaría.
  *   2. **Detenida.** Un lote con error determinístico no se destraba solo.
@@ -157,6 +165,10 @@ export function calcularEstadoDeSincronizacion(
   datos: DatosCrudosDeSincronizacion,
 ): EstadoDeSincronizacion {
   const { credencial } = datos;
+
+  if (credencial !== null && credencial.hayCredencial && credencial.ilegible) {
+    return 'credencial_danada';
+  }
 
   if (credencial !== null && (!credencial.hayCredencial || credencial.revocada)) {
     return 'sin_credencial';

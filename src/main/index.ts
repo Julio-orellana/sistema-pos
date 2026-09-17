@@ -818,6 +818,7 @@ app.whenReady().then(
           revocada: estado.revocada,
           conectada: estado.conectada,
           yaSeIntentoConectar: sesionDeNube.primerIntentoTerminado,
+          ilegible: estado.credencialIlegible,
         };
       },
       ejecutarCicloAhora: (): Promise<unknown> =>

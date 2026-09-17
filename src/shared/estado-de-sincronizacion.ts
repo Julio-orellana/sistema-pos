@@ -23,13 +23,19 @@
  */
 
 /**
- * Los siete estados posibles. Es una lista en tiempo de ejecución, no solo un
+ * Los ocho estados posibles. Es una lista en tiempo de ejecución, no solo un
  * tipo, para que las pruebas recorran TODOS: un estado nuevo agregado sin
  * texto o sin color no puede pasar en silencio.
  */
 export const ESTADOS_DE_SINCRONIZACION = [
   /** Un lote quedó detenido con un error determinístico. */
   'detenida',
+  /**
+   * Hay un archivo de credencial y esta aplicación no lo puede usar: no se
+   * descifró o estaba vacío (§4.52). No es la red ni una revocación: hay que
+   * reconectar la terminal.
+   */
+  'credencial_danada',
   /** No hay credencial guardada, o la nube la rechazó. */
   'sin_credencial',
   /** Hay pendientes y el más viejo pasa el umbral de 24 h. */
@@ -70,9 +76,11 @@ export type ColorDeEstado = 'neutral' | 'ambar' | 'rojo';
  * - **`sin_conexion` y `pendientes`: neutral.** Son pasivos: se resuelven
  *   solos cuando vuelve la red, y escalan a ámbar recién cuando los pendientes
  *   se vuelven viejos.
+ * - **`credencial_danada`: rojo**, como `sin_credencial`: nada va a subir
+ *   hasta que una persona reconecte la terminal.
  */
 export function colorDeEstado(estado: EstadoDeSincronizacion): ColorDeEstado {
-  if (estado === 'detenida' || estado === 'sin_credencial') {
+  if (estado === 'detenida' || estado === 'sin_credencial' || estado === 'credencial_danada') {
     return 'rojo';
   }
   if (estado === 'pendientes_viejos' || estado === 'problema_al_sincronizar') {
@@ -94,6 +102,8 @@ export function textoDeBarraDeEstado(estado: EstadoDeSincronizacion, pendientes:
   switch (estado) {
     case 'detenida':
       return 'Nube: DETENIDA';
+    case 'credencial_danada':
+      return 'Nube: credencial dañada — hay que reconectar';
     case 'sin_credencial':
       return 'Nube: sin conectar';
     case 'pendientes_viejos':

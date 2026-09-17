@@ -22,6 +22,7 @@ const CREDENCIAL_OK: CredencialParaElResumen = {
   revocada: false,
   conectada: true,
   yaSeIntentoConectar: true,
+  ilegible: false,
 };
 
 /** Base neutra: credencial buena, sin pendientes, sin nada bloqueado. */
@@ -104,7 +105,7 @@ describe('Los estados de siempre, cada uno en su condición exacta', () => {
   it('sin token vigente pero con credencial buena y pendientes: sin_conexion', () => {
     const estado = calcularEstadoDeSincronizacion(
       base({
-        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true },
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false },
         pendientes: 5,
         pendienteMasViejaDesde: hace(1),
       }),
@@ -117,7 +118,7 @@ describe('Los estados de siempre, cada uno en su condición exacta', () => {
     // «sin conexión» a los 514 ms porque la sesión arranca después de la ventana.
     const estado = calcularEstadoDeSincronizacion(
       base({
-        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: false },
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: false, ilegible: false },
         pendientes: 2,
         pendienteMasViejaDesde: hace(1),
       }),
@@ -127,14 +128,14 @@ describe('Los estados de siempre, cada uno en su condición exacta', () => {
 
   it('sin token vigente pero SIN pendientes: al día igual (no hay nada que avisar)', () => {
     const estado = calcularEstadoDeSincronizacion(
-      base({ credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true } }),
+      base({ credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false } }),
     );
     expect(estado).toBe('al_dia');
   });
 
   it('sin credencial guardada: sin_credencial', () => {
     const estado = calcularEstadoDeSincronizacion(
-      base({ credencial: { hayCredencial: false, revocada: false, conectada: false, yaSeIntentoConectar: true } }),
+      base({ credencial: { hayCredencial: false, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false } }),
     );
     expect(estado).toBe('sin_credencial');
   });
@@ -142,9 +143,61 @@ describe('Los estados de siempre, cada uno en su condición exacta', () => {
   it('credencial revocada: sin_credencial, aunque hayCredencial siga en true', () => {
     // Revocada significa "el archivo sigue ahí pero la nube ya no lo acepta".
     const estado = calcularEstadoDeSincronizacion(
-      base({ credencial: { hayCredencial: true, revocada: true, conectada: false, yaSeIntentoConectar: true } }),
+      base({ credencial: { hayCredencial: true, revocada: true, conectada: false, yaSeIntentoConectar: true, ilegible: false } }),
     );
     expect(estado).toBe('sin_credencial');
+  });
+
+  it('CREDENCIAL DAÑADA (punto 36): archivo presente que no se pudo usar, sin token y con pendientes → credencial_danada, NO sin_conexion', () => {
+    // Es exactamente lo que antes caía en «sin conexión»: hay archivo, no hay
+    // token, la sesión ya intentó y hay pendientes.
+    const estado = calcularEstadoDeSincronizacion(
+      base({
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: true },
+        pendientes: 2,
+        pendienteMasViejaDesde: hace(1),
+      }),
+    );
+    expect(estado).toBe('credencial_danada');
+  });
+
+  it('credencial dañada SIN pendientes también se avisa: nada va a subir hasta reconectar', () => {
+    const estado = calcularEstadoDeSincronizacion(
+      base({ credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: true } }),
+    );
+    expect(estado).toBe('credencial_danada');
+  });
+
+  it('credencial dañada gana sobre detenida y sobre pendientes viejos: es la causa de fondo', () => {
+    const estado = calcularEstadoDeSincronizacion(
+      base({
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: true },
+        pendientes: 9,
+        pendienteMasViejaDesde: hace(30),
+        hayLoteBloqueante: true,
+      }),
+    );
+    expect(estado).toBe('credencial_danada');
+  });
+
+  it('credencial dañada gana sobre una medición vieja de «problema al sincronizar»', () => {
+    const estado = calcularEstadoDeSincronizacion(
+      trasUnFalloMedido(true, {
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: true },
+      }),
+    );
+    expect(estado).toBe('credencial_danada');
+  });
+
+  it('CONTROL: la misma credencial SIN la marca de ilegible sigue siendo sin_conexion', () => {
+    const estado = calcularEstadoDeSincronizacion(
+      base({
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false },
+        pendientes: 2,
+        pendienteMasViejaDesde: hace(1),
+      }),
+    );
+    expect(estado).toBe('sin_conexion');
   });
 
   it('un lote bloqueante: detenida', () => {
@@ -181,7 +234,7 @@ describe('Después de un fallo MEDIDO: «problema al sincronizar» NO es «sin c
   it('ESCENARIO B — sin token y sin medición: sin_conexion, igual que antes', () => {
     const estado = calcularEstadoDeSincronizacion(
       base({
-        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true },
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false },
         pendientes: 2,
         pendienteMasViejaDesde: hace(1),
       }),
@@ -191,7 +244,7 @@ describe('Después de un fallo MEDIDO: «problema al sincronizar» NO es «sin c
 
   it('sin token, aunque haya una medición positiva vieja: sin_conexion (no hay token con qué subir)', () => {
     const estado = calcularEstadoDeSincronizacion(
-      trasUnFalloMedido(true, { credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true } }),
+      trasUnFalloMedido(true, { credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false } }),
     );
     expect(estado).toBe('sin_conexion');
   });
@@ -231,7 +284,7 @@ describe('Después de un fallo MEDIDO: «problema al sincronizar» NO es «sin c
     ).toBe('pendientes_viejos');
     expect(
       calcularEstadoDeSincronizacion(
-        trasUnFalloMedido(true, { credencial: { hayCredencial: false, revocada: false, conectada: false, yaSeIntentoConectar: true } }),
+        trasUnFalloMedido(true, { credencial: { hayCredencial: false, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false } }),
       ),
     ).toBe('sin_credencial');
   });
@@ -281,7 +334,7 @@ describe('Prioridad: qué gana cuando varias cosas son ciertas a la vez', () => 
   it('sin credencial gana sobre lote bloqueante: la causa de fondo, no el síntoma', () => {
     const estado = calcularEstadoDeSincronizacion(
       base({
-        credencial: { hayCredencial: false, revocada: false, conectada: false, yaSeIntentoConectar: true },
+        credencial: { hayCredencial: false, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false },
         hayLoteBloqueante: true,
         pendientes: 9,
         pendienteMasViejaDesde: hace(1),
@@ -300,7 +353,7 @@ describe('Prioridad: qué gana cuando varias cosas son ciertas a la vez', () => 
   it('pendientes viejos gana sobre sin_conexion', () => {
     const estado = calcularEstadoDeSincronizacion(
       base({
-        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true },
+        credencial: { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: false },
         pendientes: 9,
         pendienteMasViejaDesde: hace(30),
       }),
@@ -332,8 +385,8 @@ describe('El color: FALSIFICADO contra la frase literal de §3.3', () => {
     expect(colorDeEstado('problema_al_sincronizar')).not.toBe(colorDeEstado('sin_conexion'));
   });
 
-  it('la lista recorre los siete estados, y cada uno tiene color y texto', () => {
-    expect(ESTADOS_DE_SINCRONIZACION).toHaveLength(7);
+  it('la lista recorre los ocho estados, y cada uno tiene color y texto', () => {
+    expect(ESTADOS_DE_SINCRONIZACION).toHaveLength(8);
     for (const estado of ESTADOS_DE_SINCRONIZACION) {
       expect(['neutral', 'ambar', 'rojo']).toContain(colorDeEstado(estado));
       expect(textoDeBarraDeEstado(estado, 3).startsWith('Nube: ')).toBe(true);
@@ -347,9 +400,10 @@ describe('El color: FALSIFICADO contra la frase literal de §3.3', () => {
     expect(colorDeEstado('pendientes_viejos')).toBe('ambar');
   });
 
-  it('detenida y sin_credencial: rojo', () => {
+  it('detenida, sin_credencial y credencial_danada: rojo', () => {
     expect(colorDeEstado('detenida')).toBe('rojo');
     expect(colorDeEstado('sin_credencial')).toBe('rojo');
+    expect(colorDeEstado('credencial_danada')).toBe('rojo');
   });
 });
 
@@ -366,6 +420,14 @@ describe('El texto de la barra nombra el número, y NO inventa una hora', () => 
     );
     expect(textoDeBarraDeEstado('detenida', 0)).toBe('Nube: DETENIDA');
     expect(textoDeBarraDeEstado('sin_credencial', 0)).toBe('Nube: sin conectar');
+    expect(textoDeBarraDeEstado('credencial_danada', 2)).toBe('Nube: credencial dañada — hay que reconectar');
+  });
+
+  it('el texto de la credencial dañada NO habla de conexión ni se confunde con «sin conectar»', () => {
+    const texto = textoDeBarraDeEstado('credencial_danada', 2);
+    expect(texto).not.toContain('conexión');
+    expect(texto).not.toBe(textoDeBarraDeEstado('sin_credencial', 2));
+    expect(texto).not.toBe(textoDeBarraDeEstado('sin_conexion', 2));
   });
 
   it('NINGÚN texto contiene una hora del reloj: no se mide "desde cuándo" con precisión de minutos', () => {

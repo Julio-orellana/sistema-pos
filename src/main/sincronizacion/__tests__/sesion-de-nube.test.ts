@@ -849,6 +849,27 @@ describe('Una credencial que existe pero NO SE PUEDE DESCIFRAR', () => {
     expect(sesion.estado().hayCredencial).toBe(true);
   });
 
+  it('SE MARCA COMO ILEGIBLE (punto 36): la barra la puede distinguir de «sin conexión»', async () => {
+    expect(sesion.estado().credencialIlegible).toBe(false);
+
+    await sesion.arrancar();
+
+    expect(sesion.estado().credencialIlegible).toBe(true);
+  });
+
+  it('renovar sobre el mismo archivo ilegible también la marca', async () => {
+    await sesion.renovar();
+
+    expect(sesion.estado().credencialIlegible).toBe(true);
+  });
+
+  it('reconectar la DESMARCA: la credencial nueva ya se escribió con el cifrado de esta aplicación', async () => {
+    await sesion.arrancar();
+    await sesion.conectar(CORREO, CONTRASENA);
+
+    expect(sesion.estado().credencialIlegible).toBe(false);
+  });
+
   it('NO se marca como revocada: no es lo mismo que la nube rechace la credencial', async () => {
     await sesion.arrancar();
 

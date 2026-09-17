@@ -43,7 +43,7 @@ beforeEach(() => {
   limpiar = prueba.limpiar;
   repos = crearRepositorios(base);
   ciclosPedidos = 0;
-  credencialActual = { hayCredencial: true, revocada: false, conectada: true, yaSeIntentoConectar: true };
+  credencialActual = { hayCredencial: true, revocada: false, conectada: true, yaSeIntentoConectar: true, ilegible: false };
   medicionActual = null;
 
   idJimmy = repos.usuarios.crear({
@@ -114,6 +114,13 @@ describe('resumen(): lo liviano, sin nada sensible', () => {
   it('sin nube configurada (credencial null): configurada en false', () => {
     credencialActual = null;
     expect(servicio.resumen().configurada).toBe(false);
+  });
+
+  it('una credencial ILEGIBLE llega como credencial_danada, en resumen y en detalle (punto 36)', () => {
+    encolarUsuario('Ana');
+    credencialActual = { hayCredencial: true, revocada: false, conectada: false, yaSeIntentoConectar: true, ilegible: true };
+    expect(servicio.resumen().estado).toBe('credencial_danada');
+    expect(servicio.detalle().estado).toBe('credencial_danada');
   });
 
   it('un lote bloqueante se refleja como "detenida"', () => {

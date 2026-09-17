@@ -328,6 +328,7 @@ function dependenciasSobre(
         revocada: boolean;
         conectada: boolean;
         yaSeIntentoConectar: boolean;
+        ilegible: boolean;
       } => {
         const estado = sesionDeNube.estado();
         return {
@@ -335,6 +336,7 @@ function dependenciasSobre(
           revocada: estado.revocada,
           conectada: estado.conectada,
           yaSeIntentoConectar: sesionDeNube.primerIntentoTerminado,
+          ilegible: estado.credencialIlegible,
         };
       },
       ejecutarCicloAhora: (): Promise<unknown> => Promise.resolve(null),

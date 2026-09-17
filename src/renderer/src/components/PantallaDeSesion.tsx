@@ -76,6 +76,9 @@ function AvisoDePendientes({
     if (resumen.estado === 'detenida') {
       return `La sincronización está DETENIDA. Hay ${cambios} esperando.`;
     }
+    if (resumen.estado === 'credencial_danada') {
+      return `La credencial de la nube está dañada y hay que volver a conectar la terminal. Hay ${cambios} esperando.`;
+    }
     if (resumen.estado === 'sin_credencial') {
       return `Esta terminal no tiene conexión con la nube. Hay ${cambios} esperando.`;
     }

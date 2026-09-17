@@ -128,6 +128,13 @@ export interface EstadoDeNube {
   readonly renovacionesFallidas: number;
   /** Qué pasó la última vez, para mostrarlo. Nunca lleva tokens ni contraseñas. */
   readonly ultimoMotivo: string | null;
+  /**
+   * `true` cuando hay un archivo de credencial y la última vez que se leyó NO
+   * se pudo usar: no se descifró o estaba vacío (§4.52). Es distinto de
+   * `revocada` (la nube la rechazó) y de no tener conexión: el arreglo es
+   * reconectar. Una sesión buena lo vuelve a `false`.
+   */
+  readonly credencialIlegible: boolean;
 
   // --- Credencial revocada (fase 3.a, segunda mitad) ------------------------
   /**
@@ -200,6 +207,8 @@ export class SesionDeNube {
   private ultimoExp: number | null = null;
   /** Ver `primerIntentoTerminado`. */
   private intentoDeArranqueTerminado = false;
+  /** Ver `EstadoDeNube.credencialIlegible`. */
+  private credencialIlegible = false;
 
   public constructor(dependencias: DependenciasDeLaSesionDeNube) {
     this.auth = dependencias.auth;
@@ -240,6 +249,7 @@ export class SesionDeNube {
       relojSospechoso: this.desfase !== null && elDesfaseMerecePreocupar(this.desfase),
       renovacionesFallidas: this.fallidas,
       ultimoMotivo: this.motivo,
+      credencialIlegible: this.credencialIlegible,
       revocada: this.revocadaDesde !== null,
       revocadaDesde: this.revocadaDesde,
       exposicionHasta:
@@ -398,6 +408,7 @@ export class SesionDeNube {
     // Arrancar RE-VERIFICA contra el servidor: ver el comentario de `renovar`.
     this.revocadaDesde = null;
     const guardado = this.credencial.leer();
+    this.credencialIlegible = guardado === null && this.credencial.ultimaLecturaIlegible;
     if (guardado === null) {
       this.motivo =
         this.credencial.ultimoMotivo ??
@@ -433,6 +444,7 @@ export class SesionDeNube {
     }
 
     const guardado = this.credencial.leer();
+    this.credencialIlegible = guardado === null && this.credencial.ultimaLecturaIlegible;
     if (guardado === null) {
       this.olvidarSesionEnMemoria();
       this.motivo = this.credencial.ultimoMotivo ?? 'No hay credencial guardada para renovar.';
@@ -493,6 +505,9 @@ export class SesionDeNube {
     this.ultimoExp = claims.exp;
     this.fallidas = 0;
     this.motivo = null;
+    // La credencial recién guardada se escribió con el cifrado de ESTA
+    // aplicación: ya no está dañada.
+    this.credencialIlegible = false;
     /*
       Una sesión buena BORRA el estado de revocada. Es el único camino de
       salida, y es el que corresponde: si el servidor volvió a dar tokens, la

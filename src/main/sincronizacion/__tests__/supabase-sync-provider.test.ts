@@ -69,6 +69,7 @@ function sesionDeMentira(token: string | null, extra: Partial<EstadoDeNube> = {}
     relojSospechoso: false,
     renovacionesFallidas: 0,
     ultimoMotivo: null,
+    credencialIlegible: false,
     revocada: false,
     revocadaDesde: null,
     exposicionHasta: null,
