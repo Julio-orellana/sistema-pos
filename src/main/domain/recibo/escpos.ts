@@ -50,9 +50,6 @@ const AVANZAR = Uint8Array.from([ESC, 0x64, 0x03]);
  */
 const CORTAR = Uint8Array.from([GS, 0x56, 0x42, 0x00]);
 
-/** Cuántos caracteres imprime una térmica de 80 mm con la fuente A. */
-export const COLUMNAS_TERMICA = 48;
-
 /**
  * Equivalencias para caracteres que CP850 no tiene.
  *
