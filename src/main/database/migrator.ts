@@ -47,6 +47,7 @@ import sqlAnulacionesDeVenta from './migrations/033_anulaciones_de_venta.sql?raw
 import sqlSuperficieAnulacionDeVenta from './migrations/034_superficie_anulacion_de_venta.sql?raw';
 import sqlTotpDeAutorizacionRemota from './migrations/036_totp_de_autorizacion_remota.sql?raw';
 import sqlQuitarPinRemotoHash from './migrations/037_quitar_pin_remoto_hash.sql?raw';
+import sqlAnulacionSoloPresencial from './migrations/038_anulacion_solo_presencial.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -160,6 +161,12 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 37,
     nombre: '037_quitar_pin_remoto_hash',
     sql: sqlQuitarPinRemotoHash,
+  },
+  // Espejo: `0038_anulacion_solo_presencial`, con el mismo nombre de restricción.
+  {
+    orden: 38,
+    nombre: '038_anulacion_solo_presencial',
+    sql: sqlAnulacionSoloPresencial,
   },
 ];
 

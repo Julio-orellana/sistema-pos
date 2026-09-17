@@ -1,0 +1,44 @@
+-- ===========================================================================
+-- 038_anulacion_solo_presencial.sql — La base rechaza una anulación autorizada a distancia
+-- ===========================================================================
+--
+-- La superficie `anulacion_de_venta` NO acepta el código remoto desde que
+-- existe (`ACEPTA_PIN_REMOTO` en `autenticacion.ts`; CLAUDE.md §4.9 y §4.45).
+-- Hasta esta migración lo sostenían el servicio y dos pruebas. Desde acá también
+-- la base: una fila con `autorizada_via` distinta de 'presencial' no entra.
+--
+-- REVIERTE UNA DECISIÓN DEL DISEÑO, POR DECISIÓN DE JULIO DEL 2026-09-17. La 033
+-- dejó el CHECK amplio a propósito: repetir la política en un CHECK «sería el
+-- segundo lugar que el proyecto ya eliminó» (`docs/ANULACION-DE-VENTA.md` §1.1).
+-- Aquel segundo lugar era un parámetro que podía AMPLIAR un permiso sin que nada
+-- fallara. Este falla CERRADO: si alguien pusiera `anulacion_de_venta: true` sin
+-- una migración nueva, el INSERT de la anulación se rechaza, la transacción se
+-- revierte entera y no queda nada escrito. Una prueba ata los dos lugares
+-- (`anulacion-solo-presencial.test.ts`).
+--
+-- ES UN CHECK CON NOMBRE QUE CONVIVE CON EL DE LA COLUMNA. La 033 ya está
+-- aplicada y no se edita, y el CHECK de su columna no tiene nombre: quitarlo
+-- exigiría recrear la tabla con el procedimiento de doce pasos, que el proyecto
+-- descartó (ver la cabecera de la 008). Con los dos, 'presencial' pasa y todo lo
+-- demás se rechaza. Volver a ampliar sería una migración con
+-- `DROP CONSTRAINT anulaciones_de_venta_solo_presencial`, medido en SQLite 3.53.4.
+--
+-- `ADD CONSTRAINT ... CHECK` es la misma forma que usa la 008: no está en la
+-- gramática documentada de SQLite y se midió que la aplica. REVISA LAS FILAS QUE
+-- YA EXISTEN: con una sola fila que no sea 'presencial', SQLite rechaza la
+-- migración, se revierte y la aplicación no arranca. No debería haber ninguna:
+-- la superficie nunca aceptó el código remoto. Para encontrarla, si pasara:
+--
+--     SELECT id, venta_id, autorizada_via, fecha
+--       FROM anulaciones_de_venta
+--      WHERE autorizada_via <> 'presencial';
+--
+-- No puede dar NULL: `autorizada_via` es NOT NULL (regla de los CHECK de tres
+-- valores, `checks-con-null.test.ts`).
+--
+-- ESPEJO: `0038_anulacion_solo_presencial` en la nube, con el mismo nombre de
+-- restricción y la misma expresión.
+-- ===========================================================================
+
+ALTER TABLE anulaciones_de_venta
+  ADD CONSTRAINT anulaciones_de_venta_solo_presencial CHECK (autorizada_via = 'presencial');

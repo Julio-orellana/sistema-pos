@@ -262,7 +262,7 @@ Tres detalles del esquema:
 | Detalle | Por qué |
 |---|---|
 | **No copia** el total, la forma de pago, quién vendió ni la caja | Todo eso está en `ventas`, que no cambia nunca. Una copia sería un segundo lugar que puede discrepar. La nube encuentra la caja leyendo la venta. |
-| `autorizada_via` admite `'remoto'` aunque la sección 4.2 recomienda no aceptarlo | Qué superficie acepta el PIN remoto vive en **una sola tabla**, `ACEPTA_PIN_REMOTO` (§4.9). Repetir esa política en un CHECK crearía el segundo lugar que el proyecto ya eliminó. Guardar la vía deja la fila leíble sola, y ampliar la política un día no exigiría migración. |
+| ~~`autorizada_via` admite `'remoto'` aunque la sección 4.2 recomienda no aceptarlo~~ **SUPERADO EL 2026-09-17: la base solo acepta `'presencial'`** | ~~Qué superficie acepta el PIN remoto vive en **una sola tabla**, `ACEPTA_PIN_REMOTO` (§4.9). Repetir esa política en un CHECK crearía el segundo lugar que el proyecto ya eliminó. Guardar la vía deja la fila leíble sola, y ampliar la política un día no exigiría migración.~~ **Decisión de Julio: migraciones `038` (local) y `0038` (nube), CHECK `anulaciones_de_venta_solo_presencial`**, que convive con el de la columna. El «segundo lugar» de §4.9 podía ampliar un permiso sin que nada fallara; este falla cerrado, y una prueba exige que la tabla y la base digan lo mismo. La columna se conserva: la fila sigue leyéndose sola. Ver CLAUDE.md §4.54. |
 | Motivo obligatorio, hasta 200 caracteres | Es el mismo tope del motivo del ajuste de inventario (`servicio-de-productos.ts:73`). La diferencia es que acá no puede ir vacío: una anulación sin motivo no se puede revisar. |
 
 ### 1.2 Las tres formas posibles, y por qué esta

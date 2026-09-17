@@ -228,10 +228,11 @@ número que use queda reservado también del lado local.
 | `0032_venta_detalle_costo_unitario_snap.sql` | Sí — aplicada el 2026-09-15 justo después de la `0031`, con la misma aprobación. Evidencia en CLAUDE.md §4.4. |
 | `0033_anulaciones_de_venta.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Se ensayó en un Postgres 17 LOCAL con las migraciones de esta carpeta (CLAUDE.md §4.53). Espera la aprobación de Julio, primero para `pos-pruebas-descartable`. |
 | `0035_sincronizar_anulacion_de_venta.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Exige la `0033`. Mismo ensayo local y misma espera. |
+| `0038_anulacion_solo_presencial.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Espejo de la `038` local: CHECK `anulaciones_de_venta_solo_presencial`, que convive con el de la columna. Exige la `0033` y va en la misma ronda, después de la `0035`, por decisión de Julio. Ensayada con `ROLLBACK` en el Postgres 17 LOCAL (CLAUDE.md §4.54). |
 
 **ACTUALIZADO EL 2026-09-17: los dos proyectos tienen las mismas 26** (las 24
-de abajo más la `0031` y la `0032`, del 2026-09-15). **La `0033` y la `0035`
-están escritas y no aplicadas en ninguno.** El párrafo que sigue describe el
+de abajo más la `0031` y la `0032`, del 2026-09-15). **La `0033`, la `0035` y
+la `0038` están escritas y no aplicadas en ninguno.** El párrafo que sigue describe el
 estado del 2026-09-14: **no quedaba ninguna migración pendiente en
 `pos-jimmy-cano` y los dos proyectos tenían las mismas 24.** La última fue la `0029`, el 2026-09-14, aplicada
 después de la `0027` y la `0028` del mismo día; antes la `0025` y la `0026`,
