@@ -10,10 +10,12 @@
  * con el NOMBRE de la columna, antes de que la primera venta real intente
  * subir y falle en el mostrador.
  *
- * Cubre además las funciones de la migración 0023, todas: que existan, que las
- * cinco de escritura sean SECURITY DEFINER, que ninguna tenga el search_path
- * sin fijar, y que la versión de contrato que esta terminal manda sea la que
- * la nube declara.
+ * Cubre además las funciones de la nube, todas: que existan, que las de
+ * escritura sean SECURITY DEFINER, que ninguna tenga el search_path sin fijar,
+ * que la versión de contrato que esta terminal manda sea la que la nube
+ * declara, y que la foto declare EXACTAMENTE las funciones que esta terminal
+ * conoce: una función que falte en la lista fija de
+ * `contrato_de_sincronizacion()` no aparece en la foto, y eso falla acá.
  *
  * Las exclusiones son EXPLÍCITAS y salen de una sola fuente: las columnas que
  * no viajan las dice `COLUMNAS_EXCLUIDAS` de la bandeja de salida —la misma
@@ -31,6 +33,8 @@ import { z } from 'zod';
 import {
   AYUDANTES_INTERNOS,
   COLUMNA_DEL_SERVIDOR,
+  FUNCIONES_DEL_CONTRATO,
+  FUNCIONES_DE_DISPARADOR,
   FUNCIONES_DE_ESCRITURA,
   FUNCIONES_DE_RESTAURACION,
   FUNCION_DEL_CONTRATO,
@@ -68,7 +72,7 @@ const SEARCH_PATH_VACIO = 'search_path=""';
 // El esquema local
 // ---------------------------------------------------------------------------
 
-/** Las doce tablas que viajan. Es el tipo de la bandeja de salida, hecho lista. */
+/** Las trece tablas que viajan. Es el tipo de la bandeja de salida, hecho lista. */
 const TABLAS_QUE_VIAJAN: readonly TablaSincronizable[] = [
   'usuarios',
   'categorias',
@@ -81,10 +85,11 @@ const TABLAS_QUE_VIAJAN: readonly TablaSincronizable[] = [
   'ventas',
   'venta_detalle',
   'recibos',
+  'anulaciones_de_venta',
   'auditoria_log',
 ];
 
-/** Las que tienen que estar en la nube: las doce más `denominaciones`, sembrada allá desde la 0004. */
+/** Las que tienen que estar en la nube: las trece más `denominaciones`, sembrada allá desde la 0004. */
 const TABLAS_DE_LA_NUBE = [...TABLAS_QUE_VIAJAN, 'denominaciones'].sort();
 
 /** Tablas locales SIN espejo, a propósito (supabase/migrations/README.md, dirección 1). */
@@ -94,16 +99,11 @@ const TABLAS_SOLO_LOCALES = ['sync_cola', 'bloqueos_de_autorizacion', 'migracion
  * Tablas que YA SE ENCOLAN pero cuyo espejo y cuya puerta en la nube TODAVÍA NO
  * EXISTEN. No es una lista de perdón: cada entrada dice por qué está y cuándo
  * sale, y la prueba de abajo obliga a sacarla el día que llegue su espejo.
+ *
+ * VACÍA desde el 2026-09-17: `anulaciones_de_venta` estuvo acá desde el núcleo
+ * local de la anulación hasta que llegaron la 0033 y la 0035.
  */
-const TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA: readonly { readonly tabla: TablaSincronizable; readonly motivo: string }[] = [
-  {
-    tabla: 'anulaciones_de_venta',
-    motivo:
-      'Núcleo local de la anulación (docs/ANULACION-DE-VENTA.md). La migración 0033, la función ' +
-      '`sincronizar_anulacion_de_venta` y la entrada del enrutador son del prompt de sincronización (§7). ' +
-      'Hasta entonces, contra una nube real su lote detiene la cola (§7.5).',
-  },
-];
+const TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA: readonly { readonly tabla: TablaSincronizable; readonly motivo: string }[] = [];
 
 interface ColumnaLocal {
   readonly nombre: string;
@@ -149,7 +149,7 @@ const nombresDe = (columnas: readonly { readonly nombre: string }[]): string[] =
 // ---------------------------------------------------------------------------
 
 describe('La foto de la nube tiene las tablas correctas', () => {
-  it('exactamente las trece: las doce que viajan más denominaciones', () => {
+  it('exactamente las catorce: las trece que viajan más denominaciones', () => {
     expect(Object.keys(foto.tablas).sort()).toEqual(TABLAS_DE_LA_NUBE);
   });
 
@@ -271,6 +271,31 @@ describe('Las funciones de sincronización de la nube, según la foto', () => {
     });
   }
 
+  for (const disparador of FUNCIONES_DE_DISPARADOR) {
+    it(`${disparador}: la función de trigger existe, devuelve trigger, no es DEFINER y tiene search_path vacío`, () => {
+      expect(foto.funciones[disparador]).toEqual({
+        security_definer: false,
+        search_path: [SEARCH_PATH_VACIO],
+        argumentos: '',
+        devuelve: 'trigger',
+      });
+    });
+  }
+
+  it('la foto declara EXACTAMENTE las funciones que esta terminal conoce: ni una que falte en la lista fija del contrato, ni una desconocida', () => {
+    // La lección de la 0027 (CLAUDE.md §4.29): `contrato_de_sincronizacion()`
+    // enumera las funciones con un `proname IN (...)` literal. Una función que
+    // se crea y no se agrega ahí NO aparece en la foto que se tome, y la nube
+    // tendría una puerta que nadie vigila. Se dice con nombre, en las dos
+    // direcciones.
+    const enLaFoto = Object.keys(foto.funciones).sort();
+    const conocidas = [...FUNCIONES_DEL_CONTRATO].sort();
+    expect({
+      laTerminalLaConoceYLaFotoNoLaDeclara: conocidas.filter((f) => !enLaFoto.includes(f)),
+      laFotoLaDeclaraYLaTerminalNoLaConoce: enLaFoto.filter((f) => !conocidas.includes(f)),
+    }).toEqual({ laTerminalLaConoceYLaFotoNoLaDeclara: [], laFotoLaDeclaraYLaTerminalNoLaConoce: [] });
+  });
+
   it('NINGUNA función de la foto tiene el search_path sin fijar', () => {
     const sinFijar = Object.entries(foto.funciones)
       .filter(([, definicion]) => !(definicion.search_path ?? []).includes(SEARCH_PATH_VACIO))
@@ -278,7 +303,7 @@ describe('Las funciones de sincronización de la nube, según la foto', () => {
     expect(sinFijar).toEqual([]);
   });
 
-  it('las listas cerradas de tablas de las cinco funciones cubren las doce que viajan, y solo nombran tablas que existen en la nube', () => {
+  it('las listas cerradas de tablas de las funciones de escritura cubren las trece que viajan, y solo nombran tablas que existen en la nube', () => {
     const admitidas = new Set(Object.values(TABLAS_ADMITIDAS_POR_FUNCION).flat());
     for (const tabla of TABLAS_QUE_VIAJAN) {
       expect(admitidas, `${tabla} no tiene ninguna función por la que subir`).toContain(tabla);
@@ -288,7 +313,7 @@ describe('Las funciones de sincronización de la nube, según la foto', () => {
     }
   });
 
-  it('auditoria_log está en la lista de las cinco funciones: toda operación deja su asiento', () => {
+  it('auditoria_log está en la lista de todas las funciones de escritura: toda operación deja su asiento', () => {
     for (const funcion of FUNCIONES_DE_ESCRITURA) {
       expect(TABLAS_ADMITIDAS_POR_FUNCION[funcion]).toContain('auditoria_log');
     }

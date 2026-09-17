@@ -2,8 +2,9 @@
  * Qué función de la nube le corresponde a cada lote.
  *
  * Es **puro**: recibe las filas del lote y devuelve el nombre de una de las
- * cinco funciones de la `0023`, o explica por qué no se puede decidir. Sin
- * red, sin base, sin reloj. Se prueba con una tabla de casos escritos.
+ * funciones de escritura de la nube (`FUNCIONES_DE_ESCRITURA`), o explica por
+ * qué no se puede decidir. Sin red, sin base, sin reloj. Se prueba con una
+ * tabla de casos escritos.
  *
  * ===========================================================================
  * LA REGLA NO ES «MIRÁ LA PRIMERA TABLA», Y ESA ES TODA LA DIFICULTAD
@@ -21,6 +22,14 @@
  * `sincronizar_lote_simple`, que la rechazaría por nombre —`ventas` no está en
  * su lista cerrada— y **detendría la cola con un error de forma**: un fallo
  * ruidoso, por suerte, pero por la razón equivocada.
+ *
+ * La anulación de una venta (0035) tiene el mismo problema del otro lado:
+ *
+ *   anulación    →  anulaciones_de_venta → productos… → auditoria_log
+ *
+ * Trae `productos` y `auditoria_log`, igual que un lote simple, y NO trae
+ * `ventas`. Sin su tabla decisiva caería en `sincronizar_lote_simple`, que la
+ * rechazaría por nombre y detendría la cola (§7.5 de ANULACION-DE-VENTA.md).
  *
  * Por eso se enruta por PRESENCIA de una tabla decisiva, en orden de
  * especificidad, y no por posición.
@@ -61,6 +70,9 @@ const ESTADOS_DE_CAJA = {
 const TABLA_DECISIVA: readonly (readonly [string, FuncionDeEscritura])[] = [
   ['ventas', 'sincronizar_venta'],
   ['usuarios', 'sincronizar_usuario'],
+  // Decide por PRESENCIA, como las otras: la fila de la anulación va primera,
+  // pero lo que la distingue de un lote simple es que esté, no dónde.
+  ['anulaciones_de_venta', 'sincronizar_anulacion_de_venta'],
 ];
 
 /** Por qué un lote no se pudo enrutar. Lleva el motivo, no un código. */

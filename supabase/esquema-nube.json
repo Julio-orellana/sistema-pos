@@ -1,5 +1,13 @@
 {
   "funciones": {
+    "anulaciones_de_venta_es_inmutable": {
+      "argumentos": "",
+      "devuelve": "trigger",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": false
+    },
     "auditoria_log_es_inmutable": {
       "argumentos": "",
       "devuelve": "trigger",
@@ -64,6 +72,14 @@
       ],
       "security_definer": false
     },
+    "sincronizar_anulacion_de_venta": {
+      "argumentos": "lote jsonb, version_de_contrato integer",
+      "devuelve": "jsonb",
+      "search_path": [
+        "search_path=\"\""
+      ],
+      "security_definer": true
+    },
     "sincronizar_apertura_de_caja": {
       "argumentos": "lote jsonb, version_de_contrato integer",
       "devuelve": "jsonb",
@@ -122,6 +138,48 @@
     }
   },
   "tablas": {
+    "anulaciones_de_venta": [
+      {
+        "nombre": "id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "venta_id",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "solicitada_por",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "autorizada_por",
+        "nulable": false,
+        "tipo": "uuid"
+      },
+      {
+        "nombre": "autorizada_via",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "motivo",
+        "nulable": false,
+        "tipo": "text"
+      },
+      {
+        "nombre": "fecha",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "recibido_en",
+        "nulable": false,
+        "tipo": "timestamp with time zone"
+      }
+    ],
     "auditoria_log": [
       {
         "nombre": "id",
@@ -560,14 +618,14 @@
         "tipo": "numeric(14,3)"
       },
       {
-        "nombre": "precio_compra",
-        "nulable": true,
-        "tipo": "numeric(14,2)"
-      },
-      {
         "nombre": "recibido_en",
         "nulable": false,
         "tipo": "timestamp with time zone"
+      },
+      {
+        "nombre": "precio_compra",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
       }
     ],
     "recibos": [

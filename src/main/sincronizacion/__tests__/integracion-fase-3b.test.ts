@@ -25,6 +25,7 @@ import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeCategorias } from '@main/domain/catalogo/servicio-de-categorias';
 import { ServicioDeUsuarios } from '@main/domain/usuarios/servicio-de-usuarios';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
+import { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import { LogTecnicoSilencioso } from '@main/log-tecnico';
 
 import { SupabaseSyncProvider } from '../supabase-sync-provider';
@@ -310,6 +311,68 @@ describe('CADA OPERACIÓN va a SU función, y no se confunden entre sí', () => 
 });
 
 // ===========================================================================
+describe('UNA ANULACIÓN REAL sube por sincronizar_anulacion_de_venta, y una venta normal NO se confunde con ella', () => {
+  function anulaciones(): ServicioDeAnulacionDeVenta {
+    return new ServicioDeAnulacionDeVenta({
+      base,
+      ventas: repos.ventas,
+      ventaDetalle: repos.ventaDetalle,
+      productos: repos.productos,
+      cajaSesiones: repos.cajaSesiones,
+      recibos: repos.recibos,
+      usuarios: repos.usuarios,
+      anulaciones: repos.anulacionesDeVenta,
+      auditoria: repos.auditoria,
+      log: new LogTecnicoSilencioso(),
+    });
+  }
+
+  it('PRUEBA CRUZADA: venta, anulación y otra venta, en ese orden, van a sincronizar_venta, sincronizar_anulacion_de_venta y sincronizar_venta', async () => {
+    caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    base.prepare('DELETE FROM sync_cola').run();
+    const lineas = [{ productoId: idMaiz, cantidad: '2' }];
+    const anulada = venta.registrar(idCajera, 'venta', { lineas, descuento: null, formaPago: 'efectivo', numBoleta: null });
+    anulaciones().anular(
+      { ventaId: anulada.venta.id, motivo: 'El cliente devolvió la mercadería', voucher: null },
+      idCajera,
+      { autorizadaPor: idJimmy, via: 'presencial' },
+    );
+    venta.registrar(idCajera, 'venta', { lineas, descuento: null, formaPago: 'efectivo', numBoleta: null });
+
+    await crearTrabajador().ejecutarCiclo();
+
+    expect(funcionesLlamadas()).toEqual(['sincronizar_venta', 'sincronizar_anulacion_de_venta', 'sincronizar_venta']);
+    expect(repos.syncCola.contarPendientes()).toBe(0);
+  });
+
+  it('el lote de la anulación viaja con la forma de §7.1: la anulación, sus productos y su asiento, y NUNCA la fila de ventas', async () => {
+    caja.abrir(idCajera, { modo: 'simple', monto: '500' });
+    const vendida = venta.registrar(idCajera, 'venta', {
+      lineas: [{ productoId: idMaiz, cantidad: '2' }],
+      descuento: null,
+      formaPago: 'efectivo',
+      numBoleta: null,
+    });
+    base.prepare('DELETE FROM sync_cola').run();
+    anulaciones().anular({ ventaId: vendida.venta.id, motivo: 'Cobro duplicado', voucher: null }, idCajera, { autorizadaPor: idJimmy, via: 'presencial' });
+
+    let mandadas: { tabla: string; operacion: string }[] = [];
+    const espia = ((url: string, opciones: RequestInit): Promise<Response> => {
+      mandadas = (JSON.parse(opciones.body as string) as { lote: { tabla: string; operacion: string }[] }).lote.map((c) => ({ tabla: c.tabla, operacion: c.operacion }));
+      return fetchQueAcepta()(url, opciones);
+    }) as unknown as typeof fetch;
+
+    await crearTrabajador(espia).ejecutarCiclo();
+
+    expect(funcionesLlamadas()).toEqual(['sincronizar_anulacion_de_venta']);
+    expect(mandadas).toEqual([
+      { tabla: 'anulaciones_de_venta', operacion: 'insertar' },
+      { tabla: 'productos', operacion: 'actualizar' },
+      { tabla: 'auditoria_log', operacion: 'insertar' },
+    ]);
+  });
+});
+
 describe('UN CONFLICTO DE INVENTARIO: su asiento sube solo, por sincronizar_asiento (CLAUDE.md §4.3)', () => {
   it('la venta revertida no viaja; el asiento conflicto_de_inventario sí, y queda sincronizado', async () => {
     caja.abrir(idCajera, { modo: 'simple', monto: '500' });

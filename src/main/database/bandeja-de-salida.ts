@@ -83,13 +83,12 @@ export type TablaSincronizable =
   | 'venta_detalle'
   | 'recibos'
   /*
-    La anulación de una venta (docs/ANULACION-DE-VENTA.md §7.1). Se ENCOLA desde
-    el núcleo local, dentro de la transacción, como toda operación de negocio.
-    PERO SU PUERTA EN LA NUBE TODAVÍA NO EXISTE: la función
-    `sincronizar_anulacion_de_venta`, la migración `0033` y la entrada del
-    enrutador son del prompt de sincronización. Hasta entonces, contra una nube
-    real este lote detendría la cola (§7.5 del diseño): una versión con el
-    núcleo de anulación no se instala en una terminal conectada.
+    La anulación de una venta (docs/ANULACION-DE-VENTA.md §7.1). Se encola
+    dentro de la transacción, como toda operación de negocio, y sube por
+    `sincronizar_anulacion_de_venta` (migración `0035`, que exige la `0033`).
+    UNA NUBE SIN ESAS DOS MIGRACIONES DETIENE LA COLA en la primera anulación:
+    PostgREST no encuentra la función. Por eso se aplican a la nube ANTES de
+    instalar la versión que anula (§7.5 del diseño).
   */
   | 'anulaciones_de_venta'
   | 'auditoria_log';

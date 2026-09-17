@@ -208,6 +208,60 @@ describe('NO SE ENRUTA POR LA PRIMERA TABLA, y este es el caso que lo prueba', (
   });
 });
 
+describe('LA ANULACIÓN DE UNA VENTA va a su propia función (la 0035), y no se confunde con nada', () => {
+  /*
+    Una anulación trae `productos` y `auditoria_log`, igual que un lote simple,
+    y NO trae `ventas`. Sin su tabla decisiva caería en
+    `sincronizar_lote_simple`, que la rechazaría por nombre y detendría la cola
+    (docs/ANULACION-DE-VENTA.md §7.5).
+  */
+  const anulacion = (): CambioSincronizable[] => [
+    fila('anulaciones_de_venta'),
+    fila('productos'),
+    fila('productos'),
+    fila('auditoria_log'),
+  ];
+
+  it('una anulación va a sincronizar_anulacion_de_venta', () => {
+    expect(elegirFuncionDelLote(anulacion())).toBe('sincronizar_anulacion_de_venta');
+  });
+
+  it('una anulación y un lote simple comparten productos y auditoria_log: decide la PRESENCIA de anulaciones_de_venta', () => {
+    const simple = [fila('productos'), fila('auditoria_log')];
+
+    expect(elegirFuncionDelLote(simple)).toBe('sincronizar_lote_simple');
+    expect(elegirFuncionDelLote(anulacion())).toBe('sincronizar_anulacion_de_venta');
+  });
+
+  it('PRUEBA CRUZADA: un lote de venta normal sigue yendo a sincronizar_venta, y nunca a la función de la anulación', () => {
+    const venta = [fila('productos'), fila('productos'), fila('ventas'), fila('venta_detalle'), fila('auditoria_log')];
+
+    expect(elegirFuncionDelLote(venta)).toBe('sincronizar_venta');
+    expect(elegirFuncionDelLote(venta)).not.toBe('sincronizar_anulacion_de_venta');
+  });
+
+  it('la fila de la anulación decide en cualquier posición: no se enruta por la primera tabla', () => {
+    expect(elegirFuncionDelLote([fila('productos'), fila('auditoria_log'), fila('anulaciones_de_venta')])).toBe(
+      'sincronizar_anulacion_de_venta',
+    );
+  });
+
+  it('una anulación mezclada con una venta se rechaza nombrando las dos: ninguna función la aceptaría', () => {
+    const mezcla = [fila('anulaciones_de_venta'), fila('productos'), fila('ventas'), fila('auditoria_log')];
+
+    expect(() => elegirFuncionDelLote(mezcla)).toThrow(LoteNoEnrutable);
+    expect(() => elegirFuncionDelLote(mezcla)).toThrow(/anulaciones_de_venta/);
+    expect(() => elegirFuncionDelLote(mezcla)).toThrow(/ventas/);
+  });
+
+  it('una anulación mezclada con un usuario o con una caja también se rechaza', () => {
+    expect(() => elegirFuncionDelLote([fila('anulaciones_de_venta'), fila('usuarios')])).toThrow(/mezcla tablas/);
+    expect(() =>
+      elegirFuncionDelLote([fila('anulaciones_de_venta'), fila('caja_sesiones', { estado: 'abierta' })]),
+    ).toThrow(/mezcla tablas/);
+  });
+});
+
 describe('Ante un lote incoherente NO SE ADIVINA: se rechaza con el motivo', () => {
   it('un lote vacío se rechaza', () => {
     expect(() => elegirFuncionDelLote([])).toThrow(/no tiene ninguna fila/);

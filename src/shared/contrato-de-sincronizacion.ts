@@ -31,7 +31,7 @@ export const VERSION_DEL_CONTRATO_DE_SINCRONIZACION = 1;
 /** La columna que pone el servidor en cada fila que recibe (§1.5.1). Nunca viaja. */
 export const COLUMNA_DEL_SERVIDOR = 'recibido_en';
 
-/** Las cinco funciones de escritura. Todas `SECURITY DEFINER`, todas solo para el rol `terminal`. */
+/** Las funciones de escritura. Todas `SECURITY DEFINER`, todas solo para el rol `terminal`. */
 export const FUNCIONES_DE_ESCRITURA = [
   'sincronizar_usuario',
   'sincronizar_apertura_de_caja',
@@ -46,6 +46,13 @@ export const FUNCIONES_DE_ESCRITURA = [
    * Sin esta puerta, esos lotes detenían la cola entera. Ver CLAUDE.md §4.29.
    */
   'sincronizar_asiento',
+  /**
+   * La séptima, agregada por la `0035`: la anulación de una venta
+   * (docs/ANULACION-DE-VENTA.md §7). Su lote trae la fila de
+   * `anulaciones_de_venta`, los productos que repone y su asiento, y NUNCA la
+   * fila de `ventas`: en la nube `ventas` solo se inserta.
+   */
+  'sincronizar_anulacion_de_venta',
 ] as const;
 
 export type FuncionDeEscritura = (typeof FUNCIONES_DE_ESCRITURA)[number];
@@ -77,14 +84,48 @@ export const AYUDANTES_INTERNOS = [
 ] as const;
 
 /**
+ * Las funciones de TRIGGER de la nube: la que pone `recibido_en` con el reloj
+ * del servidor (0019) y las que hacen inmutables la bitácora (0022) y las
+ * anulaciones (0033). Nadie las llama: las dispara Postgres.
+ *
+ * Están acá, y no solo en la lista del contrato de la nube, por la lección de
+ * la 0027 (CLAUDE.md §4.29): una función que la nube tiene y que esta terminal
+ * no nombra en ninguna lista es una función que la prueba de deriva no vigila.
+ */
+export const FUNCIONES_DE_DISPARADOR = [
+  'fijar_recibido_en',
+  'auditoria_log_es_inmutable',
+  'anulaciones_de_venta_es_inmutable',
+] as const;
+
+/** La función que declara la versión del contrato (0023). La llaman las de escritura. */
+export const FUNCION_DE_LA_VERSION_DEL_CONTRATO = 'version_del_contrato_de_sincronizacion';
+
+/**
+ * TODAS las funciones que la nube tiene que declarar en su contrato, ni una más
+ * ni una menos. La prueba de deriva exige que la foto tenga exactamente estas:
+ * si alguien crea una función y se olvida de agregarla a la lista fija de
+ * `contrato_de_sincronizacion()`, la foto que se tome ya no la trae, y esta
+ * lista sí.
+ */
+export const FUNCIONES_DEL_CONTRATO: readonly string[] = [
+  ...FUNCIONES_DE_ESCRITURA,
+  FUNCION_DEL_CONTRATO,
+  ...FUNCIONES_DE_RESTAURACION,
+  ...AYUDANTES_INTERNOS,
+  ...FUNCIONES_DE_DISPARADOR,
+  FUNCION_DE_LA_VERSION_DEL_CONTRATO,
+];
+
+/**
  * La LISTA CERRADA de tablas que cada función admite, copiada de los `CASE`
- * de la migración. Una tabla fuera de la lista de su función se rechaza allá
- * por nombre; acá, la prueba de deriva exige que las doce tablas
+ * de las migraciones. Una tabla fuera de la lista de su función se rechaza allá
+ * por nombre; acá, la prueba de deriva exige que las trece tablas
  * sincronizables aparezcan en al menos una lista, para que ninguna quede sin
  * puerta cuando se agregue una.
  *
- * `auditoria_log` está en las cinco porque toda operación de negocio deja su
- * asiento, y en las cinco se escribe con `DO NOTHING`: su trigger de
+ * `auditoria_log` está en todas porque toda operación de negocio deja su
+ * asiento, y en todas se escribe con `DO NOTHING`: su trigger de
  * inmutabilidad abortaría cualquier `DO UPDATE`.
  */
 export const TABLAS_ADMITIDAS_POR_FUNCION: Readonly<Record<FuncionDeEscritura, readonly string[]>> = {
@@ -93,6 +134,7 @@ export const TABLAS_ADMITIDAS_POR_FUNCION: Readonly<Record<FuncionDeEscritura, r
   sincronizar_cierre_de_caja: ['caja_sesiones', 'caja_sesion_denominaciones', 'auditoria_log'],
   sincronizar_venta: ['productos', 'ventas', 'venta_detalle', 'auditoria_log'],
   sincronizar_asiento: ['auditoria_log'],
+  sincronizar_anulacion_de_venta: ['anulaciones_de_venta', 'productos', 'auditoria_log'],
   sincronizar_lote_simple: [
     'categorias',
     'productos',
