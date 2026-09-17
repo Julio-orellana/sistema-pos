@@ -28,6 +28,15 @@
  *      se cae a mitad del día, y la subida no contesta. NO hay conexión: la
  *      barra tiene que decir «sin conexión», nunca «problema al sincronizar».
  *      Es el caso que mirar solo el token confundiría.
+ *   F. CREDENCIAL DAÑADA: el archivo de credencial existe pero son bytes que
+ *      el `safeStorage` real no descifra (como el de una versión con otro
+ *      nombre de producto, §4.23). La barra tiene que decir «credencial
+ *      dañada», en rojo, y NUNCA «sin conexión»: el problema no es la red
+ *      (§4.52). Y no se llama a la red con un token que no se pudo leer.
+ *
+ *   En A, B, C y E se lee además el COLOR de la barra (su clase): C en ámbar,
+ *   A, B y E sin color (§4.52).
+ *
  *   D. NUBE REAL (solo con --con-nube-de-pruebas): `pos-pruebas-descartable`,
  *      con la credencial de terminal de `.env.nube-pruebas` y SIN filas
  *      pendientes, así que no se sube ni una fila. Es el caso normal: se tiene
@@ -60,6 +69,7 @@
  * Código 0 si todo pasa, 1 si alguna comprobación falla, 2 si faltó algo.
  */
 
+const { randomBytes } = require('node:crypto');
 const { existsSync, mkdtempSync, readFileSync, writeFileSync } = require('node:fs');
 const http = require('node:http');
 const netNode = require('node:net');
@@ -90,6 +100,10 @@ const PRIMERA_PANTALLA_EN_MENOS_DE_MS = 12_000;
 const IPC_EN_MENOS_DE_MS = 1_000;
 /** El texto que la barra tiene que mostrar en C, exacto (§4.51). */
 const TEXTO_DE_C = 'Nube: problema al sincronizar — 2 pendientes';
+/** El texto que la barra tiene que mostrar en F, exacto (§4.52). */
+const TEXTO_DE_F = 'Nube: credencial dañada — hay que reconectar';
+const CLASE_AMBAR = 'barra-estado__nube--ambar';
+const CLASE_ROJO = 'barra-estado__nube--rojo';
 /**
  * Hasta cuándo, contado desde el lanzamiento, se espera el texto de la barra en
  * C y en E: primer ciclo a los 30 s de mostrar la ventana, 30 s de límite de la
@@ -253,7 +267,7 @@ async function salir(app) {
 }
 
 /** Primer arranque: primer administrador (deja filas en la cola) y credencial cifrada. */
-async function preparar(datos, entornoDeNube, { tokenDeRefresco, conPendientes }) {
+async function preparar(datos, entornoDeNube, { tokenDeRefresco, conPendientes, credencialIlegible = false }) {
   const { app } = await lanzar(datos, entornoDeNube);
   const ventana = await app.firstWindow();
   await ventana.waitForLoadState('domcontentloaded');
@@ -274,7 +288,10 @@ async function preparar(datos, entornoDeNube, { tokenDeRefresco, conPendientes }
     tokenDeRefresco,
   );
   await salir(app);
-  writeFileSync(join(datos, ARCHIVO_DE_CREDENCIAL), Buffer.from(cifradoEnBase64, 'base64'), { mode: 0o600 });
+  // En F se guardan bytes al azar: el archivo EXISTE y `safeStorage` no lo
+  // puede descifrar, que es lo que deja una versión con otra identidad.
+  const contenido = credencialIlegible ? randomBytes(48) : Buffer.from(cifradoEnBase64, 'base64');
+  writeFileSync(join(datos, ARCHIVO_DE_CREDENCIAL), contenido, { mode: 0o600 });
 }
 
 /** Segundo arranque: el que se mide. */
@@ -326,13 +343,13 @@ async function medirArranque(
   let muestreando = true;
   const muestreo = (async () => {
     while (muestreando) {
-      const texto = await ventana
-        .locator('[data-prueba="barra-nube"]')
-        .innerText({ timeout: 250 })
-        .catch(() => null);
-      if (texto !== null && barrasVistas.at(-1)?.texto !== texto) {
-        barrasVistas.push({ ms: Date.now() - lanzadoEn, texto });
-        anotar(`${nombre}: la barra cambió a los ${String(Date.now() - lanzadoEn)} ms: «${texto}»`);
+      const indicador = ventana.locator('[data-prueba="barra-nube"]');
+      const texto = await indicador.innerText({ timeout: 250 }).catch(() => null);
+      const clase = texto === null ? null : await indicador.getAttribute('class', { timeout: 250 }).catch(() => null);
+      const anterior = barrasVistas.at(-1);
+      if (texto !== null && (anterior?.texto !== texto || anterior?.clase !== clase)) {
+        barrasVistas.push({ ms: Date.now() - lanzadoEn, texto, clase });
+        anotar(`${nombre}: la barra cambió a los ${String(Date.now() - lanzadoEn)} ms: «${texto}» (class="${String(clase)}")`);
       }
       await esperar(250);
     }
@@ -403,7 +420,11 @@ async function medirArranque(
     .locator('[data-prueba="barra-nube"]')
     .innerText({ timeout: 2_000 })
     .catch(() => '(no se encontró el indicador)');
-  anotar(`${nombre}: barra de estado a los ${String(Date.now() - lanzadoEn)} ms: «${barra}»`);
+  const claseDeLaBarra = await ventana
+    .locator('[data-prueba="barra-nube"]')
+    .getAttribute('class', { timeout: 2_000 })
+    .catch(() => '(no se encontró el indicador)');
+  anotar(`${nombre}: barra de estado a los ${String(Date.now() - lanzadoEn)} ms: «${barra}» (class="${String(claseDeLaBarra)}")`);
 
   const rutaDeLog = join(datos, ARCHIVO_DE_LOG);
   const log = existsSync(rutaDeLog) ? readFileSync(rutaDeLog, 'utf8') : '';
@@ -445,10 +466,25 @@ async function medirArranque(
   );
 
   await salir(app);
-  return { visibleEnMs, pantallaEnMs, barra, barrasVistas, lineas: lineasDeEsteArranque, salida: salida(), lanzadoEn };
+  return { visibleEnMs, pantallaEnMs, barra, claseDeLaBarra: claseDeLaBarra ?? '', barrasVistas, lineas: lineasDeEsteArranque, salida: salida(), lanzadoEn };
 }
 
 /** Todos los textos que mostró la barra, en orden, para la salida cruda. */
+/** A, B y E: sin conexión o pendientes, sin color. Nunca ámbar ni rojo en toda la espera. */
+function comprobarSinColor(nombre, medido) {
+  const conColor = medido.barrasVistas.filter(
+    (vista) => (vista.clase ?? '').includes(CLASE_AMBAR) || (vista.clase ?? '').includes(CLASE_ROJO),
+  );
+  comprobar(
+    `${nombre}: la barra NUNCA tuvo color (ni ámbar ni rojo) en toda la espera`,
+    'ninguna clase «--ambar» ni «--rojo»',
+    conColor.length === 0
+      ? `ninguna; final class="${medido.claseDeLaBarra}"`
+      : conColor.map((vista) => `+${String(vista.ms)} ms «${vista.texto}» class="${String(vista.clase)}"`).join(' → '),
+    conColor.length === 0,
+  );
+}
+
 function barrasEnUnRenglon(medido) {
   return medido.barrasVistas.map((vista) => `+${String(vista.ms)} ms «${vista.texto}»`).join(' → ');
 }
@@ -517,6 +553,7 @@ async function main() {
       barrasEnUnRenglon(medido),
       !medido.barrasVistas.some((vista) => vista.texto.includes('problema al sincronizar')),
     );
+    comprobarSinColor('A', medido);
     muda.cerrar();
   }
 
@@ -553,6 +590,7 @@ async function main() {
       barrasEnUnRenglon(medido),
       !medido.barrasVistas.some((vista) => vista.texto.includes('problema al sincronizar')),
     );
+    comprobarSinColor('B', medido);
   }
 
   // ----- C. Auth contesta, la subida no ----------------------------------------
@@ -600,6 +638,12 @@ async function main() {
       barrasEnUnRenglon(medido),
       !medido.barrasVistas.some((vista) => vista.texto.includes('sin conexión')),
     );
+    comprobar(
+      'C: «problema al sincronizar» se pinta en ÁMBAR (§4.52)',
+      `class con «${CLASE_AMBAR}»`,
+      `class="${medido.claseDeLaBarra}"`,
+      medido.claseDeLaBarra.split(' ').includes(CLASE_AMBAR),
+    );
     nube.cerrar();
   }
 
@@ -639,6 +683,57 @@ async function main() {
       'ningún texto con «problema al sincronizar»',
       barrasEnUnRenglon(medido),
       !medido.barrasVistas.some((vista) => vista.texto.includes('problema al sincronizar')),
+    );
+    comprobarSinColor('E', medido);
+    nube.cerrar();
+  }
+
+  // ----- F. Credencial dañada ---------------------------------------------------
+  if (correr('F')) {
+    const nube = await levantarNubeQueContestaAuth({ contestaSalud: true });
+    const datos = mkdtempSync(join(tmpdir(), 'pos-arranque-credencial-danada-'));
+    anotar(`F. CREDENCIAL DAÑADA (bytes que safeStorage no descifra), nube que sí contesta en ${nube.url}; datos en ${datos}`);
+    const entorno = { POS_NUBE_URL: nube.url, POS_NUBE_LLAVE_PUBLICABLE: 'llave-de-verificacion', POS_SYNC_PROVIDER: 'supabase' };
+    await preparar(datos, entorno, { tokenDeRefresco: 'no-se-usa', conPendientes: true, credencialIlegible: true });
+    const medido = await medirArranque('F', datos, entorno, {
+      esperaDespuesMs: 25_000,
+      conPendientes: true,
+      barraEsperada: TEXTO_DE_F,
+      barraHastaMs: 45_000,
+    });
+    for (const peticion of nube.peticiones) {
+      console.info(`    nube de mentira recibió: ${peticion}`);
+    }
+    const motivo = lineaCon(medido.lineas, 'no se pudo descifrar');
+    comprobar(
+      'F: la bitácora dice que la credencial no se pudo descifrar',
+      'renglón «… no se pudo descifrar en esta máquina…»',
+      motivo ?? '(ninguno)',
+      motivo !== null,
+    );
+    comprobar(
+      'F: no se llamó a Auth con un token que no se pudo leer',
+      'ninguna petición a /auth/v1/token',
+      nube.peticiones.join(' | ') || '(ninguna petición)',
+      !nube.peticiones.some((peticion) => peticion.includes('/auth/v1/token')),
+    );
+    comprobar(
+      `F: al final, la barra dice EXACTAMENTE «${TEXTO_DE_F}»`,
+      `«${TEXTO_DE_F}»`,
+      `final «${medido.barra}»; recorrido: ${barrasEnUnRenglon(medido)}`,
+      medido.barra === TEXTO_DE_F,
+    );
+    comprobar(
+      'F: la barra NUNCA dijo «sin conexión» en toda la espera (el problema no es la red)',
+      'ningún texto con «sin conexión»',
+      barrasEnUnRenglon(medido),
+      !medido.barrasVistas.some((vista) => vista.texto.includes('sin conexión')),
+    );
+    comprobar(
+      'F: la credencial dañada se pinta en ROJO',
+      `class con «${CLASE_ROJO}»`,
+      `class="${medido.claseDeLaBarra}"`,
+      medido.claseDeLaBarra.split(' ').includes(CLASE_ROJO),
     );
     nube.cerrar();
   }
