@@ -12,7 +12,9 @@
  *      la base queda como estaba, sin una sola fila nueva.
  *   4. Se reintenta. Un PIN equivocado deja su asiento y no anula nada.
  *   5. Con el PIN de Jimmy se anula, y la confirmación muestra los montos ya
- *      ajustados: lo que deja de contar la caja y el inventario repuesto.
+ *      ajustados: lo que deja de contar la caja y el inventario repuesto. **El
+ *      PDF del disco ya está marcado en ese mismo momento**, sin que nadie lo
+ *      haya reimpreso: se abre el archivo y se lee lo que dice adentro.
  *   6. La fila pasa a decir «Anulada» y pierde su botón; el recibo reimpreso
  *      lleva la marca con las mismas cifras.
  *   7. Con la de tarjeta, un voucher equivocado se rechaza **sin llegar al
@@ -25,9 +27,12 @@
  * Salida: cada comprobación con lo esperado y lo real, y código 1 si alguna falla.
  */
 
-const { mkdirSync, mkdtempSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+const { mkdirSync, mkdtempSync, readFileSync, statSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
+
+const { textoDelPdf } = require('./texto-de-pdf.cjs');
 
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
@@ -102,6 +107,29 @@ async function main() {
       conexion.close();
     }
   };
+  /**
+   * El PDF del recibo de una venta, TAL COMO ESTÁ EN EL DISCO.
+   *
+   * La fila guarda la ruta relativa; la absoluta se arma con la carpeta de
+   * datos de esta corrida, que es la misma que usa la aplicación.
+   */
+  const pdfDeLaVenta = (ventaId) => {
+    const [fila] = leerBase('SELECT pdf_path FROM recibos WHERE venta_id = ?', ventaId);
+    if (fila === undefined) {
+      throw new Error(`La venta ${ventaId} no tiene recibo.`);
+    }
+    const ruta = join(datos, fila.pdf_path);
+    const bytes = readFileSync(ruta);
+    return {
+      ruta,
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex').slice(0, 16),
+      modificado: statSync(ruta).mtimeMs,
+      // Lo que el archivo DICE, traducido de sus glifos (ver texto-de-pdf.cjs).
+      texto: textoDelPdf(ruta),
+    };
+  };
+
   /** Una foto de todo lo que una anulación escribiría. */
   const fotoDeLaBase = () =>
     JSON.stringify({
@@ -235,6 +263,26 @@ async function main() {
     );
     await capturar('1-historial-con-anular');
 
+    /*
+      EL PDF DEL DISCO, ANTES DE ANULAR. Es el control de las dos comprobaciones
+      que vienen después: si el lector no encontrara nunca nada, «no dice VENTA
+      ANULADA» pasaría igual con un archivo vacío.
+    */
+    const pdfAntes = pdfDeLaVenta(armado.enEfectivo.ventaId);
+    anotar(`PDF antes de anular: ${pdfAntes.ruta.split('/').pop()} · ${String(pdfAntes.bytes)} bytes · sha256 ${pdfAntes.sha256}`);
+    comprobar(
+      'el lector abre el PDF del disco y lee lo que dice: es el recibo de esta venta',
+      'dice «RECIBO DE VENTA» y su total',
+      pdfAntes.texto.includes('RECIBO DE VENTA') ? 'lo dice' : 'NO lo dice (el lector no sirve)',
+      pdfAntes.texto.includes('RECIBO DE VENTA') && pdfAntes.texto.includes('8.50'),
+    );
+    comprobar(
+      'y todavía NO dice que esté anulada',
+      'sin la marca',
+      pdfAntes.texto.includes('VENTA ANULADA') ? 'YA la tiene (mal)' : 'sin marca',
+      !pdfAntes.texto.includes('VENTA ANULADA'),
+    );
+
     // =======================================================================
     // 3. Se pide la anulación, se ve la vista previa y SE CANCELA.
     // =======================================================================
@@ -354,6 +402,58 @@ async function main() {
 
     await prueba('anulacion-listo').click();
     await prueba('modal-de-anulacion').waitFor({ state: 'detached', timeout: ESPERA_CORTA });
+
+    /*
+      ===================================================================
+      EL PUNTO 46: EL ARCHIVO DEL DISCO YA ESTÁ MARCADO
+      ===================================================================
+      Acá NADIE reimprimió nada: la única acción fue confirmar la anulación. Se
+      abre el PDF que quedó en la carpeta de recibos y se lee lo que dice
+      adentro, sin pasar por la pantalla.
+    */
+    const pdfDespues = pdfDeLaVenta(armado.enEfectivo.ventaId);
+    anotar(`PDF después de anular: ${String(pdfDespues.bytes)} bytes · sha256 ${pdfDespues.sha256}`);
+    anotar(
+      `lo que dice el PDF del disco: ${JSON.stringify(
+        pdfDespues.texto
+          .split('\n')
+          .map((linea) => linea.match(/\*\* VENTA ANULADA \*\*.{0,80}/))
+          .filter((encontrado) => encontrado !== null)
+          .map((encontrado) => encontrado[0])
+          .slice(0, 2),
+      )}`,
+    );
+    comprobar(
+      'EL PDF DEL DISCO YA DICE «VENTA ANULADA» sin que nadie lo haya reimpreso',
+      'la marca dentro del archivo',
+      pdfDespues.texto.includes('** VENTA ANULADA **') ? 'la tiene' : 'NO la tiene (mal)',
+      pdfDespues.texto.includes('** VENTA ANULADA **'),
+    );
+    comprobar(
+      'y dice también quién autorizó y por qué',
+      `«Autorizó: Jimmy» y «${MOTIVO}»`,
+      `autorizó=${String(pdfDespues.texto.includes('Autorizó: Jimmy'))} motivo=${String(pdfDespues.texto.includes(MOTIVO))}`,
+      pdfDespues.texto.includes('Autorizó: Jimmy') && pdfDespues.texto.includes(MOTIVO),
+    );
+    comprobar(
+      'el archivo es OTRO: se reescribió encima del mismo, en el momento de anular',
+      `sha256 distinto de ${pdfAntes.sha256}, y más reciente`,
+      `sha256 ${pdfDespues.sha256} · ${String(pdfDespues.modificado - pdfAntes.modificado)} ms después`,
+      pdfDespues.sha256 !== pdfAntes.sha256 && pdfDespues.modificado > pdfAntes.modificado,
+    );
+    comprobar(
+      'NO dice «REIMPRESIÓN»: es el recibo original marcado, no una reimpresión',
+      'sin la leyenda de reimpresión',
+      pdfDespues.texto.includes('REIMPRESI') ? 'dice REIMPRESIÓN (mal)' : 'no la dice',
+      !pdfDespues.texto.includes('REIMPRESI'),
+    );
+    comprobar(
+      'y CONSERVA las cifras del recibo original',
+      'el mismo total, Q8.50',
+      pdfDespues.texto.includes('8.50') ? 'lo conserva' : 'lo perdió (mal)',
+      pdfDespues.texto.includes('8.50'),
+    );
+
     const avisoDelHistorial = ((await prueba('recibos-aviso').textContent()) ?? '').trim();
     comprobar(
       'el historial avisa que la venta quedó anulada',
