@@ -30,8 +30,20 @@ export const ARCHIVO_DE_LOG = 'log-tecnico.log';
  * no pudo guardar (CLAUDE.md §4.3), según qué operación se revirtió. El hecho
  * del negocio va a `auditoria_log`; acá solo queda que ESE asiento faltó y por
  * qué.
+ *
+ * `arranque`: los hitos del arranque de la aplicación, con los milisegundos
+ * desde que empezó el proceso (2026-09-17). Existen porque en la tienda la
+ * aplicación no llegó a mostrar ninguna pantalla y el archivo no decía hasta
+ * dónde había llegado.
  */
-export type OrigenTecnico = 'impresion' | 'recibo' | 'sincronizacion' | 'venta' | 'anulacion' | 'autenticacion';
+export type OrigenTecnico =
+  | 'arranque'
+  | 'impresion'
+  | 'recibo'
+  | 'sincronizacion'
+  | 'venta'
+  | 'anulacion'
+  | 'autenticacion';
 
 /** Escribe una línea en la bitácora técnica. */
 export interface LogTecnico {

@@ -80,13 +80,16 @@ const AJUSTES_KIOSKO = {
 const enDesarrollo = process.env.ELECTRON_RENDERER_URL !== undefined;
 
 /**
- * Crea la ventana del punto de venta.
+ * Crea la ventana del punto de venta, ESCONDIDA.
+ *
+ * No la muestra: eso lo decide quien arranca, con `mostrarCuandoEsteLista`
+ * (`mostrar-ventana.ts`), que además avisa cuándo ya se ve para que recién ahí
+ * arranque lo que usa la red. La verificación automatizada de arranque
+ * simplemente no la muestra, para no tomarse la pantalla del usuario.
+ *
  * @param rutaPreload Ruta absoluta al script de preload compilado.
- * @param mostrarAlEstarLista `false` solo en la verificación automatizada de
- *        arranque, donde interesa comprobar la configuración de la ventana sin
- *        tomarse la pantalla del usuario.
  */
-export function crearVentanaPrincipal(rutaPreload: string, mostrarAlEstarLista = true): BrowserWindow {
+export function crearVentanaPrincipal(rutaPreload: string): BrowserWindow {
   // Sin menú de aplicación: elimina Archivo/Editar/Ver y todos sus atajos.
   Menu.setApplicationMenu(null);
 
@@ -119,14 +122,6 @@ export function crearVentanaPrincipal(rutaPreload: string, mostrarAlEstarLista =
   };
 
   const ventana = new BrowserWindow(opciones);
-
-  ventana.once('ready-to-show', () => {
-    if (!mostrarAlEstarLista) {
-      return;
-    }
-    ventana.show();
-    ventana.focus();
-  });
 
   aplicarBloqueosDeKiosko(ventana);
   aplicarPoliticaDeNavegacion(ventana);

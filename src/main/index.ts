@@ -72,6 +72,10 @@ import { quitarManejadoresIpc, registrarManejadoresIpc } from '@main/ipc/registe
 import { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
 import { cargarInterfaz, crearVentanaPrincipal, describirEstadoKiosko } from '@main/windows/main-window';
 import {
+  ESPERA_MAXIMA_PARA_MOSTRAR_LA_VENTANA_MS,
+  mostrarCuandoEsteLista,
+} from '@main/windows/mostrar-ventana';
+import {
   crearSyncProvider,
   leerConfiguracionAdaptadoresDelEntorno,
 } from '@shared/adapters';
@@ -438,8 +442,17 @@ app.on('second-instance', () => {
   }
 });
 
+/**
+ * Milisegundos desde que arrancó el proceso, para los hitos del arranque que
+ * quedan en la bitácora técnica.
+ */
+function msDesdeElInicioDelProceso(): number {
+  return Math.round(process.uptime() * MILISEGUNDOS_POR_SEGUNDO);
+}
+
 app.whenReady().then(
   () => {
+    const aplicacionListaALosMs = msDesdeElInicioDelProceso();
     try {
       // En verificación se usa una base descartable en la carpeta temporal: la
       // prueba necesita sembrar un administrador y no puede dejar usuarios de
@@ -466,6 +479,7 @@ app.whenReady().then(
       return;
     }
 
+    const baseAbiertaALosMs = msDesdeElInicioDelProceso();
     const baseDeDatos = obtenerBaseDeDatos();
     const repositorios = crearRepositorios(baseDeDatos);
     // Bitácora TÉCNICA (§4.14): se crea antes que los servicios porque la
@@ -895,225 +909,284 @@ app.whenReady().then(
       },
     });
 
-    const ventana = crearVentanaPrincipal(RUTA_PRELOAD, !enVerificacionDeArranque);
+    /*
+      HITOS DEL ARRANQUE, en la bitácora técnica (2026-09-17). En la tienda la
+      aplicación no llegó a mostrar ninguna pantalla y el archivo no decía hasta
+      dónde había llegado. Con esto, cada arranque deja: cuándo estuvo lista
+      Electron, cuándo abrió la base, cuándo se creó la ventana, cuándo se
+      MOSTRÓ (y si fue porque avisó que estaba lista o por límite de espera),
+      cuándo terminó de cargar la interfaz y cuándo arrancó lo que usa la red.
+    */
+    const anotarArranque = (mensaje: string): void => {
+      logTecnico.registrar('arranque', mensaje);
+      console.info(`[arranque] ${mensaje}`);
+    };
+
+    const ventana = crearVentanaPrincipal(RUTA_PRELOAD);
     ventanaQueListaImpresoras = ventana;
     controladorDeSalida.conectarVentana(ventana);
     interceptarCierresDelSistema(ventana, controladorDeSalida);
     cargarInterfaz(ventana, DIRECTORIO_RENDERER);
 
     if (enVerificacionDeArranque) {
+      // La verificación de arranque NO muestra la ventana (no se toma la
+      // pantalla de quien la corre) y tampoco arranca nada de red.
       ventana.webContents.once('did-finish-load', () => {
         void ejecutarVerificacionDeArranque(ventana, controladorDeSalida, autenticacion);
       });
       return;
     }
 
+    anotarArranque(
+      `ventana creada a los ${String(msDesdeElInicioDelProceso())} ms del inicio del proceso ` +
+        `(Electron lista a los ${String(aplicacionListaALosMs)} ms, base abierta a los ${String(baseAbiertaALosMs)} ms)`,
+    );
+    ventana.webContents.once('did-finish-load', () => {
+      anotarArranque(`la interfaz terminó de cargar a los ${String(msDesdeElInicioDelProceso())} ms del inicio del proceso`);
+    });
+
     /*
       ===================================================================
-      TRABAJADOR DE SINCRONIZACIÓN (fase 1.b)
+      NADA DE RED ANTES DE QUE LA VENTANA SE VEA (2026-09-17)
       ===================================================================
-      Corre contra `SimulatedSyncProvider`: **no toca la red, no usa
-      credenciales y no habla con Supabase.** Lo que sí hace de verdad es leer
-      `sync_cola`, respetar el orden de los lotes, aplicar el backoff y detener
-      la cola ante un error determinístico. El día que exista el adaptador real
-      lo único que cambia es qué devuelve `crearSyncProvider`.
+      Todo lo que habla con la red o lee el estado de la red —la sesión con la
+      nube (que además descifra la credencial), el trabajador de
+      sincronización, el sondeo de `net.isOnline()` y el latido— arranca
+      DENTRO de `arrancarLoQueUsaLaRed`, y esa función se llama una sola vez,
+      cuando `mostrarCuandoEsteLista` confirma que la ventana ya se mostró.
 
-      Va DESPUÉS de crear la ventana porque el primer ciclo se agenda 30
-      segundos más tarde, contados desde acá: es lo que §2.4 pide para no
-      competir con el arranque en un i3.
+      Hasta este día arrancaba en el mismo turno en que se creaba la ventana,
+      o sea ANTES de que se mostrara. En macOS eso no la bloqueaba (medido:
+      ventana visible a los 683 ms con la nube muda), pero la regla que pidió
+      Julio tras el hallazgo de la tienda es que el arranque nunca pueda quedar
+      esperando a la red, y la única forma de que sea cierto por construcción
+      es que la red empiece después. La prueba
+      `nada-de-red-antes-de-mostrar-la-ventana.test.ts` lo exige.
     */
-    /*
-      ===================================================================
-      EL PROVEEDOR REAL (fase 3.b)
-      ===================================================================
-      Solo existe si hay sesión de nube, o sea si el proyecto está
-      configurado. Si no, `crearSyncProvider` cae al simulado y avisa: la
-      cola sigue funcionando entera contra un adaptador que no toca la red,
-      que es como corrió toda la fase 1.b.
+    const arrancarLoQueUsaLaRed = (): void => {
+      anotarArranque(
+        `arranca lo que usa la red (sesión con la nube, sincronización, sondeo del enlace) a los ` +
+          `${String(msDesdeElInicioDelProceso())} ms del inicio del proceso, con la ventana ya visible`,
+      );
 
-      `net.fetch` y no el `fetch` de Node: en Windows respeta el proxy del
-      sistema, y el de Node no (§5.4 del diseño).
-    */
-    const detectorDeConexion =
-      sesionDeNube === null
-        ? null
-        : new DetectorDeConexion({
-            urlDelProyecto: urlDeLaNube,
-            referenciaDelProyecto: new URL(urlDeLaNube).hostname.split('.')[0] ?? '',
-            llavePublicable: llaveDeLaNube,
-            sistemaDiceQueHayRed: (): boolean => net.isOnline(),
-            buscar: net.fetch.bind(net),
-            registrar: anotarSincronizacion,
-            relojDeLaNube,
-          });
+      /*
+        ===================================================================
+        TRABAJADOR DE SINCRONIZACIÓN (fase 1.b)
+        ===================================================================
+        Corre contra `SimulatedSyncProvider`: **no toca la red, no usa
+        credenciales y no habla con Supabase.** Lo que sí hace de verdad es leer
+        `sync_cola`, respetar el orden de los lotes, aplicar el backoff y detener
+        la cola ante un error determinístico. El día que exista el adaptador real
+        lo único que cambia es qué devuelve `crearSyncProvider`.
 
-    const proveedorDeSincronizacion = crearSyncProvider(
-      // El proveedor sale de la MISMA configuración que la URL, no de
-      // `process.env` suelto: si no, un instalador con la nube incrustada
-      // seguiría arrancando con el simulado y diría «al día» sin que nada
-      // hubiera viajado, que es la trampa medida en §4.35.
-      leerConfiguracionAdaptadoresDelEntorno({
-        ...process.env,
-        POS_SYNC_PROVIDER: configuracionDeNube.proveedor,
-      }),
-      sesionDeNube === null || detectorDeConexion === null
-        ? undefined
-        : new SupabaseSyncProvider({
-            urlDelProyecto: urlDeLaNube,
-            llavePublicable: llaveDeLaNube,
-            sesion: sesionDeNube,
-            conexion: detectorDeConexion,
-            buscar: net.fetch.bind(net),
-            registrar: anotarSincronizacion,
-            relojDeLaNube,
-            /*
-              Fase 3.c: quien sube las FOTOS. Solo el bucket `fotos`; los PDF de
-              recibos no se suben y no hay con qué hacerlo (§2.5.3).
+        Va DESPUÉS de que la ventana se MUESTRA (ver `arrancarLoQueUsaLaRed`)
+        y el primer ciclo se agenda 30 segundos más tarde, contados desde acá:
+        es lo que §2.4 pide para no competir con el arranque en un i3.
+      */
+      /*
+        ===================================================================
+        EL PROVEEDOR REAL (fase 3.b)
+        ===================================================================
+        Solo existe si hay sesión de nube, o sea si el proyecto está
+        configurado. Si no, `crearSyncProvider` cae al simulado y avisa: la
+        cola sigue funcionando entera contra un adaptador que no toca la red,
+        que es como corrió toda la fase 1.b.
 
-              `leerArchivo` devuelve `null` cuando el archivo ya no está, y esa
-              es toda la implementación del caso «foto huérfana» de §2.5.4: el
-              trabajador la aparta un día sin detener la cola.
-            */
-            subidorDeFotos: new SubidorDeFotos({
+        `net.fetch` y no el `fetch` de Node: en Windows respeta el proxy del
+        sistema, y el de Node no (§5.4 del diseño).
+      */
+      const detectorDeConexion =
+        sesionDeNube === null
+          ? null
+          : new DetectorDeConexion({
+              urlDelProyecto: urlDeLaNube,
+              referenciaDelProyecto: new URL(urlDeLaNube).hostname.split('.')[0] ?? '',
+              llavePublicable: llaveDeLaNube,
+              sistemaDiceQueHayRed: (): boolean => net.isOnline(),
+              buscar: net.fetch.bind(net),
+              registrar: anotarSincronizacion,
+              relojDeLaNube,
+            });
+
+      const proveedorDeSincronizacion = crearSyncProvider(
+        // El proveedor sale de la MISMA configuración que la URL, no de
+        // `process.env` suelto: si no, un instalador con la nube incrustada
+        // seguiría arrancando con el simulado y diría «al día» sin que nada
+        // hubiera viajado, que es la trampa medida en §4.35.
+        leerConfiguracionAdaptadoresDelEntorno({
+          ...process.env,
+          POS_SYNC_PROVIDER: configuracionDeNube.proveedor,
+        }),
+        sesionDeNube === null || detectorDeConexion === null
+          ? undefined
+          : new SupabaseSyncProvider({
               urlDelProyecto: urlDeLaNube,
               llavePublicable: llaveDeLaNube,
-              // El `?.` no es pereza: el estrechamiento del ternario no
-              // sobrevive dentro de esta flecha, y sin sesión el resultado
-              // correcto es exactamente `null` —«no hay credencial usable»—,
-              // que es lo que el subidor ya sabe leer.
-              accessToken: (): string | null => sesionDeNube?.accessTokenVigente() ?? null,
+              sesion: sesionDeNube,
+              conexion: detectorDeConexion,
               buscar: net.fetch.bind(net),
-              leerArchivo: (rutaRelativa): Buffer | null => {
-                try {
-                  return readFileSync(almacenDeFotos.rutaAbsolutaDe(rutaRelativa));
-                } catch {
-                  return null;
-                }
-              },
+              registrar: anotarSincronizacion,
+              relojDeLaNube,
+              /*
+                Fase 3.c: quien sube las FOTOS. Solo el bucket `fotos`; los PDF de
+                recibos no se suben y no hay con qué hacerlo (§2.5.3).
+
+                `leerArchivo` devuelve `null` cuando el archivo ya no está, y esa
+                es toda la implementación del caso «foto huérfana» de §2.5.4: el
+                trabajador la aparta un día sin detener la cola.
+              */
+              subidorDeFotos: new SubidorDeFotos({
+                urlDelProyecto: urlDeLaNube,
+                llavePublicable: llaveDeLaNube,
+                // El `?.` no es pereza: el estrechamiento del ternario no
+                // sobrevive dentro de esta flecha, y sin sesión el resultado
+                // correcto es exactamente `null` —«no hay credencial usable»—,
+                // que es lo que el subidor ya sabe leer.
+                accessToken: (): string | null => sesionDeNube?.accessTokenVigente() ?? null,
+                buscar: net.fetch.bind(net),
+                leerArchivo: (rutaRelativa): Buffer | null => {
+                  try {
+                    return readFileSync(almacenDeFotos.rutaAbsolutaDe(rutaRelativa));
+                  } catch {
+                    return null;
+                  }
+                },
+              }),
             }),
-          }),
-    );
-    const trabajadorDeSincronizacion = new TrabajadorDeSincronizacion({
-      cola: repositorios.syncCola,
-      proveedor: proveedorDeSincronizacion,
-      registrar: anotarSincronizacion,
-      /*
-        LA PODA de la cola (fase 4.c, riesgo 8.6). Corre dentro del ciclo del
-        trabajador, así que la primera de cada arranque ocurre con el primer
-        ciclo —30 s después de abrir la ventana— y después como mucho una vez
-        por día. Borra SOLO lo ya subido hace más de 30 días; lo pendiente y lo
-        saltado a mano no los toca nunca.
-      */
-      poda: new PodaDeLaCola({
+      );
+      const trabajadorDeSincronizacion = new TrabajadorDeSincronizacion({
         cola: repositorios.syncCola,
+        proveedor: proveedorDeSincronizacion,
         registrar: anotarSincronizacion,
-      }),
-    });
-    planificadorDeSincronizacion = new PlanificadorDeSincronizacion({
-      trabajador: trabajadorDeSincronizacion,
-      registrar: anotarSincronizacion,
-    });
-    // El único aviso de «hay algo que subir» sale de la bandeja de salida, que
-    // es el único lugar que escribe la cola. Ver `observarLotesEncolados`.
-    observarLotesEncolados(() => {
-      planificadorDeSincronizacion?.alConfirmarTransaccion();
-    });
-    planificadorDeSincronizacion.arrancar();
-
-    /*
-      La sesión con la nube arranca acá, después de la ventana, por la misma
-      razón que el trabajador: no competir con el arranque en un i3. `arrancar`
-      NO lanza aunque no haya red ni credencial —la tienda tiene que poder
-      abrir sin internet—, así que no hace falta envolverlo en un `catch`.
-    */
-    void sesionDeNube?.arrancar();
-
-    /*
-      ===================================================================
-      EL LATIDO DIARIO (§5.3, riesgo 8.3)
-      ===================================================================
-      NO es para detectar conexión: es para que el proyecto del plan gratuito
-      no se pause por inactividad. Por eso consulta la BASE y no el health de
-      Auth, que según §5.3 no cuenta como actividad de base.
-
-      Se revisa cada hora y late cuando toca, en vez de agendar un
-      temporizador de 24 horas: una terminal que se apaga cada noche nunca
-      llegaría a dispararlo. `unref` para que no retenga el proceso en el
-      cierre ordenado, igual que el resto de los temporizadores del módulo.
-    */
-    /*
-      ===================================================================
-      LOS DISPARADORES DE CAMBIO DE ESTADO (§5.3, tercera fila)
-      ===================================================================
-      Sin esto, `olvidarLaEspera()` sería una pieza suelta y la escalera de
-      recomprobación mandaría siempre: tras una hora sin internet la terminal
-      esperaría hasta 5 minutos para darse cuenta de que la red volvió, aunque
-      el sistema operativo ya lo supiera. Con esto, se entera enseguida.
-
-      Los tres disparadores, y por qué cada uno:
-
-        · `resume` de powerMonitor — la máquina despertó de suspensión. Va con
-          la espera de 15 s de §5.4: **en Windows el adaptador de red tarda
-          unos segundos en levantar después de que el sistema ya corre**, y
-          comprobar en el instante cero da un falso «sin internet» y mete el
-          backoff donde no hacía falta. Los 15 s los pone `alDespertar()` del
-          planificador, que existía desde la fase 1.b esperando este día.
-        · `on-ac` — la enchufaron. No dice nada de la red por sí solo, pero en
-          la práctica acompaña a que alguien volvió a la tienda y encendió
-          cosas.
-        · La transición `false → true` de `net.isOnline()`. **Electron no
-          emite ningún evento para esto** —el módulo `net` no es un
-          EventEmitter—, así que se sondea. Es una lectura en memoria del
-          Network List Manager de Windows, sin red y sin costo, y solo se
-          actúa cuando CAMBIA: pasar de «no hay enlace» a «hay enlace» es la
-          señal más barata que existe de que vale la pena recomprobar.
-    */
-    if (detectorDeConexion !== null) {
-      const olvidarYReintentar = (motivo: string): void => {
-        detectorDeConexion.olvidarLaEspera();
-        planificadorDeSincronizacion?.alDespertar();
-        anotarSincronizacion(`${motivo}: se recomprueba la conexión sin esperar la escalera.`);
-      };
-
-      powerMonitor.on('resume', () => {
-        olvidarYReintentar('la máquina despertó de suspensión');
+        /*
+          LA PODA de la cola (fase 4.c, riesgo 8.6). Corre dentro del ciclo del
+          trabajador, así que la primera de cada arranque ocurre con el primer
+          ciclo —30 s después de abrir la ventana— y después como mucho una vez
+          por día. Borra SOLO lo ya subido hace más de 30 días; lo pendiente y lo
+          saltado a mano no los toca nunca.
+        */
+        poda: new PodaDeLaCola({
+          cola: repositorios.syncCola,
+          registrar: anotarSincronizacion,
+        }),
       });
-      powerMonitor.on('on-ac', () => {
-        olvidarYReintentar('la máquina volvió a la corriente');
+      planificadorDeSincronizacion = new PlanificadorDeSincronizacion({
+        trabajador: trabajadorDeSincronizacion,
+        registrar: anotarSincronizacion,
       });
+      // El único aviso de «hay algo que subir» sale de la bandeja de salida, que
+      // es el único lugar que escribe la cola. Ver `observarLotesEncolados`.
+      observarLotesEncolados(() => {
+        planificadorDeSincronizacion?.alConfirmarTransaccion();
+      });
+      planificadorDeSincronizacion.arrancar();
 
       /*
-        El sondeo del enlace. Solo dispara en la transición hacia arriba: al
-        sistema operativo se le cree el «no» (§5.2), así que pasar a `true` no
-        prueba que haya nube —lo prueba la capa 2— pero sí es el momento en que
-        vale la pena preguntarlo.
+        La sesión con la nube arranca acá, con la ventana ya visible, por la
+        misma razón que el trabajador: no competir con el arranque en un i3, y
+        que nada de red corra antes de que la ventana se vea. `arrancar`
+        NO lanza aunque no haya red ni credencial —la tienda tiene que poder
+        abrir sin internet—, así que no hace falta envolverlo en un `catch`.
       */
-      let habiaEnlace = net.isOnline();
-      const CADA_MEDIO_MINUTO_MS = SEGUNDOS_ENTRE_SONDEOS_DEL_ENLACE * MILISEGUNDOS_POR_SEGUNDO;
-      vigilanteDelEnlace = setInterval(() => {
-        const hayEnlace = net.isOnline();
-        if (hayEnlace && !habiaEnlace) {
-          olvidarYReintentar('el sistema operativo volvió a ver una red');
-        }
-        habiaEnlace = hayEnlace;
-      }, CADA_MEDIO_MINUTO_MS);
-      vigilanteDelEnlace.unref();
+      void sesionDeNube?.arrancar();
 
-      const CADA_HORA_MS = MINUTOS_POR_HORA * SEGUNDOS_POR_MINUTO * MILISEGUNDOS_POR_SEGUNDO;
-      latidoDiario = setInterval(() => {
-        const token = sesionDeNube?.accessTokenVigente() ?? null;
-        if (token !== null && detectorDeConexion.tocaLatido()) {
-          void detectorDeConexion.latir(token);
-        }
-      }, CADA_HORA_MS);
-      latidoDiario.unref();
-    }
-    const avisoDeArranque =
-      `trabajador en marcha con ${proveedorDeSincronizacion.nombre}; ` +
-      `primer ciclo en 30 s. Pendientes en la cola: ` +
-      `${String(repositorios.syncCola.contarPendientes())} filas en ` +
-      `${String(repositorios.syncCola.contarLotesPendientes())} lotes.`;
-    anotarSincronizacion(avisoDeArranque);
+      /*
+        ===================================================================
+        EL LATIDO DIARIO (§5.3, riesgo 8.3)
+        ===================================================================
+        NO es para detectar conexión: es para que el proyecto del plan gratuito
+        no se pause por inactividad. Por eso consulta la BASE y no el health de
+        Auth, que según §5.3 no cuenta como actividad de base.
+
+        Se revisa cada hora y late cuando toca, en vez de agendar un
+        temporizador de 24 horas: una terminal que se apaga cada noche nunca
+        llegaría a dispararlo. `unref` para que no retenga el proceso en el
+        cierre ordenado, igual que el resto de los temporizadores del módulo.
+      */
+      /*
+        ===================================================================
+        LOS DISPARADORES DE CAMBIO DE ESTADO (§5.3, tercera fila)
+        ===================================================================
+        Sin esto, `olvidarLaEspera()` sería una pieza suelta y la escalera de
+        recomprobación mandaría siempre: tras una hora sin internet la terminal
+        esperaría hasta 5 minutos para darse cuenta de que la red volvió, aunque
+        el sistema operativo ya lo supiera. Con esto, se entera enseguida.
+
+        Los tres disparadores, y por qué cada uno:
+
+          · `resume` de powerMonitor — la máquina despertó de suspensión. Va con
+            la espera de 15 s de §5.4: **en Windows el adaptador de red tarda
+            unos segundos en levantar después de que el sistema ya corre**, y
+            comprobar en el instante cero da un falso «sin internet» y mete el
+            backoff donde no hacía falta. Los 15 s los pone `alDespertar()` del
+            planificador, que existía desde la fase 1.b esperando este día.
+          · `on-ac` — la enchufaron. No dice nada de la red por sí solo, pero en
+            la práctica acompaña a que alguien volvió a la tienda y encendió
+            cosas.
+          · La transición `false → true` de `net.isOnline()`. **Electron no
+            emite ningún evento para esto** —el módulo `net` no es un
+            EventEmitter—, así que se sondea. Es una lectura en memoria del
+            Network List Manager de Windows, sin red y sin costo, y solo se
+            actúa cuando CAMBIA: pasar de «no hay enlace» a «hay enlace» es la
+            señal más barata que existe de que vale la pena recomprobar.
+      */
+      if (detectorDeConexion !== null) {
+        const olvidarYReintentar = (motivo: string): void => {
+          detectorDeConexion.olvidarLaEspera();
+          planificadorDeSincronizacion?.alDespertar();
+          anotarSincronizacion(`${motivo}: se recomprueba la conexión sin esperar la escalera.`);
+        };
+
+        powerMonitor.on('resume', () => {
+          olvidarYReintentar('la máquina despertó de suspensión');
+        });
+        powerMonitor.on('on-ac', () => {
+          olvidarYReintentar('la máquina volvió a la corriente');
+        });
+
+        /*
+          El sondeo del enlace. Solo dispara en la transición hacia arriba: al
+          sistema operativo se le cree el «no» (§5.2), así que pasar a `true` no
+          prueba que haya nube —lo prueba la capa 2— pero sí es el momento en que
+          vale la pena preguntarlo.
+        */
+        let habiaEnlace = net.isOnline();
+        const CADA_MEDIO_MINUTO_MS = SEGUNDOS_ENTRE_SONDEOS_DEL_ENLACE * MILISEGUNDOS_POR_SEGUNDO;
+        vigilanteDelEnlace = setInterval(() => {
+          const hayEnlace = net.isOnline();
+          if (hayEnlace && !habiaEnlace) {
+            olvidarYReintentar('el sistema operativo volvió a ver una red');
+          }
+          habiaEnlace = hayEnlace;
+        }, CADA_MEDIO_MINUTO_MS);
+        vigilanteDelEnlace.unref();
+
+        const CADA_HORA_MS = MINUTOS_POR_HORA * SEGUNDOS_POR_MINUTO * MILISEGUNDOS_POR_SEGUNDO;
+        latidoDiario = setInterval(() => {
+          const token = sesionDeNube?.accessTokenVigente() ?? null;
+          if (token !== null && detectorDeConexion.tocaLatido()) {
+            void detectorDeConexion.latir(token);
+          }
+        }, CADA_HORA_MS);
+        latidoDiario.unref();
+      }
+      const avisoDeArranque =
+        `trabajador en marcha con ${proveedorDeSincronizacion.nombre}; ` +
+        `primer ciclo en 30 s. Pendientes en la cola: ` +
+        `${String(repositorios.syncCola.contarPendientes())} filas en ` +
+        `${String(repositorios.syncCola.contarLotesPendientes())} lotes.`;
+      anotarSincronizacion(avisoDeArranque);
+    };
+
+    void mostrarCuandoEsteLista(ventana, {
+      limiteMs: ESPERA_MAXIMA_PARA_MOSTRAR_LA_VENTANA_MS,
+      registrar: anotarArranque,
+      msDesdeElInicio: msDesdeElInicioDelProceso,
+    }).then((comoSeMostro) => {
+      if (comoSeMostro !== 'destruida-antes-de-mostrarse') {
+        arrancarLoQueUsaLaRed();
+      }
+    });
 
     // En macOS es normal que la aplicación siga viva sin ventanas; se recrea
     // la ventana al reactivarla desde el Dock.
@@ -1123,6 +1196,12 @@ app.whenReady().then(
         controladorDeSalida.conectarVentana(nuevaVentana);
         interceptarCierresDelSistema(nuevaVentana, controladorDeSalida);
         cargarInterfaz(nuevaVentana, DIRECTORIO_RENDERER);
+        // Lo que usa la red ya arrancó con la primera ventana: acá solo se muestra.
+        void mostrarCuandoEsteLista(nuevaVentana, {
+          limiteMs: ESPERA_MAXIMA_PARA_MOSTRAR_LA_VENTANA_MS,
+          registrar: anotarArranque,
+          msDesdeElInicio: msDesdeElInicioDelProceso,
+        });
       }
     });
   },
