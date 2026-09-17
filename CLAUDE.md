@@ -79,6 +79,34 @@ Node requerido: **>= 22**.
 >   empeore la experiencia de desarrollo en macOS.
 > - Qué se puede y qué jamás se puede bloquear en cada sistema: sección 4.6.
 
+> ### NUNCA SE PRUEBA UNA VERSIÓN CONTRA LA NUBE QUE UN CLIENTE ESTÁ USANDO
+>
+> **Ninguna instalación que no sea la terminal real de un cliente se conecta al
+> proyecto de nube que ese cliente esté usando.** Ni para probar el instalador,
+> ni «un minuto», ni desde otra cuenta de Windows de la misma computadora.
+>
+> Una prueba de instalador va de una de estas dos formas, y no hay una tercera:
+>
+> - **sin nube conectada** —se compila con `POS_COMPILAR_SIN_NUBE=1`, o
+>   simplemente no se toca «Conectar con la nube»—, o
+> - contra un proyecto **exclusivo para probar instaladores**, que no comparta
+>   ninguna instalación real de ningún cliente.
+>
+> **POR QUÉ, con el caso que la costó.** El 2026-09-15 una segunda computadora
+> con el instalador de prueba restauró desde la nube y quedó apuntando al MISMO
+> proyecto que la terminal real de la tienda. Las dos subieron durante media
+> hora, cada una creó su propio producto «Arroz» con su propio UUID, la cola se
+> detuvo con un `23505` y el proyecto terminó con una mezcla de dos terminales
+> que no correspondía a ninguna de las dos. **La sincronización es solo de
+> subida (decisión 10): una terminal nunca se entera de lo que escribió la
+> otra**, así que el daño no se ve hasta que algo choca, y lo que no choca se
+> sobreescribe en silencio. Se cerró vaciando el proyecto y reiniciando la
+> terminal con una carpeta de datos nueva. El episodio completo está en §4.55.
+>
+> Es la misma familia de reglas que §9.5 del diseño —«nada que toque la nube se
+> prueba primero en el proyecto real»— extendida al otro lado: tampoco se prueba
+> un instalador en el proyecto que una tienda está usando.
+
 1. **Es una app de escritorio, no una web.** Electron + React + Vite +
    TypeScript estricto. Nunca `any` implícito.
 2. **Ventana en modo kiosko:** pantalla completa, sin menú, sin barra de
@@ -8976,6 +9004,68 @@ de §6.2).
 
 Qué hacer con los datos lo decide Julio: punto 42 de §6.2.
 
+#### CIERRE DEL EPISODIO (2026-09-17)
+
+**Qué era la base B, confirmado por Julio:** una instalación que él hizo en una
+SEGUNDA computadora para probar el instalador, y que **apuntó por error al mismo
+proyecto que la terminal real de la tienda**. No era una terminal del negocio y
+sus ocho ventas y cinco cajas no son dinero de la tienda. Ya está apagada.
+
+**La decisión:**
+
+| Qué | Decisión de Julio |
+|---|---|
+| Fuente de verdad | **La base A**, la terminal real de la tienda, y ninguna otra |
+| `pos-pruebas-descartable` | **Vaciado el 2026-09-17**, con una copia completa de solo lectura guardada antes |
+| La base A | **Reinicia con una carpeta de datos nueva** en la tienda, así que la nube se llena desde cero. Lo hace Julio directamente |
+| Fusionar o renombrar el Arroz | **No.** Sería un segundo escritor sobre la nube, y la terminal lo pisa en su próximo lote |
+
+**Por qué la carpeta nueva y no reencolar la historia de A:** la base A ya tiene
+su historia marcada como subida en `sync_cola` y nada la vuelve a encolar (punto
+44). Después del vaciado, su próxima operación —hasta un ingreso, que escribe un
+asiento con el `usuario_id` de Jimmy— habría fallado con `23503`. Reencolar todo
+sería un guion nuevo; con una instalación de prueba de tres productos, la carpeta
+nueva es más barata y no deja nada a medias.
+
+**La copia, antes de tocar nada.** 14 tablas, 166 filas, en
+`scratchpad/copia-descartable-2026-09-17/`: leída por PostgREST con la credencial
+de restauración —la única con política de `SELECT`—, pasando por el seguro de
+`proyectos-de-prueba.cjs`, y con **todas las columnas casteadas a `::text`** para
+que ningún decimal pasara por un `double` de JSON (`"32.00"`, `"243.000"`). Los
+conteos de la copia coinciden uno a uno con los que la base tenía en ese momento.
+Es del scratchpad de la sesión: si tiene que sobrevivir, hay que moverla.
+
+**El vaciado.** Un `TRUNCATE` de las DOCE tablas de negocio en una sola
+sentencia —así ninguna llave foránea queda apuntando a una fila borrada y no hace
+falta `CASCADE`—, precedido de un bloque `DO` que aborta si no encuentra al
+usuario Jimmy (`e91bf457-…`): si esa sentencia se apuntara alguna vez al proyecto
+real, que tiene 0 usuarios, no borraría nada. `denominaciones` y
+`configuracion_negocio` no se tocan, que es lo que ya hacía el propio
+`verify:nube` (`TABLAS_QUE_NO_SE_VACIAN`). No hay ningún disparador de TRUNCATE,
+medido: es la única vía, porque `auditoria_log` y `anulaciones_de_venta` son
+inmutables por disparadores de FILA, que un `DELETE` sí dispara.
+
+```
+   ok   anulaciones_de_venta            0 filas  ·   ok   auditoria_log          0 filas
+   ok   caja_sesion_denominaciones      0 filas  ·   ok   caja_sesiones          0 filas
+   ok   categorias                      0 filas  ·   ok   limites_descuento      0 filas
+   ok   precios_especiales              0 filas  ·   ok   productos              0 filas
+   ok   recibos                         0 filas  ·   ok   usuarios               0 filas
+   ok   venta_detalle                   0 filas  ·   ok   ventas                 0 filas
+   ·    configuracion_negocio           1 filas      (no se vacía)
+   ·    denominaciones                 11 filas      (no se vacía)
+después: 14 tablas, 17 funciones, 14 políticas, 29 migraciones, última 0038_anulacion_solo_presencial
+denominaciones intactas: 11 filas, suma 386.9, md5 de los ids 8cc567c1648cc8c0e6690e03928e689a
+configuracion_negocio: {"id":"unica","nombre_comercial":null,"direccion":null,"telefono":null,"nit":null,"actualizado_en":"2026-09-14T12:36:42.760579+00:00"}
+mitad B de la deriva: «lo que la nube declara coincide con supabase/esquema-nube.json», 0 diferencias, exit=0
+```
+
+**El seguro ya no dejaría repetir el vaciado:** el usuario ancla no está, así que
+volver a correr esa sentencia aborta. Es la forma que se buscaba.
+
+**Y la regla que deja este episodio** está en el recuadro del principio de §4:
+una versión nueva no se prueba contra la nube que un cliente está usando.
+
 ### 4.56 La ronda de la anulación, aplicada en `pos-pruebas-descartable` (2026-09-17)
 
 **Primero se confirmó la precondición que puso Julio**, leyendo la nube y no
@@ -9410,6 +9500,8 @@ el proyecto), `verify:restauracion`, y nada contra `pos-jimmy-cano`.
 | **La función comprueba, además de §7.3, que el asiento sea sobre `ventas`, que ningún producto venga dos veces y que haya al menos uno.** | Solo lo que dice §7.3 | Son formas del mismo lote que la terminal nunca manda distinto, y dejarlas pasar abriría un lote que la función acepta y que no describe una anulación. Queda señalado para que Julio lo revise. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **A REVISAR — la `0033` pone un `COMMENT` sobre `ventas.estado`.** | No comentar esa columna | Está en §9 del diseño aprobado. Es solo documentación del catálogo: la columna, su CHECK y sus filas no cambian, y hoy esa columna no tiene comentario. Se señala porque el pedido dice que `ventas.estado` no se toca; si Julio prefiere, se quita del archivo antes de aplicarla. | 2026-09-17 (número de prompt por confirmar) |
 | **La foto `esquema-nube.json` se escribió desde un Postgres 17 LOCAL con las migraciones del repositorio, antes de aplicar nada; se vuelve a tomar con `--tomar-foto` del descartable después de aplicarlas, y tiene que dar la misma.** | Escribirla a mano; esperar a aplicar | «No lo dejes para una sesión futura». A mano ya se había equivocado una vez (el orden de `precio_compra`, §4.53). El ensayo reprodujo la foto de git salvo esa columna y los permisos del descartable. La foto que manda sigue siendo la de la nube. | 2026-09-17 (número de prompt por confirmar) |
+| **La base A, la terminal real de la tienda, es la ÚNICA fuente de verdad; `pos-pruebas-descartable` se vació y la base A reinicia con una carpeta de datos nueva.** | Fusionar las dos filas de «Arroz»; renombrar una por SQL; escribir un guion que reencole toda la historia de la base A; conservar la nube mezclada | Decisión de Julio del 2026-09-17, con el episodio en §4.55. La nube tenía una mezcla de dos terminales que no correspondía a ninguna de las dos, así que no servía como respaldo de nada. Fusionar o renombrar por SQL haría de la nube un segundo escritor, y la terminal lo pisa en su próximo lote. Reencolar la historia de A no tiene mecanismo (punto 44) y sería un guion nuevo para una instalación de prueba de tres productos. Antes de vaciar se guardó una copia de solo lectura de las 166 filas, con las columnas casteadas a texto. | 2026-09-17 (número de prompt por confirmar) |
+| **Una versión nueva NUNCA se prueba contra la nube que un cliente está usando: sin nube conectada, o contra un proyecto exclusivo de pruebas de instalador.** Recuadro al principio de §4. | Confiar en el cuidado de cada vez; permitirlo «un minuto» para probar el instalador; permitirlo desde otra cuenta de Windows de la misma computadora | Es la regla que deja el episodio de §4.55: una segunda computadora con el instalador de prueba quedó apuntando al proyecto de la tienda y las dos terminales escribieron media hora. Con sincronización solo de subida, ninguna se entera de la otra: lo que choca detiene la cola y lo que no choca se sobreescribe en silencio. Es §9.5 del diseño —nada se prueba primero en el proyecto real— extendida al otro lado. Mientras no exista el punto 45, esta regla es lo único que lo evita. | 2026-09-17 (número de prompt por confirmar) |
 | **La foto tiene que declarar EXACTAMENTE `FUNCIONES_DEL_CONTRATO`, y la lista de funciones de `verificacion-de-nube.cjs` tiene que ser igual a `FUNCIONES_DE_ESCRITURA`; las dos cosas las exigen pruebas.** | Seguir exigiendo solo las funciones de escritura, una por una | Una función fuera de la lista del contrato no aparece en la foto, y una prueba que itera la lista de la terminal no ve funciones de más. La copia del `.cjs` se había quedado sin `sincronizar_asiento` desde la 0027. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
 | **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
@@ -9475,10 +9567,11 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 38 | **Si el almacenamiento cifrado del sistema no está disponible (sin llavero o sin DPAPI), la barra sigue diciendo «sin conexión».** | Es el tercer caso en que `leer()` devuelve `null` con archivo presente, y a propósito NO se marcó como credencial dañada (§4.52): el archivo puede estar perfecto, y reconectar tampoco serviría, porque guardar exige el mismo cifrado. Hace falta decidir qué texto le corresponde. Leído, no medido: en Windows con DPAPI no se espera que pase. | Abierto — de bajo riesgo |
 | 37 | **Las fotos que fallan de forma transitoria también cuentan para «problema al sincronizar».** | La medición se hace para cualquier lote, de negocio o de archivo, salvo una foto ausente, que no sale a la red. Si Storage contesta 5xx y el health contesta, la barra dice «problema al sincronizar». Es verdad, pero es una foto y no una venta. | Abierto — confirmar si se quiere así |
 | 40 | **Una anulación posterior a un robo queda excluida al restaurar, pero los productos que repuso se restauran con la reposición aplicada.** | Medido sin red (§4.53): la venta queda válida y vuelve a contar en el efectivo esperado, que es lo que §8 del diseño pide. Pero el inventario queda con lo que el ladrón «devolvió» y los contadores bajados, y volver a anular esa venta da `CONTADORES_INCONSISTENTES`. Los productos aparecen en la lista de anomalías, porque la nube los actualizó después del robo. Qué hacer con ese inventario (ajustarlo a mano, que hoy solo suma; recalcular; dejarlo listado) es una decisión de negocio. | Abierto — decisión de Julio |
-| 41 | **Las pruebas de la anulación contra `pos-pruebas-descartable` chocan con la instalación de prueba de Jimmy.** | ~~Hay una caja ABIERTA por Jimmy desde el 2026-09-15~~ **RESUELTA esa mitad el 2026-09-17: la cerró la terminal real** (cerrada_en 17:44:42, recibida 18:17:06; §4.56), así que hoy hay 0 cajas abiertas y una prueba puede abrir la suya. **Lo que sigue abierto:** la batería destructiva y `verify:restauracion` exigen **vaciar** las doce tablas de negocio, y el proyecto tiene 2 usuarios, 3 productos, 12 ventas, 12 recibos, 9 cajas y 97 asientos de las DOS bases de la instalación de prueba (§4.55). Vaciarlo borraría esos datos y detendría la cola de esa instalación. | Abierto — decisión de Julio, junto con el punto 42 |
-| 42 | **¿Qué base es la terminal de verdad, y qué se hace con lo que hoy tiene `pos-pruebas-descartable`?** El 2026-09-15 subieron ahí dos bases locales (§4.55): A, la original, y B, restaurada a las 22:29 UTC mientras A seguía existiendo. | La nube tiene una mezcla de las dos: el Arroz `93109c61` de B con dos ventas, las 8 ventas y las 5 cajas de B, y la caja abierta y el «Carton de Huevos» de A. A no sabe nada de lo de B, y su propio Arroz no está en la nube. Si A sigue en uso: el recibo 5 choca con `23505`, Frijol se reescribe en silencio y su Arroz vuelve a chocar. Hace falta saber dónde corrió B y si sus ventas fueron de prueba. **No se propone fusionar ni renombrar por SQL**: la nube tendría un segundo escritor que las terminales pisan. | Abierto — **decisión de Julio**, antes de volver a abrir cualquiera de las dos |
-| 43 | **La restauración deja viva la sesión de Auth cuando rechaza un usuario de otro rol.** | `cliente-de-restauracion.ts:188` lanza antes de guardar la sesión, así que `cerrarSesion()` no hace nada y el token de refresco sigue válido en GoTrue. Nadie lo guarda: solo existió en la respuesta. En el descartable hay una sesión así (`6c95f26f`, 2026-09-15 22:28:25 UTC). El arreglo sería cerrar esa sesión con su propio token antes de lanzar. | Abierto — de bajo riesgo |
-| 44 | **Una base que ya subió su historia a un proyecto no la vuelve a subir a otro.** | Leído en el código, no medido: `sync_cola` no guarda a qué proyecto subió cada lote, y nada reinicia `sincronizado_en` si cambia la nube incrustada. Si una base que sincronizó con `pos-pruebas-descartable` pasa a apuntar a `pos-jimmy-cano`, el real recibe solo lo nuevo, y el primer lote que nombre un usuario, una categoría o un producto viejo fallaría con `23503`. Importa si la tienda conserva su base de prueba al pasar a producción. | Abierto — decidir antes del paso a producción |
+| 41 | ~~**Las pruebas de la anulación contra `pos-pruebas-descartable` chocan con la instalación de prueba de Jimmy.**~~ | **RESUELTO EL 2026-09-17, y en sus dos mitades.** (1) **La caja abierta**: la cerró la terminal real, por el camino de la aplicación (`cerrada_en` 17:44:42, recibida 18:17:06; §4.56), así que hay 0 cajas abiertas y una prueba puede abrir la suya. (2) **Las filas de las dos bases**: el proyecto se vació el mismo día, con la copia completa de sus 166 filas guardada antes (§4.55, «cierre del episodio»). Quedaron las doce tablas de negocio en 0, `denominaciones` con sus 11 y `configuracion_negocio` con su única fila. **La batería destructiva y `verify:restauracion` ya pueden correr**; no se corrieron en ese momento porque Julio pidió no hacerlo todavía, y correrlas deja filas de prueba en el proyecto. | **Resuelto** — 2026-09-17 |
+| 42 | ~~**¿Qué base es la terminal de verdad, y qué se hace con lo que hoy tiene `pos-pruebas-descartable`?**~~ | **RESUELTO EL 2026-09-17. La historia completa queda escrita a propósito, porque es la clase de caso que conviene poder volver a leer.** **QUÉ PASÓ:** el 2026-09-15 dos bases locales distintas subieron al mismo proyecto. La **A** es la terminal real de la tienda, creada el 15/09 a las 01:34 UTC con el primer administrador de Jimmy. La **B** la instaló Julio en una SEGUNDA computadora para probar el instalador, restauró desde la nube a las 22:29 UTC —cuando A seguía existiendo— y **quedó apuntando por error al mismo proyecto que la terminal real**. Entre las 22:29 y las 23:05 trabajó B; a las 23:20 volvió A. Cada una creó su propio producto «Arroz» con su propio UUID, porque la sincronización es solo de subida (decisión 10) y **A nunca se enteró del Arroz de B**: el de B subió primero y el de A chocó con `23505` contra `productos_nombre_key`, Jimmy saltó el lote y quedó un hueco permanente. **CÓMO SE DIAGNOSTICÓ:** cruzando `auditoria_log` con `auth.sessions` y `auth.refresh_tokens`. La sesión de A (`d06c38f5`, creada 01:36:56) tiene tokens a las 01:48, 01:56, 01:57, 01:58 **y 23:20**, o sea el mismo archivo de credencial de la madrugada a la noche; y a las 23:20:33 subió un asiento con `fecha` 02:03:32 que solo podía estar en su cola. La de B (`a9193060`, creada 22:36:14) refresca cada 675 s entre las 22:36 y las 23:05, y su ajuste de Frijol dice «inventario anterior 47.000», que son los 83 de A menos las cuatro ventas de B: B partió del estado de A. **LA DECISIÓN:** la base A es la única fuente de verdad; `pos-pruebas-descartable` se vació el 2026-09-17 con una copia previa de sus 166 filas; la base A reinicia con una **carpeta de datos nueva**, así que la nube se llena desde cero. No se fusionó ni se renombró nada por SQL: sería un segundo escritor que la terminal pisa. **Y la regla que deja el episodio** está en el recuadro del principio de §4. | **Resuelto** — 2026-09-17, §4.55 |
+| 43 | **La restauración deja viva la sesión de Auth cuando rechaza un usuario de otro rol.** | `cliente-de-restauracion.ts:188` lanza antes de guardar la sesión, así que `cerrarSesion()` no hace nada y el token de refresco sigue válido en GoTrue. Nadie lo guarda: solo existió en la respuesta. En el descartable hay una sesión así (`6c95f26f`, 2026-09-15 22:28:25 UTC), y el vaciado del 2026-09-17 no la toca: vive en el esquema `auth`, no en `public`. El arreglo sería cerrar esa sesión con su propio token antes de lanzar. | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** A evaluar antes de escalar a más clientes o sucursales |
+| 44 | **Una base que ya subió su historia a un proyecto no la vuelve a subir a otro.** | Leído en el código, no medido: `sync_cola` no guarda a qué proyecto subió cada lote, y nada reinicia `sincronizado_en` si cambia la nube incrustada. Si una base que sincronizó con `pos-pruebas-descartable` pasa a apuntar a `pos-jimmy-cano`, el real recibe solo lo nuevo, y el primer lote que nombre un usuario, una categoría o un producto viejo fallaría con `23503`. Importa si la tienda conserva su base de prueba al pasar a producción. **El 2026-09-17 se esquivó, no se resolvió:** la decisión para la base A fue arrancar con una carpeta de datos nueva (§4.55), justamente porque reencolar su historia no tiene mecanismo. | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** Hay que decidirlo antes del paso a producción si la tienda conserva su base |
+| 45 | **Protección estructural de UNA SOLA TERMINAL POR PROYECTO.** Que cada instalación tenga un id de terminal propio, que viaje en cada lote, y que la nube rechace el lote de una segunda terminal que no haya sido autorizada a reemplazar a la primera. | Hoy nada lo impide: la credencial de terminal es una sola por proyecto, los lotes no dicen de qué instalación vienen, y la sincronización es solo de subida, así que dos bases pueden escribir la misma nube sin enterarse una de la otra. Es lo que pasó el 2026-09-15 (§4.55). Mientras no exista, lo que lo evita es la regla operativa del recuadro de §4, que es humana y no del sistema. Toca el contrato con la nube —un campo más en cada lote y una comprobación en las siete funciones de escritura—, así que es diseño, no un parche. Se relaciona con el punto 10 (multi-sucursal) y con §1.5 del diseño (la terminal robada). | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** A evaluar antes de escalar a más clientes o sucursales |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
