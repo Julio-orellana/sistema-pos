@@ -30,6 +30,7 @@ import { ErrorDeNegocio } from '@main/database/errores';
 import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import type { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
+import type { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
 import type { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { reciboComoTexto } from '@main/domain/recibo/plantilla-de-recibo';
 import { ejecutarConRespuesta } from './respuesta';
@@ -40,6 +41,13 @@ export interface DependenciasDeRecibosIpc {
   readonly negocio: ServicioDeConfiguracionDeNegocio;
   readonly recibos: ServicioDeRecibos;
   readonly repositorioDeRecibos: RepositorioDeRecibos;
+  /**
+   * El servicio de anulación, solo para preguntarle si una venta se puede
+   * anular. Se le pregunta A ÉL y no se compara la caja acá: la regla vive en
+   * un solo lugar, y así el historial no puede ofrecer un botón que el
+   * servicio después rechace (§1.1 del diseño de la anulación).
+   */
+  readonly anulacionDeVenta: ServicioDeAnulacionDeVenta;
 }
 
 /** Id del usuario en sesión, o falla. El guard ya comprobó que hay uno. */
@@ -57,7 +65,7 @@ function actorEnSesion(sesion: SesionActual): string {
 
 /** Registra los canales de negocio y recibos. */
 export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibosIpc): void {
-  const { sesion, negocio, recibos, repositorioDeRecibos } = dependencias;
+  const { sesion, negocio, recibos, repositorioDeRecibos, anulacionDeVenta } = dependencias;
 
   // --- Configuración del negocio -------------------------------------------
   ipcMain.handle(
@@ -116,6 +124,18 @@ export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibo
               impreso: recibo.impreso,
               lineas: modelo.lineas.length,
               conDescuento: modelo.descuento !== null,
+              // La misma marca que lleva el papel: sale del modelo, que la leyó
+              // de `anulaciones_de_venta`. Copia nueva, nada de dominio cruza.
+              anulacion:
+                modelo.anulacion === null
+                  ? null
+                  : {
+                      fecha: modelo.anulacion.fecha,
+                      hora: modelo.anulacion.hora,
+                      autorizadaPor: modelo.anulacion.autorizadaPor,
+                      motivo: modelo.anulacion.motivo,
+                    },
+              sePuedeAnular: anulacionDeVenta.sePuedeAnular(recibo.ventaId),
             };
           }),
         ),

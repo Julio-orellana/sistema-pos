@@ -1602,6 +1602,22 @@ export const esquemaReciboPorId = z.object({
   id: z.uuid(),
 });
 
+/**
+ * La anulación de una venta, tal como la muestran el historial y el recibo.
+ *
+ * La fecha y la hora vienen ya formateadas en hora de Guatemala: la ventana no
+ * hace aritmética de fechas, igual que con los períodos de los reportes.
+ */
+export interface AnulacionEnHistorialIpc {
+  /** Día de la anulación, «15/09/2026». */
+  readonly fecha: string;
+  /** Hora de la anulación, «12:04». */
+  readonly hora: string;
+  /** Quién la autorizó, con el nombre de hoy. */
+  readonly autorizadaPor: string;
+  readonly motivo: string;
+}
+
 /** Una fila del historial de recibos. */
 export interface ReciboEnHistorialIpc {
   readonly id: string;
@@ -1618,6 +1634,16 @@ export interface ReciboEnHistorialIpc {
   readonly lineas: number;
   /** `true` si la venta llevaba descuento discrecional. */
   readonly conDescuento: boolean;
+  /** La anulación de esta venta, o `null` si sigue en pie (§1.1). */
+  readonly anulacion: AnulacionEnHistorialIpc | null;
+  /**
+   * `true` si la pantalla debe OFRECER anular esta venta.
+   *
+   * Lo decide el proceso principal, con la misma regla que después aplica el
+   * servicio: la caja donde se registró la venta sigue abierta y la venta no
+   * está anulada. La pantalla no lo deduce ni compara cajas por su cuenta.
+   */
+  readonly sePuedeAnular: boolean;
 }
 
 // ---------------------------------------------------------------------------

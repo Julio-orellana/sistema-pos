@@ -182,6 +182,9 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
     negocio: dependencias.negocio,
     recibos: dependencias.recibos,
     repositorioDeRecibos: dependencias.repositorioDeRecibos,
+    // Solo para saber si el historial ofrece «Anular» en cada fila. La regla
+    // vive en el servicio, no acá (§1.1 del diseño de la anulación).
+    anulacionDeVenta: dependencias.anulacionDeVenta,
   });
   // Reportes y topes de descuento: los cinco canales exigen rol
   // administrativo. Cuánto entró a la tienda y cuánto puede rebajar cada rol
