@@ -16,7 +16,12 @@
  */
 
 import type { LineaDeRecibo, ModeloDeRecibo } from './modelo-de-recibo';
-import { AGRADECIMIENTO, LEYENDA_NO_FISCAL, TITULO_DEL_RECIBO } from './modelo-de-recibo';
+import {
+  AGRADECIMIENTO,
+  LEYENDA_NO_FISCAL,
+  MARCA_DE_VENTA_ANULADA,
+  TITULO_DEL_RECIBO,
+} from './modelo-de-recibo';
 
 /** Columnas que entran en 80 mm con la fuente A estándar. */
 export const COLUMNAS_80MM = 48;
@@ -120,6 +125,24 @@ export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): 
   }
   if (modelo.reimpresion) {
     lineas.push(centrado('** REIMPRESIÓN **', ancho));
+  }
+  /*
+    LA MARCA DE ANULADA VA ARRIBA, antes de los datos de la venta, y el resto
+    del papel queda EXACTAMENTE igual: mismas líneas, mismos precios, mismo
+    descuento y mismo total (§5.1). No es un documento nuevo, es el original
+    marcado, y por eso se lee en el orden en que pasaron las cosas: hubo una
+    venta, se entregó este papel, y después se anuló, con fecha, responsable y
+    motivo.
+  */
+  if (modelo.anulacion !== null) {
+    lineas.push(centrado(MARCA_DE_VENTA_ANULADA, ancho));
+    lineas.push(`Anulada: ${modelo.anulacion.fecha} ${modelo.anulacion.hora}`);
+    for (const parte of enVariasLineas(`Autorizó: ${modelo.anulacion.autorizadaPor}`, ancho)) {
+      lineas.push(parte);
+    }
+    for (const parte of enVariasLineas(`Motivo: ${modelo.anulacion.motivo}`, ancho)) {
+      lineas.push(parte);
+    }
   }
   lineas.push(separador);
 
@@ -263,6 +286,16 @@ export function reciboComoHtml(modelo: ModeloDeRecibo): string {
     ? '<p class="reimpresion">** REIMPRESI&Oacute;N **</p>'
     : '';
 
+  // La misma marca que el papel, con los mismos tres datos. Ver `reciboComoTexto`.
+  const anulacion =
+    modelo.anulacion === null
+      ? ''
+      : `
+  <p class="anulada">${MARCA_DE_VENTA_ANULADA}</p>
+  <p class="anulada-detalle">Anulada: ${escapar(modelo.anulacion.fecha)} ${escapar(modelo.anulacion.hora)}<br>
+  Autoriz&oacute;: ${escapar(modelo.anulacion.autorizadaPor)}<br>
+  Motivo: ${escapar(modelo.anulacion.motivo)}</p>`;
+
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -286,6 +319,8 @@ export function reciboComoHtml(modelo: ModeloDeRecibo): string {
   .titulo { font-weight: bold; margin-top: 3mm; }
   .leyenda { font-size: 8.5pt; }
   .reimpresion { font-weight: bold; text-align: center; margin: 1mm 0 0; }
+  .anulada { font-weight: bold; text-align: center; margin: 1mm 0 0; }
+  .anulada-detalle { margin: 0.5mm 0 0; font-size: 9pt; }
   hr { border: 0; border-top: 1px dashed #000; margin: 2mm 0; }
   table { width: 100%; border-collapse: collapse; }
   td { padding: 0; vertical-align: top; }
@@ -306,7 +341,7 @@ export function reciboComoHtml(modelo: ModeloDeRecibo): string {
 
   <div class="centro titulo">${TITULO_DEL_RECIBO}</div>
   <div class="centro leyenda">${LEYENDA_NO_FISCAL}</div>
-  ${reimpresion}
+  ${reimpresion}${anulacion}
   <hr>
 
   <table>

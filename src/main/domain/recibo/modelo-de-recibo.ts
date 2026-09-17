@@ -36,6 +36,7 @@ import type {
   Recibo,
   TipoValor,
 } from '@main/database/repositories/entidades';
+import type { RepositorioDeAnulacionesDeVenta } from '@main/database/repositories/anulaciones-de-venta';
 import type { RepositorioDeConfiguracionDeNegocio } from '@main/database/repositories/configuracion-negocio';
 import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
@@ -65,6 +66,16 @@ export const TITULO_DEL_RECIBO = 'RECIBO DE VENTA';
 
 /** La advertencia legal, obligatoria mientras no haya facturación electrónica. */
 export const LEYENDA_NO_FISCAL = 'Proforma, no válido como factura fiscal';
+
+/**
+ * La marca que lleva el recibo de una venta anulada.
+ *
+ * Vive acá, con los demás textos del papel, y no en la plantilla: la escriben
+ * las DOS salidas —el texto de la térmica y el HTML del PDF— y tienen que decir
+ * exactamente lo mismo. Sin acentos a propósito: así sale igual en CP850 y en
+ * el PDF, sin depender de la página de códigos de la impresora.
+ */
+export const MARCA_DE_VENTA_ANULADA = '** VENTA ANULADA **';
 
 /** El pie de todo recibo. */
 export const AGRADECIMIENTO = '¡Gracias por su compra!';
@@ -102,6 +113,29 @@ export interface DescuentoDelRecibo {
   readonly autorizadoPor: string | null;
 }
 
+/**
+ * La marca de una venta anulada (docs/ANULACION-DE-VENTA.md §5).
+ *
+ * NO HAY DOCUMENTO NUEVO: no se emite una nota de crédito ni un papel con
+ * numeración propia. El recibo conserva su número y TODAS sus cifras —líneas,
+ * precios, descuento y total—, y arriba lleva esta marca. Es honesto con lo que
+ * pasó: hubo una venta, se entregó ese papel, y después se anuló, con fecha,
+ * responsable y motivo.
+ *
+ * Se lee de `anulaciones_de_venta`, que es la única fuente de «esta venta está
+ * anulada» (§1.1). Nunca de `ventas.estado`, que sigue diciendo `completada`
+ * también en las anuladas.
+ */
+export interface AnulacionDelRecibo {
+  /** Fecha de la anulación, como «15/09/2026». */
+  readonly fecha: string;
+  /** Hora de la anulación, como «12:04». */
+  readonly hora: string;
+  /** Quién la autorizó, con el nombre que tiene HOY, igual que el cajero. */
+  readonly autorizadaPor: string;
+  readonly motivo: string;
+}
+
 /** Todo lo que hace falta para dibujar un recibo, y nada más. */
 export interface ModeloDeRecibo {
   readonly negocio: {
@@ -127,6 +161,8 @@ export interface ModeloDeRecibo {
   readonly numBoleta: string | null;
   /** `true` si es una reimpresión de un recibo ya emitido. */
   readonly reimpresion: boolean;
+  /** La marca de anulación, o `null` si la venta sigue en pie. */
+  readonly anulacion: AnulacionDelRecibo | null;
 }
 
 /** Dependencias del armador. */
@@ -136,6 +172,7 @@ export interface DependenciasDelModelo {
   readonly recibos: RepositorioDeRecibos;
   readonly usuarios: RepositorioDeUsuarios;
   readonly configuracion: RepositorioDeConfiguracionDeNegocio;
+  readonly anulaciones: RepositorioDeAnulacionesDeVenta;
 }
 
 /** Un campo configurado, o su marcador entre corchetes. */
@@ -247,6 +284,23 @@ export function armarModeloDeRecibo(
   const configuracion: ConfiguracionNegocio = dependencias.configuracion.obtener();
   const { fecha, hora } = fechaYHora(venta.fecha);
 
+  /*
+    La marca de anulación sale de `anulaciones_de_venta` y NO CAMBIA NINGUNA
+    CIFRA del recibo: el papel sigue diciendo exactamente lo que se le entregó
+    al cliente (§5.1). Quien autorizó se resuelve en vivo, como el cajero.
+  */
+  const anulada = dependencias.anulaciones.obtenerPorVenta(venta.id);
+  const anulacion: AnulacionDelRecibo | null =
+    anulada === null
+      ? null
+      : {
+          ...fechaYHora(anulada.fecha),
+          autorizadaPor:
+            dependencias.usuarios.obtenerPorId(anulada.autorizadaPor)?.nombre ??
+            MARCADORES.usuarioDesconocido,
+          motivo: anulada.motivo,
+        };
+
   const hayDescuento = venta.descuentoTipo !== null && venta.descuentoValor !== null;
 
   const lineas: LineaDeRecibo[] = dependencias.ventaDetalle
@@ -305,5 +359,6 @@ export function armarModeloDeRecibo(
     formaPago: venta.formaPago,
     numBoleta: venta.numBoleta,
     reimpresion: opciones.reimpresion ?? false,
+    anulacion,
   };
 }

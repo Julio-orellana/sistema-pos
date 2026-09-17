@@ -283,6 +283,7 @@ function dependenciasSobre(
       recibos: repos.recibos,
       usuarios: repos.usuarios,
       configuracion: repos.configuracionNegocio,
+      anulaciones: repos.anulacionesDeVenta,
       impresora: new NullPrinterProvider(),
       generarPdf: (_html, destino): Promise<void> => {
         writeFileSync(destino, '%PDF-1.4 de mentira\n');

@@ -371,6 +371,7 @@ describe('Quitar la impresora vuelve a «solo PDF» y los recibos se siguen emit
         recibos: repos.recibos,
         usuarios: repos.usuarios,
         configuracion: repos.configuracionNegocio,
+        anulaciones: repos.anulacionesDeVenta,
         impresora: new ImpresoraSegunElArchivo(carpeta, enviador, log),
         log,
         carpetaDeDatos: carpeta,

@@ -209,6 +209,7 @@ beforeEach(() => {
     recibos: repos.recibos,
     usuarios: repos.usuarios,
     configuracion: repos.configuracionNegocio,
+    anulaciones: repos.anulacionesDeVenta,
     impresora: new NullPrinterProvider(),
     log: new LogTecnicoSilencioso(),
     carpetaDeDatos: '/datos',

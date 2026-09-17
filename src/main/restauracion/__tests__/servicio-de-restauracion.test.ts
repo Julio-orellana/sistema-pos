@@ -295,6 +295,7 @@ describe('Una restauración completa, por falla, contra la nube de mentira', () 
       recibos: reposB.recibos,
       usuarios: reposB.usuarios,
       configuracion: reposB.configuracionNegocio,
+      anulaciones: reposB.anulacionesDeVenta,
       impresora: new NullPrinterProvider(),
       generarPdf: (_html, ruta): Promise<void> => {
         destinos.push(ruta);

@@ -623,6 +623,7 @@ app.whenReady().then(
       recibos: repositorios.recibos,
       usuarios: repositorios.usuarios,
       configuracion: repositorios.configuracionNegocio,
+      anulaciones: repositorios.anulacionesDeVenta,
       impresora,
       generarPdf: generarPdfDesdeHtml,
       carpetaDeDatos: app.getPath('userData'),
