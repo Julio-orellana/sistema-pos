@@ -22,6 +22,24 @@
  * que es el dato que tiene a mano cuando un cliente vuelve al mostrador
  * (docs/ANULACION-DE-VENTA.md §4.3).
  *
+ * ---------------------------------------------------------------------------
+ * EL FILTRO POR MÉTODO DE PAGO Y LOS TOTALES
+ * ---------------------------------------------------------------------------
+ * Desde el 2026-09-17 esta pantalla reemplaza al reporte «Cobros con tarjeta»
+ * que docs/ANULACION-DE-VENTA.md §3.5 había diseñado aparte: una sola pantalla
+ * con filtro es mejor que dos que muestran casi lo mismo.
+ *
+ * **NI EL FILTRO NI LOS TOTALES SE RESUELVEN ACÁ.** El filtro viaja al proceso
+ * principal, que devuelve las filas ya filtradas Y sus totales ya sumados con
+ * Decimal.js. La ventana no suma ni un centavo, por la razón de §4.15: acá no
+ * hay Decimal, así que sumar sería hacerlo en punto flotante y el historial
+ * diría un número distinto del que dice la base.
+ *
+ * **LOS TOTALES PUEDEN NO VENIR.** `totales` llega en `null` cuando quien mira
+ * no tiene rol administrativo, y esa decisión la toma el proceso principal
+ * (§4.40): cuánto entró a la tienda es información de dueño. La pantalla
+ * dibuja la línea si le llegó y no la dibuja si no, sin preguntar el rol.
+ *
  * EL BOTÓN «ANULAR» SOLO APARECE EN LAS VENTAS DE LA CAJA QUE SIGUE ABIERTA, y
  * en las demás **no se dibuja en absoluto**, ni siquiera apagado. Una venta de
  * una caja ya cerrada no se va a poder anular nunca más, así que un botón
@@ -33,16 +51,30 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import type { ReciboEnHistorialIpc, ReciboVistoIpc } from '@shared/types/ipc';
+import type {
+  FiltroDeFormaPagoIpc,
+  HistorialDeRecibosIpc,
+  ReciboEnHistorialIpc,
+  ReciboVistoIpc,
+} from '@shared/types/ipc';
 import { formatearQuetzales } from '@shared/money';
 import { ModalDeAnulacion } from './ModalDeAnulacion';
+
+/** Las tres opciones del filtro, en el orden en que se dibujan. */
+const FILTROS: readonly { readonly clave: FiltroDeFormaPagoIpc; readonly etiqueta: string }[] = [
+  { clave: 'todas', etiqueta: 'Todas' },
+  { clave: 'efectivo', etiqueta: 'Efectivo' },
+  { clave: 'tarjeta', etiqueta: 'Tarjeta' },
+];
 
 export function PantallaDeRecibos({
   alVolver,
 }: {
   readonly alVolver: () => void;
 }): React.JSX.Element {
-  const [recibos, setRecibos] = useState<readonly ReciboEnHistorialIpc[] | null>(null);
+  const [historial, setHistorial] = useState<HistorialDeRecibosIpc | null>(null);
+  /** Por qué método de pago se está filtrando. Se lo resuelve el proceso principal. */
+  const [filtro, setFiltro] = useState<FiltroDeFormaPagoIpc>('todas');
   const [abierto, setAbierto] = useState<ReciboVistoIpc | null>(null);
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -54,21 +86,21 @@ export function PantallaDeRecibos({
   useEffect(() => {
     const control = new AbortController();
     void (async (): Promise<void> => {
-      const respuesta = await window.pos.recibos.listar();
+      const respuesta = await window.pos.recibos.listar(filtro);
       if (control.signal.aborted) {
         return;
       }
       if (respuesta.ok) {
-        setRecibos(respuesta.datos);
+        setHistorial(respuesta.datos);
       } else {
         setMensaje(respuesta.error.mensaje);
-        setRecibos([]);
+        setHistorial({ recibos: [], filtro, totales: null });
       }
     })();
     return (): void => {
       control.abort();
     };
-  }, [recarga]);
+  }, [recarga, filtro]);
 
   const ver = useCallback((id: string): void => {
     setTrabajando(true);
@@ -104,6 +136,14 @@ export function PantallaDeRecibos({
     })();
   }, []);
 
+  /*
+    Las filas y los totales salen del MISMO sobre que devolvió el proceso
+    principal, así que la línea de totales no puede ser de otro conjunto que el
+    que se está dibujando.
+  */
+  const recibos = historial === null ? null : historial.recibos;
+  const totales = historial === null ? null : historial.totales;
+
   return (
     <div data-prueba="pantalla-de-recibos">
       <header className="encabezado">
@@ -126,13 +166,88 @@ export function PantallaDeRecibos({
       )}
 
       <section className="tarjeta">
+        <div className="opciones" data-prueba="filtro-de-forma-de-pago">
+          {FILTROS.map((una) => (
+            <button
+              key={una.clave}
+              type="button"
+              className={filtro === una.clave ? 'opcion opcion--activa' : 'opcion'}
+              data-prueba={`filtro-${una.clave}`}
+              onClick={() => {
+                setMensaje(null);
+                setAviso(null);
+                setFiltro(una.clave);
+              }}
+            >
+              {una.etiqueta}
+            </button>
+          ))}
+        </div>
+
+        {/*
+          LA LÍNEA DE TOTALES SOLO SE DIBUJA SI LLEGÓ. Viene en `null` cuando
+          quien mira no es administrativo, y esa decisión es del proceso
+          principal: acá no se consulta ningún rol.
+        */}
+        {totales !== null && (
+          <div className="totales-del-historial" data-prueba="totales-del-historial">
+            <div className="dato">
+              <span className="dato__etiqueta">
+                En efectivo <small>({totales.ventasEnEfectivo})</small>
+              </span>
+              <span className="dato__valor" data-prueba="totales-efectivo">
+                {formatearQuetzales(totales.enEfectivo)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">
+                Con tarjeta <small>({totales.ventasEnTarjeta})</small>
+              </span>
+              <span className="dato__valor" data-prueba="totales-tarjeta">
+                {formatearQuetzales(totales.enTarjeta)}
+              </span>
+            </div>
+            <div className="dato">
+              <span className="dato__etiqueta">
+                Total <small>({totales.cantidadDeVentas})</small>
+              </span>
+              <span className="dato__valor" data-prueba="totales-general">
+                {formatearQuetzales(totales.general)}
+              </span>
+            </div>
+            {/*
+              LO ANULADO SE INFORMA APARTE Y NO SE RESTA DE NADA: ya está fuera
+              de los tres números de arriba. Se muestra para que el total se
+              pueda leer sin tener que sumar las filas a mano y descubrir que
+              falta algo, con el mismo criterio del renglón de descuentos del
+              reporte de ventas (§4.15).
+            */}
+            {totales.anuladas > 0 && (
+              <div className="dato reporte__referencia">
+                <span className="dato__etiqueta">
+                  Anuladas, fuera del total <small>({totales.anuladas})</small>
+                </span>
+                <span className="dato__valor" data-prueba="totales-anulado">
+                  {formatearQuetzales(totales.totalAnulado)}
+                </span>
+              </div>
+            )}
+            <p className="nota">
+              Los totales son de lo que se ve arriba y solo cuentan las ventas que siguen en pie:
+              una venta anulada es plata que se le devolvió al cliente.
+            </p>
+          </div>
+        )}
+
         {recibos === null ? (
           <p className="pendiente" data-prueba="recibos-cargando">
             Consultando los recibos…
           </p>
         ) : recibos.length === 0 ? (
           <p className="pendiente" data-prueba="recibos-vacio">
-            Todavía no se emitió ningún recibo. Aparecen acá en cuanto se cobre la primera venta.
+            {filtro === 'todas'
+              ? 'Todavía no se emitió ningún recibo. Aparecen acá en cuanto se cobre la primera venta.'
+              : `No hay ninguna venta con ${filtro === 'efectivo' ? 'efectivo' : 'tarjeta'} entre los recibos recientes.`}
           </p>
         ) : (
           <ul className="lista" data-prueba="lista-de-recibos">
@@ -157,6 +272,25 @@ export function PantallaDeRecibos({
                     {recibo.lineas} {recibo.lineas === 1 ? 'producto' : 'productos'} ·{' '}
                     {recibo.formaPago === 'efectivo' ? 'Efectivo' : 'Tarjeta'}
                   </span>
+                  {/*
+                    EL VOUCHER Y SU ESTADO, solo en las ventas con tarjeta: es
+                    lo que reemplaza al reporte de §3.5, y sirve para cotejar
+                    contra la terminal del banco qué cobros siguen en pie.
+
+                    El estado NO SE GUARDA en ningún lado: se deriva de la
+                    existencia de la fila de anulación, que es la misma regla
+                    que usan el efectivo esperado y los reportes (§1.1, §1.3).
+                  */}
+                  {recibo.formaPago === 'tarjeta' && (
+                    <span className="lista__detalle" data-prueba="recibo-voucher">
+                      Voucher {recibo.numBoleta ?? '(sin voucher)'} ·{' '}
+                      <strong data-prueba="recibo-estado-tarjeta">
+                        {recibo.anulacion === null
+                          ? 'Activo'
+                          : `Anulado el ${recibo.anulacion.fecha} ${recibo.anulacion.hora}`}
+                      </strong>
+                    </span>
+                  )}
                   {recibo.anulacion !== null && (
                     <span className="lista__detalle" data-prueba="recibo-anulacion-detalle">
                       Anulada el {recibo.anulacion.fecha} {recibo.anulacion.hora} · autorizó{' '}

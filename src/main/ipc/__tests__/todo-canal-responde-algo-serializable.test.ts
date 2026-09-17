@@ -492,7 +492,8 @@ describe('1. En una tienda con datos, cada canal devuelve algo que el puente pue
       telefono: '5555-1234',
       nit: null,
     });
-    await llamar(CANALES_IPC.recibosListar, 'listar');
+    await llamar(CANALES_IPC.recibosListar, 'listar todas', { formaPago: 'todas' });
+    await llamar(CANALES_IPC.recibosListar, 'listar solo tarjeta', { formaPago: 'tarjeta' });
     await llamar(CANALES_IPC.recibosVer, 'ver el combinado', { id: terminal.ids.reciboCombinado });
     await llamar(CANALES_IPC.recibosReimprimir, 'reimprimir', { id: terminal.ids.reciboConTarjeta });
   });

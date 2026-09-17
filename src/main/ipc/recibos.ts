@@ -20,14 +20,19 @@ import { ipcMain } from 'electron';
 import {
   CANALES_IPC,
   esquemaConfiguracionDeNegocio,
+  esquemaFiltroDeRecibos,
   esquemaReciboPorId,
   type ConfiguracionDeNegocioIpc,
+  type HistorialDeRecibosIpc,
   type ReciboEnHistorialIpc,
   type ReciboVistoIpc,
   type RespuestaIpc,
+  type TotalesDelHistorialIpc,
 } from '@shared/types/ipc';
+import { montoACadena, sumarLista } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
 import type { RepositorioDeRecibos } from '@main/database/repositories/recibos';
+import { totalesPorFormaDePago } from '@main/domain/venta/totales-por-forma-de-pago';
 import { requiereRol, requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import type { ServicioDeConfiguracionDeNegocio } from '@main/domain/negocio/servicio-de-configuracion';
 import type { ServicioDeAnulacionDeVenta } from '@main/domain/venta/servicio-de-anulacion';
@@ -61,6 +66,63 @@ function actorEnSesion(sesion: SesionActual): string {
     );
   }
   return enSesion.id;
+}
+
+/** Una fila del historial y si su venta sigue en pie. */
+interface FilaDelHistorial {
+  readonly fila: ReciboEnHistorialIpc;
+  readonly enPie: boolean;
+}
+
+/**
+ * Los totales del conjunto filtrado, o `null` si quien mira no es administrativo.
+ *
+ * ===========================================================================
+ * POR QUÉ LOS TOTALES LLEVAN ROL Y LAS FILAS NO
+ * ===========================================================================
+ * Las filas ya se le mostraban a cualquiera con sesión, y está bien: un cajero
+ * tiene que poder reimprimir el recibo de un cliente que volvió al mostrador, y
+ * ese papel no dice nada que el cliente no haya visto al comprar (§4.14).
+ *
+ * **Una línea de totales es otra cosa: es un reporte.** Dice cuánto entró a la
+ * tienda, que es justamente lo que §4.15 reserva para el rol administrativo
+ * —«información de dueño, no de mostrador»— y lo que §4.40 esconde del paso de
+ * conteo de la caja, para que quien cuenta el cajón no pueda copiar el número
+ * que el sistema espera en vez de contar.
+ *
+ * Es verdad que un cajero puede sumar a mano las filas que ya ve. La diferencia
+ * es entre un número que hay que reconstruir y uno que el sistema entrega
+ * exacto y de un vistazo, que es la misma distinción que §4.40 ya tomó.
+ *
+ * **Lo decide el proceso principal, nunca la pantalla**, por la razón medida en
+ * §4.40: esconderlo en la ventana no protege nada, porque el canal se llama
+ * desde la consola.
+ */
+function totalesParaLaVentana(
+  sesion: SesionActual,
+  filas: readonly FilaDelHistorial[],
+): TotalesDelHistorialIpc | null {
+  if (sesion.obtener()?.rol !== 'administrativo') {
+    return null;
+  }
+
+  const enPie = filas.filter(({ enPie: cuenta }) => cuenta).map(({ fila }) => fila);
+  const anuladas = filas.filter(({ fila }) => fila.anulacion !== null).map(({ fila }) => fila);
+
+  // El reparto y las sumas salen de la ÚNICA función que hace esto, la misma
+  // que usa el resumen de ventas por período.
+  const totales = totalesPorFormaDePago(enPie);
+
+  return {
+    enEfectivo: totales.enEfectivo,
+    enTarjeta: totales.enTarjeta,
+    general: totales.general,
+    ventasEnEfectivo: totales.ventasEnEfectivo,
+    ventasEnTarjeta: totales.ventasEnTarjeta,
+    cantidadDeVentas: totales.cantidadDeVentas,
+    anuladas: anuladas.length,
+    totalAnulado: montoACadena(sumarLista(anuladas.map((fila) => fila.total))),
+  };
 }
 
 /** Registra los canales de negocio y recibos. */
@@ -104,15 +166,17 @@ export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibo
   // --- Historial de recibos -------------------------------------------------
   ipcMain.handle(
     CANALES_IPC.recibosListar,
-    async (): Promise<RespuestaIpc<readonly ReciboEnHistorialIpc[]>> =>
+    async (_evento, payload: unknown): Promise<RespuestaIpc<HistorialDeRecibosIpc>> =>
       ejecutarConRespuesta('RECIBOS_LISTAR_FALLIDO', () =>
-        requiereSesion(sesion, () =>
-          repositorioDeRecibos.listarRecientes().map((recibo): ReciboEnHistorialIpc => {
+        requiereSesion(sesion, () => {
+          const { formaPago } = esquemaFiltroDeRecibos.parse(payload);
+
+          const todas = repositorioDeRecibos.listarRecientes().map((recibo) => {
             // Se arma el modelo completo de cada uno: es la MISMA fuente que
             // usa el papel, así que el historial no puede mostrar un total
             // distinto del que salió impreso.
             const modelo = recibos.modeloDe(recibo.id);
-            return {
+            const fila: ReciboEnHistorialIpc = {
               id: recibo.id,
               ventaId: recibo.ventaId,
               numeroRecibo: recibo.numeroRecibo,
@@ -121,6 +185,7 @@ export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibo
               cajero: modelo.cajero,
               total: modelo.total,
               formaPago: modelo.formaPago,
+              numBoleta: modelo.numBoleta,
               impreso: recibo.impreso,
               lineas: modelo.lineas.length,
               conDescuento: modelo.descuento !== null,
@@ -137,8 +202,34 @@ export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibo
                     },
               sePuedeAnular: anulacionDeVenta.sePuedeAnular(recibo.ventaId),
             };
-          }),
-        ),
+            /*
+              CUÁLES CUENTAN PARA LOS TOTALES: las que NO tienen fila en
+              `anulaciones_de_venta`, y nada más.
+
+              **NO SE MIRA `ventas.estado`, Y ESO ES DELIBERADO.** Esa columna
+              dice 'completada' también en las anuladas, así que leerla para
+              decidir si una venta está en pie es siempre engañoso: es la regla
+              de §1.3 del diseño, la que aplican el resto de los reportes por
+              `VENTA_SIN_ANULACION` (§4.15) y el efectivo esperado de la caja
+              (§4.10), y hay una prueba estructural que recorre todo el código
+              de producción y falla si alguna consulta vuelve a decidir por ahí
+              (`anulacion-estructural.test.ts`).
+            */
+            return { fila, enPie: fila.anulacion === null };
+          });
+
+          // El filtro se aplica ACÁ, sobre las filas ya armadas, para que los
+          // totales de abajo sean exactamente los de lo que se va a dibujar.
+          const delFiltro = todas.filter(
+            ({ fila }) => formaPago === 'todas' || fila.formaPago === formaPago,
+          );
+
+          return {
+            recibos: delFiltro.map(({ fila }) => fila),
+            filtro: formaPago,
+            totales: totalesParaLaVentana(sesion, delFiltro),
+          };
+        }),
       ),
   );
 

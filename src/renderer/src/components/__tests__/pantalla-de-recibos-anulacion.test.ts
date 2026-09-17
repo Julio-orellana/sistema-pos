@@ -27,6 +27,9 @@ import type {
   ResultadoDeAnulacionIpc,
   RespuestaIpc,
   VistaPreviaDeAnulacionIpc,
+  FiltroDeFormaPagoIpc,
+  HistorialDeRecibosIpc,
+  TotalesDelHistorialIpc,
 } from '@shared/types/ipc';
 import { PantallaDeRecibos } from '../PantallaDeRecibos';
 
@@ -58,6 +61,7 @@ function recibo(
     cajero: 'Ana',
     total: '8.50',
     formaPago: 'efectivo',
+    numBoleta: null,
     impreso: false,
     lineas: 1,
     conDescuento: false,
@@ -71,6 +75,7 @@ const HISTORIAL: readonly ReciboEnHistorialIpc[] = [
   recibo('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', VENTA_EN_EFECTIVO, 4),
   recibo('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', VENTA_CON_TARJETA, 3, {
     formaPago: 'tarjeta',
+    numBoleta: VOUCHER,
     total: '4.25',
   }),
   recibo('cccccccc-cccc-4ccc-8ccc-cccccccccccc', VENTA_DE_CAJA_CERRADA, 2, {
@@ -138,6 +143,28 @@ let contenedor: HTMLDivElement;
 let raiz: Root;
 /** Todo lo que la pantalla le mandó al canal `venta:anular`, en orden. */
 let pedidos: PedidoDeAnulacionIpc[];
+/** Con qué filtro pidió la pantalla el historial, en orden. */
+let filtrosPedidos: FiltroDeFormaPagoIpc[];
+/**
+ * Qué devuelve el canal como totales.
+ *
+ * Es un valor FIJO a propósito: la pantalla no los calcula, los dibuja. Si
+ * algún día los calculara, esta prueba seguiría pasando y sería la señal de
+ * que hay que mirar el otro lado —por eso existe además la prueba del canal,
+ * que sí comprueba las sumas.
+ */
+let totalesQueDevuelveElCanal: TotalesDelHistorialIpc | null;
+
+const TOTALES: TotalesDelHistorialIpc = {
+  enEfectivo: '7.70',
+  enTarjeta: '9.90',
+  general: '17.60',
+  ventasEnEfectivo: 3,
+  ventasEnTarjeta: 2,
+  cantidadDeVentas: 5,
+  anuladas: 1,
+  totalAnulado: '1.25',
+};
 
 /**
  * El proceso principal de mentira. Contesta como el real:
@@ -150,10 +177,26 @@ let pedidos: PedidoDeAnulacionIpc[];
  */
 function instalarApi(): void {
   pedidos = [];
+  filtrosPedidos = [];
+  totalesQueDevuelveElCanal = TOTALES;
   (window as unknown as { pos: unknown }).pos = {
     recibos: {
-      listar: (): Promise<RespuestaIpc<readonly ReciboEnHistorialIpc[]>> =>
-        Promise.resolve({ ok: true, datos: HISTORIAL }),
+      // Filtra como el real: por forma de pago, sobre la lista entera.
+      listar: (
+        filtro: FiltroDeFormaPagoIpc = 'todas',
+      ): Promise<RespuestaIpc<HistorialDeRecibosIpc>> => {
+        filtrosPedidos.push(filtro);
+        return Promise.resolve({
+          ok: true,
+          datos: {
+            recibos: HISTORIAL.filter(
+              (uno) => filtro === 'todas' || uno.formaPago === filtro,
+            ),
+            filtro,
+            totales: totalesQueDevuelveElCanal,
+          },
+        });
+      },
       ver: (): Promise<unknown> => Promise.resolve({ ok: false, error: { codigo: 'X', mensaje: 'no' } }),
       reimprimir: (): Promise<unknown> =>
         Promise.resolve({ ok: false, error: { codigo: 'X', mensaje: 'no' } }),
@@ -531,5 +574,183 @@ describe('EL PIN, y la confirmación con los montos ajustados', () => {
     expect(porPrueba('modal-de-anulacion')).toBeNull();
     expect(porPrueba('recibos-aviso')?.textContent).toContain('Venta del recibo 4 anulada');
     expect(porPrueba('recibos-aviso')?.textContent).toContain('Q8.50');
+  });
+});
+
+// ===========================================================================
+// EL FILTRO POR MÉTODO DE PAGO, LOS TOTALES Y EL VOUCHER (§3.5, reemplazado)
+// ===========================================================================
+
+describe('EL FILTRO POR MÉTODO DE PAGO se lo resuelve el proceso principal', () => {
+  it('al abrir, pide el historial con «todas» y dibuja las tres opciones', async () => {
+    await montar();
+
+    expect(filtrosPedidos).toEqual(['todas']);
+    expect(porPrueba('filtro-todas')).not.toBeNull();
+    expect(porPrueba('filtro-efectivo')).not.toBeNull();
+    expect(porPrueba('filtro-tarjeta')).not.toBeNull();
+  });
+
+  it('TOCAR «Tarjeta» VUELVE A PEDIR el historial con ese filtro: la ventana no filtra sola', async () => {
+    await montar();
+
+    await tocar(porPrueba('filtro-tarjeta'));
+
+    expect(filtrosPedidos).toEqual(['todas', 'tarjeta']);
+  });
+
+  it('con el filtro en tarjeta se dibujan solo las filas que el canal devolvió', async () => {
+    await montar();
+
+    await tocar(porPrueba('filtro-tarjeta'));
+
+    const filas = todos('fila-de-recibo');
+    expect(filas).toHaveLength(1);
+    expect(filas[0]?.textContent).toContain(numeroDe(VENTA_CON_TARJETA));
+  });
+
+  it('la opción elegida queda marcada, y solo una', async () => {
+    await montar();
+    await tocar(porPrueba('filtro-efectivo'));
+
+    expect(porPrueba('filtro-efectivo')?.className).toContain('opcion--activa');
+    expect(porPrueba('filtro-todas')?.className).not.toContain('opcion--activa');
+    expect(porPrueba('filtro-tarjeta')?.className).not.toContain('opcion--activa');
+  });
+
+  it('un filtro sin ninguna fila lo dice con el método de pago, no con el texto de «todavía no se cobró»', async () => {
+    (window as unknown as { pos: { recibos: { listar: unknown } } }).pos.recibos.listar = (
+      filtro: FiltroDeFormaPagoIpc,
+    ): Promise<RespuestaIpc<HistorialDeRecibosIpc>> =>
+      Promise.resolve({ ok: true, datos: { recibos: [], filtro, totales: null } });
+
+    await montar();
+    await tocar(porPrueba('filtro-tarjeta'));
+
+    expect(porPrueba('recibos-vacio')?.textContent).toContain('tarjeta');
+    expect(porPrueba('recibos-vacio')?.textContent).not.toContain('Todavía no se emitió');
+  });
+});
+
+describe('LOS TOTALES se dibujan si llegaron, y la ventana no los calcula', () => {
+  it('dibuja los tres montos tal cual los mandó el proceso principal', async () => {
+    await montar();
+
+    expect(porPrueba('totales-del-historial')).not.toBeNull();
+    expect(porPrueba('totales-efectivo')?.textContent).toContain('7.70');
+    expect(porPrueba('totales-tarjeta')?.textContent).toContain('9.90');
+    expect(porPrueba('totales-general')?.textContent).toContain('17.60');
+  });
+
+  it('SIN TOTALES no dibuja la línea: es lo que pasa con el rol venta', async () => {
+    totalesQueDevuelveElCanal = null;
+
+    await montar();
+
+    expect(porPrueba('totales-del-historial')).toBeNull();
+    expect(porPrueba('totales-efectivo')).toBeNull();
+    // Las filas se siguen dibujando: lo que se esconde son los totales.
+    expect(todos('fila-de-recibo').length).toBeGreaterThan(0);
+  });
+
+  it('lo anulado se informa aparte y NO se resta de los totales en la pantalla', async () => {
+    await montar();
+
+    expect(porPrueba('totales-anulado')?.textContent).toContain('1.25');
+    // El general sigue siendo el que mandó el canal: la ventana no le resta nada.
+    expect(porPrueba('totales-general')?.textContent).toContain('17.60');
+  });
+
+  it('sin ninguna venta anulada no dibuja ese renglón', async () => {
+    totalesQueDevuelveElCanal = { ...TOTALES, anuladas: 0, totalAnulado: '0.00' };
+
+    await montar();
+
+    expect(porPrueba('totales-anulado')).toBeNull();
+    expect(porPrueba('totales-general')).not.toBeNull();
+  });
+});
+
+describe('EL VOUCHER Y SU ESTADO, en las ventas con tarjeta', () => {
+  it('la fila con tarjeta muestra su voucher y dice «Activo»', async () => {
+    await montar();
+
+    const conTarjeta = fila(VENTA_CON_TARJETA);
+    expect(conTarjeta.textContent).toContain(VOUCHER);
+    expect(
+      conTarjeta.querySelector('[data-prueba="recibo-estado-tarjeta"]')?.textContent,
+    ).toBe('Activo');
+  });
+
+  it('UNA VENTA CON TARJETA YA ANULADA dice «Anulado» CON SU FECHA', async () => {
+    (window as unknown as { pos: { recibos: { listar: unknown } } }).pos.recibos.listar = (
+      filtro: FiltroDeFormaPagoIpc,
+    ): Promise<RespuestaIpc<HistorialDeRecibosIpc>> =>
+      Promise.resolve({
+        ok: true,
+        datos: {
+          recibos: [
+            recibo('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', VENTA_CON_TARJETA, 3, {
+              formaPago: 'tarjeta',
+              numBoleta: VOUCHER,
+              sePuedeAnular: false,
+              anulacion: {
+                fecha: '17/09/2026',
+                hora: '12:04',
+                autorizadaPor: 'Jimmy',
+                motivo: MOTIVO,
+              },
+            }),
+          ],
+          filtro,
+          totales: null,
+        },
+      });
+
+    await montar();
+
+    const estado = porPrueba('recibo-estado-tarjeta')?.textContent ?? '';
+    expect(estado).toContain('Anulado');
+    expect(estado).toContain('17/09/2026');
+    expect(estado).toContain('12:04');
+    expect(porPrueba('recibo-voucher')?.textContent).toContain(VOUCHER);
+  });
+
+  it('UNA VENTA EN EFECTIVO no dibuja ninguna línea de voucher', async () => {
+    await montar();
+
+    expect(
+      fila(VENTA_EN_EFECTIVO).querySelector('[data-prueba="recibo-voucher"]'),
+    ).toBeNull();
+  });
+});
+
+describe('EL BOTÓN «ANULAR» CONVIVE CON EL FILTRO', () => {
+  it('sigue apareciendo en la venta con tarjeta cuando el filtro está en «Tarjeta»', async () => {
+    await montar();
+    await tocar(porPrueba('filtro-tarjeta'));
+
+    expect(
+      fila(VENTA_CON_TARJETA).querySelector('[data-prueba="recibo-anular"]'),
+    ).not.toBeNull();
+  });
+
+  it('con el filtro puesto, anular manda el MISMO pedido de siempre y no toca el filtro', async () => {
+    await montar();
+    await tocar(porPrueba('filtro-tarjeta'));
+
+    await abrirAnulacion(VENTA_CON_TARJETA);
+    await escribir('anulacion-voucher', VOUCHER);
+    await escribir('anulacion-motivo', MOTIVO);
+    await tocar(porPrueba('anulacion-continuar'));
+    await tocar(porPrueba('anulacion-autorizar'));
+    await teclearPin(PIN_CORRECTO);
+    await tocar(porPrueba('anulacion-listo'));
+
+    expect(porPrueba('modal-de-anulacion')).toBeNull();
+    expect(pedidos.map((pedido) => pedido.pin)).toEqual([null, PIN_CORRECTO]);
+    expect(pedidos.every((pedido) => pedido.ventaId === VENTA_CON_TARJETA)).toBe(true);
+    // Al releer la lista, el filtro elegido se conserva: no vuelve a «todas».
+    expect(filtrosPedidos.at(-1)).toBe('tarjeta');
   });
 });

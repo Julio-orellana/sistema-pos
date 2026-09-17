@@ -1603,6 +1603,24 @@ export const esquemaReciboPorId = z.object({
 });
 
 /**
+ * Por qué método de pago se está filtrando el historial de recibos.
+ *
+ * **EL FILTRO VIAJA AL PROCESO PRINCIPAL, no se aplica en la ventana**, y no es
+ * un capricho: la línea de totales es de «el conjunto actualmente filtrado», y
+ * la ventana no puede sumar. Si filtrara acá y sumara allá, o bien la ventana
+ * haría aritmética de punto flotante —lo que §4.15 prohíbe— o bien los totales
+ * serían de otro conjunto que el que se ve. Filtrando en el proceso principal,
+ * las filas que se dibujan y los totales que se muestran salen de la misma
+ * lista, por construcción.
+ */
+export type FiltroDeFormaPagoIpc = 'todas' | 'efectivo' | 'tarjeta';
+
+/** Payload del historial: por qué método de pago se quiere filtrar. */
+export const esquemaFiltroDeRecibos = z.object({
+  formaPago: z.enum(['todas', 'efectivo', 'tarjeta']),
+});
+
+/**
  * La anulación de una venta, tal como la muestran el historial y el recibo.
  *
  * La fecha y la hora vienen ya formateadas en hora de Guatemala: la ventana no
@@ -1629,6 +1647,16 @@ export interface ReciboEnHistorialIpc {
   readonly cajero: string;
   readonly total: string;
   readonly formaPago: FormaPagoIpc;
+  /**
+   * El voucher de la terminal del banco (`ventas.num_boleta`), o `null` en una
+   * venta en efectivo.
+   *
+   * Es el mismo número que ya sale IMPRESO en el papel del cliente
+   * (`plantilla-de-recibo.ts`), así que mostrarlo acá no revela nada que el
+   * cliente no tenga en la mano: por eso viaja con el resto de la fila y no
+   * detrás de un rol, igual que el total.
+   */
+  readonly numBoleta: string | null;
   /** `true` si alguna vez salió por la impresora térmica. */
   readonly impreso: boolean;
   readonly lineas: number;
@@ -1644,6 +1672,54 @@ export interface ReciboEnHistorialIpc {
    * está anulada. La pantalla no lo deduce ni compara cajas por su cuenta.
    */
   readonly sePuedeAnular: boolean;
+}
+
+/**
+ * Cuánto suma el conjunto que el historial está mostrando.
+ *
+ * ---------------------------------------------------------------------------
+ * QUÉ CUENTA Y QUÉ NO
+ * ---------------------------------------------------------------------------
+ * Solo las ventas **que siguen en pie**, y lo decide **la ausencia de su fila
+ * en `anulaciones_de_venta`, nunca `ventas.estado`** —esa columna dice
+ * 'completada' también en las anuladas (§1.3 del diseño)—. Es el mismo
+ * criterio de todos los reportes (§4.15) y del efectivo esperado de la caja
+ * (§4.10), y la razón es de negocio: una venta anulada es plata que se le
+ * devolvió al cliente, así que sumarla diría que entró un dinero que salió.
+ *
+ * Lo anulado **no se esconde**: se informa aparte, en `anuladas` y
+ * `totalAnulado`, para que el número de arriba se pueda leer sin tener que
+ * sumar las filas a mano para descubrir que falta algo.
+ */
+export interface TotalesDelHistorialIpc {
+  readonly enEfectivo: string;
+  readonly enTarjeta: string;
+  /** Efectivo + tarjeta, exacto al centavo. */
+  readonly general: string;
+  readonly ventasEnEfectivo: number;
+  readonly ventasEnTarjeta: number;
+  /** Cuántas ventas entraron en las sumas de arriba. */
+  readonly cantidadDeVentas: number;
+  /** Cuántas filas del conjunto están anuladas y quedaron fuera. */
+  readonly anuladas: number;
+  /** Cuánto sumaban esas anuladas, como referencia. */
+  readonly totalAnulado: string;
+}
+
+/** Lo que devuelve el historial de recibos: las filas y, si corresponde, sus totales. */
+export interface HistorialDeRecibosIpc {
+  readonly recibos: readonly ReciboEnHistorialIpc[];
+  /** El filtro con el que se armó esta lista, devuelto para que la pantalla no lo suponga. */
+  readonly filtro: FiltroDeFormaPagoIpc;
+  /**
+   * Los totales, o **`null` si quien mira no tiene rol administrativo**.
+   *
+   * Lo decide el proceso principal, nunca la pantalla, por la misma razón que
+   * el efectivo teórico de la caja (§4.40): esconderlo en la ventana no
+   * protege nada, porque el canal se llama desde la consola. Cuánto entró a la
+   * tienda es información de dueño y no de mostrador (§4.15).
+   */
+  readonly totales: TotalesDelHistorialIpc | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2151,7 +2227,7 @@ export interface ApiPos {
    * tienda sale, al reimprimirse, con el nombre y el NIT correctos.
    */
   readonly recibos: {
-    listar(): Promise<RespuestaIpc<readonly ReciboEnHistorialIpc[]>>;
+    listar(filtro?: FiltroDeFormaPagoIpc): Promise<RespuestaIpc<HistorialDeRecibosIpc>>;
     ver(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
     reimprimir(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
   };

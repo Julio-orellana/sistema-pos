@@ -17,6 +17,13 @@
  *     cifras de siempre**: se comparan los dos textos y lo único que cambia son
  *     los renglones de la marca.
  *   · Las respuestas de los tres canales pasan `structuredClone` (§4.42).
+ *
+ * DESDE EL 2026-09-17 SOSTIENE ADEMÁS EL FILTRO Y LOS TOTALES del historial,
+ * que reemplazan al reporte «Cobros con tarjeta» de §3.5 del diseño. Viven acá
+ * y no en un archivo aparte porque necesitan EXACTAMENTE este armado —dos
+ * ventas de distinta forma de pago, una anulable y una anulada, con sesión de
+ * un rol y del otro—, y duplicarlo sería mantener dos copias del mismo
+ * escenario que pueden derivar.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -27,8 +34,15 @@ import type { Database } from 'better-sqlite3';
 
 import { NullPrinterProvider } from '@shared/adapters/receipt-printer';
 import { generarHashDePin } from '@shared/auth';
-import { montoACadena } from '@shared/money';
-import { CANALES_IPC, type ReciboEnHistorialIpc, type ReciboVistoIpc, type RespuestaIpc } from '@shared/types/ipc';
+import { montoACadena, sumarLista } from '@shared/money';
+import {
+  CANALES_IPC,
+  type FiltroDeFormaPagoIpc,
+  type HistorialDeRecibosIpc,
+  type ReciboEnHistorialIpc,
+  type ReciboVistoIpc,
+  type RespuestaIpc,
+} from '@shared/types/ipc';
 import { ErrorDeNegocio } from '@main/database/errores';
 import { crearRepositorios, type Repositorios } from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
@@ -97,12 +111,18 @@ async function llamar<T>(canal: string, payload?: unknown): Promise<RespuestaIpc
   return respuesta;
 }
 
-async function historial(): Promise<readonly ReciboEnHistorialIpc[]> {
-  const respuesta = await llamar<readonly ReciboEnHistorialIpc[]>(CANALES_IPC.recibosListar);
+async function historialCompleto(
+  formaPago: FiltroDeFormaPagoIpc = 'todas',
+): Promise<HistorialDeRecibosIpc> {
+  const respuesta = await llamar<HistorialDeRecibosIpc>(CANALES_IPC.recibosListar, { formaPago });
   if (!respuesta.ok) {
     throw new Error(`El historial falló: ${respuesta.error.mensaje}`);
   }
   return respuesta.datos;
+}
+
+async function historial(): Promise<readonly ReciboEnHistorialIpc[]> {
+  return (await historialCompleto()).recibos;
 }
 
 /** La fila del historial de una venta, o falla la prueba. */
@@ -118,9 +138,10 @@ function filaDe(lista: readonly ReciboEnHistorialIpc[], ventaId: string): Recibo
 async function venderConRecibo(
   formaPago: 'efectivo' | 'tarjeta' = 'efectivo',
   cantidad = '2',
+  productoId = idMaiz,
 ): Promise<string> {
   const registrada = venta.registrar(idAna, 'venta', {
-    lineas: [{ productoId: idMaiz, cantidad }],
+    lineas: [{ productoId, cantidad }],
     descuento: null,
     formaPago,
     numBoleta: formaPago === 'tarjeta' ? VOUCHER : null,
@@ -431,5 +452,276 @@ describe('EL RECIBO REIMPRESO de una venta anulada', () => {
     const visto = await llamar<ReciboVistoIpc>(CANALES_IPC.recibosVer, { id: recibo.id });
     expect(visto.ok && visto.datos.texto).not.toContain('ANULADA');
     expect(idJimmy).not.toBe(idAna);
+  });
+});
+
+// ===========================================================================
+// EL FILTRO POR MÉTODO DE PAGO Y LOS TOTALES (§3.5, reemplazado)
+// ===========================================================================
+
+/**
+ * Un producto a Q1.10, para que las sumas de la prueba sean de las que el
+ * punto flotante arruina.
+ *
+ * El maíz de arriba cuesta Q4.25, y todo múltiplo de 0.25 es exacto en binario:
+ * con él, sumar con `Number` daría el mismo resultado que con Decimal y la
+ * prueba no distinguiría una implementación de la otra. Con Q1.10, en cambio,
+ * `1.1 + 2.2 + 4.4` da **7.700000000000001** y `3.3 + 6.6` da
+ * **9.899999999999999`, medido con Node.
+ */
+function productoDeDecimalesFeos(): string {
+  const categoria = repos.categorias.crear({ nombre: 'Feos', orden: 2 }).id;
+  return repos.productos.crear({
+    nombre: 'Azúcar',
+    categoriaId: categoria,
+    tipoMedida: 'unidad',
+    unidadPeso: null,
+    cantidadPredefinidaIcono: '1',
+    precioBase: '1.10',
+    inventarioDisponible: '100',
+  }).id;
+}
+
+/** Deja a Jimmy en sesión: es quien puede ver los totales. */
+function entraJimmy(): void {
+  const jimmy = repos.usuarios.obtenerPorId(idJimmy);
+  if (jimmy === null) {
+    throw new Error('No está Jimmy.');
+  }
+  sesion.iniciar(jimmy);
+}
+
+describe('EL HISTORIAL FILTRA POR MÉTODO DE PAGO', () => {
+  it('«todas» trae las de efectivo y las de tarjeta', async () => {
+    const enEfectivo = await venderConRecibo('efectivo');
+    const conTarjeta = await venderConRecibo('tarjeta');
+
+    const historial = await historialCompleto('todas');
+
+    expect(historial.filtro).toBe('todas');
+    expect(historial.recibos.map((fila) => fila.ventaId).sort()).toEqual(
+      [enEfectivo, conTarjeta].sort(),
+    );
+  });
+
+  it('«tarjeta» no trae NINGUNA venta en efectivo, y «efectivo» ninguna con tarjeta', async () => {
+    await venderConRecibo('efectivo');
+    await venderConRecibo('efectivo');
+    const conTarjeta = await venderConRecibo('tarjeta');
+
+    const soloTarjeta = await historialCompleto('tarjeta');
+    const soloEfectivo = await historialCompleto('efectivo');
+
+    expect(soloTarjeta.recibos.map((fila) => fila.ventaId)).toEqual([conTarjeta]);
+    expect(soloTarjeta.recibos.every((fila) => fila.formaPago === 'tarjeta')).toBe(true);
+    expect(soloEfectivo.recibos).toHaveLength(2);
+    expect(soloEfectivo.recibos.every((fila) => fila.formaPago === 'efectivo')).toBe(true);
+  });
+
+  it('el filtro con el que se armó la lista VUELVE en la respuesta, para que la pantalla no lo suponga', async () => {
+    await venderConRecibo('tarjeta');
+
+    expect((await historialCompleto('tarjeta')).filtro).toBe('tarjeta');
+    expect((await historialCompleto('efectivo')).filtro).toBe('efectivo');
+    expect((await historialCompleto('todas')).filtro).toBe('todas');
+  });
+
+  it('un filtro sin ninguna venta devuelve la lista vacía, no un error', async () => {
+    await venderConRecibo('efectivo');
+
+    const soloTarjeta = await historialCompleto('tarjeta');
+
+    expect(soloTarjeta.recibos).toEqual([]);
+    expect(soloTarjeta.filtro).toBe('tarjeta');
+  });
+
+  it('LA FILA CON TARJETA TRAE SU VOUCHER; la de efectivo lo trae en null', async () => {
+    const enEfectivo = await venderConRecibo('efectivo');
+    const conTarjeta = await venderConRecibo('tarjeta');
+
+    const lista = (await historialCompleto('todas')).recibos;
+
+    expect(filaDe(lista, conTarjeta).numBoleta).toBe(VOUCHER);
+    expect(filaDe(lista, enEfectivo).numBoleta).toBeNull();
+  });
+
+  it('el voucher que viaja es el MISMO que guardó la venta, no uno recalculado', async () => {
+    const conTarjeta = await venderConRecibo('tarjeta');
+
+    const fila = filaDe((await historialCompleto('tarjeta')).recibos, conTarjeta);
+
+    expect(fila.numBoleta).toBe(repos.ventas.obtenerPorId(conTarjeta)?.numBoleta);
+  });
+});
+
+describe('LOS TOTALES SON DEL CONJUNTO FILTRADO, y se suman con Decimal', () => {
+  beforeEach(() => {
+    entraJimmy();
+  });
+
+  it('SUMA EXACTA: tres ventas que en punto flotante darían 7.700000000000001 dan 7.70', async () => {
+    const azucar = productoDeDecimalesFeos();
+    await venderConRecibo('efectivo', '1', azucar); // 1.10
+    await venderConRecibo('efectivo', '2', azucar); // 2.20
+    await venderConRecibo('efectivo', '4', azucar); // 4.40
+
+    const totales = (await historialCompleto('efectivo')).totales;
+
+    // El control: así de mal sale sumando como sumaría la ventana.
+    expect(1.1 + 2.2 + 4.4).not.toBe(7.7);
+    expect(totales?.enEfectivo).toBe('7.70');
+  });
+
+  it('EFECTIVO + TARJETA DA EXACTAMENTE EL GENERAL, con decimales feos de los dos lados', async () => {
+    const azucar = productoDeDecimalesFeos();
+    await venderConRecibo('efectivo', '1', azucar); // 1.10
+    await venderConRecibo('efectivo', '2', azucar); // 2.20
+    await venderConRecibo('efectivo', '4', azucar); // 4.40
+    await venderConRecibo('tarjeta', '3', azucar); // 3.30
+    await venderConRecibo('tarjeta', '6', azucar); // 6.60
+
+    const totales = (await historialCompleto('todas')).totales;
+
+    expect(3.3 + 6.6).not.toBe(9.9);
+    expect(totales?.enEfectivo).toBe('7.70');
+    expect(totales?.enTarjeta).toBe('9.90');
+    expect(totales?.general).toBe('17.60');
+    expect(sumarLista([totales?.enEfectivo ?? '0', totales?.enTarjeta ?? '0']).toFixed(2)).toBe(
+      totales?.general,
+    );
+  });
+
+  it('CON EL FILTRO EN TARJETA, el total en efectivo es cero: los totales son de lo que se ve', async () => {
+    const azucar = productoDeDecimalesFeos();
+    await venderConRecibo('efectivo', '4', azucar); // 4.40
+    await venderConRecibo('tarjeta', '3', azucar); // 3.30
+
+    const soloTarjeta = (await historialCompleto('tarjeta')).totales;
+
+    expect(soloTarjeta?.enEfectivo).toBe('0.00');
+    expect(soloTarjeta?.enTarjeta).toBe('3.30');
+    expect(soloTarjeta?.general).toBe('3.30');
+    expect(soloTarjeta?.cantidadDeVentas).toBe(1);
+  });
+
+  it('cuenta las ventas de cada montón, no solo los montos', async () => {
+    await venderConRecibo('efectivo');
+    await venderConRecibo('efectivo');
+    await venderConRecibo('tarjeta');
+
+    const totales = (await historialCompleto('todas')).totales;
+
+    expect(totales?.ventasEnEfectivo).toBe(2);
+    expect(totales?.ventasEnTarjeta).toBe(1);
+    expect(totales?.cantidadDeVentas).toBe(3);
+  });
+
+  it('UNA VENTA ANULADA NO CUENTA en los totales, y se informa aparte', async () => {
+    const azucar = productoDeDecimalesFeos();
+    const queSigue = await venderConRecibo('efectivo', '4', azucar); // 4.40
+    const queSeAnula = await venderConRecibo('efectivo', '2', azucar); // 2.20
+    anulacion.anular({ ventaId: queSeAnula, motivo: MOTIVO, voucher: null }, idAna, {
+      autorizadaPor: idJimmy,
+      via: 'presencial',
+    });
+
+    const historial = await historialCompleto('efectivo');
+
+    // La fila SIGUE en la lista: el historial muestra todos los recibos.
+    expect(historial.recibos).toHaveLength(2);
+    expect(filaDe(historial.recibos, queSeAnula).anulacion).not.toBeNull();
+    // Pero fuera de la suma, y dicho aparte para que el número se pueda leer.
+    expect(historial.totales?.enEfectivo).toBe('4.40');
+    expect(historial.totales?.cantidadDeVentas).toBe(1);
+    expect(historial.totales?.anuladas).toBe(1);
+    expect(historial.totales?.totalAnulado).toBe('2.20');
+    expect(queSigue).toBeTruthy();
+  });
+
+  it('lo anulado se decide por su FILA, nunca por `ventas.estado`, que sigue en «completada»', async () => {
+    const queSeAnula = await venderConRecibo('efectivo');
+    anulacion.anular({ ventaId: queSeAnula, motivo: MOTIVO, voucher: null }, idAna, {
+      autorizadaPor: idJimmy,
+      via: 'presencial',
+    });
+
+    expect(repos.ventas.obtenerPorId(queSeAnula)?.estado).toBe('completada');
+    expect((await historialCompleto('todas')).totales?.cantidadDeVentas).toBe(0);
+  });
+
+  it('`ventas.estado` NO DECIDE NADA: una venta marcada «anulada» a mano SIGUE contando', async () => {
+    await venderConRecibo('efectivo'); // 8.50
+    const rara = await venderConRecibo('efectivo'); // 8.50
+    /*
+      Nada en producción escribe 'anulada' —`RepositorioDeVentas.anular()` se
+      eliminó con el diseño de la anulación—, pero el CHECK del esquema lo
+      admite. Lo que esta prueba fija es que, si apareciera, **el historial
+      igual NO la trata como anulada**: lo que decide es la fila de
+      `anulaciones_de_venta` y nada más (§1.3 del diseño). Mirar `estado`
+      sería tener dos criterios que pueden discrepar, y hay una prueba
+      estructural que lo prohíbe en todo el código de producción.
+    */
+    base.prepare("UPDATE ventas SET estado = 'anulada' WHERE id = ?").run(rara);
+
+    const historial = await historialCompleto('efectivo');
+
+    expect(historial.recibos).toHaveLength(2);
+    expect(historial.totales?.general).toBe('17.00');
+    expect(historial.totales?.cantidadDeVentas).toBe(2);
+    expect(historial.totales?.anuladas).toBe(0);
+  });
+
+  it('sin ninguna venta, los totales son cero y no `null`', async () => {
+    const totales = (await historialCompleto('todas')).totales;
+
+    expect(totales?.general).toBe('0.00');
+    expect(totales?.enEfectivo).toBe('0.00');
+    expect(totales?.enTarjeta).toBe('0.00');
+    expect(totales?.anuladas).toBe(0);
+  });
+});
+
+describe('LOS TOTALES SON INFORMACIÓN DE DUEÑO: sin rol administrativo no viajan', () => {
+  it('con la sesión de ANA (rol venta) el canal NO manda ningún total', async () => {
+    await venderConRecibo('efectivo');
+    await venderConRecibo('tarjeta');
+
+    // El `beforeEach` deja a Ana en sesión.
+    const historial = await historialCompleto('todas');
+
+    expect(sesion.obtener()?.rol).toBe('venta');
+    expect(historial.totales).toBeNull();
+  });
+
+  it('con la sesión de JIMMY (administrativo) sí los manda', async () => {
+    await venderConRecibo('efectivo');
+    entraJimmy();
+
+    const historial = await historialCompleto('todas');
+
+    expect(historial.totales).not.toBeNull();
+    expect(historial.totales?.general).toBe('8.50');
+  });
+
+  it('LAS FILAS LLEGAN IGUAL A LOS DOS: lo único que cambia son los totales', async () => {
+    await venderConRecibo('efectivo');
+    await venderConRecibo('tarjeta');
+
+    const comoAna = await historialCompleto('todas');
+    entraJimmy();
+    const comoJimmy = await historialCompleto('todas');
+
+    expect(comoAna.recibos).toEqual(comoJimmy.recibos);
+    expect(comoAna.totales).toBeNull();
+    expect(comoJimmy.totales).not.toBeNull();
+  });
+
+  it('el voucher SÍ llega al rol venta: ya está impreso en el papel del cliente', async () => {
+    const conTarjeta = await venderConRecibo('tarjeta');
+
+    const comoAna = await historialCompleto('tarjeta');
+
+    expect(sesion.obtener()?.rol).toBe('venta');
+    expect(filaDe(comoAna.recibos, conTarjeta).numBoleta).toBe(VOUCHER);
   });
 });

@@ -25,7 +25,8 @@ import {
   type ResultadoDeAnulacionIpc,
   type ResultadoDeCobro,
   type ConfiguracionDeNegocioIpc,
-  type ReciboEnHistorialIpc,
+  type FiltroDeFormaPagoIpc,
+  type HistorialDeRecibosIpc,
   type ReciboVistoIpc,
   type PeriodoIpc,
   type ResumenDeVentasIpc,
@@ -257,9 +258,11 @@ const apiPos: ApiPos = {
   },
 
   recibos: {
-    listar: (): Promise<RespuestaIpc<readonly ReciboEnHistorialIpc[]>> =>
-      ipcRenderer.invoke(CANALES_IPC.recibosListar) as Promise<
-        RespuestaIpc<readonly ReciboEnHistorialIpc[]>
+    // El filtro por método de pago viaja al proceso principal, que es quien
+    // filtra Y suma: la ventana no calcula nada (§4.15).
+    listar: (filtro: FiltroDeFormaPagoIpc = 'todas'): Promise<RespuestaIpc<HistorialDeRecibosIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.recibosListar, { formaPago: filtro }) as Promise<
+        RespuestaIpc<HistorialDeRecibosIpc>
       >,
     ver: (id: string): Promise<RespuestaIpc<ReciboVistoIpc>> =>
       ipcRenderer.invoke(CANALES_IPC.recibosVer, { id }) as Promise<RespuestaIpc<ReciboVistoIpc>>,

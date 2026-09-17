@@ -1727,3 +1727,19 @@ button:disabled {
   color: var(--texto-tenue);
   font-style: italic;
 }
+
+/* --- Totales del historial de recibos ------------------------------------ */
+/* Van entre el filtro y la lista, separados de las dos cosas: son el resumen
+   de lo que está abajo, no un renglón más de la lista ni otra opción del
+   filtro. Solo se dibujan si el proceso principal los mandó, que es cuando
+   quien mira tiene rol administrativo (§4.40). */
+.totales-del-historial {
+  margin: 12px 0 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+}
+.totales-del-historial .nota {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
