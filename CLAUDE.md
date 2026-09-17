@@ -107,6 +107,36 @@ Node requerido: **>= 22**.
 > prueba primero en el proyecto real»— extendida al otro lado: tampoco se prueba
 > un instalador en el proyecto que una tienda está usando.
 
+> ### DOS SESIONES DE CLAUDE CODE NO TRABAJAN SOBRE EL MISMO PROYECTO DE NUBE SIN AVISARSE
+>
+> **Antes de correr una sesión de Claude Code contra `pos-jimmy-cano` o contra
+> `pos-pruebas-descartable`, hay que avisarle a cualquier otra sesión que esté
+> trabajando sobre ese mismo proyecto.** Vale para aplicar una migración, para
+> corregir un registro y para cualquier escritura; una lectura no hace falta
+> anunciarla, pero conviene decir que se está mirando.
+>
+> **POR QUÉ, con el caso que la costó.** El 2026-09-17 esta sesión aplicó la
+> `0033`, la `0035` y la `0038` a `pos-pruebas-descartable` y documentó, con
+> evidencia, que el real NO las tenía. Tres horas y media más tarde Julio aplicó
+> esas mismas tres al real desde otra sesión, sin decírselo a la que estaba
+> trabajando. Consecuencias concretas: **CLAUDE.md quedó afirmando algo falso
+> sobre producción** —que los dos proyectos tenían juegos distintos de
+> migraciones—, la sesión que siguió trabajando partió de ese estado equivocado,
+> y el registro de la `0038` quedó sin su punto y coma final, lo que obligó a una
+> corrección aparte sobre el proyecto real (§4.4).
+>
+> **Es la misma lección de §4.55**, la de las dos terminales que escribían el
+> mismo proyecto, aplicada ahora a sesiones de Claude Code en vez de a
+> instalaciones de la aplicación: dos escritores sobre una nube, cada uno
+> creyendo que es el único, y el daño apareciendo después, en lo que quedó
+> escrito. Con una diferencia que la hace más traicionera: acá el segundo
+> escritor **documenta** lo que hizo en su propia sesión, y la otra no se entera.
+>
+> Lo que hay que hacer, en concreto: decir en qué proyecto se va a escribir antes
+> de escribir, y **releer el catálogo antes de afirmar en qué estado está un
+> proyecto** —nunca repetir lo que dice CLAUDE.md sin volver a medirlo, que es lo
+> que hace esta regla verificable en vez de un buen propósito—.
+
 1. **Es una app de escritorio, no una web.** Electron + React + Vite +
    TypeScript estricto. Nunca `any` implícito.
 2. **Ventana en modo kiosko:** pantalla completa, sin menú, sin barra de
@@ -538,8 +568,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos`<br>`0027_sincronizar_asiento`<br>`0028_limites_descuento_id_determinista`<br>`0029_restauracion_ventas_por_mes`<br>`0031_productos_precio_compra`<br>`0032_venta_detalle_costo_unitario_snap` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) **2026-09-12 (la `0023` y la `0024`)** y **2026-09-13 (la `0025` y la `0026`, con lo que la fase 2.c queda aplicada entera)** y **2026-09-14 (la `0027`, la `0028` y, después de la 030 local y en ese orden, la `0029`)** y **2026-09-15 (la `0031` y la `0032`)** |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos`<br>`0027_sincronizar_asiento`<br>`0028_limites_descuento_id_determinista`<br>`0029_restauracion_ventas_por_mes`<br>`0031_productos_precio_compra`<br>`0032_venta_detalle_costo_unitario_snap`<br>`0033_anulaciones_de_venta`<br>`0035_sincronizar_anulacion_de_venta`<br>`0038_anulacion_solo_presencial` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) **2026-09-12 (la `0023` y la `0024`)** y **2026-09-13 (la `0025` y la `0026`, con lo que la fase 2.c queda aplicada entera)** y **2026-09-14 (la `0027`, la `0028` y, después de la 030 local y en ese orden, la `0029`)** y **2026-09-15 (la `0031` y la `0032`)** y **2026-09-17, 21:51–21:54 UTC (la `0033`, la `0035` y la `0038`, aplicadas por Julio desde otra sesión; el registro de la `0038` se corrigió ese mismo día, ver abajo)** |
 | Plan | gratuito |
 
 Estado verificado contra el catálogo del proyecto, no contra el script, el
@@ -567,7 +597,54 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**LA `0033_anulaciones_de_venta`, LA `0035_sincronizar_anulacion_de_venta` Y LA `0038_anulacion_solo_presencial` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-17, EN ESE ORDEN Y EN UNA SOLA RONDA, Y NO EN `pos-jimmy-cano`** (§4.53, §4.54, §4.56). **Por primera vez desde el 2026-09-12 los dos proyectos NO tienen el mismo juego de migraciones: el descartable tiene 29 y el real 26.** Las aprobó Julio después de ver el SQL completo de las tres, y recién después de que la caja abierta de la instalación de prueba se cerrara por la terminal real (§4.56). El real espera a que se decida junto con el plan de entrega.
+~~**LA `0033_anulaciones_de_venta`, LA `0035_sincronizar_anulacion_de_venta` Y LA `0038_anulacion_solo_presencial` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-17, EN ESE ORDEN Y EN UNA SOLA RONDA, Y NO EN `pos-jimmy-cano`** (§4.53, §4.54, §4.56). **Por primera vez desde el 2026-09-12 los dos proyectos NO tienen el mismo juego de migraciones: el descartable tiene 29 y el real 26.** Las aprobó Julio después de ver el SQL completo de las tres, y recién después de que la caja abierta de la instalación de prueba se cerrara por la terminal real (§4.56). El real espera a que se decida junto con el plan de entrega.~~
+
+**CORREGIDO EL 2026-09-17: LAS TRES ESTÁN APLICADAS TAMBIÉN EN `pos-jimmy-cano`,
+y los dos proyectos vuelven a tener el mismo juego de 29 migraciones.** Al real
+las aplicó **Julio, desde otra sesión de Claude Code**, a las 21:51–21:54 UTC del
+2026-09-17 —tres horas y media después de la ronda del descartable, que fue la de
+§4.56— y sin coordinarlo con la sesión que estaba trabajando en paralelo. De ahí
+salió la regla del recuadro de §4 sobre avisar antes de correr una sesión contra
+un proyecto. El párrafo tachado de arriba describe el estado que hubo entre las
+18:27 y las 21:54 UTC de ese día.
+
+Estado del real **verificado leyendo su catálogo el 2026-09-17**, no el archivo
+ni el relato:
+
+| Qué se comprobó | `pos-jimmy-cano` | `pos-pruebas-descartable` |
+|---|---|---|
+| Migraciones registradas | **29**, la última `0038_anulacion_solo_presencial` | 29 |
+| Columnas en `public` | **137** | 137 |
+| Huella de las columnas (nombre, tipo, precisión, escala, nulabilidad) | `5c2d44ae02db18a1fb64f552fe426a29` | **el mismo** |
+| Tablas / políticas / condiciones distintas | 14 / 14 / **1** | 14 |
+| Funciones en `public` | **18** | 17 |
+| Los tres CHECK de `anulaciones_de_venta`, con su `convalidated` | `571ef01d5daa63ea77034507b221bf21` | **el mismo** |
+| md5 de lo registrado, contra el archivo sin el salto final | `0033` → `167821022f76e54528355f888f8fecb7`; `0035` → `7e230bd8b5ac2f27efeffbaaef7b6e1f`; `0038` → `db79f130845f2da8034d124d24163993` | **los mismos** |
+| Filas de negocio | 0 en `anulaciones_de_venta`, `ventas`, `venta_detalle`, `usuarios`, `recibos` y `auditoria_log` | — |
+
+**La función de más del real es `rls_auto_enable`**, leída por nombre: es
+preexistente del proyecto y ajena a este esquema, como §4.4 viene diciendo desde
+la fase 2.b. Las 17 de este esquema están en los dos.
+
+> **EL REGISTRO DE LA `0038` DEL REAL TUVO QUE CORREGIRSE, Y CONVIENE SABER POR
+> QUÉ.** Al aplicarla desde la otra sesión quedó registrada **sin el punto y coma
+> final**: 3102 caracteres contra los 3103 del archivo, md5
+> `2ce3ccfaab64128ebf6ee2a566af6a43` en vez de `db79f130845f2da8034d124d24163993`.
+> **El esquema estaba bien** —el `;` separa sentencias, no es una— pero el
+> registro dejaba de ser el archivo byte a byte, que es lo que hace auditable la
+> historia. No fue una maña de la herramienta: la `0033` y la `0035` quedaron
+> registradas con su `;` en ese mismo proyecto y minutos antes, y el mismo
+> archivo 0038 quedó con su `;` en el descartable.
+>
+> Se corrigió el 2026-09-17 **sin tocar el esquema**: un `UPDATE` de
+> `supabase_migrations.schema_migrations` que reemplaza el texto registrado por
+> los 3145 bytes del archivo leídos del disco, con un seguro que solo escribe si
+> el md5 de lo que llega es el del archivo **y** si lo que hay guardado es ese
+> mismo texto sin el `;`. Se descartó la otra salida —`DROP CONSTRAINT`, borrar
+> la fila y volver a aplicar— porque dejaba a producción sin la restricción
+> durante un instante y le cambiaba la versión a la migración, para arreglar un
+> carácter. Antes y después del `UPDATE`, la huella de los tres CHECK es la misma
+> (`571ef01d5daa63ea77034507b221bf21`) y las seis tablas de negocio siguen en 0.
 
 **LA `0031_productos_precio_compra` Y LA `0032_venta_detalle_costo_unitario_snap` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-15 A LAS 05:09 UTC, Y NO EN `pos-jimmy-cano`** (§4.39, §4.40). Las aprobó Julio después de ver el SQL; el real espera a que se decida junto con el plan de entrega. **Consecuencia medida en el diseño, no en la tienda:** la instalación de Jimmy (`v1.0.0-prueba.1`, sin la 031 ni la 032) sube a ese proyecto, así que su próximo lote de productos o de venta va a ser rechazado por «le faltan columnas» y su cola se va a detener, visible, hasta que instale una versión con las dos migraciones locales, que reescriben los payloads pendientes; ahí «Reintentar ahora» sube todo. Evidencia en §4.40. Lo que sigue de este párrafo describe el estado ANTERIOR a ellas.
 
@@ -8661,7 +8738,11 @@ la foto, el enrutador por presencia y la restauración. **Nada contra
 `pos-jimmy-cano`, y ninguna migración en ningún proyecto sin que Julio vea el
 SQL** (incluido el descartable).
 
-> **LA `0033` Y LA `0035` ESTÁN ESCRITAS Y NO APLICADAS EN NINGÚN PROYECTO.**
+> ~~**LA `0033` Y LA `0035` ESTÁN ESCRITAS Y NO APLICADAS EN NINGÚN PROYECTO.**~~
+> **DESDE EL 2026-09-17 ESTÁN APLICADAS EN LOS DOS**: en `pos-pruebas-descartable`
+> por esta sesión, a las 18:22–18:27 UTC (§4.56), y en `pos-jimmy-cano` por Julio
+> desde otra sesión, a las 21:51–21:54 UTC (§4.4). Lo que sigue describe el
+> estado del día en que se escribió.
 > Lo que se midió se midió en un Postgres 17 **LOCAL**, en el scratchpad, con las
 > migraciones de `supabase/migrations/` aplicadas en orden. No es Supabase. Las
 > pruebas contra `pos-pruebas-descartable` esperan la aprobación (y el punto 41
@@ -8856,15 +8937,23 @@ punto 40 de §6.2.**
 #### Lo que NO se verificó
 
 - ~~**Nada contra Supabase.** Ni la `0033` ni la `0035` están aplicadas.~~
-  **SUPERADO EL 2026-09-17: las dos están aplicadas en `pos-pruebas-descartable`,
-  con la 0038 (§4.56).** Lo que sigue sin correrse contra la nube es la batería
-  destructiva —exige vaciar el proyecto, punto 41 de §6.2— y
-  `verify:restauracion`, por lo mismo.
+  ~~**SUPERADO EL 2026-09-17: las dos están aplicadas en `pos-pruebas-descartable`,
+  con la 0038 (§4.56).**~~ **CORREGIDO EL 2026-09-17, más tarde ese mismo día: las
+  tres están aplicadas TAMBIÉN en `pos-jimmy-cano`** —las aplicó Julio desde otra
+  sesión, a las 21:51–21:54 UTC—, **y el estado del real quedó verificado contra
+  su catálogo: 29 migraciones, la última `0038_anulacion_solo_presencial`, 137
+  columnas y la misma huella que el descartable** (§4.4). Lo que sigue sin
+  correrse contra la nube es la batería destructiva —exige vaciar el proyecto,
+  punto 41 de §6.2— y `verify:restauracion`, por lo mismo.
 - ~~**Una terminal con esta versión no puede restaurar desde una nube sin la 0033
-  y la 0035**~~: **ya no aplica al descartable**, que las tiene. Sigue valiendo
-  para `pos-jimmy-cano`, que no.
-- `verify:nube` (mitad B) contra cualquiera de los dos proyectos va a reportar
-  la tabla y las dos funciones «en la foto y no en la nube» hasta aplicarlas.
+  y la 0035**~~: **ya no aplica a ninguno de los dos proyectos desde el
+  2026-09-17.** ~~Sigue valiendo para `pos-jimmy-cano`, que no.~~
+- ~~`verify:nube` (mitad B) contra cualquiera de los dos proyectos va a reportar
+  la tabla y las dos funciones «en la foto y no en la nube» hasta aplicarlas.~~
+  **Ya no: los dos las tienen.** Contra el descartable la mitad B coincide con la
+  foto, 0 diferencias (§4.56); contra el real el guion no corre —el seguro lo
+  rechaza por nombre (§4.20)—, y lo que lo reemplaza es la huella de columnas,
+  igual en los dos (§4.4).
 - **Windows**, como siempre.
 
 ### 4.54 La base rechaza una anulación autorizada a distancia (migraciones 038 / 0038, 2026-09-17)
@@ -9930,6 +10019,7 @@ su rastro en la bitácora técnica.
 | **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
 | **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **La base rechaza una anulación con vía distinta de `'presencial'`: CHECK con nombre `anulaciones_de_venta_solo_presencial` en la 038 local y en la 0038 de la nube, que convive con el CHECK amplio de la columna en los dos lados. La 0038 va en la misma ronda que la 0033 y la 0035.** **REVIERTE la fila de `docs/ANULACION-DE-VENTA.md` §1.1.** | Dejar el CHECK amplio, como decía el diseño; estrechar la 0033 antes de su primera aplicación; en la nube, quitar el CHECK de la columna | Decisión de Julio. El «segundo lugar» que §4.9 eliminó podía ampliar un permiso en silencio; este falla cerrado, y una prueba exige que `ACEPTA_PIN_REMOTO` y la base digan lo mismo. Estrechar la 0033 dejaría la local y la nube distintas hasta la 038. En la nube se deja el CHECK amplio para que el espejo sea exacto y ampliar algún día sea la misma sentencia en los dos lados. Aplicarla junto con la 0033 no rompe a nadie: ninguna versión publicada escribe `'remoto'` (medido en los tags). §4.54. | 2026-09-17 (número de prompt por confirmar) |
+| **Dos sesiones de Claude Code no trabajan sobre el mismo proyecto de nube sin avisarse, y el estado de un proyecto se afirma releyendo su catálogo, nunca repitiendo lo que dice CLAUDE.md.** | Confiar en que la documentación esté al día; coordinar solo las migraciones y no el resto de las escrituras | El 2026-09-17 esta sesión documentó, con evidencia, que `pos-jimmy-cano` no tenía la `0033`, la `0035` ni la `0038`; tres horas y media después Julio las aplicó desde otra sesión, sin avisar. CLAUDE.md quedó afirmando algo falso sobre producción, la sesión siguiente partió de ahí, y el registro de la `0038` quedó sin su `;` final, lo que obligó a una corrección aparte sobre el proyecto real. Es §4.55 otra vez —dos escritores sobre una nube, cada uno creyendo que es el único— con el agravante de que acá el segundo escritor documenta en su propia sesión y la otra no se entera. §4.4 y el recuadro de §4. | 2026-09-17 (número de prompt por confirmar) |
 | **El PDF del recibo se regenera EN EL MOMENTO de confirmar la anulación, reusando la misma `producir` de la reimpresión, sin imprimir y sin marcarlo como reimpresión.** Cierra el punto 46. | Dejarlo como estaba —la marca al ver o reimprimir—; llamar a `reimprimir()`, que además saca un ticket; una segunda función de regeneración; dispararlo sin esperar | Decisión de Julio: el archivo del disco **nunca** debe quedar desactualizado, ni un momento, y es lo que §5.2 del diseño decía desde el principio. Llamar a `reimprimir()` habría sacado un ticket por la térmica que nadie pidió, contra lo que §5.2 dice con todas las letras, y habría marcado el papel como reimpresión cuando nadie lo reimprimió; por eso `producir` recibe `imprimir`, que vale `true` salvo que se diga lo contrario, y emitir y reimprimir no cambiaron en nada. Una segunda función de regeneración terminaría dibujando dos papeles distintos. **Se espera a que termine antes de contestarle a la ventana**: disparado sin esperar, quien mirara el archivo justo después de ver la confirmación podría encontrarlo sin marcar. Va en el flujo y no en el manejador, por la razón por la que el flujo existe (§4.45), y eso obligó a que `pedir` fuera asincrónica —con sus 64 llamadas en las pruebas—: **una sola puerta**, porque un segundo método «pedir y además dejar el recibo al día» devolvería el defecto el día que alguien llamara al primero. Nunca lanza: una anulación confirmada no se cae porque el disco esté lleno. §4.59. | 2026-09-17 (número de prompt por confirmar) |
 | **La anulación se pide desde el HISTORIAL DE RECIBOS, y el botón «Anular» solo se dibuja en las ventas de la caja que sigue abierta y sin anular. En las demás NO se dibuja nada, ni un botón deshabilitado.** | Un botón apagado con su explicación; un botón siempre visible que falle al tocarlo; una pantalla propia de anulaciones | El historial es donde el cajero ya busca la venta por su número cuando el cliente vuelve al mostrador (§4.3 del diseño), así que no hace falta una pantalla más ni enseñarle otro camino. **El botón apagado se descartó a propósito:** una venta de una caja ya cerrada no se va a poder anular NUNCA MÁS —el alcance del diseño es solo caja abierta—, así que un control gris prometería algo que no existe; y una venta ya anulada se explica mejor con su etiqueta, que dice cuándo, quién autorizó y por qué. Un botón que siempre se ve y falla al tocarlo es peor: convierte una regla del negocio en un error que aparece después de decidir. §4.58. | 2026-09-17 (número de prompt por confirmar) |
 | **Qué ventas se pueden anular lo contesta el SERVICIO (`sePuedeAnular`), con la MISMA copia de la regla que usa `leerYValidar`, y una prueba de acoplamiento lo exige.** | Que el proceso principal compare la caja abierta contra `venta.caja_sesion_id` al armar el historial; que la pantalla lo deduzca de los datos que ya recibe | Es la lección de §4.57 aplicada antes de que costara: dos copias de la misma regla se desincronizan con el primer cambio, y acá la discrepancia sería peor que un nombre feo —el historial ofrecería anular algo que el servicio después rechaza, o escondería el botón de algo que sí se puede—. La regla vive en `impedimentoParaAnular`, la llaman los dos, y la prueba recorre los estados exigiendo que las dos respuestas coincidan, con un control que impide que «coincidan» dos funciones rotas. **Cuesta una lectura por fila del historial** (la caja y la anulación de cada venta, las dos por llave primaria), sobre un listado que ya arma el modelo completo de cada recibo; no se midió en el i3. §4.58. | 2026-09-17 (número de prompt por confirmar) |
