@@ -226,13 +226,15 @@ número que use queda reservado también del lado local.
 | `0029_restauracion_ventas_por_mes.sql` | Sí — aplicada el 2026-09-14, con la aprobación explícita de Julio, después de la 030 local y en ese orden; en `pos-pruebas-descartable` desde el mismo día (fase 4.b), verificada allí con `npm run verify:restauracion`. Crea `restauracion_ventas_por_mes()` —`SECURITY INVOKER`, solo rol `restauracion`, suma `ventas.total` por mes UTC con `NUMERIC` y la devuelve como texto— y reemplaza `contrato_de_sincronizacion` para que la enumere. Es puramente aditiva y la versión de contrato no sube. Leído del catálogo del real: registro con `md5 1b6247a51bfcbac7f69d66aaf863076c`, igual al archivo y al registro del descartable; las 16 funciones de `public` con `md5(pg_get_functiondef)` idéntico en los dos proyectos; la salida de `contrato_de_sincronizacion()` con los claims de restauración da `525d648ebbbf6a535bf6e46dfed3cc52` en los dos (13 tablas, 15 funciones, versión 1); `search_path=""`, ACL sin `anon`; sondas: `restauracion` → `[]`, `terminal` → `42501`, `anon` → `permission denied`. Ver CLAUDE.md §4.4. |
 | `0031_productos_precio_compra.sql` | Sí — aplicada el 2026-09-15 a las 20:59 UTC, con la aprobación de Julio después de ver el SQL; en `pos-pruebas-descartable` desde las 05:09 UTC del mismo día. Evidencia en CLAUDE.md §4.4. |
 | `0032_venta_detalle_costo_unitario_snap.sql` | Sí — aplicada el 2026-09-15 justo después de la `0031`, con la misma aprobación. Evidencia en CLAUDE.md §4.4. |
-| `0033_anulaciones_de_venta.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Se ensayó en un Postgres 17 LOCAL con las migraciones de esta carpeta (CLAUDE.md §4.53). Espera la aprobación de Julio, primero para `pos-pruebas-descartable`. |
-| `0035_sincronizar_anulacion_de_venta.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Exige la `0033`. Mismo ensayo local y misma espera. |
-| `0038_anulacion_solo_presencial.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Espejo de la `038` local: CHECK `anulaciones_de_venta_solo_presencial`, que convive con el de la columna. Exige la `0033` y va en la misma ronda, después de la `0035`, por decisión de Julio. Ensayada con `ROLLBACK` en el Postgres 17 LOCAL (CLAUDE.md §4.54). |
+| `0033_anulaciones_de_venta.sql` | **No — aplicada en `pos-pruebas-descartable` el 2026-09-17 (versión `20260917182250`, md5 `167821022f76e54528355f888f8fecb7`, igual al archivo sin el salto final), y NO en el real.** Antes se ensayó en un Postgres 17 LOCAL con las migraciones de esta carpeta (CLAUDE.md §4.53). Evidencia del catálogo en CLAUDE.md §4.56. |
+| `0035_sincronizar_anulacion_de_venta.sql` | **No — aplicada en `pos-pruebas-descartable` el 2026-09-17 (versión `20260917182506`, md5 `7e230bd8b5ac2f27efeffbaaef7b6e1f`), justo después de la `0033`, y NO en el real.** Las tres puertas que tienen que cerrarse dieron `42501`. Ver CLAUDE.md §4.56. |
+| `0038_anulacion_solo_presencial.sql` | **No — aplicada en `pos-pruebas-descartable` el 2026-09-17 (versión `20260917182736`, md5 `db79f130845f2da8034d124d24163993`), tercera de la ronda, y NO en el real.** Espejo de la `038` local: CHECK `anulaciones_de_venta_solo_presencial`, `convalidated = true`, que convive con el de la columna. Ver CLAUDE.md §4.54 y §4.56. |
 
 **ACTUALIZADO EL 2026-09-17: los dos proyectos tienen las mismas 26** (las 24
-de abajo más la `0031` y la `0032`, del 2026-09-15). **La `0033`, la `0035` y
-la `0038` están escritas y no aplicadas en ninguno.** El párrafo que sigue describe el
+de abajo más la `0031` y la `0032`, del 2026-09-15). **ESO DEJÓ DE SER CIERTO EL
+2026-09-17: la `0033`, la `0035` y la `0038` se aplicaron en
+`pos-pruebas-descartable` y no en el real, así que el descartable tiene 29 y el
+real 26** (CLAUDE.md §4.56). El párrafo que sigue describe el
 estado del 2026-09-14: **no quedaba ninguna migración pendiente en
 `pos-jimmy-cano` y los dos proyectos tenían las mismas 24.** La última fue la `0029`, el 2026-09-14, aplicada
 después de la `0027` y la `0028` del mismo día; antes la `0025` y la `0026`,

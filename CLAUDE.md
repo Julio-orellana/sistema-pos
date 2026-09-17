@@ -539,7 +539,7 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
-**LA `0033_anulaciones_de_venta`, LA `0035_sincronizar_anulacion_de_venta` Y LA `0038_anulacion_solo_presencial` ESTÁN ESCRITAS DESDE EL 2026-09-17 Y NO APLICADAS EN NINGUNO DE LOS DOS PROYECTOS** (§4.53, §4.54). La 0038 va en la misma ronda que las otras dos y después de ellas, por decisión de Julio. Los dos proyectos siguen con las mismas 26.
+**LA `0033_anulaciones_de_venta`, LA `0035_sincronizar_anulacion_de_venta` Y LA `0038_anulacion_solo_presencial` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-17, EN ESE ORDEN Y EN UNA SOLA RONDA, Y NO EN `pos-jimmy-cano`** (§4.53, §4.54, §4.56). **Por primera vez desde el 2026-09-12 los dos proyectos NO tienen el mismo juego de migraciones: el descartable tiene 29 y el real 26.** Las aprobó Julio después de ver el SQL completo de las tres, y recién después de que la caja abierta de la instalación de prueba se cerrara por la terminal real (§4.56). El real espera a que se decida junto con el plan de entrega.
 
 **LA `0031_productos_precio_compra` Y LA `0032_venta_detalle_costo_unitario_snap` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-15 A LAS 05:09 UTC, Y NO EN `pos-jimmy-cano`** (§4.39, §4.40). Las aprobó Julio después de ver el SQL; el real espera a que se decida junto con el plan de entrega. **Consecuencia medida en el diseño, no en la tienda:** la instalación de Jimmy (`v1.0.0-prueba.1`, sin la 031 ni la 032) sube a ese proyecto, así que su próximo lote de productos o de venta va a ser rechazado por «le faltan columnas» y su cola se va a detener, visible, hasta que instale una versión con las dos migraciones locales, que reescriben los payloads pendientes; ahí «Reintentar ahora» sube todo. Evidencia en §4.40. Lo que sigue de este párrafo describe el estado ANTERIOR a ellas.
 
@@ -8826,13 +8826,14 @@ punto 40 de §6.2.**
 
 #### Lo que NO se verificó
 
-- **Nada contra Supabase.** Ni la `0033` ni la `0035` están aplicadas. La
-  batería nueva de `verify:nube` solo pasó `node --check`, y `verify:restauracion`
-  no se corrió. Ver el punto 41 de §6.2.
-- **Una terminal con esta versión no puede restaurar desde una nube sin la 0033
-  y la 0035**: la precondición de deriva nombra la tabla y la función que faltan.
-  Lo mismo pasa con `ensayo:restauracion` y `verify:pantallas:restauracion`
-  contra el descartable, hasta aplicarlas.
+- ~~**Nada contra Supabase.** Ni la `0033` ni la `0035` están aplicadas.~~
+  **SUPERADO EL 2026-09-17: las dos están aplicadas en `pos-pruebas-descartable`,
+  con la 0038 (§4.56).** Lo que sigue sin correrse contra la nube es la batería
+  destructiva —exige vaciar el proyecto, punto 41 de §6.2— y
+  `verify:restauracion`, por lo mismo.
+- ~~**Una terminal con esta versión no puede restaurar desde una nube sin la 0033
+  y la 0035**~~: **ya no aplica al descartable**, que las tiene. Sigue valiendo
+  para `pos-jimmy-cano`, que no.
 - `verify:nube` (mitad B) contra cualquiera de los dos proyectos va a reportar
   la tabla y las dos funciones «en la foto y no en la nube» hasta aplicarlas.
 - **Windows**, como siempre.
@@ -8848,7 +8849,7 @@ CHECK amplio a propósito.
 |---|---|---|
 | Sentencia | `ALTER TABLE anulaciones_de_venta ADD CONSTRAINT anulaciones_de_venta_solo_presencial CHECK (autorizada_via = 'presencial')` | La misma sobre `public.anulaciones_de_venta`, más su `COMMENT ON CONSTRAINT` |
 | El CHECK amplio de la columna | Sigue: no tiene nombre, y quitarlo exigiría recrear la tabla | **Sigue a propósito**, aunque acá se podría quitar: el espejo queda exacto y volver a ampliar es la misma sentencia en los dos lados |
-| Estado | En el migrador: corre en toda base que se abra con esta versión | **Escrita, sin aplicar.** Va en la misma ronda que la 0033 y la 0035, después de ellas |
+| Estado | En el migrador; **aplicada en la base de trabajo de esta Mac el 2026-09-17** (§4.56) y en toda base que se abra con esta versión | **Aplicada en `pos-pruebas-descartable` el 2026-09-17**, en la misma ronda que la 0033 y la 0035 y después de ellas (§4.56). En `pos-jimmy-cano`, no |
 
 **Por qué el argumento del «segundo lugar» no se sostenía acá.** El segundo
 lugar que §4.9 eliminó podía AMPLIAR un permiso sin que nada fallara. Este falla
@@ -8974,6 +8975,131 @@ de §6.2).
 - si el Arroz de A vuelve a viajar (venta, edición o ajuste), el mismo `23505`.
 
 Qué hacer con los datos lo decide Julio: punto 42 de §6.2.
+
+### 4.56 La ronda de la anulación, aplicada en `pos-pruebas-descartable` (2026-09-17)
+
+**Primero se confirmó la precondición que puso Julio**, leyendo la nube y no
+suponiéndola: la caja `52d86b49`, abierta desde el 2026-09-15, la cerró la
+terminal real.
+
+```
+la_caja_52d86b49: {"estado":"cerrada","abrio":"Jimmy","abierta_en":"2026-09-15T23:21:48.957+00:00",
+  "monto_inicial":500,"monto_esperado":500,"monto_real":500,"diferencia":0,
+  "cerrada_en":"2026-09-17T17:44:42.522+00:00","cerrada_por":null,
+  "recibido_en":"2026-09-17T18:17:06.878505+00:00"}
+cajas_abiertas: 0
+asiento caja_cerrada  fecha 09-17 17:44:42.522  recibido_en 09-17 18:17:06.878505
+  {"modo":"simple","montoReal":"500.00","abiertaPor":"e91bf457-…","cerradaPor":"e91bf457-…",
+   "diferencia":"0.00","fueCajaAjena":false,"huboReconteo":false,"autorizadaPor":null,
+   "autorizadaVia":null,"montoEsperado":"500.00","conteosSellados":0,"cambioElEsperado":false}
+```
+
+**`cerrada_por` va en `null` y es lo correcto**, no un dato faltante: §4.9 lo
+reserva para el cierre de una caja AJENA, y acá Jimmy cerró la que él mismo
+abrió. Quién cerró está en el asiento (`cerradaPor`), igual que quién abrió.
+La caja cuadró: contó Q500.00 sobre Q500.00 esperados, sin conteos sellados y
+sin autorización, así que `diferencia_autorizada_por` y `_via` quedan en `null`
+como manda el CHECK de la 008.
+
+**Las tres de la nube, en orden, con el md5 del registro contra el archivo.**
+Cada md5 es el del archivo del repositorio **sin el salto de línea final**, la
+misma convención de la 0031 y la 0032:
+
+| Orden | Migración | Versión registrada | md5 registrado = md5 del archivo |
+|---|---|---|---|
+| 1 | `0033_anulaciones_de_venta` | `20260917182250` | `167821022f76e54528355f888f8fecb7` |
+| 2 | `0035_sincronizar_anulacion_de_venta` | `20260917182506` | `7e230bd8b5ac2f27efeffbaaef7b6e1f` |
+| 3 | `0038_anulacion_solo_presencial` | `20260917182736` | `db79f130845f2da8034d124d24163993` |
+
+`schema_migrations` pasó de 26 a **29**.
+
+**La 0033, leída del catálogo:** las 8 columnas con su tipo (`id`, `venta_id`,
+`solicitada_por`, `autorizada_por` en `uuid`; `autorizada_via` y `motivo` en
+`text`; `fecha` y `recibido_en` en `timestamptz`, esta última con `DEFAULT
+now()`), los dos CHECK y las cinco llaves con `convalidated = true`, los dos
+disparadores (`anulaciones_de_venta_prohibir_cambios` sobre la función nueva y
+`anulaciones_de_venta_fijar_recibido_en` sobre `fijar_recibido_en`), RLS activo
+con `relforcerowsecurity = false`, `relacl` con `authenticated=r` y nada más, 0
+filas, y la política `restauracion_lee_anulaciones_de_venta`. **Las políticas de
+`public` pasaron a 14 con UNA sola condición distinta**, que es la comprobación
+de la 0025. `anulaciones_de_venta_es_inmutable` quedó `SECURITY INVOKER` con
+`search_path=""`. Y `ventas` no cambió: 12 filas, todas `completada`; lo único
+que la 0033 le hizo es el `COMMENT` de `estado`.
+
+**La 0035:** `SECURITY DEFINER`, `search_path=""`, `volatile`, ACL
+`{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}` —**sin
+`anon`**—, y su `COMMENT`. Las tres puertas que tienen que estar cerradas se
+midieron llamándola con un lote vacío, así que no escribieron nada:
+
+```
+restauracion            -> 42501 Solo la terminal puede sincronizar la anulación de una venta
+sin rol                 -> 42501 Solo la terminal puede sincronizar la anulación de una venta
+terminal pero anónimo   -> 42501 Solo la terminal puede sincronizar la anulación de una venta
+```
+
+**El contrato, con los claims de `restauracion`:** versión **1** (no subió), 14
+tablas y 17 funciones, `md5` de la salida `6098d441b4be79b09f8f8af6ea6d581c`,
+con `anulaciones_de_venta` declarada y las dos funciones nuevas enumeradas
+(`sincronizar_anulacion_de_venta` DEFINER, `anulaciones_de_venta_es_inmutable`
+INVOKER, las dos con `search_path=""`).
+
+**La 0038:** las tres restricciones CHECK de la tabla con `convalidated = true`,
+la nueva con su `COMMENT`, y las dos sondas —que no dejan ninguna fila:
+
+```
+anulaciones_de_venta_autorizada_via_check | CHECK ((autorizada_via = ANY (ARRAY['presencial'::text, 'remoto'::text]))) | convalidated=true
+anulaciones_de_venta_motivo_check         | CHECK (((length(btrim(motivo)) > 0) AND (length(motivo) <= 200)))          | convalidated=true
+anulaciones_de_venta_solo_presencial      | CHECK ((autorizada_via = 'presencial'::text))                             | convalidated=true
+INSERT 'remoto'                      -> 23514 violates check constraint "anulaciones_de_venta_solo_presencial"
+INSERT 'presencial' con ids inventados -> 23503 violates foreign key constraint "anulaciones_de_venta_venta_id_fkey"
+filas de anulaciones: 0
+```
+
+**La 038 local, sobre la base de trabajo de esta Mac**, por el mismo camino que
+la aplicación —`abrirBaseDeDatos` al arrancar y `cerrarBaseDeDatosOrdenadamente`
+al salir— y **sin arrancar la aplicación a propósito**: `npm run dev` habría
+puesto al trabajador a subir las 63 filas que esa base tiene en `sync_cola`, y
+sería una tercera terminal contra el descartable. Se respaldó el archivo antes.
+
+```
+[trabajo] sha256 ANTES: "20d980588e36753d"
+[trabajo] PRIMERA apertura: migraciones aplicadas ahora: ["038_anulacion_solo_presencial"]
+[trabajo] registro de las dos últimas: [{"orden":38,…,"aplicada_en":"2026-09-17T18:27:09.993Z"},{"orden":37,…,"aplicada_en":"2026-09-17T16:39:42.705Z"}]
+[trabajo] integrity_check: [{"integrity_check":"ok"}]   foreign_key_check: []
+[trabajo] filas: {"usuarios":2,"productos":6,"ventas":4,"venta_detalle":10,"cajas":4,"recibos":3,"auditoria_log":55,"sync_cola":63,"anulaciones":0}
+[trabajo] la restricción en el esquema guardado: "CONSTRAINT anulaciones_de_venta_solo_presencial CHECK (autorizada_via = 'presencial')"
+[trabajo] INSERT remoto sobre la base de trabajo: "SQLITE_CONSTRAINT_CHECK CHECK constraint failed: anulaciones_de_venta_solo_presencial"
+[trabajo] cierre ordenado: {"cerrada":true,"puntoDeControlAplicado":true,…}
+[trabajo] SEGUNDA apertura (como el próximo arranque): {"aplicadasAhora":[],"ultimaAplicada":"038_anulacion_solo_presencial","totalConocidas":28}
+[trabajo] integrity_check de la segunda apertura: [{"integrity_check":"ok"}]   (mismas filas)
+```
+
+**La mitad B de la deriva, ya con las tres aplicadas:**
+
+```
+Mitad B de la prueba de deriva contra ztidrshifrblhfraiowg
+   ·    la nube declara: contrato v1: 14 tablas, 17 funciones
+   ok   lo que la nube declara coincide con supabase/esquema-nube.json
+
+1 comprobaciones, 0 fallidas.
+INFORME_DE_NUBE {"comprobaciones":1,"fallidas":[],…,"diferencias":[]}
+exit=0
+```
+
+**Eso cierra la apuesta del ensayo local del 2026-09-17:** la foto
+`esquema-nube.json` se había tomado de un Postgres 17 local con las migraciones
+de la carpeta (§4.53), antes de aplicar nada, y la nube real declara exactamente
+lo mismo.
+
+**El linter de seguridad** quedó con **7** avisos
+`authenticated_security_definer_function_executable` —uno más, el de
+`sincronizar_anulacion_de_venta`, esperado y no se corrige: esas funciones son
+la única puerta de escritura de la terminal— más `auth_leaked_password_protection`,
+que es configuración de Auth. **0 INFO `rls_enabled_no_policy`**: la tabla nueva
+nació con su política.
+
+**Lo que NO se hizo, por pedido de Julio:** la batería destructiva (exige vaciar
+el proyecto), `verify:restauracion`, y nada contra `pos-jimmy-cano`.
 
 ## 5. Registro de decisiones técnicas
 
@@ -9349,7 +9475,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 38 | **Si el almacenamiento cifrado del sistema no está disponible (sin llavero o sin DPAPI), la barra sigue diciendo «sin conexión».** | Es el tercer caso en que `leer()` devuelve `null` con archivo presente, y a propósito NO se marcó como credencial dañada (§4.52): el archivo puede estar perfecto, y reconectar tampoco serviría, porque guardar exige el mismo cifrado. Hace falta decidir qué texto le corresponde. Leído, no medido: en Windows con DPAPI no se espera que pase. | Abierto — de bajo riesgo |
 | 37 | **Las fotos que fallan de forma transitoria también cuentan para «problema al sincronizar».** | La medición se hace para cualquier lote, de negocio o de archivo, salvo una foto ausente, que no sale a la red. Si Storage contesta 5xx y el health contesta, la barra dice «problema al sincronizar». Es verdad, pero es una foto y no una venta. | Abierto — confirmar si se quiere así |
 | 40 | **Una anulación posterior a un robo queda excluida al restaurar, pero los productos que repuso se restauran con la reposición aplicada.** | Medido sin red (§4.53): la venta queda válida y vuelve a contar en el efectivo esperado, que es lo que §8 del diseño pide. Pero el inventario queda con lo que el ladrón «devolvió» y los contadores bajados, y volver a anular esa venta da `CONTADORES_INCONSISTENTES`. Los productos aparecen en la lista de anomalías, porque la nube los actualizó después del robo. Qué hacer con ese inventario (ajustarlo a mano, que hoy solo suma; recalcular; dejarlo listado) es una decisión de negocio. | Abierto — decisión de Julio |
-| 41 | **Las pruebas de la anulación contra `pos-pruebas-descartable` chocan con la instalación de prueba de Jimmy.** | Leído con `SELECT` el 2026-09-17 a las 15:21 UTC: 2 usuarios (Jimmy, julio), 12 ventas, 82 asientos, última recepción 2026-09-15 23:32 UTC, y **una caja ABIERTA por Jimmy desde el 2026-09-15 23:21 UTC**, con 0 ventas. La nube admite una sola caja abierta, y una anulación exige su caja abierta: una prueba no puede abrir la suya sin que esa se cierre. La batería destructiva y `verify:restauracion` además exigen vaciar el proyecto, lo que borraría esos datos y detendría la cola de esa instalación en su próximo cierre. | Abierto — decisión de Julio |
+| 41 | **Las pruebas de la anulación contra `pos-pruebas-descartable` chocan con la instalación de prueba de Jimmy.** | ~~Hay una caja ABIERTA por Jimmy desde el 2026-09-15~~ **RESUELTA esa mitad el 2026-09-17: la cerró la terminal real** (cerrada_en 17:44:42, recibida 18:17:06; §4.56), así que hoy hay 0 cajas abiertas y una prueba puede abrir la suya. **Lo que sigue abierto:** la batería destructiva y `verify:restauracion` exigen **vaciar** las doce tablas de negocio, y el proyecto tiene 2 usuarios, 3 productos, 12 ventas, 12 recibos, 9 cajas y 97 asientos de las DOS bases de la instalación de prueba (§4.55). Vaciarlo borraría esos datos y detendría la cola de esa instalación. | Abierto — decisión de Julio, junto con el punto 42 |
 | 42 | **¿Qué base es la terminal de verdad, y qué se hace con lo que hoy tiene `pos-pruebas-descartable`?** El 2026-09-15 subieron ahí dos bases locales (§4.55): A, la original, y B, restaurada a las 22:29 UTC mientras A seguía existiendo. | La nube tiene una mezcla de las dos: el Arroz `93109c61` de B con dos ventas, las 8 ventas y las 5 cajas de B, y la caja abierta y el «Carton de Huevos» de A. A no sabe nada de lo de B, y su propio Arroz no está en la nube. Si A sigue en uso: el recibo 5 choca con `23505`, Frijol se reescribe en silencio y su Arroz vuelve a chocar. Hace falta saber dónde corrió B y si sus ventas fueron de prueba. **No se propone fusionar ni renombrar por SQL**: la nube tendría un segundo escritor que las terminales pisan. | Abierto — **decisión de Julio**, antes de volver a abrir cualquiera de las dos |
 | 43 | **La restauración deja viva la sesión de Auth cuando rechaza un usuario de otro rol.** | `cliente-de-restauracion.ts:188` lanza antes de guardar la sesión, así que `cerrarSesion()` no hace nada y el token de refresco sigue válido en GoTrue. Nadie lo guarda: solo existió en la respuesta. En el descartable hay una sesión así (`6c95f26f`, 2026-09-15 22:28:25 UTC). El arreglo sería cerrar esa sesión con su propio token antes de lanzar. | Abierto — de bajo riesgo |
 | 44 | **Una base que ya subió su historia a un proyecto no la vuelve a subir a otro.** | Leído en el código, no medido: `sync_cola` no guarda a qué proyecto subió cada lote, y nada reinicia `sincronizado_en` si cambia la nube incrustada. Si una base que sincronizó con `pos-pruebas-descartable` pasa a apuntar a `pos-jimmy-cano`, el real recibe solo lo nuevo, y el primer lote que nombre un usuario, una categoría o un producto viejo fallaría con `23503`. Importa si la tienda conserva su base de prueba al pasar a producción. | Abierto — decidir antes del paso a producción |
