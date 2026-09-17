@@ -37,38 +37,24 @@
 
 import { useEffect, useState } from 'react';
 
+import { colorDeEstado, textoDeBarraDeEstado } from '@shared/estado-de-sincronizacion';
 import type { ResumenDeSincronizacionIpc, SesionIniciada } from '@shared/types/ipc';
 
 /** Cada cuánto se refresca el indicador de sincronización. */
 const INTERVALO_DE_SONDEO_MS = 20_000;
 
-/** El texto y la clase de color para cada estado, calculados en el proceso principal. */
+/**
+ * La clase CSS del color. El color y el texto NO se deciden acá: salen de
+ * `@shared/estado-de-sincronizacion`, la misma copia que prueban las pruebas
+ * del proceso principal. Hasta el 2026-09-17 esta barra tenía su propio
+ * `switch` con los textos escritos a mano, y lo que se probaba no era lo que se
+ * mostraba.
+ */
 function claseDeColor(estado: ResumenDeSincronizacionIpc['estado']): string {
-  if (estado === 'detenida' || estado === 'sin_credencial') {
-    return 'barra-estado__nube barra-estado__nube--rojo';
-  }
-  if (estado === 'pendientes_viejos') {
-    return 'barra-estado__nube barra-estado__nube--ambar';
-  }
-  return 'barra-estado__nube';
-}
-
-/** El texto corto, con los mismos nombres que usa `resumen-de-sincronizacion.ts`. */
-function textoDelResumen(resumen: ResumenDeSincronizacionIpc): string {
-  switch (resumen.estado) {
-    case 'detenida':
-      return 'Nube: DETENIDA';
-    case 'sin_credencial':
-      return 'Nube: sin conectar';
-    case 'pendientes_viejos':
-      return `Nube: ${String(resumen.pendientes)} pendientes (más de 24 h)`;
-    case 'sin_conexion':
-      return `Nube: sin conexión — ${String(resumen.pendientes)} pendientes`;
-    case 'pendientes':
-      return `Nube: ${String(resumen.pendientes)} pendientes`;
-    case 'al_dia':
-      return 'Nube: al día';
-  }
+  const color = colorDeEstado(estado);
+  return color === 'neutral'
+    ? 'barra-estado__nube'
+    : `barra-estado__nube barra-estado__nube--${color}`;
 }
 
 export function BarraDeEstado({
@@ -153,7 +139,7 @@ export function BarraDeEstado({
         // alarme (ver `calcularEstadoDeSincronizacion`). No hace falta una
         // rama aparte para "sin configurar": el propio cálculo ya lo cubre.
         <span className={claseDeColor(resumen.estado)} data-prueba="barra-nube">
-          {textoDelResumen(resumen)}
+          {textoDeBarraDeEstado(resumen.estado, resumen.pendientes)}
         </span>
       )}
 

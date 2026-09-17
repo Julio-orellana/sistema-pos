@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   calcularEstadoDeSincronizacion,
   colorDeEstado,
+  ESTADOS_DE_SINCRONIZACION,
   textoDeBarraDeEstado,
   UMBRAL_DE_PENDIENTES_VIEJOS_MS,
   type CredencialParaElResumen,
@@ -176,6 +177,17 @@ describe('El color: FALSIFICADO contra la frase literal de §3.3', () => {
     expect(colorDeEstado('sin_conexion')).toBe('neutral');
   });
 
+  it('la lista recorre los seis estados, y cada uno tiene color y texto', () => {
+    expect(ESTADOS_DE_SINCRONIZACION).toHaveLength(6);
+    for (const estado of ESTADOS_DE_SINCRONIZACION) {
+      expect(['neutral', 'ambar', 'rojo']).toContain(colorDeEstado(estado));
+      expect(textoDeBarraDeEstado(estado, 3).startsWith('Nube: ')).toBe(true);
+    }
+    // Seis textos distintos: ningún estado se ve igual que otro.
+    const textos = ESTADOS_DE_SINCRONIZACION.map((estado) => textoDeBarraDeEstado(estado, 3));
+    expect(new Set(textos).size).toBe(ESTADOS_DE_SINCRONIZACION.length);
+  });
+
   it('pendientes_viejos: ambar', () => {
     expect(colorDeEstado('pendientes_viejos')).toBe('ambar');
   });
@@ -199,14 +211,7 @@ describe('El texto de la barra nombra el número, y NO inventa una hora', () => 
   });
 
   it('NINGÚN texto contiene una hora del reloj: no se mide "desde cuándo" con precisión de minutos', () => {
-    for (const estado of [
-      'al_dia',
-      'pendientes',
-      'pendientes_viejos',
-      'sin_conexion',
-      'detenida',
-      'sin_credencial',
-    ] as const) {
+    for (const estado of ESTADOS_DE_SINCRONIZACION) {
       expect(textoDeBarraDeEstado(estado, 5)).not.toMatch(/\d{1,2}:\d{2}/);
     }
   });

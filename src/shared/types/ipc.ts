@@ -11,6 +11,8 @@
 
 import { z } from 'zod';
 
+import type { EstadoDeSincronizacion } from '../estado-de-sincronizacion';
+
 // ---------------------------------------------------------------------------
 // Canales
 // ---------------------------------------------------------------------------
@@ -1365,18 +1367,13 @@ export interface EstadoDeNubeIpc {
 // ---------------------------------------------------------------------------
 
 /**
- * Los seis estados que puede mostrar la sincronización, calculados en el
- * proceso principal (`resumen-de-sincronizacion.ts`). El renderer nunca
- * decide el estado: solo lo muestra con el texto y el color que le
- * corresponden.
+ * Los estados que puede mostrar la sincronización, calculados en el proceso
+ * principal (`resumen-de-sincronizacion.ts`). El renderer nunca decide el
+ * estado: solo lo muestra con el texto y el color que le corresponden. La
+ * lista vive en `src/shared/estado-de-sincronizacion.ts`, una sola vez: hasta
+ * el 2026-09-17 esta unión era una tercera copia escrita a mano.
  */
-export type EstadoDeSincronizacionIpc =
-  | 'detenida'
-  | 'sin_credencial'
-  | 'pendientes_viejos'
-  | 'sin_conexion'
-  | 'pendientes'
-  | 'al_dia';
+export type EstadoDeSincronizacionIpc = EstadoDeSincronizacion;
 
 /**
  * Resumen LIVIANO. Lo pide la barra de estado, SIN sesión ni rol: no lleva

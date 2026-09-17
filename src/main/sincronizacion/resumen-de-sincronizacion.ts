@@ -22,20 +22,21 @@
  * decide cuánto de él mostrar.
  */
 
-/** Los seis estados posibles, del más al menos grave para el color. */
-export type EstadoDeSincronizacion =
-  /** Un lote quedó detenido con un error determinístico. */
-  | 'detenida'
-  /** No hay credencial guardada, o la nube la rechazó. */
-  | 'sin_credencial'
-  /** Hay pendientes y el más viejo pasa el umbral de 24 h. */
-  | 'pendientes_viejos'
-  /** Hay credencial pero no hay token vigente ahora mismo, y hay pendientes. */
-  | 'sin_conexion'
-  /** Hay pendientes, recientes, y nada más raro. */
-  | 'pendientes'
-  /** Sin pendientes. */
-  | 'al_dia';
+import type { EstadoDeSincronizacion } from '@shared/estado-de-sincronizacion';
+
+/*
+  La lista de estados, su color y su texto viven en `src/shared`, en UNA sola
+  copia que usan este módulo y la barra de estado (ver la cabecera de
+  `estado-de-sincronizacion.ts`). Se reexportan para que nadie de este lado
+  tenga que saber dónde están.
+*/
+export {
+  colorDeEstado,
+  ESTADOS_DE_SINCRONIZACION,
+  textoDeBarraDeEstado,
+  type ColorDeEstado,
+  type EstadoDeSincronizacion,
+} from '@shared/estado-de-sincronizacion';
 
 /**
  * El umbral de 24 horas de la decisión 8 del diseño.
@@ -116,55 +117,4 @@ export function calcularEstadoDeSincronizacion(
   }
 
   return 'al_dia';
-}
-
-/** El color con el que la barra de estado pinta cada estado (§3.3). */
-export type ColorDeEstado = 'neutral' | 'ambar' | 'rojo';
-
-/**
- * «Sin color cuando está al día; ámbar con pendientes viejos; rojo cuando
- * está detenida o sin credencial.» — §3.3 del diseño, literal.
- *
- * Los estados que el diseño no menciona explícitamente (`pendientes`,
- * `sin_conexion`) quedan neutrales por omisión: son normales y transitorios,
- * y solo escalan a ámbar el día que los pendientes se vuelven viejos.
- */
-export function colorDeEstado(estado: EstadoDeSincronizacion): ColorDeEstado {
-  if (estado === 'detenida' || estado === 'sin_credencial') {
-    return 'rojo';
-  }
-  if (estado === 'pendientes_viejos') {
-    return 'ambar';
-  }
-  return 'neutral';
-}
-
-/**
- * El texto corto de la barra de estado, con los ejemplos de §3.3 como guía.
- *
- * **NO dice «sin conexión desde HH:MM»**, aunque esa es la redacción literal
- * del diseño: esta aplicación no tiene ningún reloj que registre el instante
- * exacto en que se perdió la conexión (el detector solo guarda el ÚLTIMO
- * veredicto, no cuándo cambió), y escribir una hora ahí sería inventar una
- * precisión que no se midió. En su lugar se dice cuántos pendientes hay, que
- * sí es un dato real.
- */
-export function textoDeBarraDeEstado(
-  estado: EstadoDeSincronizacion,
-  pendientes: number,
-): string {
-  switch (estado) {
-    case 'detenida':
-      return 'Nube: DETENIDA';
-    case 'sin_credencial':
-      return 'Nube: sin conectar';
-    case 'pendientes_viejos':
-      return `Nube: ${String(pendientes)} pendientes (más de 24 h)`;
-    case 'sin_conexion':
-      return `Nube: sin conexión — ${String(pendientes)} pendientes`;
-    case 'pendientes':
-      return `Nube: ${String(pendientes)} pendientes`;
-    case 'al_dia':
-      return 'Nube: al día';
-  }
 }
