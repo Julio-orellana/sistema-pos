@@ -4891,6 +4891,14 @@ sin SQLite y sin reloj real.
 | `pendientes` | neutral | Pendientes recientes, nada raro |
 | `al_dia` | neutral | Sin pendientes |
 
+> **DESDE EL 2026-09-17 SON SIETE (§4.51).** Se sumó
+> `problema_al_sincronizar` («Nube: problema al sincronizar — N pendientes»):
+> hay token, una subida falló, y la capa 2 comprobada después SÍ llegó a la
+> nube. Y `sin_conexion` cubre también el caso contrario, con token: la subida
+> falló y la capa 2 NO llegó. La lista, los colores y los textos ya no viven en
+> `resumen-de-sincronizacion.ts` sino en `src/shared/estado-de-sincronizacion.ts`,
+> una sola vez; la tabla de arriba describe el estado anterior.
+
 **La prioridad importa, y está probada**: sin credencial gana sobre detenida
 —es la causa de fondo, no el síntoma—, detenida gana sobre pendientes viejos, y
 pendientes viejos gana sobre sin conexión.
@@ -8224,7 +8232,7 @@ Corrida final, 2026-09-17 12:43Z, **32 de 32**, con `--con-nube-de-pruebas`:
 |---|---|---|---|---|
 | A. Nube que acepta TCP y calla | 452 ms del proceso | 621 ms | `+20583 ms: Auth no contestó a la renovación de la sesión: Supabase Auth no contestó en 20 s.` | «Nube: sin conexión — 2 pendientes» |
 | B. `https://10.255.255.1`, descarta paquetes | 362 ms | 518 ms | `+11005 ms: … No se pudo hablar con Supabase Auth: fetch failed` | «Nube: sin conexión — 2 pendientes» |
-| C. Auth contesta, la subida calla | 394 ms | 547 ms | `+534 ms: access token renovado`; `+60515 ms: ciclo: fallo_transitorio; … sincronizar_usuario no contestó en 30 s.` | «Nube: 2 pendientes» (punto 34) |
+| C. Auth contesta, la subida calla | 394 ms | 547 ms | `+534 ms: access token renovado`; `+60515 ms: ciclo: fallo_transitorio; … sincronizar_usuario no contestó en 30 s.` | «Nube: 2 pendientes» (punto 34; **desde §4.51, «Nube: problema al sincronizar — 2 pendientes»**) |
 | D. `pos-pruebas-descartable` real, cola vacía | 377 ms | 546 ms | `+812 ms: access token renovado` | «Nube: al día» |
 
 El IPC contestó en 2 a 7 ms al principio y a mitad de la espera, con la
@@ -8309,6 +8317,175 @@ prueba que esos renglones no existían antes.
   terminal en `pos-pruebas-descartable` (`ztidrshifrblhfraiowg`): un
   `grant_type=password` desde el guion y una renovación desde la app, con la
   cola vacía. Ninguna fila de negocio.
+
+### 4.51 La barra distingue «sin conexión» de «problema al sincronizar» (2026-09-17)
+
+**El pedido de Julio.** En el escenario C de §4.50 Auth contesta, pero una
+subida puntual (`sincronizar_usuario`) no contesta en su límite, y la barra
+decía «Nube: 2 pendientes». Eso es engañoso: SÍ hay conexión y lo que falla es
+otra cosa. Tampoco debe verse igual que el escenario B, que es sin conexión de
+verdad.
+
+> **CORREGIDO: EL PUNTO 34 DE §6.2 LO PLANTEABA AL REVÉS.** Decía que en C «no
+> se ve que la nube no está contestando», y sugería que C debía decir «sin
+> conexión». En C la nube contesta (Auth renueva el token), así que ese
+> planteo proponía justo la confusión que Julio pide evitar.
+
+#### Por qué no alcanza con mirar el token ni el fallo
+
+| Señal | Por qué no sirve sola |
+|---|---|
+| `conectada` (hay token en memoria) | `sesion-de-nube.ts:233` es `accessToken !== null`, y una renovación que falla por la red **no borra el token**, ni siquiera pasado su `exp` (leído en `renovar()`, no medido). Con la red caída a mitad del día, sigue en `true`. |
+| El fallo de la subida | Una subida que no contesta en 30 s se ve igual con la red caída que con un servidor trabado. Y clasificar por el texto del error está prohibido en este proyecto. |
+
+Lo que sí los separa es **preguntarle a la nube, después del fallo, si
+contesta**: la capa 2 de §5.2 (`GET /auth/v1/health`, 200 con `sb-project-ref`
+y el cuerpo de GoTrue, 8 s de límite), que ya existía en `DetectorDeConexion`.
+
+#### Qué se construyó
+
+| Pieza | Qué hace |
+|---|---|
+| `TrabajadorDeSincronizacion`, dependencia `comprobarConexionTrasFallo` | Después de anotar un fallo TRANSITORIO en la cola, llama a la capa 2 y guarda en memoria `{ loteId, intentos, hayNube }`. Mientras mide expone `medicionEnCurso`. Anota el resultado en la bitácora técnica. No mide ante un éxito, un 401, un fallo determinístico ni una foto ausente. No lanza nunca. |
+| `RepositorioDeSyncCola.intentosDeLotePendiente` | Los `intentos` que hoy tiene ese lote, o `null` si ya no está pendiente. |
+| `calcularEstadoDeSincronizacion` | Estado nuevo `problema_al_sincronizar`, y `sin_conexion` también con token cuando la medición dice que no se llega. Solo vale si la medición es del fallo de AHORA: mismos `intentos`, o un fallo nuevo del mismo lote que se está midiendo. |
+| `SesionDeNube.primerIntentoTerminado` | `sin_conexion` por falta de token exige que la sesión YA haya intentado conectarse en este arranque (ver «Lo que apareció midiendo»). |
+| `index.ts` | El trabajador recibe `() => detectorDeConexion.comprobar()`, dentro de la compuerta de red. El servicio lee la medición del trabajador con una función, igual que `ejecutarCicloAhora`. |
+| `src/shared/estado-de-sincronizacion.ts` | La lista de estados, el color y el texto, UNA sola vez (ver abajo). |
+
+El orden de prioridad queda así:
+
+1. `sin_credencial`
+2. `detenida`
+3. `pendientes_viejos`
+4. `sin_conexion`: sin token **y** con el primer intento terminado
+5. **Con token y una medición vigente del último fallo**: `problema_al_sincronizar` si la nube contestó, `sin_conexion` si no
+6. `pendientes`
+7. `al_dia`
+
+| Texto | Cuándo |
+|---|---|
+| `Nube: problema al sincronizar — N pendientes` | 5, la nube contestó (escenario C) |
+| `Nube: sin conexión — N pendientes` | 4 (escenario B), o 5 si no contestó (escenario E, la red caída con token) |
+| `Nube: N pendientes` | Todavía no se sabe: antes del primer intento de conectarse, un fallo sin medir, o una medición vieja |
+
+`problema_al_sincronizar` es **neutral**, como lo era `pendientes` en ese mismo
+caso. Escalarlo a ámbar sería otra decisión.
+
+#### Un defecto de patrón que apareció al tocarlo: el texto estaba escrito dos veces
+
+**Auditoría completa**, antes de arreglar (`git grep` sobre `develop` en `e182602`):
+
+| # | Lugar | Qué tenía | Qué pasó |
+|---|---|---|---|
+| 1 | `resumen-de-sincronizacion.ts` | La unión de estados | Ahora reexporta la de `src/shared` |
+| 2 | `src/shared/types/ipc.ts` | La unión otra vez, escrita a mano | `EstadoDeSincronizacionIpc = EstadoDeSincronizacion` |
+| 3 | `resumen-de-sincronizacion.ts` | `textoDeBarraDeEstado`: **la que probaba Vitest** | Movida a `src/shared` |
+| 4 | `BarraDeEstado.tsx` | `textoDelResumen`: **la que se VE** | Borrada; la barra usa la de `src/shared` |
+| 5 | `resumen-de-sincronizacion.ts` | `colorDeEstado` | Movida a `src/shared` |
+| 6 | `BarraDeEstado.tsx` | `claseDeColor` con su propia lógica | Sale del color de `src/shared` |
+| 7 | `PantallaDeSincronizacion.tsx` | `TEXTO_DE_ESTADO`, etiquetas largas | **No es copia**: dice otra cosa, y su `Record` obliga a una por estado. Se agregó la nueva |
+| 8 | `PantallaDeSesion.tsx` | Mira tres estados para el aviso del administrador | **No es copia**: es una decisión. No cambió |
+| 9 | `resumen-de-sincronizacion.test.ts` | La barrida «ningún texto tiene hora» con los seis estados escritos a mano | Recorre `ESTADOS_DE_SINCRONIZACION` |
+
+Una prueba que fija el texto de la copia que nadie muestra no fija nada. El
+compilador vigilaba las uniones; nadie vigilaba que los textos dijeran lo mismo.
+
+**Prueba estructural**, `estado-de-sincronizacion-una-sola-fuente.test.ts`.
+Recorre el árbol sintáctico de `src/renderer` y `src/main` y falla, con archivo
+y línea, si:
+
+- un literal o una plantilla contiene «Nube:»;
+- alguien declara `textoDeBarraDeEstado` o `colorDeEstado`;
+- la unión del contrato IPC deja de ser la de `src/shared`.
+
+Tiene controles de sus dos detectores. Un comentario no cuenta.
+
+#### Falsificado, una mutación por vez, con el archivo restaurado y su sha256 comparado
+
+| # | Mutación | Qué cayó |
+|---|---|---|
+| M1 | La medición siempre da `problema_al_sincronizar` (ignora `hayNube`) | 2: «LA RED CAÍDA A MITAD DEL DÍA…» (puro) y «…la nube que NO contesta: sin_conexion, aunque haya token» (servicio) |
+| M2 | No exigir que la medición sea del intento de ahora | 4: «volvió a fallar después de medir» y «ya no está pendiente», en el puro y en el servicio |
+| M3 | Decidir «problema» solo con el token, sin medir | 6 |
+| M4 | Medir ANTES de anotar el fallo en la cola | 2 del trabajador: `expected [ …(2) ] to deeply equal [ { intentosEnLaColaAlMedir: 1 } ]` |
+| M5 | Medir también ante un 401 | 1: «un 401 no mide…» |
+| M6 | Medir sin guardar la medición | 3 del trabajador |
+| M7 | La barra vuelve a escribir su propio «Nube: sin conexión — …» | 1: `"renderer/src/components/BarraDeEstado.tsx:142 «Nube: sin conexión — »"` |
+| M8 | `EstadoDeSincronizacionIpc` vuelve a ser otra unión | 1: «la unión del contrato IPC es la de la fuente única» |
+| M9 | «sin conexión» vuelve a mirar solo el token | 1: «ANTES del primer intento…», `expected 'sin_conexion' to be 'pendientes'` |
+| M10 | La sesión marca el intento terminado antes de renovar | 1: «MIENTRAS la primera renovación está en camino…», `expected true to be false` |
+| M11 | Sin la regla de la medición en curso | 1: «MIENTRAS SE MIDE un fallo nuevo…», `expected 'pendientes' to be 'sin_conexion'` |
+| M12 | El trabajador no limpia `medicionEnCurso` | 2 del trabajador |
+
+#### Verificado en la aplicación real (macOS): `npm run verify:arranque:sin-respuesta-de-red -- --con-nube-de-pruebas`
+
+Corrida del 2026-09-17, 14:03 a 14:08 UTC: **47 de 47**, código 0, 262 s. El
+arnés lee la barra cada 250 ms y anota cada cambio.
+
+| Escenario | Qué dijo la barra, con la hora desde el lanzamiento | Bitácora |
+|---|---|---|
+| A. Nube muda | `+504 ms «Nube: 2 pendientes»` → `+40665 ms «Nube: sin conexión — 2 pendientes»` | `+20441 ms: falló la renovación (intento 1, sin respuesta del servidor)` |
+| B. Paquetes descartados | `+542 ms «Nube: 2 pendientes»` → `+20492 ms «Nube: sin conexión — 2 pendientes»` | `+11031 ms: falló la renovación (intento 1, sin respuesta del servidor): … fetch failed` |
+| C. Auth (token y health) contesta, la subida calla | `+493 ms «Nube: 2 pendientes»` → `+80444 ms «Nube: problema al sincronizar — 2 pendientes»` | `+60459 ms: intento 1 falló`; `+60471 ms: después del fallo, la nube de este proyecto SÍ contesta` |
+| E. Auth dio el token, después calla entera | `+531 ms «Nube: 2 pendientes»` → `+80603 ms «Nube: sin conexión — 2 pendientes»` | `+60488 ms: intento 1 falló`; `+68494 ms: después del fallo, no se llega a la nube: La nube no contestó en 8 s.` |
+| D. `pos-pruebas-descartable` (`ztidrshifrblhfraiowg`), cola vacía | `+501 ms «Nube: al día»` | `+810 ms: access token renovado` |
+
+Los saltos a los 20 y 40 s y a los 80 s son el sondeo de la barra, cada 20 s.
+En C la nube de mentira recibió, en orden: `POST /auth/v1/token`, `POST
+/rest/v1/rpc/sincronizar_usuario`, `GET /auth/v1/health` (30 s después, al
+vencer la subida) y el reintento de `sincronizar_usuario`.
+
+**El servidor de C cambió, y hay que decirlo.** Antes contestaba solo
+`/auth/v1/token`. Ahora contesta también `/auth/v1/health` como Supabase:
+200, `sb-project-ref: 127` (la referencia que `index.ts` saca de
+`127.0.0.1`) y el cuerpo de GoTrue. «Auth contesta» incluye su health. El
+servidor viejo, que calla el health, pasó a ser el escenario E.
+
+**Falsificado en la aplicación real**, una mutación por vez, restaurando el
+archivo y comprobando su sha256:
+
+| Mutación | Corrida | Qué cayó |
+|---|---|---|
+| F1: `index.ts` sin pasarle `comprobarConexionTrasFallo` al trabajador | `--solo=C`, 11 comprobaciones, 2 fallidas | «después del fallo, el trabajador comprobó la capa 2…» (`real: (ninguno)`) y «al final, la barra dice EXACTAMENTE…» (`real: final «Nube: 2 pendientes»`) |
+| F2: la medición siempre da «problema» (ignora `hayNube`) | `--solo=E`, 10 comprobaciones, 2 fallidas | «al final la barra dice «sin conexión»» y «NUNCA dijo «problema al sincronizar»», las dos con `+80609 ms «Nube: problema al sincronizar — 2 pendientes»` |
+| La primera corrida, ANTES del arreglo de `primerIntentoTerminado` | `--solo=CE`, 21 comprobaciones, 1 fallida | «C: CON CONEXIÓN la barra NUNCA dijo «sin conexión»», con `+514 ms «Nube: sin conexión — 2 pendientes» → +20713 ms «Nube: 2 pendientes» → +80699 ms «Nube: problema al sincronizar — 2 pendientes»` |
+
+#### Lo que apareció midiendo, y no se veía leyendo
+
+1. **Al abrir, la barra decía «sin conexión» antes de haber preguntado.** A
+   los 514 ms de C, con Auth contestando bien, porque la sesión arranca
+   después de mostrar la ventana (§4.50) y `sin_conexion` solo miraba el token.
+   Duraba hasta la siguiente consulta, 20 s. Pasaba en todo arranque con
+   pendientes, y en B quedaba bien por casualidad. Se arregló con
+   `primerIntentoTerminado`.
+2. **Una comprobación del propio arnés pasaba en falso.** La primera versión
+   esperaba que la barra hubiera dicho el texto ALGUNA VEZ. En E dio por bueno
+   el «sin conexión» de los 510 ms, cuando a los 75 s la barra decía «Nube: 2
+   pendientes». Ahora espera que lo diga AHORA y compara el texto final.
+3. **La barra parpadeaba en E.** Después de cada reintento fallido, mientras se
+   repite la comprobación (hasta 8 s), la medición anterior dejaba de valer y la
+   barra volvía a «N pendientes». Ahora sigue valiendo mientras se mide un fallo
+   nuevo del mismo lote (`medicionEnCurso`).
+
+#### Qué más se corrió
+
+`npm run verify`: 105 archivos, 2403 pruebas, 0 errores de lint (los mismos 14
+avisos de siempre). Antes de este cambio: 104 archivos y 2363 pruebas.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **Una caída de red de verdad a mitad del día.** E la imita con un servidor
+  que calla. Con la red caída de verdad, `net.fetch` probablemente falla en el
+  acto y la capa 1 (`net.isOnline()`) contesta sin esperar 8 s: es
+  inferencia, no se midió.
+- **Un 5xx real de Supabase** con el health contestando: está probado con un
+  doble en Vitest, no contra la nube.
+- **Qué se escribió en la nube:** nada. D inició sesión como terminal en
+  `pos-pruebas-descartable` (`ztidrshifrblhfraiowg`): un
+  `grant_type=password` desde el guion y una renovación desde la aplicación,
+  con la cola vacía.
 
 ## 5. Registro de decisiones técnicas
 
@@ -8608,6 +8785,10 @@ prueba que esos renglones no existían antes.
 | **La ventana se muestra al llegar `ready-to-show` O a los 10 s, lo que ocurra primero (`mostrar-ventana.ts`).** | `show: true` desde el principio; mostrar solo con `ready-to-show`, como hasta la 1.1.0 | En las tres versiones publicadas la ventana nace escondida y solo `ready-to-show` la muestra. En Windows, una ventana escondida con `fullscreen: true` sigue escondida hasta `show()` (leído en `native_window_views.cc` de Electron 44.2.0, no medido), así que si ese aviso no llega nunca, no aparece ninguna pantalla y la CPU queda quieta: la misma forma que el síntoma de la tienda. **No está medido que esa sea la causa en la tienda.** En macOS no se puede reproducir: la ventana en pantalla completa se hace visible sola (medido). `show: true` dibujaría un cuadro vacío antes de la interfaz. 10 s son «unos pocos segundos». §4.50. | 2026-09-17 (número de prompt por confirmar) |
 | **Toda petición HTTP del proceso principal lleva `signal` en la MISMA llamada, y `net.request`, `http(s).request` y `http(s).get` están prohibidos; lo exige `toda-peticion-de-red-lleva-limite.test.ts`.** | Confiar en que cada módulo se acuerde; aceptar opciones armadas en una variable | Las siete peticiones que existen ya lo cumplían, pero porque alguien se acordó. Se midió que sin `signal` `net.fetch` queda colgado más de 25 s contra un servidor mudo. Unas opciones armadas afuera no se pueden comprobar sin seguir el flujo de datos, así que no cuentan. §4.50. | 2026-09-17 (número de prompt por confirmar) |
 | **La bitácora técnica gana el origen `arranque`: ventana creada, interfaz cargada, ventana mostrada (y si fue por el aviso o por el límite) y cuándo arranca la red, en ms desde el inicio del proceso.** | Dejarlo en la consola; no registrar nada | El `.exe` de la tienda no tiene consola, y la causa real del hallazgo no se conoce: con estos renglones, `log-tecnico.log` dice en qué paso del arranque se quedó. §4.50 y punto 31 de §6.2. | 2026-09-17 (número de prompt por confirmar) |
+| **Después de un fallo TRANSITORIO de una subida, el trabajador comprueba la capa 2 (health de Auth) y la barra decide con eso: `problema_al_sincronizar` si la nube contestó, `sin_conexion` si no. La medición solo vale para el fallo de ahora (mismo lote y mismos `intentos`, o un fallo nuevo de ese lote en medición).** | Decidirlo con `conectada`; clasificar por el texto del error; comparar fechas de la medición y del fallo; medir antes de anotar el fallo | Pedido de Julio: C tiene conexión y no puede verse igual que B. `conectada` sigue en `true` con la red caída a mitad del día, porque el token no se borra, así que habría dicho «problema» sin conexión. El texto del error no se clasifica. Comparar lote e `intentos` no depende de dos relojes. Medir antes de anotar retrasaría hasta 8 s la escritura del backoff en la cola. §4.51. | 2026-09-17 (número de prompt por confirmar) |
+| **A REVISAR — `sin_conexion` también se muestra CON token cuando la capa 2 medida después de un fallo no llega a la nube.** | Dejar ese caso como «N pendientes», como hasta hoy | Es la misma afirmación que ya hace `sin_conexion` y esta vez está medida. Cambia lo que se ve con la red caída a mitad del día: antes «N pendientes», ahora «sin conexión». §4.51. | 2026-09-17 (número de prompt por confirmar) |
+| **`sin_conexion` por falta de token exige que la sesión ya haya intentado conectarse en este arranque (`primerIntentoTerminado`).** | Mirar solo el token, como hasta hoy | Medido: con Auth contestando, la barra decía «sin conexión» a los 514 ms de cada arranque con pendientes, porque la sesión arranca después de mostrar la ventana (§4.50), y lo sostenía 20 s. Antes del primer intento no se sabe nada, y la barra dice «N pendientes». §4.51. | 2026-09-17 (número de prompt por confirmar) |
+| **Los estados de la barra de nube, su color y su texto viven UNA vez, en `src/shared/estado-de-sincronizacion.ts`, y una prueba sobre el árbol sintáctico falla si el renderer o el proceso principal vuelven a escribirlos.** | Agregar el estado nuevo en las copias que había | Las pruebas fijaban el texto del proceso principal y la barra mostraba el suyo: una prueba que fija lo que nadie ve no fija nada. §4.51. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -8662,7 +8843,10 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 31 | **¿Por qué la aplicación no mostró ninguna pantalla con la red de la tienda de Jimmy? LA CAUSA REAL NO ESTÁ MEDIDA.** | Lo que se sabe (§4.50): ninguna versión publicada espera una petición de red antes de mostrar la ventana, y todas las peticiones ya tenían límite. La hipótesis de una verificación de conexión sin límite no se sostiene en el código. Lo que sí encaja con el síntoma es una ventana que nunca recibe `ready-to-show` (en Windows queda escondida para siempre; leído, no medido), pero no se sabe qué de esa red lo provocaría. **Para saberlo:** instalar una versión con el origen `[arranque]` y traer `%APPDATA%\POS Jimmy Cano\log-tecnico.log` después de un arranque con la red de la tienda, más la versión que tenía instalada. Si falta «ventana creada», se trabó antes (base de datos, disco). Si está «ventana creada» y falta «interfaz terminó de cargar», es la interfaz. Si dice «SIN que avisara que estaba lista», el respaldo de 10 s la mostró. Si no existe el archivo, no se llegó ni a escribir en la carpeta de datos. | Abierto — **hace falta el log de la tienda** |
 | 32 | **Auth habla por el `fetch` de Node, no por `net.fetch`, aunque el comentario de `index.ts` (~línea 824) dice lo contrario.** | Los dos `ClienteDeAuthHttp` de `index.ts` (líneas 765 y 836) reciben `undefined`, así que usan el `fetch` global (undici), que no toma el proxy de Windows; PostgREST y Storage sí van por `net.fetch`. Si la red de una tienda exige proxy, la sesión con la nube no se renovaría nunca, sin colgarse: 20 s de límite, y undici además corta la conexión a unos 10 s (medido: «fetch failed» a +10.8 s contra una IP que descarta paquetes). Cambiarlo es pasar `net.fetch`, pero cambia la pila de red de un camino medido y hay que probarlo en Windows. | Abierto — decisión técnica de Julio |
 | 33 | **¿Se bajan los límites de 20 s (Auth), 30 s (subida y restauración) y 60 s (fotos y descarga)?** | Julio pidió «unos pocos segundos». Ninguno corre ya antes de mostrar la ventana (§4.50), así que ninguno puede trabar la primera pantalla. Bajarlos acorta lo que tarda en decir «sin conexión» y, en una conexión lenta de la tienda, puede cortar peticiones que sí iban a contestar. No se tocaron. | Abierto — decisión de Julio |
-| 34 | **Si Auth contesta pero la subida no, la barra dice «Nube: 2 pendientes» y no «sin conexión».** | Medido en el escenario C de §4.50. El estado de la barra (§4.34) mira si hay token vigente, no si la última subida contestó, y el lote queda como transitorio y se reintenta. No es un cuelgue, pero la persona no ve que la nube no está contestando. | Abierto — de bajo riesgo |
+| 34 | ~~**Si Auth contesta pero la subida no, la barra dice «Nube: 2 pendientes» y no «sin conexión».**~~ | ~~Medido en el escenario C de §4.50. El estado de la barra (§4.34) mira si hay token vigente, no si la última subida contestó, y el lote queda como transitorio y se reintenta. No es un cuelgue, pero la persona no ve que la nube no está contestando.~~ **El planteo estaba al revés: en C la nube contesta.** | **RESUELTO (2026-09-17, pedido de Julio): la barra dice «Nube: problema al sincronizar — N pendientes»**, distinto de «sin conexión». Ver §4.51 |
+| 35 | **`conectada` quiere decir «hay un access token en memoria», no «se llega a la nube»: una renovación que falla por la red no lo borra, ni siquiera pasado el `exp`.** | Leído en `sesion-de-nube.ts` (`estado()` y `renovar()`), no medido. La barra ya no depende de eso para decir «sin conexión» o «problema» después de un fallo (§4.51). Lo que sigue: el proveedor puede mandar un token vencido y recibir un 401 de PostgREST, que no toca la cola ni mide nada, y la barra dice «N pendientes» hasta que la renovación vuelve. Cambiar el significado de `conectada` toca la pantalla de nube y la revocación. | Abierto — decisión técnica de Julio |
+| 36 | **Una credencial que existe pero no se puede descifrar muestra «Nube: sin conexión — N pendientes».** | Leído, no medido: `hayCredencial` es `true` porque el archivo existe, y no hay token. Lo correcto sería algo como «sin conectar» (hay que reconectar), que la pantalla «Conectar con la nube» sí dice (§4.23). Es anterior a §4.51 y no cambió. | Abierto — de bajo riesgo |
+| 37 | **Las fotos que fallan de forma transitoria también cuentan para «problema al sincronizar».** | La medición se hace para cualquier lote, de negocio o de archivo, salvo una foto ausente, que no sale a la red. Si Storage contesta 5xx y el health contesta, la barra dice «problema al sincronizar». Es verdad, pero es una foto y no una venta. | Abierto — confirmar si se quiere así |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -8853,11 +9037,13 @@ npm run verify:pantallas:impresora  # la app real con impresoras SIMULADAS: esta
                          # desconectada, la que recibe (bytes ESC/POS), confirmación «ilegible»,
                          # guardar, reinicio, venta con impresora y venta después de quitarla (§4.43).
 npm run verify:arranque:sin-respuesta-de-red  # la app real contra redes que NUNCA contestan: nube que
-                         # acepta TCP y calla (A), IP que descarta paquetes (B), Auth que contesta y
-                         # subida que calla (C). Mide cuándo se llamó a show() según la bitácora, la
-                         # primera pantalla, el IPC y el orden ventana → red (§4.50).
-                         # Con `-- --con-nube-de-pruebas` suma D: pos-pruebas-descartable de verdad,
-                         # solo Auth y SIN filas pendientes. `-- --solo=AB` elige escenarios. ~5 min.
+                         # acepta TCP y calla (A), IP que descarta paquetes (B), Auth (token y health)
+                         # que contesta y subida que calla (C), y Auth que da el token y después calla
+                         # entera (E). Mide cuándo se llamó a show() según la bitácora, la primera
+                         # pantalla, el IPC, el orden ventana → red (§4.50) y TODO lo que dijo la barra:
+                         # C tiene que decir «problema al sincronizar» y nunca «sin conexión»; B y E, al
+                         # revés (§4.51). Con `-- --con-nube-de-pruebas` suma D: pos-pruebas-descartable
+                         # de verdad, solo Auth y SIN filas pendientes. `-- --solo=AB` elige. ~9 min.
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
@@ -8967,6 +9153,7 @@ src/shared/     código compartido main <-> renderer
   pin.ts        reglas de formato del PIN (sí va al renderer)
   money.ts      aritmética exacta con Decimal.js
   descuento.ts  cálculo del descuento discrecional (lo usan las DOS capas)
+  estado-de-sincronizacion.ts  los estados de la barra de nube, su color y su texto: UNA sola copia (§4.51)
   contrato-de-sincronizacion.ts  la versión de contrato y las listas cerradas de la 0023
   __tests__/    pruebas automatizadas
 scripts/        guiones de desarrollo: verify:pantallas, verify:nube y su seguro, y
