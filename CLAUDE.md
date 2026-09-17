@@ -4898,6 +4898,10 @@ sin SQLite y sin reloj real.
 > falló y la capa 2 NO llegó. La lista, los colores y los textos ya no viven en
 > `resumen-de-sincronizacion.ts` sino en `src/shared/estado-de-sincronizacion.ts`,
 > una sola vez; la tabla de arriba describe el estado anterior.
+>
+> **DESDE EL MISMO DÍA SON OCHO (§4.52):** `credencial_danada` («Nube:
+> credencial dañada — hay que reconectar», rojo), y `problema_al_sincronizar`
+> pasó de neutral a **ámbar**.
 
 **La prioridad importa, y está probada**: sin credencial gana sobre detenida
 —es la causa de fondo, no el síntoma—, detenida gana sobre pendientes viejos, y
@@ -8487,6 +8491,101 @@ avisos de siempre). Antes de este cambio: 104 archivos y 2363 pruebas.
   `grant_type=password` desde el guion y una renovación desde la aplicación,
   con la cola vacía.
 
+### 4.52 «Problema al sincronizar» en ámbar, y la credencial dañada con texto propio (2026-09-17)
+
+**Dos pedidos de Julio sobre §4.51.**
+
+1. **`problema_al_sincronizar` pasa de neutral a ÁMBAR**, el mismo tono de
+   `pendientes_viejos`. «Sin conexión» es pasivo: se arregla solo cuando vuelve
+   el wifi. «Problema al sincronizar» quiere decir que HAY conexión y algo
+   puntual falla activamente, por ejemplo el proyecto de Supabase pausado por
+   falta de pago. Es el estado que más conviene ver de reojo. `sin_conexion` y
+   `pendientes` siguen neutrales.
+2. **Punto 36 resuelto.** Una credencial que existe pero no se puede usar
+   mostraba «Nube: sin conexión — N pendientes», y el problema no es la red.
+   Ahora es el estado `credencial_danada`: «Nube: credencial dañada — hay que
+   reconectar», en **rojo**, como `sin_credencial`, porque nada va a subir
+   hasta que una persona reconecte.
+
+#### Cómo se detecta la credencial dañada
+
+| Pieza | Qué hace |
+|---|---|
+| `AlmacenDeCredencial.ultimaLecturaIlegible` | `true` cuando la última lectura encontró el archivo y no lo pudo usar: `decryptString` lanzó, o descifró a cadena vacía. `false` sin archivo, con una lectura buena y después de `borrar()` |
+| `SesionDeNube.estado().credencialIlegible` | Se toma de esa lectura en `arrancar()` y en `renovar()`. Una sesión buena (`aplicarSesion`, al reconectar) lo vuelve a `false` |
+| `CredencialParaElResumen.ilegible` | `index.ts` lo pasa desde la sesión |
+| `calcularEstadoDeSincronizacion` | Si hay archivo y es ilegible, `credencial_danada`, **antes que todo lo demás**: es la causa de fondo, y gana sobre `detenida`, `pendientes_viejos` y una medición de «problema al sincronizar». Se avisa aunque no haya pendientes |
+
+Los textos y colores siguen viviendo una sola vez, en
+`src/shared/estado-de-sincronizacion.ts` (§4.51). La pantalla de
+sincronización tiene su etiqueta larga, y el aviso del administrador al iniciar
+sesión lo nombra.
+
+> **Lo que a propósito NO es «dañada»: «el almacenamiento cifrado del sistema no
+> está disponible».** Ahí el archivo puede estar perfecto y lo que falta es el
+> llavero o DPAPI; reconectar tampoco serviría, porque guardar exige el mismo
+> cifrado. Ese caso sigue mostrando «sin conexión». Es el punto 38 de §6.2.
+
+#### Pruebas nuevas, y falsificaciones
+
+Vitest: 15 pruebas nuevas en `resumen-de-sincronizacion.test.ts` (estado, prioridad, color y
+texto), `credencial.test.ts`, `sesion-de-nube.test.ts` y
+`servicio-de-sincronizacion.test.ts`. Una mutación por vez, archivo restaurado y
+sha256 comparado:
+
+| # | Mutación | Qué cayó |
+|---|---|---|
+| M1 | `problema_al_sincronizar` vuelve a neutral | 2: «ÁMBAR, el mismo de pendientes_viejos» y «NO se ven del mismo color» que `sin_conexion` |
+| M2 | El cálculo ignora `ilegible` | 5: las 4 del estado y su prioridad, y la del cableado en el servicio |
+| M3 | `arrancar()` no marca la credencial | 1: «SE MARCA COMO ILEGIBLE (punto 36)…» |
+| M4 | Reconectar no la desmarca | 1: «reconectar la DESMARCA…» |
+| M5 | El almacén no marca el archivo que no descifra | 3 |
+
+#### En la aplicación real (macOS): `npm run verify:arranque:sin-respuesta-de-red -- --con-nube-de-pruebas`
+
+Corrida del 2026-09-17, 14:37 a 14:41 UTC: **62 de 62**, código 0, 289 s. El
+arnés ahora anota también la clase de la barra en cada cambio, y suma el
+escenario **F**: la misma carpeta de siempre, con `sincronizacion.credencial`
+reemplazado por 48 bytes al azar que el `safeStorage` real no descifra.
+
+```
+A: la barra cambió a los 40470 ms: «Nube: sin conexión — 2 pendientes» (class="barra-estado__nube")
+B: la barra cambió a los 20635 ms: «Nube: sin conexión — 2 pendientes» (class="barra-estado__nube")
+C: la barra cambió a los 80593 ms: «Nube: problema al sincronizar — 2 pendientes» (class="barra-estado__nube barra-estado__nube--ambar")
+E: la barra cambió a los 80599 ms: «Nube: sin conexión — 2 pendientes» (class="barra-estado__nube")
+F: log-tecnico +495 ms: [sincronizacion] La credencial guardada no se pudo descifrar en esta máquina: Error while decrypting the ciphertext provided to safeStorage.decryptString. Ciphertext does not appear to be encrypted.
+F: la barra cambió a los 530 ms: «Nube: credencial dañada — hay que reconectar» (class="barra-estado__nube barra-estado__nube--rojo")
+OK    F: no se llamó a Auth con un token que no se pudo leer
+OK    F: la barra NUNCA dijo «sin conexión» en toda la espera (el problema no es la red)
+D: la barra cambió a los 506 ms: «Nube: al día» (class="barra-estado__nube")
+```
+
+En F la nube de mentira no recibió ninguna petición. A, B y E no tuvieron color
+en ningún momento de la espera.
+
+**Falsificado en la aplicación real** (F3): con `index.ts` pasando
+`ilegible: false`, `--solo=F` da 11 comprobaciones y 3 fallidas. La barra
+reproduce exactamente el defecto anterior:
+`+495 ms «Nube: 2 pendientes» → +20652 ms «Nube: sin conexión — 2 pendientes»`,
+con `class="barra-estado__nube"`. Archivo restaurado, sha256 igual
+(`40e3eeebcd68`).
+
+#### Qué más se corrió
+
+`npm run verify`: 105 archivos, 2418 pruebas, 0 errores de lint (los mismos 14
+avisos).
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre: el archivo ilegible se fabricó con el llavero de
+  macOS, y en la tienda descifraría DPAPI. Que DPAPI lance igual ante bytes que
+  no son suyos está leído en la documentación de Electron, no medido.
+- **El aviso al administrador** al iniciar sesión con la credencial dañada: no
+  tiene prueba de Vitest ni se manejó en la app (el aviso tampoco la tenía antes,
+  §4.34).
+- **Nube:** D inició sesión como terminal en `pos-pruebas-descartable`
+  (`ztidrshifrblhfraiowg`) con la cola vacía. No se escribió ninguna fila.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -8789,6 +8888,9 @@ avisos de siempre). Antes de este cambio: 104 archivos y 2363 pruebas.
 | **A REVISAR — `sin_conexion` también se muestra CON token cuando la capa 2 medida después de un fallo no llega a la nube.** | Dejar ese caso como «N pendientes», como hasta hoy | Es la misma afirmación que ya hace `sin_conexion` y esta vez está medida. Cambia lo que se ve con la red caída a mitad del día: antes «N pendientes», ahora «sin conexión». §4.51. | 2026-09-17 (número de prompt por confirmar) |
 | **`sin_conexion` por falta de token exige que la sesión ya haya intentado conectarse en este arranque (`primerIntentoTerminado`).** | Mirar solo el token, como hasta hoy | Medido: con Auth contestando, la barra decía «sin conexión» a los 514 ms de cada arranque con pendientes, porque la sesión arranca después de mostrar la ventana (§4.50), y lo sostenía 20 s. Antes del primer intento no se sabe nada, y la barra dice «N pendientes». §4.51. | 2026-09-17 (número de prompt por confirmar) |
 | **Los estados de la barra de nube, su color y su texto viven UNA vez, en `src/shared/estado-de-sincronizacion.ts`, y una prueba sobre el árbol sintáctico falla si el renderer o el proceso principal vuelven a escribirlos.** | Agregar el estado nuevo en las copias que había | Las pruebas fijaban el texto del proceso principal y la barra mostraba el suyo: una prueba que fija lo que nadie ve no fija nada. §4.51. | 2026-09-17 (número de prompt por confirmar) |
+| **`problema_al_sincronizar` se pinta en ÁMBAR, el mismo tono de `pendientes_viejos`; `sin_conexion` y `pendientes` siguen neutrales.** **SUPERA la parte de §4.51 que lo dejaba neutral.** | Dejarlo neutral; rojo | Decisión de Julio: «sin conexión» es pasivo y se resuelve solo, y «problema al sincronizar» quiere decir que hay conexión y algo falla activamente (por ejemplo, el proyecto pausado por falta de pago). Merece atención sin ser crítico. §4.52. | 2026-09-17 (número de prompt por confirmar) |
+| **Estado propio `credencial_danada` («Nube: credencial dañada — hay que reconectar», rojo), cuando hay archivo de credencial y no se descifró o estaba vacío. Gana sobre todos los demás estados.** | Seguir mostrando «sin conexión»; reusar «sin conectar» | Pedido de Julio (punto 36): el problema no es la red y el arreglo es reconectar. «Sin conectar» diría que nunca se conectó, y en la pantalla de nube eso se lee distinto. Rojo como `sin_credencial`, porque nada sube hasta que actúe una persona. §4.52. | 2026-09-17 (número de prompt por confirmar) |
+| **«Almacenamiento cifrado no disponible» NO cuenta como credencial dañada.** | Meterlo en el mismo estado | El archivo puede estar bien, y reconectar no serviría porque guardar exige el mismo cifrado: el texto «hay que reconectar» sería falso. Queda abierto como punto 38. §4.52. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -8845,7 +8947,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 33 | **¿Se bajan los límites de 20 s (Auth), 30 s (subida y restauración) y 60 s (fotos y descarga)?** | Julio pidió «unos pocos segundos». Ninguno corre ya antes de mostrar la ventana (§4.50), así que ninguno puede trabar la primera pantalla. Bajarlos acorta lo que tarda en decir «sin conexión» y, en una conexión lenta de la tienda, puede cortar peticiones que sí iban a contestar. No se tocaron. | Abierto — decisión de Julio |
 | 34 | ~~**Si Auth contesta pero la subida no, la barra dice «Nube: 2 pendientes» y no «sin conexión».**~~ | ~~Medido en el escenario C de §4.50. El estado de la barra (§4.34) mira si hay token vigente, no si la última subida contestó, y el lote queda como transitorio y se reintenta. No es un cuelgue, pero la persona no ve que la nube no está contestando.~~ **El planteo estaba al revés: en C la nube contesta.** | **RESUELTO (2026-09-17, pedido de Julio): la barra dice «Nube: problema al sincronizar — N pendientes»**, distinto de «sin conexión». Ver §4.51 |
 | 35 | **`conectada` quiere decir «hay un access token en memoria», no «se llega a la nube»: una renovación que falla por la red no lo borra, ni siquiera pasado el `exp`.** | Leído en `sesion-de-nube.ts` (`estado()` y `renovar()`), no medido. La barra ya no depende de eso para decir «sin conexión» o «problema» después de un fallo (§4.51). Lo que sigue: el proveedor puede mandar un token vencido y recibir un 401 de PostgREST, que no toca la cola ni mide nada, y la barra dice «N pendientes» hasta que la renovación vuelve. Cambiar el significado de `conectada` toca la pantalla de nube y la revocación. | Abierto — decisión técnica de Julio |
-| 36 | **Una credencial que existe pero no se puede descifrar muestra «Nube: sin conexión — N pendientes».** | Leído, no medido: `hayCredencial` es `true` porque el archivo existe, y no hay token. Lo correcto sería algo como «sin conectar» (hay que reconectar), que la pantalla «Conectar con la nube» sí dice (§4.23). Es anterior a §4.51 y no cambió. | Abierto — de bajo riesgo |
+| 36 | ~~**Una credencial que existe pero no se puede descifrar muestra «Nube: sin conexión — N pendientes».**~~ | ~~Leído, no medido: `hayCredencial` es `true` porque el archivo existe, y no hay token.~~ | **RESUELTO (2026-09-17, pedido de Julio): estado propio `credencial_danada`, «Nube: credencial dañada — hay que reconectar», en rojo.** Ver §4.52 |
+| 38 | **Si el almacenamiento cifrado del sistema no está disponible (sin llavero o sin DPAPI), la barra sigue diciendo «sin conexión».** | Es el tercer caso en que `leer()` devuelve `null` con archivo presente, y a propósito NO se marcó como credencial dañada (§4.52): el archivo puede estar perfecto, y reconectar tampoco serviría, porque guardar exige el mismo cifrado. Hace falta decidir qué texto le corresponde. Leído, no medido: en Windows con DPAPI no se espera que pase. | Abierto — de bajo riesgo |
 | 37 | **Las fotos que fallan de forma transitoria también cuentan para «problema al sincronizar».** | La medición se hace para cualquier lote, de negocio o de archivo, salvo una foto ausente, que no sale a la red. Si Storage contesta 5xx y el health contesta, la barra dice «problema al sincronizar». Es verdad, pero es una foto y no una venta. | Abierto — confirmar si se quiere así |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
@@ -9043,7 +9146,9 @@ npm run verify:arranque:sin-respuesta-de-red  # la app real contra redes que NUN
                          # pantalla, el IPC, el orden ventana → red (§4.50) y TODO lo que dijo la barra:
                          # C tiene que decir «problema al sincronizar» y nunca «sin conexión»; B y E, al
                          # revés (§4.51). Con `-- --con-nube-de-pruebas` suma D: pos-pruebas-descartable
-                         # de verdad, solo Auth y SIN filas pendientes. `-- --solo=AB` elige. ~9 min.
+                         # de verdad, solo Auth y SIN filas pendientes. F: credencial que no se descifra: «credencial
+                         # dañada», en rojo, sin llamar a Auth (§4.52). Lee también el COLOR: C en ámbar;
+                         # A, B y E sin color. `-- --solo=AB` elige. ~10 min.
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
