@@ -539,6 +539,8 @@ La función `auditoria_log_es_inmutable` tiene `search_path = ''` y es
 SECURITY INVOKER, no DEFINER. El linter de seguridad ya no reporta nada sobre
 ella.
 
+**LA `0033_anulaciones_de_venta` Y LA `0035_sincronizar_anulacion_de_venta` ESTÁN ESCRITAS DESDE EL 2026-09-17 Y NO APLICADAS EN NINGUNO DE LOS DOS PROYECTOS** (§4.53). Los dos siguen con las mismas 26.
+
 **LA `0031_productos_precio_compra` Y LA `0032_venta_detalle_costo_unitario_snap` ESTÁN APLICADAS EN `pos-pruebas-descartable` DESDE EL 2026-09-15 A LAS 05:09 UTC, Y NO EN `pos-jimmy-cano`** (§4.39, §4.40). Las aprobó Julio después de ver el SQL; el real espera a que se decida junto con el plan de entrega. **Consecuencia medida en el diseño, no en la tienda:** la instalación de Jimmy (`v1.0.0-prueba.1`, sin la 031 ni la 032) sube a ese proyecto, así que su próximo lote de productos o de venta va a ser rechazado por «le faltan columnas» y su cola se va a detener, visible, hasta que instale una versión con las dos migraciones locales, que reescriben los payloads pendientes; ahí «Reintentar ahora» sube todo. Evidencia en §4.40. Lo que sigue de este párrafo describe el estado ANTERIOR a ellas.
 
 **ACTUALIZADO EL 2026-09-15, 20:59 UTC: LA `0031` Y LA `0032` TAMBIÉN ESTÁN APLICADAS EN `pos-jimmy-cano`**, en ese orden, con la aprobación explícita de Julio después de ver el SQL completo de los dos archivos. Los dos proyectos tienen hoy las mismas 26 migraciones. Evidencia leída del catálogo del real, no del archivo:
@@ -7213,8 +7215,9 @@ solo el núcleo local, que se usa de punta a punta por el canal
 | Efectivo esperado y reportes: la anulada se excluye por su fila (§3.1, §1.3) | **Hecho** |
 | Los cuatro asientos de §6.1, con el contenido de §6.2 | **Hecho** |
 | Canal `venta:anular`, en la prueba de clonado de todos los canales (§4.42) | **Hecho** |
-| Sincronización a la nube (§7): la `0033`, la `0035`, el enrutador, el contrato | **No**. Prompt aparte |
-| Restauración (§8), el recibo marcado (§5), el reporte de cobros con tarjeta (§3.5), la pantalla | **No**. Prompts aparte |
+| Sincronización a la nube (§7): la `0033`, la `0035`, el enrutador, el contrato | **Del lado de la terminal, hecho el 2026-09-17 (§4.53). La `0033` y la `0035`, ESCRITAS y SIN APLICAR en ningún proyecto** |
+| Restauración (§8) | **Hecho el 2026-09-17 (§4.53)** |
+| El recibo marcado (§5), el reporte de cobros con tarjeta (§3.5), la pantalla | **No**. Prompts aparte |
 
 > **UNA VERSIÓN CON ESTE NÚCLEO NO SE INSTALA EN UNA TERMINAL CONECTADA A LA
 > NUBE.** El lote de la anulación se encola dentro de la transacción (§2.2,
@@ -7224,6 +7227,12 @@ solo el núcleo local, que se usa de punta a punta por el canal
 > puede llamar desde la consola. `deriva-de-esquema.test.ts` anota la tabla en
 > `TABLAS_QUE_VIAJAN_SIN_PUERTA_TODAVIA`, y falla el día que llegue su espejo
 > hasta que se la saque.
+>
+> **ACTUALIZADO EL 2026-09-17 (§4.53):** el enrutador ya manda el lote a
+> `sincronizar_anulacion_de_venta` y la tabla salió de esa lista. Lo que sigue
+> valiendo: **contra una nube SIN la `0033` y la `0035` la cola se detiene en la
+> primera anulación** (PostgREST no encuentra la función). Las dos migraciones
+> se aplican antes de instalar la versión que anula.
 
 #### La regla, y lo que cambió en consultas que ya existían
 
@@ -8614,6 +8623,220 @@ avisos).
 - **Nube:** D inició sesión como terminal en `pos-pruebas-descartable`
   (`ztidrshifrblhfraiowg`) con la cola vacía. No se escribió ninguna fila.
 
+### 4.53 La anulación sube a la nube y se restaura (2026-09-17)
+
+**Qué se pidió.** Las secciones 7 y 8 de `docs/ANULACION-DE-VENTA.md`: la
+tabla espejo, la función `sincronizar_anulacion_de_venta` con el endurecimiento
+de la 0023 y la 0027, la función en la lista de `contrato_de_sincronizacion()`,
+la foto, el enrutador por presencia y la restauración. **Nada contra
+`pos-jimmy-cano`, y ninguna migración en ningún proyecto sin que Julio vea el
+SQL** (incluido el descartable).
+
+> **LA `0033` Y LA `0035` ESTÁN ESCRITAS Y NO APLICADAS EN NINGÚN PROYECTO.**
+> Lo que se midió se midió en un Postgres 17 **LOCAL**, en el scratchpad, con las
+> migraciones de `supabase/migrations/` aplicadas en orden. No es Supabase. Las
+> pruebas contra `pos-pruebas-descartable` esperan la aprobación (y el punto 41
+> de §6.2).
+
+#### Las dos migraciones
+
+| Archivo | Qué hace |
+|---|---|
+| `0033_anulaciones_de_venta.sql` | La tabla con `uuid` y `timestamptz`, `recibido_en` con el trigger de la 0019, el trigger de inmutabilidad (una función `anulaciones_de_venta_es_inmutable`, con los dos mensajes de la 033 local), RLS, `REVOKE ALL` + `GRANT SELECT` a `authenticated`, la política de lectura de `restauracion` con la condición idéntica a las otras trece, los `COMMENT` (incluido uno sobre `ventas.estado`, que es SOLO el comentario) y el contrato con la función del trigger en su lista |
+| `0035_sincronizar_anulacion_de_venta.sql` | La función, `SECURITY DEFINER` con `search_path = ''`, rol `terminal` en la primera línea, `REVOKE` de `PUBLIC` y `anon`, `GRANT` a `authenticated`, lista cerrada y regla por tabla (anulación `ignorar`, productos `actualizar`, asiento `ignorar`), y el contrato con la función en su lista |
+
+**La 0033 también reemplaza el contrato**, a diferencia de la tabla de §9 del
+diseño: la función del trigger es una función nueva y la regla de §4.29 dice
+que agregarla a la lista es parte de crearla. El cuerpo del contrato es copia
+de la 0029 con un nombre más, y el de la 0035 con otro más. Comprobado con
+`diff` (salida cruda):
+
+```
+--- 0029 vs 0033
+50c50,51
+<                            'auditoria_log_es_inmutable', 'version_del_contrato_de_sincronizacion')
+>                            'auditoria_log_es_inmutable', 'version_del_contrato_de_sincronizacion',
+>                            'anulaciones_de_venta_es_inmutable')
+--- 0033 vs 0035
+51c51
+<                            'anulaciones_de_venta_es_inmutable')
+>                            'anulaciones_de_venta_es_inmutable', 'sincronizar_anulacion_de_venta')
+```
+
+**Comprobaciones de la función más allá de §7.3**, dichas para que Julio las
+revise: el asiento tiene que ser `venta_anulada` **sobre `ventas`**
+(`entidad_tipo`), un producto no puede venir dos veces, y el lote tiene que
+traer al menos un producto.
+
+#### El ensayo local, y por qué se puede creer
+
+Un Postgres 17.10 de Homebrew en `127.0.0.1:55433`, con lo mínimo de Supabase
+simulado: los roles `anon`, `authenticated` y `service_role`, `auth.jwt()` sobre
+`request.jwt.claims` y los privilegios por omisión que la 0024 revoca. Se le
+aplicaron las 24 migraciones de la carpeta que están en los dos proyectos (sin
+la 0026, que necesita Storage). **Antes de agregar las nuevas, su
+`contrato_de_sincronizacion()` dio la foto de git salvo UNA diferencia**, y la
+diferencia estaba en la foto:
+
+```
+git HEAD : …, actualizado_en, cantidad_vendida, precio_compra, recibido_en
+ensayo   : …, actualizado_en, cantidad_vendida, recibido_en, precio_compra
+```
+
+`pos-pruebas-descartable`, leído con un `SELECT` sobre `information_schema`,
+tiene el orden del ensayo:
+`…, cantidad_vendida, recibido_en, precio_compra`. **La foto de git tenía esas
+dos columnas al revés, escritas a mano el 2026-09-14** (commit `0865008`). Las
+dos mitades de la deriva comparan por nombre, así que nunca falló nada. La foto
+nueva viene del ensayo y corrige el orden. También coinciden los permisos de
+las funciones que ya existen: `auditoria_log_es_inmutable` y `fijar_recibido_en`
+dan `{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}`
+en el ensayo y en el descartable, y `sincronizar_asiento`
+`{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}` en los
+dos.
+
+Después de la 0033 y la 0035, en el ensayo (salida cruda):
+
+```
+anulaciones_de_venta | rls t | force f | {postgres=arwdDxtm/postgres,service_role=arwdDxtm/postgres,authenticated=r/postgres}
+sincronizar_anulacion_de_venta | prosecdef t | {"search_path=\"\""} | {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+anulaciones_de_venta_es_inmutable | prosecdef f | {"search_path=\"\""} | {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+politicas 14 | condiciones_distintas 1 | de_la_tabla_nueva 1
+contrato: 14 tablas, 17 funciones, versión 1
+```
+
+#### La anulación REAL, contra el ensayo
+
+Un puente HTTP local con forma de PostgREST y GoTrue (solo `127.0.0.1`) ejecuta
+cada llamada en el ensayo con los claims del token. La terminal es REAL: base
+SQLite migrada, servicios de autenticación, catálogo, caja, venta y anulación,
+`TrabajadorDeSincronizacion` y `SupabaseSyncProvider`. Siete pasos, 7 de 7.
+Salida cruda, recortada a lo que prueba cada pedido:
+
+```
+sincronizar_venta (productos, productos, ventas, venta_detalle, venta_detalle, auditoria_log) -> HTTP 200 filas=actualizada,actualizada,insertada,insertada,insertada,insertada
+sincronizar_anulacion_de_venta (anulaciones_de_venta, productos, productos, auditoria_log) -> HTTP 200 filas=insertada,actualizada,actualizada,insertada
+constancias: [["public.anulaciones_de_venta","insertada","2026-09-17T15:43:55.520663+00:00"],["public.productos","actualizada","2026-09-17T15:43:55.520663+00:00"],["public.productos","actualizada","2026-09-17T15:43:55.520663+00:00"],["public.auditoria_log","insertada","2026-09-17T15:43:55.520663+00:00"]]
+ventas d5ddd537-…: antes «5765785d96c0782e279b327730916b4e completada», después «5765785d96c0782e279b327730916b4e completada»
+producto b236df06-…: nube «99.000 1.000 1» · SQLite «99.000 1.000 1»
+repetición -> HTTP 200 filas=ya_existia,sin_cambios,sin_cambios,ya_existia
+lote con inventario -1.000 -> HTTP 400 {"code":"23514","message":"new row for relation \"productos\" violates check constraint \"productos_inventario_no_negativo\"",…}
+anulaciones de la venta 2 · inventario del maíz · asientos: antes «0 99.000 0», después «0 99.000 0»
+otra anulación (otro id) para la misma venta -> HTTP 400 … la venta d5ddd537-… ya tiene otra anulación en la nube; una venta se anula una sola vez
+el mismo id con otro motivo -> HTTP 400 … ya existe en la nube con otro contenido; una anulación no se reescribe
+una venta que no está en la nube -> HTTP 400 … no está en la nube; una anulación no puede subir sin su venta
+un producto ajeno a la venta -> HTTP 400 … los productos del lote (…) no son los de las líneas de la venta …
+un lote que trae la fila de ventas -> HTTP 400 … la tabla ventas no forma parte de una anulación de venta
+un usuario sin rol -> HTTP 403 {"code":"42501","message":"Solo la terminal puede sincronizar la anulación de una venta",…}
+la llave publicable sola (sin token) -> HTTP 401 {"code":"42501","message":"permission denied for function sincronizar_anulacion_de_venta",…}
+otra versión de contrato -> HTTP 400 … CONTRATO: la terminal manda la versión 2 y la nube declara la 1
+anulación de la venta 3 con la caja cerrada -> HTTP 400 … la caja de la venta 41a3f4d8-… está cerrada en la nube; solo se anula una venta de la caja abierta
+terminal lee: HTTP 200 []
+llave publicable sola lee: HTTP 401 {"code":"42501","message":"permission denied for table anulaciones_de_venta"}
+UPDATE como postgres: ERROR:  Una anulación de venta no se puede modificar.
+DELETE como postgres: ERROR:  Una anulación de venta no se puede borrar.
+```
+
+El mismo `recibido_en` en las cuatro filas es la prueba de una sola
+transacción, igual que en §4.25. En el todo o nada, la fila de la anulación se
+escribe ANTES que el producto que falla, y no queda.
+
+#### La deriva atrapa la función fuera de la lista del contrato
+
+**Mitad B, con el guion REAL `verify:nube` apuntado al puente** (las variables
+`POS_NUBE_*` del proceso pisan las de `.env.nube-pruebas`: ninguna contraseña
+salió hacia el puente). Se reemplazó el contrato del ensayo por el de la 0033,
+con la función existiendo y fuera de la lista:
+
+```
+0|1        (aparece_en_el_contrato | la_funcion_existe)
+   ·    la nube declara: contrato v1: 14 tablas, 16 funciones
+  FALLA lo que la nube declara coincide con supabase/esquema-nube.json
+        - la función sincronizar_anulacion_de_venta está en la foto y no en la nube
+exit=1
+```
+
+Con el contrato de la 0035 otra vez: `ok … coincide`, `exit=0`.
+
+**Mitad A**, con la foto como la tomaría una nube con ese olvido (sin la
+función): caen 2, y una nombra la función.
+
+```
+× sincronizar_anulacion_de_venta: existe, es SECURITY DEFINER, … → expected undefined to deeply equal { security_definer: true, …(3) }
+× la foto declara EXACTAMENTE las funciones que esta terminal conoce …
++   "laTerminalLaConoceYLaFotoNoLaDeclara": [ "sincronizar_anulacion_de_venta" ]
+```
+
+Esa segunda prueba es nueva: exige que la foto declare EXACTAMENTE
+`FUNCIONES_DEL_CONTRATO` (las de escritura, el contrato, la de restauración,
+los ayudantes, las tres de trigger y la de la versión). Foto restaurada, sha256
+igual (`48f143fb…`).
+
+#### El enrutador, la restauración y la batería
+
+| Pieza | Cambio |
+|---|---|
+| `TABLA_DECISIVA` | `['anulaciones_de_venta', 'sincronizar_anulacion_de_venta']` |
+| `FUNCIONES_DE_ESCRITURA` / `TABLAS_ADMITIDAS_POR_FUNCION` | La función y sus tres tablas |
+| `ORDEN_DE_RESTAURACION` | `anulaciones_de_venta` después de `recibos` y antes de `auditoria_log` |
+| `TABLAS_QUE_SOLO_SE_INSERTAN` | La agrega: seis |
+| `CLASES_DE_COLUMNA` | Sus siete columnas, cotejadas contra la foto |
+| Las dos pantallas | «anulaciones de venta». **La de sincronización no tenía la etiqueta desde §4.45**: una anulación pendiente se veía con el nombre técnico |
+| `verificacion-de-nube.cjs` | Sección nueva de la anulación (§10.3 del diseño) y el vaciado con `service_role` se niega si hay anulaciones (son inmutables y bloquean el borrado de `ventas`) |
+
+**Un defecto de patrón encontrado de paso:** la lista de funciones de la
+batería es una copia a mano en un `.cjs`, y **le faltaba `sincronizar_asiento`
+desde la 0027**: la batería nunca probó que la llave publicable, un usuario sin
+rol y la restauración no pueden llamarla. Una prueba nueva
+(`verify-nube-conoce-todas-las-funciones.test.ts`) lee la lista del texto del
+guion y la compara con `FUNCIONES_DE_ESCRITURA`. Contra el guion de `HEAD`:
+
+```
++   "laTerminalLaTieneYElGuionNo": [
++     "sincronizar_anulacion_de_venta",
++     "sincronizar_asiento",
+```
+
+**La restauración, sin red** (`servicio-de-restauracion.test.ts`, terminal de
+origen con una venta anulada de verdad y otra activa en la caja abierta): la
+fila llega byte a byte igual, las dos ventas quedan en `completada`, el efectivo
+esperado de la caja restaurada es el mismo del origen y no cuenta la anulada,
+anularla otra vez da `VENTA_YA_ANULADA`, la activa sí se puede anular, y los
+tres escenarios de robo de §8.
+
+**Falsificado**, una mutación por vez, archivo restaurado y sha256 comparado:
+
+| Mutación | Qué cae |
+|---|---|
+| Quitar la entrada de `TABLA_DECISIVA` | 7: 5 del enrutador y las 2 cruzadas de la integración (`expected [ 'sincronizar_venta' ] to deeply equal [ 'sincronizar_venta', …(2) ]`) |
+| Quitar la tabla de `ORDEN_DE_RESTAURACION` y de las de solo inserción | 4 errores de tipos y 14 pruebas |
+| La función fuera de la lista del contrato (mitad B, ensayo) | `verify:nube` exit 1, nombrándola |
+| La foto sin la función (mitad A) | 2 pruebas |
+| El guion de la batería de `HEAD` | 1 prueba, nombrando las dos funciones que faltaban |
+
+#### LO QUE SE ENCONTRÓ Y §8 DEL DISEÑO NO PREVIÓ
+
+Con una anulación posterior al robo **excluida**, los productos que esa
+anulación repuso se restauran con la reposición aplicada. `productos` es de las
+tablas que se restauran y se listan, porque la nube también lo actualiza. La
+base restaurada queda con la venta válida, con más inventario del que hay y con
+los contadores bajados. Volver a anular esa venta ahí da
+`CONTADORES_INCONSISTENTES`. Hay una prueba que lo fija con ese nombre. **Es el
+punto 40 de §6.2.**
+
+#### Lo que NO se verificó
+
+- **Nada contra Supabase.** Ni la `0033` ni la `0035` están aplicadas. La
+  batería nueva de `verify:nube` solo pasó `node --check`, y `verify:restauracion`
+  no se corrió. Ver el punto 41 de §6.2.
+- **Una terminal con esta versión no puede restaurar desde una nube sin la 0033
+  y la 0035**: la precondición de deriva nombra la tabla y la función que faltan.
+  Lo mismo pasa con `ensayo:restauracion` y `verify:pantallas:restauracion`
+  contra el descartable, hasta aplicarlas.
+- `verify:nube` (mitad B) contra cualquiera de los dos proyectos va a reportar
+  la tabla y las dos funciones «en la foto y no en la nube» hasta aplicarlas.
+- **Windows**, como siempre.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -8919,6 +9142,13 @@ avisos).
 | **`problema_al_sincronizar` se pinta en ÁMBAR, el mismo tono de `pendientes_viejos`; `sin_conexion` y `pendientes` siguen neutrales.** **SUPERA la parte de §4.51 que lo dejaba neutral.** | Dejarlo neutral; rojo | Decisión de Julio: «sin conexión» es pasivo y se resuelve solo, y «problema al sincronizar» quiere decir que hay conexión y algo falla activamente (por ejemplo, el proyecto pausado por falta de pago). Merece atención sin ser crítico. §4.52. | 2026-09-17 (número de prompt por confirmar) |
 | **Estado propio `credencial_danada` («Nube: credencial dañada — hay que reconectar», rojo), cuando hay archivo de credencial y no se descifró o estaba vacío. Gana sobre todos los demás estados.** | Seguir mostrando «sin conexión»; reusar «sin conectar» | Pedido de Julio (punto 36): el problema no es la red y el arreglo es reconectar. «Sin conectar» diría que nunca se conectó, y en la pantalla de nube eso se lee distinto. Rojo como `sin_credencial`, porque nada sube hasta que actúe una persona. §4.52. | 2026-09-17 (número de prompt por confirmar) |
 | **«Almacenamiento cifrado no disponible» NO cuenta como credencial dañada.** | Meterlo en el mismo estado | El archivo puede estar bien, y reconectar no serviría porque guardar exige el mismo cifrado: el texto «hay que reconectar» sería falso. Queda abierto como punto 38. §4.52. | 2026-09-17 (número de prompt por confirmar) |
+| **La `0033` espeja la 033 con una función de trigger propia (`anulaciones_de_venta_es_inmutable`) y REEMPLAZA el contrato para enumerarla; la `0035` crea `sincronizar_anulacion_de_venta` y lo reemplaza otra vez.** | Reusar `auditoria_log_es_inmutable`; reemplazar el contrato una sola vez, en la 0035 | El trigger necesita una función, y la de la bitácora dice «bitácora». La regla de §4.29 es que agregar una función a la lista es parte de crearla, así que cada migración deja el contrato completo para lo que existe. Los cuerpos son copias con un nombre más, comprobadas con `diff`. §4.53. | 2026-09-17 (número de prompt por confirmar) |
+| **La función comprueba, además de §7.3, que el asiento sea sobre `ventas`, que ningún producto venga dos veces y que haya al menos uno.** | Solo lo que dice §7.3 | Son formas del mismo lote que la terminal nunca manda distinto, y dejarlas pasar abriría un lote que la función acepta y que no describe una anulación. Queda señalado para que Julio lo revise. §4.53. | 2026-09-17 (número de prompt por confirmar) |
+| **A REVISAR — la `0033` pone un `COMMENT` sobre `ventas.estado`.** | No comentar esa columna | Está en §9 del diseño aprobado. Es solo documentación del catálogo: la columna, su CHECK y sus filas no cambian, y hoy esa columna no tiene comentario. Se señala porque el pedido dice que `ventas.estado` no se toca; si Julio prefiere, se quita del archivo antes de aplicarla. | 2026-09-17 (número de prompt por confirmar) |
+| **La foto `esquema-nube.json` se escribió desde un Postgres 17 LOCAL con las migraciones del repositorio, antes de aplicar nada; se vuelve a tomar con `--tomar-foto` del descartable después de aplicarlas, y tiene que dar la misma.** | Escribirla a mano; esperar a aplicar | «No lo dejes para una sesión futura». A mano ya se había equivocado una vez (el orden de `precio_compra`, §4.53). El ensayo reprodujo la foto de git salvo esa columna y los permisos del descartable. La foto que manda sigue siendo la de la nube. | 2026-09-17 (número de prompt por confirmar) |
+| **La foto tiene que declarar EXACTAMENTE `FUNCIONES_DEL_CONTRATO`, y la lista de funciones de `verificacion-de-nube.cjs` tiene que ser igual a `FUNCIONES_DE_ESCRITURA`; las dos cosas las exigen pruebas.** | Seguir exigiendo solo las funciones de escritura, una por una | Una función fuera de la lista del contrato no aparece en la foto, y una prueba que itera la lista de la terminal no ve funciones de más. La copia del `.cjs` se había quedado sin `sincronizar_asiento` desde la 0027. §4.53. | 2026-09-17 (número de prompt por confirmar) |
+| **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
+| **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -8979,6 +9209,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 39 | ~~**`escpos.ts` exporta una segunda constante, `COLUMNAS_TERMICA = 48`, que nadie usa.**~~ | ~~Encontrado el 2026-09-17 al confirmar el ancho del RPT004.~~ | **RESUELTO (2026-09-17, pedido de Julio): se borró.** Antes se buscó en todo el repositorio y la única aparición era su declaración (`escpos.ts:54`). El ancho vive solo en `COLUMNAS_80MM`, y `ancho-del-recibo-una-sola-fuente.test.ts` falla, con archivo y línea, si otro archivo de `src/main`, `src/shared` o `src/renderer` declara un 48, o un número con nombre de ancho en caracteres. Falsificada con el `escpos.ts` de antes (`escpos.ts:54 COLUMNAS_TERMICA = 48`) y con una copia ajustada en otro archivo (`servicio-de-impresora.ts:230 CARACTERES_POR_LINEA = 42`) |
 | 38 | **Si el almacenamiento cifrado del sistema no está disponible (sin llavero o sin DPAPI), la barra sigue diciendo «sin conexión».** | Es el tercer caso en que `leer()` devuelve `null` con archivo presente, y a propósito NO se marcó como credencial dañada (§4.52): el archivo puede estar perfecto, y reconectar tampoco serviría, porque guardar exige el mismo cifrado. Hace falta decidir qué texto le corresponde. Leído, no medido: en Windows con DPAPI no se espera que pase. | Abierto — de bajo riesgo |
 | 37 | **Las fotos que fallan de forma transitoria también cuentan para «problema al sincronizar».** | La medición se hace para cualquier lote, de negocio o de archivo, salvo una foto ausente, que no sale a la red. Si Storage contesta 5xx y el health contesta, la barra dice «problema al sincronizar». Es verdad, pero es una foto y no una venta. | Abierto — confirmar si se quiere así |
+| 40 | **Una anulación posterior a un robo queda excluida al restaurar, pero los productos que repuso se restauran con la reposición aplicada.** | Medido sin red (§4.53): la venta queda válida y vuelve a contar en el efectivo esperado, que es lo que §8 del diseño pide. Pero el inventario queda con lo que el ladrón «devolvió» y los contadores bajados, y volver a anular esa venta da `CONTADORES_INCONSISTENTES`. Los productos aparecen en la lista de anomalías, porque la nube los actualizó después del robo. Qué hacer con ese inventario (ajustarlo a mano, que hoy solo suma; recalcular; dejarlo listado) es una decisión de negocio. | Abierto — decisión de Julio |
+| 41 | **Las pruebas de la anulación contra `pos-pruebas-descartable` chocan con la instalación de prueba de Jimmy.** | Leído con `SELECT` el 2026-09-17 a las 15:21 UTC: 2 usuarios (Jimmy, julio), 12 ventas, 82 asientos, última recepción 2026-09-15 23:32 UTC, y **una caja ABIERTA por Jimmy desde el 2026-09-15 23:21 UTC**, con 0 ventas. La nube admite una sola caja abierta, y una anulación exige su caja abierta: una prueba no puede abrir la suya sin que esa se cierre. La batería destructiva y `verify:restauracion` además exigen vaciar el proyecto, lo que borraría esos datos y detendría la cola de esa instalación en su próximo cierre. | Abierto — decisión de Julio |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -9031,10 +9263,12 @@ negocio:
   15 de la sección 6.2.
 - **Sí existe el NÚCLEO LOCAL de la anulación de una venta** (§4.45): las
   migraciones 033 y 034, el servicio con la reposición, el voucher y el PIN, los
-  asientos y el canal `venta:anular`. **No existen todavía** su sincronización a
-  la nube, la restauración, el recibo marcado, el reporte de cobros con tarjeta
-  ni la pantalla. **Una versión con este núcleo no se instala en una terminal
-  conectada a la nube** hasta que exista la sincronización.
+  asientos y el canal `venta:anular`. **Desde el 2026-09-17 también su
+  sincronización y su restauración del lado de la terminal** (§4.53), con la
+  `0033` y la `0035` escritas y **sin aplicar**. **No existen todavía** el
+  recibo marcado, el reporte de cobros con tarjeta ni la pantalla. **Una versión
+  que anula no se instala en una terminal conectada a una nube sin la 0033 y la
+  0035.**
 - **No existen las alertas de stock mínimo, los gráficos ni la exportación de
   reportes a un archivo.** El umbral de cada producto es una definición de
   negocio que falta: punto 18 de la sección 6.2.
@@ -9302,7 +9536,7 @@ supabase/       espejo del esquema en Postgres (migraciones para la nube)
   esquema-nube.json  la FOTO del catálogo de la nube que coteja la prueba de deriva
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
   SINCRONIZACION.md  diseño de la sincronización. APROBADO; fases 1.a, 1.b, 2.a y 2.b construidas
-  ANULACION-DE-VENTA.md  diseño de la anulación de una venta. APROBADO; núcleo local construido (§4.45)
+  ANULACION-DE-VENTA.md  diseño de la anulación de una venta. APROBADO; núcleo local (§4.45), sincronización y restauración del lado de la terminal (§4.53)
 ```
 
 ## 10. Antes de cerrar cualquier sesión de trabajo

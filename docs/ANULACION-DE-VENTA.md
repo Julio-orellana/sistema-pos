@@ -2,7 +2,11 @@
 
 > **Estado: APROBADO entero el 2026-09-15. El NÚCLEO LOCAL está construido**
 > (secciones 1, 2, 3.1 a 3.4, 4 y 6; migraciones locales 033 y 034; ver
-> CLAUDE.md §4.45). **Falta:** la sincronización (7), la restauración (8), el
+> CLAUDE.md §4.45). **Desde el 2026-09-17 también la sincronización (7) y la
+> restauración (8), del lado de la terminal**, con la `0033` y la `0035`
+> ESCRITAS y ensayadas en un Postgres 17 local, **y SIN APLICAR en ningún
+> proyecto** (CLAUDE.md §4.53). **Falta:** aplicarlas con la aprobación de
+> Julio y correr las pruebas contra `pos-pruebas-descartable` (10.3), el
 > recibo (5), el reporte de cobros con tarjeta (3.5) y la pantalla.
 > Escrito el 2026-09-15. Ninguna migración de este documento se aplica a ningún
 > proyecto de Supabase —tampoco a `pos-pruebas-descartable`— sin que Julio vea
@@ -952,6 +956,14 @@ anula.
 como toda fila de una tabla de solo inserción. Ninguna fila anterior la
 referencia, así que excluirla no rompe ninguna llave.
 
+> **LO QUE ESTA SECCIÓN NO PREVIÓ, MEDIDO EL 2026-09-17** (CLAUDE.md §4.53 y el
+> punto 39 de §6.2). La anulación excluida ya había REPUESTO sus productos en la
+> nube, y `productos` es de las tablas que se restauran y se listan. La base
+> restaurada queda con la venta válida y con el inventario y los contadores
+> como los dejó esa anulación: más inventario del que hay y `cantidad_vendida`
+> bajada. Volver a anular esa venta en la terminal restaurada se rechaza con
+> `CONTADORES_INCONSISTENTES`. Qué hacer con eso es una decisión de negocio.
+
 | Escenario | Resultado |
 |---|---|
 | Venta legítima anterior al robo, anulación falsa posterior | La venta se restaura válida y la anulación queda excluida. **El ladrón no puede borrar una venta legítima del corte restaurado.** |
@@ -963,9 +975,17 @@ referencia, así que excluirla no rompe ninguna llave.
 
 ## 9. Migraciones que hacen falta
 
-**Ninguna está escrita ni aplicada.** Antes de aplicar cualquiera se muestra el
-SQL completo y se espera tu aprobación, primero para `pos-pruebas-descartable`
-y después para `pos-jimmy-cano`.
+~~**Ninguna está escrita ni aplicada.**~~ **Desde el 2026-09-17 las cuatro están
+escritas; la 033 y la 034 están aplicadas en la base local, y la `0033` y la
+`0035` NO están aplicadas en ningún proyecto** (CLAUDE.md §4.53). Antes de
+aplicar cualquiera se muestra el SQL completo y se espera tu aprobación, primero
+para `pos-pruebas-descartable` y después para `pos-jimmy-cano`.
+
+**Una diferencia con la fila de la `0033` de abajo:** la tabla necesita una
+función para su trigger de inmutabilidad (`anulaciones_de_venta_es_inmutable`),
+y por la regla de la 0027 esa función se agrega a la lista fija del contrato.
+Por eso la `0033` también reemplaza `contrato_de_sincronizacion`, y la `0035`
+lo reemplaza otra vez con su propia función.
 
 | Número | Lado | Qué hace |
 |---|---|---|
