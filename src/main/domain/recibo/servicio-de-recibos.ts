@@ -173,6 +173,53 @@ export class ServicioDeRecibos {
     return this.producir(recibo, { reimpresion: true });
   }
 
+  /**
+   * Deja el PDF del recibo de una venta AL DÍA en el disco, sin imprimir nada.
+   *
+   * Existe por la anulación (docs/ANULACION-DE-VENTA.md §5.2): el momento en
+   * que una venta se anula es el momento en que el archivo del disco deja de
+   * decir la verdad, y ese archivo es lo que queda en la computadora de la
+   * tienda. Hasta el 2026-09-17 la marca aparecía recién cuando alguien VEÍA o
+   * REIMPRIMÍA el recibo, así que entre la anulación y esa reimpresión —que
+   * podía no llegar nunca— el PDF seguía siendo el de una venta en pie.
+   *
+   * REUSA `producir`, que es la MISMA regeneración de la reimpresión: se arma
+   * el modelo desde las filas guardadas y se escribe encima del mismo archivo.
+   * No hay una segunda forma de generar un PDF en este servicio, y no debe
+   * haberla: dos caminos terminarían dibujando papeles distintos.
+   *
+   * DOS DIFERENCIAS CON REIMPRIMIR, las dos a propósito:
+   *
+   *   · **No imprime.** §5.2 lo dice con todas las letras: anular no saca un
+   *     ticket por la térmica. Si alguien quiere el papel marcado, lo reimprime
+   *     desde el historial, que es un acto de una persona.
+   *   · **No marca el papel como reimpresión**, porque nadie lo reimprimió: es
+   *     el mismo recibo original, ahora anulado. La leyenda «** REIMPRESIÓN **»
+   *     aparece cuando de verdad alguien vuelve a emitirlo.
+   *
+   * NUNCA LANZA. Una anulación ya confirmada no se puede caer porque el PDF no
+   * se pueda escribir: el fallo queda en la bitácora técnica y la venta sigue
+   * anulada. Devuelve la ruta del PDF, o `null` si esa venta no tiene recibo
+   * —la aplicación pudo caerse entre la venta y su emisión (§4.14)—.
+   */
+  public async regenerarPdfDeLaVenta(ventaId: string): Promise<string | null> {
+    try {
+      const recibo = this.recibos.obtenerPorVenta(ventaId);
+      if (recibo === null) {
+        return null;
+      }
+      const resultado = await this.producir(recibo, { reimpresion: false, imprimir: false });
+      return resultado.rutaPdf;
+    } catch (error) {
+      const detalle = error instanceof Error ? error.message : String(error);
+      this.dependencias.log.registrar(
+        'recibo',
+        `No se pudo regenerar el PDF del recibo de la venta ${ventaId}: ${detalle}`,
+      );
+      return null;
+    }
+  }
+
   /** El modelo de un recibo, sin generar nada. Para mostrarlo en pantalla. */
   public modeloDe(reciboId: string): ModeloDeRecibo {
     const recibo = this.recibos.obtenerPorId(reciboId);
@@ -198,10 +245,17 @@ export class ServicioDeRecibos {
 
   // -------------------------------------------------------------------------
 
-  /** Arma el modelo, escribe el PDF e intenta imprimir. En ese orden. */
+  /**
+   * Arma el modelo, escribe el PDF e intenta imprimir. En ese orden.
+   *
+   * `imprimir` vale `true` salvo que se diga lo contrario, que es lo que hacen
+   * emitir y reimprimir. La única que pasa `false` es la regeneración de la
+   * anulación: ahí el PDF tiene que quedar al día y NO tiene que salir ningún
+   * ticket que nadie pidió.
+   */
   private async producir(
     recibo: Recibo,
-    opciones: { readonly reimpresion: boolean },
+    opciones: { readonly reimpresion: boolean; readonly imprimir?: boolean },
   ): Promise<ResultadoDeRecibo> {
     const modelo = armarModeloDeRecibo(this.dependencias, recibo, opciones);
     const rutaPdf = this.rutaAbsolutaDelPdf(recibo);
@@ -224,7 +278,12 @@ export class ServicioDeRecibos {
       );
     }
 
-    const impresion = await this.intentarImprimir(recibo, modelo, rutaPdf, pdfGenerado);
+    const impresion =
+      opciones.imprimir === false
+        ? // Sin impresión: se conserva lo que la fila ya decía. Afirmar acá
+          // `impreso: false` sería decir que el papel dejó de haber salido.
+          { impreso: recibo.impreso, mensaje: '' }
+        : await this.intentarImprimir(recibo, modelo, rutaPdf, pdfGenerado);
 
     return {
       recibo: this.recibos.obtenerPorId(recibo.id) ?? recibo,
