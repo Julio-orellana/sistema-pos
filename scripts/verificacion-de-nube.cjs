@@ -147,12 +147,21 @@ const DENOMINACION_Q5 = 'c11a36fb-5100-4459-8fde-740bb784d3aa';
 const ID_TOPE_VENTA = '0c2ebde1-fe5f-4d8b-a7c4-d137888109ca';
 
 /** Las cinco funciones de escritura y la de lectura, tal como se llaman por RPC. */
+/**
+ * COPIA de `FUNCIONES_DE_ESCRITURA` de `src/shared/contrato-de-sincronizacion.ts`:
+ * este guion es CommonJS y no puede importar TypeScript. Una prueba de Vitest
+ * (`verify-nube-conoce-todas-las-funciones.test.ts`) lee esta lista del texto
+ * y falla si no es IGUAL a la de la terminal. Hasta el 2026-09-17 le faltaba
+ * `sincronizar_asiento` (0027), y la batería nunca probó sus puertas.
+ */
 const FUNCIONES_DE_ESCRITURA = Object.freeze([
   'sincronizar_usuario',
   'sincronizar_apertura_de_caja',
   'sincronizar_cierre_de_caja',
   'sincronizar_venta',
   'sincronizar_lote_simple',
+  'sincronizar_asiento',
+  'sincronizar_anulacion_de_venta',
 ]);
 const FUNCION_DEL_CONTRATO = 'contrato_de_sincronizacion';
 
@@ -441,6 +450,30 @@ const filaDetalle = (ventaId, productoId, nombre) => ({
   creado_en: FECHA,
 });
 
+/** Una fila de `anulaciones_de_venta` (0033), con la forma que manda la terminal. */
+const filaAnulacion = (id, ventaId, usuarioId, motivo) => ({
+  id,
+  venta_id: ventaId,
+  solicitada_por: usuarioId,
+  autorizada_por: usuarioId,
+  autorizada_via: 'presencial',
+  motivo,
+  fecha: FECHA,
+});
+
+/** El asiento `venta_anulada` de una anulación: la función exige esa acción, sobre ventas y sobre ESA venta. */
+const asientoDeAnulacion = (id, usuarioId, ventaId) =>
+  cambio('auditoria_log', 'insertar', {
+    id,
+    usuario_id: usuarioId,
+    accion: 'venta_anulada',
+    entidad_tipo: 'ventas',
+    entidad_id: ventaId,
+    valor_anterior: null,
+    valor_nuevo: JSON.stringify({ origen: 'verify:nube' }),
+    fecha: FECHA,
+  });
+
 const filaRecibo = (ventaId, numero) => ({
   id: randomUUID(),
   venta_id: ventaId,
@@ -562,6 +595,18 @@ async function vaciarProyectoDePruebas(cliente, llaveDeServicio, informe) {
   const exigirOk = (r, que) => {
     if (r.estado >= 300) throw new Incompleto(`No se pudo ${que}: HTTP ${String(r.estado)} ${resumir(r.datos)}`);
   };
+  // `anulaciones_de_venta` (0033) es inmutable por trigger, como la bitácora, y
+  // referencia a `ventas` con ON DELETE RESTRICT: con una sola anulación, las
+  // ventas ya no se pueden borrar por PostgREST. Se dice ANTES de borrar nada.
+  const anulaciones = await cliente.pedir('GET', '/rest/v1/anulaciones_de_venta?select=id&limit=1', { token: llaveDeServicio });
+  if (anulaciones.estado !== HTTP.ok || !Array.isArray(anulaciones.datos)) {
+    throw new Incompleto(`No se pudo leer anulaciones_de_venta antes de vaciar: HTTP ${String(anulaciones.estado)} ${resumir(anulaciones.datos)}`);
+  }
+  if (anulaciones.datos.length > 0) {
+    throw new Incompleto(
+      'anulaciones_de_venta tiene filas: es inmutable y bloquea el borrado de ventas. Vaciá el proyecto de PRUEBAS por SQL (TRUNCATE) y pasá --reinicio-hecho.',
+    );
+  }
   // usuarios no se borra: auditoria_log lo referencia y es inmutable (ni el
   // SET NULL de su llave foránea pasa el trigger). Se desactivan, que es lo
   // que el invariante de administradores necesita.
@@ -576,7 +621,7 @@ async function vaciarProyectoDePruebas(cliente, llaveDeServicio, informe) {
     }),
     'vaciar configuracion_negocio',
   );
-  informe.observar('tablas vaciadas con la service_role del proyecto de pruebas (usuarios: desactivados; auditoria_log: intacta, es inmutable)');
+  informe.observar('tablas vaciadas con la service_role del proyecto de pruebas (usuarios: desactivados; auditoria_log: intacta, es inmutable; anulaciones_de_venta: estaba vacía)');
 }
 
 async function correrBateria(cliente, sesiones, foto, informe) {
@@ -799,6 +844,105 @@ async function correrBateria(cliente, sesiones, foto, informe) {
     estado: HTTP.peticionInvalida,
     texto: 'recibos solo se inserta',
   });
+  informe.seccion('Anulación de una venta (0035): todo o nada, idempotente, y solo lo que corresponde');
+  const leerVenta = async (id) => cliente.pedir('GET', `/rest/v1/ventas?id=eq.${id}&select=*`, { token: restauracion.token });
+  const ventaAntes = await leerVenta(venta);
+  const anulacion = randomUUID();
+  const asientoDeLaAnulacion = randomUUID();
+  const loteAnulacion = [
+    cambio('anulaciones_de_venta', 'insertar', filaAnulacion(anulacion, venta, admin, 'El cliente devolvió la mercadería')),
+    cambio('productos', 'actualizar', filaProducto(producto, nombreDelProducto, categoria, '7.00', '100.000', 0, '0.000')),
+    asientoDeAnulacion(asientoDeLaAnulacion, admin, venta),
+  ];
+  const anulada = await rpc('sincronizar_anulacion_de_venta', loteAnulacion, terminal.token);
+  esperar(informe, 'la anulación entera: la anulación, el producto repuesto y su asiento', anulada, { estado: HTTP.ok, resultados: 'insertada,actualizada,insertada' });
+  const marcas = new Set(filasDe(anulada).map((f) => f.recibido_en));
+  informe.comprobar('…en UNA sola transacción: las tres filas con el MISMO recibido_en', filasDe(anulada).length === 3 && marcas.size === 1, [...marcas].join(', '));
+  const anulacionRepetida = await rpc('sincronizar_anulacion_de_venta', loteAnulacion, terminal.token);
+  esperar(informe, 'repetir la MISMA anulación es un éxito idempotente, no un error', anulacionRepetida, { estado: HTTP.ok, resultados: 'ya_existia,sin_cambios,ya_existia' });
+  informe.comprobar('…y devuelve exactamente las mismas huellas', huellasDe(anulada) !== '' && huellasDe(anulada) === huellasDe(anulacionRepetida), `${huellasDe(anulada)} vs ${huellasDe(anulacionRepetida)}`);
+  const ventaDespues = await leerVenta(venta);
+  informe.comprobar(
+    'la fila de ventas NO cambió: misma fila byte a byte, y su estado sigue en completada',
+    ventaAntes.estado === HTTP.ok && JSON.stringify(ventaAntes.datos) === JSON.stringify(ventaDespues.datos) && ventaDespues.datos?.[0]?.estado === 'completada',
+    `antes ${resumir(ventaAntes.datos)} · después ${resumir(ventaDespues.datos)}`,
+  );
+  esperar(
+    informe,
+    'otra anulación (otro id) para la misma venta se rechaza',
+    await rpc('sincronizar_anulacion_de_venta', [cambio('anulaciones_de_venta', 'insertar', filaAnulacion(randomUUID(), venta, admin, 'Otra')), loteAnulacion[1], asientoDeAnulacion(randomUUID(), admin, venta)], terminal.token),
+    { estado: HTTP.peticionInvalida, texto: 'ya tiene otra anulación' },
+  );
+  esperar(
+    informe,
+    'la misma anulación con OTRO motivo se rechaza: una anulación no se reescribe',
+    await rpc('sincronizar_anulacion_de_venta', [cambio('anulaciones_de_venta', 'insertar', filaAnulacion(anulacion, venta, admin, 'Otro motivo')), loteAnulacion[1], loteAnulacion[2]], terminal.token),
+    { estado: HTTP.peticionInvalida, texto: 'con otro contenido' },
+  );
+  const ventaInexistente = randomUUID();
+  esperar(
+    informe,
+    'la anulación de una venta que no está en la nube se rechaza con nombre',
+    await rpc('sincronizar_anulacion_de_venta', [cambio('anulaciones_de_venta', 'insertar', filaAnulacion(randomUUID(), ventaInexistente, admin, 'Sin venta')), loteAnulacion[1], asientoDeAnulacion(randomUUID(), admin, ventaInexistente)], terminal.token),
+    { estado: HTTP.peticionInvalida, texto: 'no está en la nube' },
+  );
+  esperar(
+    informe,
+    'un producto AJENO a la venta en el lote se rechaza: nadie reescribe otro producto por esta puerta',
+    await rpc('sincronizar_anulacion_de_venta', [...loteAnulacion.slice(0, 2), cambio('productos', 'actualizar', filaProducto(randomUUID(), `Ajeno ${sufijo}`, categoria, '1.00', '1.000', 0, '0.000')), loteAnulacion[2]], terminal.token),
+    { estado: HTTP.peticionInvalida, texto: 'no son los de las líneas' },
+  );
+  esperar(
+    informe,
+    'un lote de anulación que trae la fila de ventas se rechaza por nombre',
+    await rpc('sincronizar_anulacion_de_venta', [loteAnulacion[0], cambio('ventas', 'insertar', filaVenta(venta, caja2, admin, 'efectivo', null)), loteAnulacion[1], loteAnulacion[2]], terminal.token),
+    { estado: HTTP.peticionInvalida, texto: 'no forma parte de una anulación' },
+  );
+
+  const ventaB = randomUUID();
+  esperar(
+    informe,
+    'una segunda venta en la misma caja, para la prueba de todo o nada',
+    await rpc(
+      'sincronizar_venta',
+      [cambio('productos', 'actualizar', filaProducto(producto, nombreDelProducto, categoria, '7.00', '97.500', 1, '2.500')), cambio('ventas', 'insertar', filaVenta(ventaB, caja2, admin, 'efectivo', null)), cambio('venta_detalle', 'insertar', filaDetalle(ventaB, producto, nombreDelProducto)), asiento(admin, 'venta', ventaB)],
+      terminal.token,
+    ),
+    { estado: HTTP.ok, resultados: 'actualizada,insertada,insertada,insertada' },
+  );
+  const anulacionB = randomUUID();
+  const asientoB = randomUUID();
+  const loteB = (inventario) => [
+    cambio('anulaciones_de_venta', 'insertar', filaAnulacion(anulacionB, ventaB, admin, 'Cobro duplicado')),
+    cambio('productos', 'actualizar', filaProducto(producto, nombreDelProducto, categoria, '7.00', inventario, 0, '0.000')),
+    asientoDeAnulacion(asientoB, admin, ventaB),
+  ];
+  esperar(
+    informe,
+    'TODO O NADA: una anulación con un producto que viola un CHECK se rechaza entera',
+    await rpc('sincronizar_anulacion_de_venta', loteB('-1.000'), terminal.token),
+    { estado: HTTP.peticionInvalida, texto: 'productos_inventario_no_negativo' },
+  );
+  const sinRastro = await cliente.pedir('GET', `/rest/v1/anulaciones_de_venta?venta_id=eq.${ventaB}&select=id`, { token: restauracion.token });
+  informe.comprobar('…y no quedó la fila de la anulación, aunque se escribió antes que el producto', sinRastro.estado === HTTP.ok && Array.isArray(sinRastro.datos) && sinRastro.datos.length === 0, `HTTP ${String(sinRastro.estado)} ${resumir(sinRastro.datos)}`);
+  esperar(
+    informe,
+    '…ni su asiento: la MISMA anulación, corregida, entra con las tres filas insertadas o actualizadas',
+    await rpc('sincronizar_anulacion_de_venta', loteB('100.000'), terminal.token),
+    { estado: HTTP.ok, resultados: 'insertada,actualizada,insertada' },
+  );
+  const ventaC = randomUUID();
+  esperar(
+    informe,
+    'una tercera venta en la misma caja, que se va a intentar anular con la caja ya cerrada',
+    await rpc(
+      'sincronizar_venta',
+      [cambio('productos', 'actualizar', filaProducto(producto, nombreDelProducto, categoria, '7.00', '97.500', 1, '2.500')), cambio('ventas', 'insertar', filaVenta(ventaC, caja2, admin, 'efectivo', null)), cambio('venta_detalle', 'insertar', filaDetalle(ventaC, producto, nombreDelProducto)), asiento(admin, 'venta', ventaC)],
+      terminal.token,
+    ),
+    { estado: HTTP.ok, resultados: 'actualizada,insertada,insertada,insertada' },
+  );
+
   esperar(
     informe,
     'se cierra la segunda caja',
@@ -806,8 +950,19 @@ async function correrBateria(cliente, sesiones, foto, informe) {
     { estado: HTTP.ok, resultados: 'actualizada,insertada' },
   );
 
+  esperar(
+    informe,
+    'con la caja CERRADA en la nube, la anulación de una de sus ventas se rechaza',
+    await rpc(
+      'sincronizar_anulacion_de_venta',
+      [cambio('anulaciones_de_venta', 'insertar', filaAnulacion(randomUUID(), ventaC, admin, 'Tarde')), cambio('productos', 'actualizar', filaProducto(producto, nombreDelProducto, categoria, '7.00', '100.000', 0, '0.000')), asientoDeAnulacion(randomUUID(), admin, ventaC)],
+      terminal.token,
+    ),
+    { estado: HTTP.peticionInvalida, texto: 'está cerrada en la nube' },
+  );
+
   informe.seccion('Lo que la terminal NO puede leer ni tocar, aunque acabe de escribirlo');
-  for (const tabla of ['ventas', 'venta_detalle', 'recibos', 'auditoria_log', 'usuarios', 'caja_sesiones']) {
+  for (const tabla of ['ventas', 'venta_detalle', 'recibos', 'anulaciones_de_venta', 'auditoria_log', 'usuarios', 'caja_sesiones']) {
     const lectura = await cliente.pedir('GET', `/rest/v1/${tabla}?select=id&limit=5`, { token: terminal.token });
     informe.comprobar(
       `la terminal no lee ${tabla} directamente: conserva SELECT (es el mismo rol que la restauración) y RLS sin políticas devuelve la lista vacía`,
