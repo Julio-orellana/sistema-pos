@@ -26,6 +26,10 @@
  *      candado—, después `autorizarComoAdministrador` con la superficie
  *      `anulacion_de_venta`, y con el PIN aceptado corre la transacción, que
  *      vuelve a validar todo adentro.
+ *   3. YA ANULADA: se regenera el PDF del recibo, para que el archivo del disco
+ *      quede marcado en el mismo momento (§5.2). Va DESPUÉS de la transacción,
+ *      nunca adentro: escribir un PDF abre una ventana de Chromium, y eso no
+ *      puede mantener abierta una escritura de SQLite (§4.14).
  */
 
 import type {
@@ -39,6 +43,7 @@ import type {
   ServicioDeAnulacionDeVenta,
   VistaPreviaDeAnulacion,
 } from '@main/domain/venta/servicio-de-anulacion';
+import type { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
 import type { UsuarioEnSesion } from '@main/domain/usuarios/sesion';
 
@@ -52,6 +57,16 @@ export const CODIGO_ANULACION_CORRECTA = 'ANULACION_CORRECTA';
 export interface DependenciasDeLaAnulacion {
   readonly anulacion: ServicioDeAnulacionDeVenta;
   readonly autenticacion: ServicioDeAutenticacion;
+  /**
+   * Los recibos, para dejar el PDF del disco marcado en cuanto la anulación se
+   * confirma (§5.2).
+   *
+   * OBLIGATORIA, como `base` en la venta y en la autenticación: opcional, un
+   * sitio que se olvidara de pasarla dejaría PDF desactualizados en el disco
+   * SIN QUE NADA FALLARA, que es la clase de defecto que este proyecto ya pagó
+   * dos veces.
+   */
+  readonly recibos: ServicioDeRecibos;
 }
 
 export class FlujoDeAnulacionDeVenta {
@@ -63,7 +78,10 @@ export class FlujoDeAnulacionDeVenta {
    * `quienPide` sale de la sesión del proceso principal, nunca del payload. Si
    * la anulación no se puede hacer, lanza el `ErrorDeNegocio` del servicio.
    */
-  public pedir(pedido: PedidoDeAnulacionIpc, quienPide: UsuarioEnSesion): ResultadoDeAnulacionIpc {
+  public async pedir(
+    pedido: PedidoDeAnulacionIpc,
+    quienPide: UsuarioEnSesion,
+  ): Promise<ResultadoDeAnulacionIpc> {
     const datos = { ventaId: pedido.ventaId, motivo: pedido.motivo, voucher: pedido.voucher };
     const vistaPrevia = vistaPreviaParaLaVentana(this.dependencias.anulacion.prepararAnulacion(datos));
 
@@ -105,6 +123,19 @@ export class FlujoDeAnulacionDeVenta {
       // La vía la determinó la verificación, nunca quien pide.
       via: permiso.viaDeAutorizacion ?? 'presencial',
     });
+
+    /*
+      LA ANULACIÓN YA ESTÁ CONFIRMADA Y LA TRANSACCIÓN CERRADA. Recién ahora se
+      regenera el PDF del recibo, para que el archivo del disco no quede ni un
+      momento diciendo que esta venta sigue en pie.
+
+      Se espera a que termine ANTES de contestarle a la ventana: si se disparara
+      sin esperar, quien mirara el archivo justo después de ver la confirmación
+      podría encontrarlo todavía sin marcar. Y no lanza nunca —lo garantiza
+      `regenerarPdfDeLaVenta`—, así que un disco lleno no puede convertir una
+      anulación hecha en un error en la pantalla.
+    */
+    await this.dependencias.recibos.regenerarPdfDeLaVenta(resultado.anulacion.ventaId);
 
     return {
       anulada: true,

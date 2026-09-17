@@ -522,19 +522,24 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   const flujoDeAnulacion = new FlujoDeAnulacionDeVenta({
     anulacion: dependencias.anulacionDeVenta,
     autenticacion: dependencias.autenticacion,
+    // Para dejar marcado el PDF del recibo en cuanto la anulación se confirma
+    // (§5.2 del diseño de la anulación).
+    recibos: dependencias.recibos,
   });
 
   ipcMain.handle(
     CANALES_IPC.ventaAnular,
     async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeAnulacionIpc>> =>
-      ejecutarConRespuesta('ANULACION_DE_VENTA_FALLIDA', () =>
-        requiereSesion(dependencias.sesion, () => {
+      ejecutarConRespuesta('ANULACION_DE_VENTA_FALLIDA', async () =>
+        requiereSesion(dependencias.sesion, async () => {
           const pedido = esquemaPedidoDeAnulacion.parse(payload);
           const enSesion = dependencias.sesion.obtener();
           if (enSesion === null) {
             throw new Error('No hay sesión iniciada.');
           }
-          return flujoDeAnulacion.pedir(pedido, enSesion);
+          // Se espera: el flujo regenera el PDF del recibo antes de contestar,
+          // así la ventana nunca ve la confirmación con el archivo sin marcar.
+          return await flujoDeAnulacion.pedir(pedido, enSesion);
         }),
       ),
   );

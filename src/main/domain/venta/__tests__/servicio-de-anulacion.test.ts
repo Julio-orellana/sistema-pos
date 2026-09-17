@@ -27,6 +27,14 @@ import { hayTransaccionDeNegocioEnCurso } from '@main/database/transaccion-en-cu
 import { ServicioDeReportes } from '@main/domain/reportes/servicio-de-reportes';
 import { FlujoDeAnulacionDeVenta } from '@main/ipc/anulacion-de-venta';
 import type { PedidoDeAnulacionIpc, ResultadoDeAnulacionIpc } from '@shared/types/ipc';
+import type {
+  ComprobanteImprimible,
+  EstadoImpresora,
+  ReceiptPrinterProvider,
+  ResultadoImpresion,
+} from '@shared/adapters/receipt-printer';
+import { reciboComoHtml } from '@main/domain/recibo/plantilla-de-recibo';
+import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import { ServicioDeVenta, type DatosDeLaVenta } from '../servicio-de-venta';
 import { ServicioDeAnulacionDeVenta } from '../servicio-de-anulacion';
 import { CifradoDePrueba, codigoDeLaApp, SECRETO_DE_PRUEBA, sembrarAutorizacionRemota } from '@main/domain/usuarios/__tests__/ayuda-totp';
@@ -59,6 +67,30 @@ class BitacoraQueGuarda implements LogTecnico {
     this.lineas.push(`[${origen}] ${mensaje}`);
   }
 }
+let recibos: ServicioDeRecibos;
+/** Cada PDF que se mandó a generar, con el HTML que lo iba a dibujar. */
+let pdfGenerados: { ruta: string; html: string }[];
+let impresora: ImpresoraQueCuenta;
+/** Lo enciende la prueba que comprueba que un PDF que falla no tumba la anulación. */
+let elPdfFalla = false;
+/**
+ * Una impresora que ANOTA lo que le mandan. Sirve para comprobar lo que NO
+ * pasa: anular no saca ningún ticket por la térmica (§5.2).
+ */
+class ImpresoraQueCuenta implements ReceiptPrinterProvider {
+  public readonly nombre = 'ImpresoraQueCuenta';
+  public readonly recibidos: string[] = [];
+
+  public imprimirComprobante(comprobante: ComprobanteImprimible): Promise<ResultadoImpresion> {
+    this.recibidos.push(comprobante.idComprobante);
+    return Promise.resolve({ ok: true, adaptador: this.nombre, omitidaPorDiseno: false, mensaje: 'impreso' });
+  }
+
+  public consultarEstado(): Promise<EstadoImpresora> {
+    return Promise.resolve({ disponible: true, adaptador: this.nombre, descripcion: 'de prueba' });
+  }
+}
+
 let flujo: FlujoDeAnulacionDeVenta;
 
 let idJimmy: string;
@@ -100,11 +132,11 @@ function sesionDe(id: string, nombre: string, rol: 'venta' | 'administrativo'): 
 }
 
 /** Pide la anulación como lo haría la ventana, con la sesión de Ana. */
-function pedir(
+async function pedir(
   ventaId: string,
   pin: string | null,
   extra: Partial<Pick<PedidoDeAnulacionIpc, 'motivo' | 'voucher'>> = {},
-): ResultadoDeAnulacionIpc {
+): Promise<ResultadoDeAnulacionIpc> {
   return flujo.pedir(
     { ventaId, motivo: extra.motivo ?? MOTIVO, voucher: extra.voucher ?? null, pin },
     sesionDe(idAna, 'Ana', 'venta'),
@@ -115,6 +147,25 @@ function pedir(
 function errorDe(operacion: () => unknown): ErrorDeNegocio {
   try {
     operacion();
+  } catch (error) {
+    if (error instanceof ErrorDeNegocio) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error('Se esperaba un ErrorDeNegocio y la operación no lanzó nada.');
+}
+
+/**
+ * Lo mismo que `errorDe`, para una operación ASINCRÓNICA.
+ *
+ * Hace falta desde que `pedir` es asincrónica —el flujo espera a que se
+ * regenere el PDF del recibo antes de contestar—: una promesa rechazada no
+ * lanza donde se la crea, así que el `try` de `errorDe` no la vería.
+ */
+async function errorAlPedir(operacion: () => Promise<unknown>): Promise<ErrorDeNegocio> {
+  try {
+    await operacion();
   } catch (error) {
     if (error instanceof ErrorDeNegocio) {
       return error;
@@ -224,7 +275,32 @@ beforeEach(() => {
     log: bitacoraTecnica,
     ahora: (): number => reloj,
   });
-  flujo = new FlujoDeAnulacionDeVenta({ anulacion, autenticacion });
+  /*
+    UN SERVICIO DE RECIBOS DE VERDAD, con el generador de PDF cambiado por uno
+    que anota lo que le llega. El flujo regenera el PDF al confirmar la
+    anulación (§5.2), y lo que se comprueba acá es que se dispare y CON QUÉ:
+    escribir un PDF de verdad necesitaría Chromium, que en Vitest no hay.
+  */
+  pdfGenerados = [];
+  elPdfFalla = false;
+  impresora = new ImpresoraQueCuenta();
+  recibos = new ServicioDeRecibos({
+    base,
+    ventas: repos.ventas,
+    ventaDetalle: repos.ventaDetalle,
+    recibos: repos.recibos,
+    usuarios: repos.usuarios,
+    configuracion: repos.configuracionNegocio,
+    anulaciones: repos.anulacionesDeVenta,
+    impresora,
+    generarPdf: (html: string, ruta: string): Promise<void> => {
+      pdfGenerados.push({ ruta, html });
+      return elPdfFalla ? Promise.reject(new Error('disco lleno (simulado)')) : Promise.resolve();
+    },
+    carpetaDeDatos: '/datos',
+    log: bitacoraTecnica,
+  });
+  flujo = new FlujoDeAnulacionDeVenta({ anulacion, autenticacion, recibos });
 
   idJimmy = repos.usuarios.crear({ nombre: 'Jimmy', rol: 'administrativo', pinHash: generarHashDePin(PIN_DE_JIMMY) }).id;
   sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy);
@@ -241,52 +317,52 @@ afterEach(() => {
 
 // ===========================================================================
 describe('El efectivo esperado: la venta anulada se EXCLUYE, no se resta', () => {
-  it('una venta en efectivo anulada deja de contar en el efectivo esperado', () => {
+  it('una venta en efectivo anulada deja de contar en el efectivo esperado', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     vender([{ productoId: idFrijol, cantidad: '1' }]);
     expect(esperadoDeLaCaja()).toBe('517.50');
 
-    expect(pedir(ventaId, PIN_DE_JIMMY).anulada).toBe(true);
+    expect((await pedir(ventaId, PIN_DE_JIMMY)).anulada).toBe(true);
 
     expect(esperadoDeLaCaja()).toBe('509.00');
   });
 
-  it('una con tarjeta NO lo cambia, ni al venderse ni al anularse', () => {
+  it('una con tarjeta NO lo cambia, ni al venderse ni al anularse', async () => {
     vender([{ productoId: idFrijol, cantidad: '1' }]);
     const conTarjeta = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta');
     expect(esperadoDeLaCaja()).toBe('509.00');
 
-    const resultado = pedir(conTarjeta, PIN_DE_JIMMY, { voucher: '004512' });
+    const resultado = await pedir(conTarjeta, PIN_DE_JIMMY, { voucher: '004512' });
     expect(resultado.anulada).toBe(true);
     expect(resultado.anulacion?.efectivoQueDejaDeContar).toBe('0.00');
 
     expect(esperadoDeLaCaja()).toBe('509.00');
   });
 
-  it('el ejemplo de §3.2: A, B con tarjeta y C; se anula A y después B', () => {
+  it('el ejemplo de §3.2: A, B con tarjeta y C; se anula A y después B', async () => {
     const a = vender([{ productoId: idMaiz, cantidad: '6.471' }]); // Q27.50
     const b = vender([{ productoId: idFrijol, cantidad: '4.444' }], 'tarjeta'); // Q40.00
     vender([{ productoId: idFrijol, cantidad: '1.333' }]); // Q12.00
     expect(esperadoDeLaCaja()).toBe('539.50');
 
-    pedir(a, PIN_DE_JIMMY);
+    await pedir(a, PIN_DE_JIMMY);
     expect(esperadoDeLaCaja()).toBe('512.00');
 
-    pedir(b, PIN_DE_JIMMY, { voucher: '004512' });
+    await pedir(b, PIN_DE_JIMMY, { voucher: '004512' });
     expect(esperadoDeLaCaja()).toBe('512.00');
   });
 });
 
 // ===========================================================================
 describe('La reposición SUMA sobre el saldo de HOY (§2.1)', () => {
-  it('con un ajuste y otra venta en el medio: 100 − 5, +50, −3, y al anular la primera queda 147, no 100', () => {
+  it('con un ajuste y otra venta en el medio: 100 − 5, +50, −3, y al anular la primera queda 147, no 100', async () => {
     const ventaA = vender([{ productoId: idMaiz, cantidad: '5' }]);
     expect(inventarioDe(idMaiz)).toBe('95.000');
     productos.ajustarInventario(idJimmy, { productoId: idMaiz, cantidad: '50', motivo: 'llegó un pedido' });
     vender([{ productoId: idMaiz, cantidad: '3' }]);
     expect(inventarioDe(idMaiz)).toBe('142.000');
 
-    const resultado = pedir(ventaA, PIN_DE_JIMMY);
+    const resultado = await pedir(ventaA, PIN_DE_JIMMY);
 
     expect(inventarioDe(idMaiz)).toBe('147.000');
     expect(resultado.anulacion?.productos).toEqual([
@@ -294,14 +370,14 @@ describe('La reposición SUMA sobre el saldo de HOY (§2.1)', () => {
     ]);
   });
 
-  it('los dos contadores bajan, y la suma de los reportes vuelve a dar el acumulado', () => {
+  it('los dos contadores bajan, y la suma de los reportes vuelve a dar el acumulado', async () => {
     const ventaA = vender([{ productoId: idMaiz, cantidad: '5' }]);
     vender([{ productoId: idMaiz, cantidad: '3' }]);
     const antes = repos.productos.obtenerPorId(idMaiz);
     expect(antes?.contadorVentas).toBe(2);
     expect(cantidadACadena(antes?.cantidadVendida ?? '0')).toBe('8.000');
 
-    pedir(ventaA, PIN_DE_JIMMY);
+    await pedir(ventaA, PIN_DE_JIMMY);
 
     const despues = repos.productos.obtenerPorId(idMaiz);
     expect(despues?.contadorVentas).toBe(1);
@@ -315,15 +391,15 @@ describe('La reposición SUMA sobre el saldo de HOY (§2.1)', () => {
     expect(reportes.resumenDeVentas({ clase: 'hoy' }).cantidadDeVentas).toBe(1);
   });
 
-  it('un producto DESACTIVADO se repone igual y NO se reactiva; la vista previa lo avisa', () => {
+  it('un producto DESACTIVADO se repone igual y NO se reactiva; la vista previa lo avisa', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '5' }]);
     repos.productos.fijarActivo(idMaiz, false);
 
-    const vista = pedir(ventaId, null).vistaPrevia;
+    const vista = (await pedir(ventaId, null)).vistaPrevia;
     expect(vista.productosDesactivados).toEqual(['Maíz blanco']);
     expect(vista.lineas[0]?.productoActivo).toBe(false);
 
-    const resultado = pedir(ventaId, PIN_DE_JIMMY);
+    const resultado = await pedir(ventaId, PIN_DE_JIMMY);
     expect(resultado.anulada).toBe(true);
     expect(inventarioDe(idMaiz)).toBe('100.000');
     expect(repos.productos.obtenerPorId(idMaiz)?.activo).toBe(false);
@@ -331,7 +407,7 @@ describe('La reposición SUMA sobre el saldo de HOY (§2.1)', () => {
     expect(lineas[0]?.productoActivo).toBe(false);
   });
 
-  it('una venta con varios productos repone cada uno sobre su propio saldo', () => {
+  it('una venta con varios productos repone cada uno sobre su propio saldo', async () => {
     const ventaId = vender([
       { productoId: idMaiz, cantidad: '2.5' },
       { productoId: idFrijol, cantidad: '1' },
@@ -339,7 +415,7 @@ describe('La reposición SUMA sobre el saldo de HOY (§2.1)', () => {
     expect(inventarioDe(idMaiz)).toBe('97.500');
     expect(inventarioDe(idFrijol)).toBe('49.000');
 
-    pedir(ventaId, PIN_DE_JIMMY);
+    await pedir(ventaId, PIN_DE_JIMMY);
 
     expect(inventarioDe(idMaiz)).toBe('100.000');
     expect(inventarioDe(idFrijol)).toBe('50.000');
@@ -348,12 +424,12 @@ describe('La reposición SUMA sobre el saldo de HOY (§2.1)', () => {
 
 // ===========================================================================
 describe('Lo que se rechaza ANTES de pedir el PIN, sin escribir nada', () => {
-  it('con la UNIDAD cambiada (de lb a unidad) se rechaza, contando filas', () => {
+  it('con la UNIDAD cambiada (de lb a unidad) se rechaza, contando filas', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2.5' }]);
     base.prepare("UPDATE productos SET tipo_medida = 'unidad', unidad_peso = NULL WHERE id = ?").run(idMaiz);
     const antes = fotoDeLaBase();
 
-    const error = errorDe(() => pedir(ventaId, null));
+    const error = await errorAlPedir(() => pedir(ventaId, null));
 
     expect(error.codigo).toBe('UNIDAD_CAMBIADA');
     expect(error.mensajeParaElUsuario).toBe(
@@ -363,61 +439,61 @@ describe('Lo que se rechaza ANTES de pedir el PIN, sin escribir nada', () => {
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('también si solo cambió la unidad de peso (de lb a kg), y tampoco con el PIN correcto', () => {
+  it('también si solo cambió la unidad de peso (de lb a kg), y tampoco con el PIN correcto', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2.5' }]);
     base.prepare("UPDATE productos SET unidad_peso = 'kg' WHERE id = ?").run(idMaiz);
     const antes = fotoDeLaBase();
 
-    expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY)).codigo).toBe('UNIDAD_CAMBIADA');
+    expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY))).codigo).toBe('UNIDAD_CAMBIADA');
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('con la CAJA CERRADA se rechaza', () => {
+  it('con la CAJA CERRADA se rechaza', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     caja.intentarCerrar(idCaja, { modo: 'simple', monto: '508.50' }, { usuarioQueCierra: idAna });
     expect(repos.cajaSesiones.obtenerPorId(idCaja)?.estado).toBe('cerrada');
     const antes = fotoDeLaBase();
 
-    const error = errorDe(() => pedir(ventaId, PIN_DE_JIMMY));
+    const error = await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY));
 
     expect(error.codigo).toBe('CAJA_DE_LA_VENTA_CERRADA');
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('la SEGUNDA anulación de la misma venta se rechaza', () => {
+  it('la SEGUNDA anulación de la misma venta se rechaza', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
-    expect(pedir(ventaId, PIN_DE_JIMMY).anulada).toBe(true);
+    expect((await pedir(ventaId, PIN_DE_JIMMY)).anulada).toBe(true);
     const antes = fotoDeLaBase();
 
-    expect(errorDe(() => pedir(ventaId, null)).codigo).toBe('VENTA_YA_ANULADA');
-    expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY)).codigo).toBe('VENTA_YA_ANULADA');
+    expect((await errorAlPedir(() => pedir(ventaId, null))).codigo).toBe('VENTA_YA_ANULADA');
+    expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY))).codigo).toBe('VENTA_YA_ANULADA');
     expect(inventarioDe(idMaiz)).toBe('100.000');
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('SIN MOTIVO se rechaza, y con más de 200 caracteres también', () => {
+  it('SIN MOTIVO se rechaza, y con más de 200 caracteres también', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     const antes = fotoDeLaBase();
 
-    expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY, { motivo: '   ' })).mensajeParaElUsuario).toBe(
+    expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY, { motivo: '   ' }))).mensajeParaElUsuario).toBe(
       'Escribí el motivo de la anulación.',
     );
-    expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY, { motivo: 'x'.repeat(201) })).codigo).toBe('DATO_INVALIDO');
+    expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY, { motivo: 'x'.repeat(201) }))).codigo).toBe('DATO_INVALIDO');
     expect(fotoDeLaBase()).toEqual(antes);
     // Y con 200 exactos pasa.
-    expect(pedir(ventaId, PIN_DE_JIMMY, { motivo: 'x'.repeat(200) }).anulada).toBe(true);
+    expect((await pedir(ventaId, PIN_DE_JIMMY, { motivo: 'x'.repeat(200) })).anulada).toBe(true);
   });
 
-  it('una venta que no existe se rechaza', () => {
-    expect(errorDe(() => pedir('00000000-0000-4000-8000-000000000000', null)).codigo).toBe('REFERENCIA_INEXISTENTE');
+  it('una venta que no existe se rechaza', async () => {
+    expect((await errorAlPedir(() => pedir('00000000-0000-4000-8000-000000000000', null))).codigo).toBe('REFERENCIA_INEXISTENTE');
   });
 
-  it('una venta que se anuló o una caja que se cerró MIENTRAS TANTO no consume un intento del candado: se valida antes de mirar el PIN', () => {
+  it('una venta que se anuló o una caja que se cerró MIENTRAS TANTO no consume un intento del candado: se valida antes de mirar el PIN', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
-    expect(pedir(ventaId, null).codigo).toBe('REQUIERE_AUTORIZACION');
+    expect((await pedir(ventaId, null)).codigo).toBe('REQUIERE_AUTORIZACION');
     caja.intentarCerrar(idCaja, { modo: 'simple', monto: '508.50' }, { usuarioQueCierra: idAna });
 
-    expect(errorDe(() => pedir(ventaId, PIN_MALO)).codigo).toBe('CAJA_DE_LA_VENTA_CERRADA');
+    expect((await errorAlPedir(() => pedir(ventaId, PIN_MALO))).codigo).toBe('CAJA_DE_LA_VENTA_CERRADA');
     expect(repos.bloqueosDeAutorizacion.obtener('anulacion_de_venta').intentosFallidos).toBe(0);
     expect(asientos('anulacion_de_venta_rechazada')).toEqual([]);
   });
@@ -425,12 +501,12 @@ describe('Lo que se rechaza ANTES de pedir el PIN, sin escribir nada', () => {
 
 // ===========================================================================
 describe('EL VOUCHER de una venta con tarjeta (§3.3, decisión 9)', () => {
-  it('con un voucher DISTINTO se rechaza con «El voucher no coincide con el de la venta original», sin pedir PIN, sin sumar intento y sin escribir nada', () => {
+  it('con un voucher DISTINTO se rechaza con «El voucher no coincide con el de la venta original», sin pedir PIN, sin sumar intento y sin escribir nada', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta', '004512');
     const antes = fotoDeLaBase();
 
     // Con el PIN CORRECTO incluso: no se llega a mirarlo.
-    const error = errorDe(() => pedir(ventaId, PIN_DE_JIMMY, { voucher: '004513' }));
+    const error = await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY, { voucher: '004513' }));
 
     expect(error.codigo).toBe('VOUCHER_NO_COINCIDE');
     expect(error.mensajeParaElUsuario).toBe('El voucher no coincide con el de la venta original.');
@@ -439,58 +515,58 @@ describe('EL VOUCHER de una venta con tarjeta (§3.3, decisión 9)', () => {
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('el voucher CORRECTO de OTRA venta también se rechaza: se compara contra ESTA venta', () => {
+  it('el voucher CORRECTO de OTRA venta también se rechaza: se compara contra ESTA venta', async () => {
     const primera = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta', 'A-100');
     vender([{ productoId: idFrijol, cantidad: '1' }], 'tarjeta', 'B-200');
 
-    expect(errorDe(() => pedir(primera, PIN_DE_JIMMY, { voucher: 'B-200' })).codigo).toBe('VOUCHER_NO_COINCIDE');
-    expect(pedir(primera, PIN_DE_JIMMY, { voucher: 'A-100' }).anulada).toBe(true);
+    expect((await errorAlPedir(() => pedir(primera, PIN_DE_JIMMY, { voucher: 'B-200' }))).codigo).toBe('VOUCHER_NO_COINCIDE');
+    expect((await pedir(primera, PIN_DE_JIMMY, { voucher: 'A-100' })).anulada).toBe(true);
   });
 
-  it('con tarjeta y SIN voucher se rechaza antes del PIN', () => {
+  it('con tarjeta y SIN voucher se rechaza antes del PIN', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta');
     const antes = fotoDeLaBase();
 
-    const error = errorDe(() => pedir(ventaId, PIN_DE_JIMMY, { voucher: null }));
+    const error = await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY, { voucher: null }));
 
     expect(error.mensajeParaElUsuario).toBe('Esta venta fue con tarjeta: escribí el número de voucher.');
-    expect(errorDe(() => pedir(ventaId, null, { voucher: '  ' })).codigo).toBe('DATO_INVALIDO');
+    expect((await errorAlPedir(() => pedir(ventaId, null, { voucher: '  ' }))).codigo).toBe('DATO_INVALIDO');
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('en EFECTIVO, un pedido CON voucher se rechaza', () => {
+  it('en EFECTIVO, un pedido CON voucher se rechaza', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
 
-    const error = errorDe(() => pedir(ventaId, null, { voucher: '004512' }));
+    const error = await errorAlPedir(() => pedir(ventaId, null, { voucher: '004512' }));
 
     expect(error.codigo).toBe('DATO_INVALIDO');
     expect(error.mensajeParaElUsuario).toBe('Una venta en efectivo no lleva voucher.');
   });
 
-  it('se recortan espacios DE LOS DOS LADOS, incluida una boleta guardada con espacios por el canal, y 0012 no es 12', () => {
+  it('se recortan espacios DE LOS DOS LADOS, incluida una boleta guardada con espacios por el canal, y 0012 no es 12', async () => {
     // El cobro por la pantalla recorta la boleta, pero el servicio la guarda tal
     // como llega: una venta cobrada llamando al canal a mano puede tener espacios.
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta', ' 0012 ');
     expect(repos.ventas.obtenerPorId(ventaId)?.numBoleta).toBe(' 0012 ');
 
-    expect(errorDe(() => pedir(ventaId, null, { voucher: '12' })).codigo).toBe('VOUCHER_NO_COINCIDE');
-    expect(errorDe(() => pedir(ventaId, null, { voucher: '0012a' })).codigo).toBe('VOUCHER_NO_COINCIDE');
-    expect(pedir(ventaId, null, { voucher: '0012' }).codigo).toBe('REQUIERE_AUTORIZACION');
-    expect(pedir(ventaId, PIN_DE_JIMMY, { voucher: '  0012' }).anulada).toBe(true);
+    expect((await errorAlPedir(() => pedir(ventaId, null, { voucher: '12' }))).codigo).toBe('VOUCHER_NO_COINCIDE');
+    expect((await errorAlPedir(() => pedir(ventaId, null, { voucher: '0012a' }))).codigo).toBe('VOUCHER_NO_COINCIDE');
+    expect((await pedir(ventaId, null, { voucher: '0012' })).codigo).toBe('REQUIERE_AUTORIZACION');
+    expect((await pedir(ventaId, PIN_DE_JIMMY, { voucher: '  0012' })).anulada).toBe(true);
   });
 
-  it('distingue mayúsculas: B-1 no es b-1', () => {
+  it('distingue mayúsculas: B-1 no es b-1', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta', 'B-1');
-    expect(errorDe(() => pedir(ventaId, null, { voucher: 'b-1' })).codigo).toBe('VOUCHER_NO_COINCIDE');
+    expect((await errorAlPedir(() => pedir(ventaId, null, { voucher: 'b-1' }))).codigo).toBe('VOUCHER_NO_COINCIDE');
   });
 
-  it('el pedido CON PIN y un voucher distinto del primero se rechaza igual: el flujo vuelve a validar, y la transacción también', () => {
+  it('el pedido CON PIN y un voucher distinto del primero se rechaza igual: el flujo vuelve a validar, y la transacción también', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta', '004512');
-    expect(pedir(ventaId, null, { voucher: '004512' }).codigo).toBe('REQUIERE_AUTORIZACION');
+    expect((await pedir(ventaId, null, { voucher: '004512' })).codigo).toBe('REQUIERE_AUTORIZACION');
     const antes = fotoDeLaBase();
 
     // Por el flujo: se rechaza antes de mirar el PIN.
-    expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY, { voucher: '999999' })).codigo).toBe('VOUCHER_NO_COINCIDE');
+    expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY, { voucher: '999999' }))).codigo).toBe('VOUCHER_NO_COINCIDE');
     // Llamando a la transacción directo, con una autorización ya concedida: la
     // transacción valida adentro y no escribe nada.
     expect(
@@ -501,9 +577,9 @@ describe('EL VOUCHER de una venta con tarjeta (§3.3, decisión 9)', () => {
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('la vista previa de una venta con tarjeta muestra el voucher y dice que la devolución es en el banco', () => {
+  it('la vista previa de una venta con tarjeta muestra el voucher y dice que la devolución es en el banco', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta', '004512');
-    const vista = pedir(ventaId, null, { voucher: '004512' }).vistaPrevia;
+    const vista = (await pedir(ventaId, null, { voucher: '004512' })).vistaPrevia;
     expect(vista.numBoleta).toBe('004512');
     expect(vista.avisoDeDevolucion).toBe('La devolución se hace en la terminal del banco.');
   });
@@ -511,12 +587,12 @@ describe('EL VOUCHER de una venta con tarjeta (§3.3, decisión 9)', () => {
 
 // ===========================================================================
 describe('La vista previa y la transacción', () => {
-  it('sin PIN devuelve REQUIERE_AUTORIZACION con la vista previa, y NO escribe nada', () => {
+  it('sin PIN devuelve REQUIERE_AUTORIZACION con la vista previa, y NO escribe nada', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     repos.recibos.crear({ ventaId, numeroRecibo: 128, pdfPath: 'recibos/recibo-000128.pdf' });
     const antes = fotoDeLaBase();
 
-    const resultado = pedir(ventaId, null);
+    const resultado = await pedir(ventaId, null);
 
     expect(resultado).toEqual({
       anulada: false,
@@ -541,17 +617,17 @@ describe('La vista previa y la transacción', () => {
     expect(fotoDeLaBase()).toEqual(antes);
   });
 
-  it('la vista previa y el resultado NO llevan el teórico de la caja', () => {
+  it('la vista previa y el resultado NO llevan el teórico de la caja', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     const esperado = esperadoDeLaCaja();
     expect(esperado).toBe('508.50');
-    expect(JSON.stringify(pedir(ventaId, null))).not.toContain(esperado);
-    const hecho = pedir(ventaId, PIN_DE_JIMMY);
+    expect(JSON.stringify(await pedir(ventaId, null))).not.toContain(esperado);
+    const hecho = await pedir(ventaId, PIN_DE_JIMMY);
     expect(JSON.stringify(hecho)).not.toContain('508.50');
     expect(JSON.stringify(hecho)).not.toContain('500.00');
   });
 
-  it('la fila de ventas, las de venta_detalle y la de recibos quedan BYTE A BYTE iguales antes y después de anular', () => {
+  it('la fila de ventas, las de venta_detalle y la de recibos quedan BYTE A BYTE iguales antes y después de anular', async () => {
     const ventaId = vender([
       { productoId: idMaiz, cantidad: '2' },
       { productoId: idFrijol, cantidad: '1' },
@@ -564,16 +640,16 @@ describe('La vista previa y la transacción', () => {
     });
     const antes = leer();
 
-    expect(pedir(ventaId, PIN_DE_JIMMY).anulada).toBe(true);
+    expect((await pedir(ventaId, PIN_DE_JIMMY)).anulada).toBe(true);
 
     expect(leer()).toEqual(antes);
     expect(repos.ventas.obtenerPorId(ventaId)?.estado).toBe('completada');
   });
 
-  it('la anulación queda escrita con quién la pidió, quién la autorizó, por qué vía y el motivo recortado', () => {
+  it('la anulación queda escrita con quién la pidió, quién la autorizó, por qué vía y el motivo recortado', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
 
-    const resultado = pedir(ventaId, PIN_DE_JIMMY, { motivo: '  el cliente devolvió el producto  ' });
+    const resultado = await pedir(ventaId, PIN_DE_JIMMY, { motivo: '  el cliente devolvió el producto  ' });
 
     expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toEqual({
       id: resultado.anulacion?.id,
@@ -586,12 +662,12 @@ describe('La vista previa y la transacción', () => {
     });
   });
 
-  it('el lote encolado tiene la forma de §7.1 —anulación, productos, asiento— y NUNCA incluye ventas', () => {
+  it('el lote encolado tiene la forma de §7.1 —anulación, productos, asiento— y NUNCA incluye ventas', async () => {
     const ventaId = vender([
       { productoId: idMaiz, cantidad: '2' },
       { productoId: idFrijol, cantidad: '1' },
     ]);
-    const resultado = pedir(ventaId, PIN_DE_JIMMY);
+    const resultado = await pedir(ventaId, PIN_DE_JIMMY);
     const idAnulacion = resultado.anulacion?.id;
 
     const filas = base
@@ -614,9 +690,9 @@ describe('La vista previa y la transacción', () => {
     expect(ventasEncoladas.n).toBe(1);
   });
 
-  it('el disparador rechaza EDITAR o BORRAR una anulación, y el error se traduce a ANULACION_INMUTABLE', () => {
+  it('el disparador rechaza EDITAR o BORRAR una anulación, y el error se traduce a ANULACION_INMUTABLE', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
-    pedir(ventaId, PIN_DE_JIMMY);
+    await pedir(ventaId, PIN_DE_JIMMY);
 
     const editar = (): unknown => base.prepare("UPDATE anulaciones_de_venta SET motivo = 'otro' WHERE venta_id = ?").run(ventaId);
     const borrar = (): unknown => base.prepare('DELETE FROM anulaciones_de_venta WHERE venta_id = ?').run(ventaId);
@@ -638,7 +714,7 @@ describe('La vista previa y la transacción', () => {
 
 // ===========================================================================
 describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (§2.5)', () => {
-  it('si falla la reposición del SEGUNDO producto, el primero no queda repuesto, no hay anulación ni asiento de la venta, y queda conflicto_de_inventario', () => {
+  it('si falla la reposición del SEGUNDO producto, el primero no queda repuesto, no hay anulación ni asiento de la venta, y queda conflicto_de_inventario', async () => {
     const ventaId = vender([
       { productoId: idMaiz, cantidad: '2' },
       { productoId: idFrijol, cantidad: '1' },
@@ -661,7 +737,7 @@ describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (�
       return llamadas === 2 ? false : original(...argumentos);
     };
     try {
-      const error = errorDe(() => pedir(ventaId, PIN_DE_JIMMY));
+      const error = await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY));
       expect(error.codigo).toBe('CONFLICTO_DE_INVENTARIO');
       expect(error.mensajeParaElUsuario).toBe(
         'El inventario de Frijol negro cambió mientras se anulaba. La venta no se anuló. Volvé a intentarlo.',
@@ -701,13 +777,13 @@ describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (�
     expect(encolado).toEqual([{ entidad_tipo: 'auditoria_log' }]);
   });
 
-  it('si falla el de los CONTADORES, también se revierte la reposición ya hecha', () => {
+  it('si falla el de los CONTADORES, también se revierte la reposición ya hecha', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     const antes = repos.productos.obtenerPorId(idMaiz);
     const original = repos.productos.anularVentaDeProducto.bind(repos.productos);
     repos.productos.anularVentaDeProducto = (): boolean => false;
     try {
-      expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY)).codigo).toBe('CONFLICTO_DE_INVENTARIO');
+      expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY))).codigo).toBe('CONFLICTO_DE_INVENTARIO');
     } finally {
       repos.productos.anularVentaDeProducto = original;
     }
@@ -727,7 +803,7 @@ describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (�
     });
   });
 
-  it('CERO reintentos: después del conflicto, volver a pedir con el PIN funciona, y el PIN hay que teclearlo otra vez', () => {
+  it('CERO reintentos: después del conflicto, volver a pedir con el PIN funciona, y el PIN hay que teclearlo otra vez', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     const original = repos.productos.reponerSiSigueIgual.bind(repos.productos);
     let llamadas = 0;
@@ -736,21 +812,21 @@ describe('Un CONFLICTO del comparar-y-cambiar revierte TODO y deja su asiento (�
       return llamadas === 1 ? false : original(...argumentos);
     };
     try {
-      expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY)).codigo).toBe('CONFLICTO_DE_INVENTARIO');
+      expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY))).codigo).toBe('CONFLICTO_DE_INVENTARIO');
       // Una sola llamada: no reintentó sola.
       expect(llamadas).toBe(1);
-      expect(pedir(ventaId, PIN_DE_JIMMY).anulada).toBe(true);
+      expect((await pedir(ventaId, PIN_DE_JIMMY)).anulada).toBe(true);
     } finally {
       repos.productos.reponerSiSigueIgual = original;
     }
   });
 
-  it('contadores que quedarían NEGATIVOS se rechazan antes del PIN, sin corregir en silencio', () => {
+  it('contadores que quedarían NEGATIVOS se rechazan antes del PIN, sin corregir en silencio', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     base.prepare("UPDATE productos SET cantidad_vendida = '1.000' WHERE id = ?").run(idMaiz);
     const antes = fotoDeLaBase();
 
-    const error = errorDe(() => pedir(ventaId, null));
+    const error = await errorAlPedir(() => pedir(ventaId, null));
 
     expect(error.codigo).toBe('CONTADORES_INCONSISTENTES');
     expect(fotoDeLaBase()).toEqual(antes);
@@ -771,7 +847,7 @@ describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulació
     'causaTecnica',
   ];
 
-  it('un conflicto al VENDER y uno al ANULAR dejan asientos con EXACTAMENTE las mismas claves, en la misma base', () => {
+  it('un conflicto al VENDER y uno al ANULAR dejan asientos con EXACTAMENTE las mismas claves, en la misma base', async () => {
     // Una venta cuyo comparar-y-cambiar de inventario falla.
     const original = repos.productos.descontarSiSigueIgual.bind(repos.productos);
     repos.productos.descontarSiSigueIgual = (): boolean => false;
@@ -786,7 +862,7 @@ describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulació
     const reponer = repos.productos.reponerSiSigueIgual.bind(repos.productos);
     repos.productos.reponerSiSigueIgual = (): boolean => false;
     try {
-      expect(errorDe(() => pedir(ventaId, PIN_DE_JIMMY)).codigo).toBe('CONFLICTO_DE_INVENTARIO');
+      expect((await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY))).codigo).toBe('CONFLICTO_DE_INVENTARIO');
     } finally {
       repos.productos.reponerSiSigueIgual = reponer;
     }
@@ -804,7 +880,7 @@ describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulació
     }
   });
 
-  it('si el asiento NO se puede escribir al ANULAR, el cajero recibe IGUAL el conflicto y la falla queda en la bitácora técnica', () => {
+  it('si el asiento NO se puede escribir al ANULAR, el cajero recibe IGUAL el conflicto y la falla queda en la bitácora técnica', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
     const antes = repos.productos.obtenerPorId(idMaiz);
     // Una falla REAL de la base al insertar el asiento, la misma que usa la
@@ -822,7 +898,7 @@ describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulació
     repos.productos.reponerSiSigueIgual = (): boolean => false;
     let error: ErrorDeNegocio;
     try {
-      error = errorDe(() => pedir(ventaId, PIN_DE_JIMMY));
+      error = await errorAlPedir(() => pedir(ventaId, PIN_DE_JIMMY));
     } finally {
       repos.productos.reponerSiSigueIgual = original;
     }
@@ -848,14 +924,14 @@ describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulació
 
 // ===========================================================================
 describe('Autorización: superficie propia, sin PIN remoto, cada rechazo con su asiento', () => {
-  it('el CÓDIGO REMOTO (6 dígitos) se rechaza en esta superficie y no anula nada', () => {
+  it('el CÓDIGO REMOTO (6 dígitos) se rechaza en esta superficie y no anula nada', async () => {
     // Desde la migración 036 el remoto es un código TOTP de seis dígitos, así
     // que en una superficie que no lo acepta ni siquiera es un PIN posible:
     // FORMATO_INVALIDO, sin consumir intento (antes era un PIN de cuatro
     // dígitos que no coincidía, PIN_INCORRECTO).
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
 
-    const resultado = pedir(ventaId, codigoRemotoDeJimmy());
+    const resultado = await pedir(ventaId, codigoRemotoDeJimmy());
 
     expect(resultado.anulada).toBe(false);
     expect(resultado.codigo).toBe('FORMATO_INVALIDO');
@@ -864,17 +940,17 @@ describe('Autorización: superficie propia, sin PIN remoto, cada rechazo con su 
     expect(inventarioDe(idMaiz)).toBe('98.000');
   });
 
-  it('el PIN de un usuario de VENTA no autoriza, aunque sea el de quien pide', () => {
+  it('el PIN de un usuario de VENTA no autoriza, aunque sea el de quien pide', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
-    expect(pedir(ventaId, PIN_DE_ANA).codigo).toBe('PIN_INCORRECTO');
+    expect((await pedir(ventaId, PIN_DE_ANA)).codigo).toBe('PIN_INCORRECTO');
     expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toBeNull();
   });
 
-  it('CADA PIN equivocado deja su asiento anulacion_de_venta_rechazada, con quién pidió y el código, y nunca el PIN', () => {
+  it('CADA PIN equivocado deja su asiento anulacion_de_venta_rechazada, con quién pidió y el código, y nunca el PIN', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
 
-    pedir(ventaId, PIN_MALO);
-    pedir(ventaId, '1111');
+    await pedir(ventaId, PIN_MALO);
+    await pedir(ventaId, '1111');
 
     const rechazos = asientos('anulacion_de_venta_rechazada');
     expect(rechazos).toHaveLength(2);
@@ -894,12 +970,12 @@ describe('Autorización: superficie propia, sin PIN remoto, cada rechazo con su 
     expect(encolados.n).toBe(2);
   });
 
-  it('el tercer PIN equivocado bloquea la superficie: deja su rechazo y el asiento autorizacion_bloqueada que ya existe', () => {
+  it('el tercer PIN equivocado bloquea la superficie: deja su rechazo y el asiento autorizacion_bloqueada que ya existe', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
-    pedir(ventaId, PIN_MALO);
-    pedir(ventaId, PIN_MALO);
+    await pedir(ventaId, PIN_MALO);
+    await pedir(ventaId, PIN_MALO);
 
-    const tercero = pedir(ventaId, PIN_MALO);
+    const tercero = await pedir(ventaId, PIN_MALO);
 
     expect(tercero.codigo).toBe('AUTORIZACION_BLOQUEADA');
     expect(tercero.segundosParaReintentar).toBe(30);
@@ -910,13 +986,13 @@ describe('Autorización: superficie propia, sin PIN remoto, cada rechazo con su 
     ]);
     expect(campos(asientos('autorizacion_bloqueada')[0]?.valor_nuevo).superficie).toBe('anulacion_de_venta');
     // Bloqueada, ni el PIN correcto anula.
-    expect(pedir(ventaId, PIN_DE_JIMMY).anulada).toBe(false);
+    expect((await pedir(ventaId, PIN_DE_JIMMY)).anulada).toBe(false);
     expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toBeNull();
   });
 
-  it('un administrador con sesión TAMBIÉN teclea su PIN: el primer pedido pide autorización igual', () => {
+  it('un administrador con sesión TAMBIÉN teclea su PIN: el primer pedido pide autorización igual', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
-    const deJimmy = flujo.pedir(
+    const deJimmy = await flujo.pedir(
       { ventaId, motivo: MOTIVO, voucher: null, pin: null },
       sesionDe(idJimmy, 'Jimmy', 'administrativo'),
     );
@@ -982,14 +1058,14 @@ describe('El candado de anulacion_de_venta es INDEPENDIENTE, en los dos sentidos
 
 // ===========================================================================
 describe('Los asientos, con el contenido EXACTO de §6.2', () => {
-  it('venta_anulada: valor_anterior es la venta; valor_nuevo, la anulación y lo que movió, clave por clave', () => {
+  it('venta_anulada: valor_anterior es la venta; valor_nuevo, la anulación y lo que movió, clave por clave', async () => {
     const ventaA = vender([{ productoId: idMaiz, cantidad: '5' }]);
     productos.ajustarInventario(idJimmy, { productoId: idMaiz, cantidad: '50', motivo: 'llegó un pedido' });
     vender([{ productoId: idMaiz, cantidad: '3' }]);
     repos.recibos.crear({ ventaId: ventaA, numeroRecibo: 128, pdfPath: 'recibos/recibo-000128.pdf' });
     const laVenta = repos.ventas.obtenerPorId(ventaA);
 
-    const resultado = pedir(ventaA, PIN_DE_JIMMY);
+    const resultado = await pedir(ventaA, PIN_DE_JIMMY);
 
     const [asiento] = asientos('venta_anulada');
     expect(asiento?.usuario_id).toBe(idAna);
@@ -1030,9 +1106,9 @@ describe('Los asientos, con el contenido EXACTO de §6.2', () => {
     });
   });
 
-  it('con tarjeta, efectivoQueDejaDeContar es 0.00 y numBoleta es el voucher; numeroRecibo va null si la venta no tuvo recibo', () => {
+  it('con tarjeta, efectivoQueDejaDeContar es 0.00 y numBoleta es el voucher; numeroRecibo va null si la venta no tuvo recibo', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta', '004512');
-    pedir(ventaId, PIN_DE_JIMMY, { voucher: '004512' });
+    await pedir(ventaId, PIN_DE_JIMMY, { voucher: '004512' });
 
     const [asiento] = asientos('venta_anulada');
     const anterior = JSON.parse(asiento?.valor_anterior ?? '{}') as Record<string, unknown>;
@@ -1042,14 +1118,129 @@ describe('Los asientos, con el contenido EXACTO de §6.2', () => {
     expect(nuevo.efectivoQueDejaDeContar).toBe('0.00');
   });
 
-  it('ningún asiento de la anulación lleva el PIN, ni en claro ni con hash', () => {
+  it('ningún asiento de la anulación lleva el PIN, ni en claro ni con hash', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
-    pedir(ventaId, PIN_MALO);
-    pedir(ventaId, PIN_DE_JIMMY);
+    await pedir(ventaId, PIN_MALO);
+    await pedir(ventaId, PIN_DE_JIMMY);
 
     const texto = JSON.stringify(base.prepare('SELECT valor_anterior, valor_nuevo FROM auditoria_log').all());
     expect(texto).not.toContain(PIN_DE_JIMMY);
     expect(texto).not.toContain(PIN_MALO);
     expect(texto).not.toContain('scrypt$');
+  });
+});
+
+// ===========================================================================
+describe('EL PDF DEL RECIBO SE REGENERA AL CONFIRMAR LA ANULACIÓN (§5.2, punto 46)', () => {
+  /** Cobra y emite el recibo, como la aplicación. Devuelve la venta y su recibo. */
+  async function venderConRecibo(
+    formaPago: 'efectivo' | 'tarjeta' = 'efectivo',
+  ): Promise<{ ventaId: string; rutaPdf: string }> {
+    const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], formaPago);
+    const emitido = await recibos.emitir(ventaId);
+    // La emisión deja su propio PDF: lo que interesa de acá en adelante es lo
+    // que pase DESPUÉS, así que se olvida.
+    pdfGenerados = [];
+    impresora.recibidos.length = 0;
+    return { ventaId, rutaPdf: emitido.rutaPdf };
+  }
+
+  it('se regenera UNA vez, sobre el MISMO archivo que dejó la emisión', async () => {
+    const { ventaId, rutaPdf } = await venderConRecibo();
+
+    expect((await pedir(ventaId, PIN_DE_JIMMY)).anulada).toBe(true);
+
+    expect(pdfGenerados).toHaveLength(1);
+    expect(pdfGenerados[0]?.ruta).toBe(rutaPdf);
+  });
+
+  it('el PDF regenerado lleva la marca, con la fecha, quién autorizó y el motivo', async () => {
+    const { ventaId } = await venderConRecibo();
+
+    await pedir(ventaId, PIN_DE_JIMMY);
+
+    const html = pdfGenerados[0]?.html ?? '';
+    expect(html).toContain('** VENTA ANULADA **');
+    expect(html).toContain('Autoriz&oacute;: Jimmy');
+    expect(html).toContain(`Motivo: ${MOTIVO}`);
+    expect(html).toMatch(/Anulada: \d{2}\/\d{2}\/\d{4} \d{2}:\d{2}/);
+  });
+
+  it('y CONSERVA las cifras: el mismo total y las mismas líneas que antes de anular', async () => {
+    const { ventaId } = await venderConRecibo();
+    const antes = reciboComoHtml(recibos.modeloDe(repos.recibos.obtenerPorVenta(ventaId)?.id ?? ''));
+
+    await pedir(ventaId, PIN_DE_JIMMY);
+
+    const despues = pdfGenerados[0]?.html ?? '';
+    // El total, la línea del producto y el número de recibo, intactos.
+    for (const cifra of ['8.50', 'Maíz blanco', '2 lb']) {
+      expect(antes).toContain(cifra);
+      expect(despues).toContain(cifra);
+    }
+    expect(antes).not.toContain('VENTA ANULADA');
+  });
+
+  it('NO SALE NINGÚN TICKET por la impresora: anular no imprime (§5.2)', async () => {
+    const { ventaId } = await venderConRecibo();
+
+    await pedir(ventaId, PIN_DE_JIMMY);
+
+    expect(impresora.recibidos).toEqual([]);
+  });
+
+  it('y el papel NO dice «REIMPRESIÓN»: nadie lo reimprimió, es el original marcado', async () => {
+    const { ventaId } = await venderConRecibo();
+
+    await pedir(ventaId, PIN_DE_JIMMY);
+
+    expect(pdfGenerados[0]?.html).not.toContain('REIMPRESI');
+  });
+
+  it('la VISTA PREVIA no regenera nada: todavía no se anuló', async () => {
+    const { ventaId } = await venderConRecibo();
+
+    expect((await pedir(ventaId, null)).codigo).toBe('REQUIERE_AUTORIZACION');
+
+    expect(pdfGenerados).toEqual([]);
+  });
+
+  it('un PIN EQUIVOCADO tampoco regenera nada', async () => {
+    const { ventaId } = await venderConRecibo();
+
+    expect((await pedir(ventaId, PIN_MALO)).codigo).toBe('PIN_INCORRECTO');
+
+    expect(pdfGenerados).toEqual([]);
+  });
+
+  it('una venta SIN RECIBO se anula igual, y no se regenera ningún PDF', async () => {
+    // Pasa si la aplicación se cayó entre la venta y la emisión del recibo (§4.14).
+    const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
+
+    expect((await pedir(ventaId, PIN_DE_JIMMY)).anulada).toBe(true);
+
+    expect(pdfGenerados).toEqual([]);
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).not.toBeNull();
+  });
+
+  it('SI EL PDF FALLA, la anulación queda hecha igual y la falla va a la bitácora técnica', async () => {
+    const { ventaId } = await venderConRecibo();
+    elPdfFalla = true;
+
+    const resultado = await pedir(ventaId, PIN_DE_JIMMY);
+
+    expect(resultado.anulada).toBe(true);
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).not.toBeNull();
+    expect(bitacoraTecnica.lineas.join('\n')).toContain('disco lleno (simulado)');
+  });
+
+  it('el inventario y el efectivo esperado quedan como si nada: el PDF no toca la base', async () => {
+    const { ventaId } = await venderConRecibo();
+    elPdfFalla = true;
+
+    await pedir(ventaId, PIN_DE_JIMMY);
+
+    expect(inventarioDe(idMaiz)).toBe('100.000');
+    expect(esperadoDeLaCaja()).toBe('500.00');
   });
 });

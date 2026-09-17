@@ -223,6 +223,9 @@ beforeEach(() => {
   });
   flujo = new FlujoDeAnulacionDeVenta({
     anulacion,
+    // El mismo servicio de recibos que usan los canales: el flujo regenera el
+    // PDF del recibo en cuanto la anulación se confirma (§5.2).
+    recibos,
     autenticacion: new ServicioDeAutenticacion({
       base,
       usuarios: repos.usuarios,
@@ -317,7 +320,7 @@ describe('EL BOTÓN «ANULAR» solo se ofrece en las ventas de la caja ABIERTA',
 
   it('una venta YA ANULADA deja de ofrecerse, y la fila lo dice con fecha, quién autorizó y motivo', async () => {
     const ventaId = await venderConRecibo();
-    flujo.pedir(
+    await flujo.pedir(
       { ventaId, motivo: MOTIVO, voucher: null, pin: PIN_DE_JIMMY },
       sesionDe(idAna, 'Ana', 'venta'),
     );
@@ -343,7 +346,7 @@ describe('EL HISTORIAL Y EL SERVICIO APLICAN LA MISMA REGLA', () => {
     const enEfectivo = await venderConRecibo();
     const conTarjeta = await venderConRecibo('tarjeta');
     const anulada = await venderConRecibo('efectivo', '1');
-    flujo.pedir(
+    await flujo.pedir(
       { ventaId: anulada, motivo: MOTIVO, voucher: null, pin: PIN_DE_JIMMY },
       sesionDe(idAna, 'Ana', 'venta'),
     );
@@ -383,7 +386,7 @@ describe('EL RECIBO REIMPRESO de una venta anulada', () => {
       throw new Error('La primera reimpresión falló.');
     }
 
-    flujo.pedir(
+    await flujo.pedir(
       { ventaId, motivo: MOTIVO, voucher: null, pin: PIN_DE_JIMMY },
       sesionDe(idAna, 'Ana', 'venta'),
     );
@@ -413,7 +416,7 @@ describe('EL RECIBO REIMPRESO de una venta anulada', () => {
   it('el recibo VISTO desde el historial muestra la misma marca que el papel', async () => {
     const ventaId = await venderConRecibo();
     const recibo = filaDe(await historial(), ventaId);
-    flujo.pedir(
+    await flujo.pedir(
       { ventaId, motivo: MOTIVO, voucher: null, pin: PIN_DE_JIMMY },
       sesionDe(idAna, 'Ana', 'venta'),
     );
