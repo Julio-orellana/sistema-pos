@@ -65,7 +65,7 @@ De ahí salen dos clases de hueco, y **significan cosas distintas**:
 | Dónde falta el número | Qué significa | Ejemplos |
 |---|---|---|
 | **Falta aquí**, existe en `src/main/database/migrations/` | Ese cambio es **solo local**: toca algo que no se espeja, porque es estado operativo de una terminal y no dato de negocio. | 0002, 0003, 0006, 0011, 0013, 0018, 0029 (la local; ver la nota sobre el 29), 0030, 0034, 0036, 0037 |
-| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027, 0029 (la de la nube; ver la nota sobre el 29) |
+| **Falta allá**, existe aquí | Ese cambio es **solo de la nube**: no tiene sentido en SQLite, o directamente no puede existir ahí. | 0019, 0020, 0021, 0022, 0024, 0025, 0026, 0027, 0029 (la de la nube; ver la nota sobre el 29), 0035 |
 
 La segunda dirección es nueva: apareció en la fase 2.a de la sincronización,
 2026-09-11. Antes todos los huecos eran de la primera clase, y por eso este
@@ -113,9 +113,9 @@ carpetas: el hueco es información, y renumerar la destruye.
 | `028_limites_descuento_id_determinista` | `0028_limites_descuento_id_determinista.sql` | El id de un tope pasa a ser FIJO por rol. Tiene que ser el MISMO valor de los dos lados, o la fila llega a la nube con una llave primaria distinta de la que allá ya existe |
 | `029_saltar_lote_de_sincronizacion` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja. **Ojo: el `0029` de este lado existe y es OTRA migración**; ver la nota sobre el 29 |
 | `030_recibos_pdf_path_relativo` | **(ninguno, a propósito)** | Cambia el VALOR de `recibos.pdf_path` en las filas locales (de absoluta a relativa), no el esquema: la columna de Postgres sigue igual y las filas ya subidas no se reescriben (la restauración las convierte al bajarlas). El `0030` queda reservado |
-| `031_productos_precio_compra` | `0031_productos_precio_compra.sql` | Costo del producto: dato de negocio que viaja en el payload de `productos`. **Aplicado en `pos-pruebas-descartable` el 2026-09-15; NO en `pos-jimmy-cano`.** Mientras terminal y nube difieran la cola se detiene (ver la cabecera del archivo) |
-| `032_venta_detalle_costo_unitario_snap` | `0032_venta_detalle_costo_unitario_snap.sql` | Foto del costo en cada línea de venta: dato de negocio que viaja en el payload de `venta_detalle`. **Aplicado en `pos-pruebas-descartable` el 2026-09-15; NO en `pos-jimmy-cano`.** Mismo problema de forma de payload que el 0031 |
-| `033_anulaciones_de_venta` | **`0033_anulaciones_de_venta.sql`, TODAVÍA NO ESCRITO** | La anulación de una venta: dato de negocio (`docs/ANULACION-DE-VENTA.md` §1). El espejo, la función `0035` y el enrutador son del prompt de sincronización. Hasta entonces, **una terminal con la 033 no se conecta a la nube**: el lote de una anulación detendría la cola |
+| `031_productos_precio_compra` | `0031_productos_precio_compra.sql` | Costo del producto: dato de negocio que viaja en el payload de `productos`. **Aplicado en `pos-pruebas-descartable` el 2026-09-15 a las 05:09 UTC y en `pos-jimmy-cano` el mismo día a las 20:59 UTC** (CLAUDE.md §4.4; esta fila decía «NO en `pos-jimmy-cano`» y quedó vieja ese día). Mientras terminal y nube difieran la cola se detiene (ver la cabecera del archivo) |
+| `032_venta_detalle_costo_unitario_snap` | `0032_venta_detalle_costo_unitario_snap.sql` | Foto del costo en cada línea de venta: dato de negocio que viaja en el payload de `venta_detalle`. **Aplicado en los dos proyectos el 2026-09-15**, en los mismos momentos que el 0031 (CLAUDE.md §4.4). Mismo problema de forma de payload que el 0031 |
+| `033_anulaciones_de_venta` | `0033_anulaciones_de_venta.sql` | La anulación de una venta: dato de negocio (`docs/ANULACION-DE-VENTA.md` §1). **Escrita el 2026-09-17 y NO aplicada en ningún proyecto**: espera la aprobación de Julio. Su puerta es la `0035`, que la exige. **Una terminal con la 033 contra una nube sin la 0033 y la 0035 detiene su cola en la primera anulación** |
 | `034_superficie_anulacion_de_venta` | **(ninguno, a propósito)** | Amplía `bloqueos_de_autorizacion`, que no se espeja. El `0034` queda reservado |
 | `036_totp_de_autorizacion_remota` | **(ninguno, NUNCA)** | El secreto de TOTP cifrado y el último paso usado. **Regla no negociable: el secreto nunca sube a la nube, bajo ninguna circunstancia** (CLAUDE.md §4.47). No es «todavía no»: ningún diseño futuro lo espeja. El `0036` queda reservado |
 | `037_quitar_pin_remoto_hash` | **(ninguno, a propósito)** | Quita `usuarios.pin_remoto_hash` de SQLite. En Postgres esa columna ya no existe desde la `0021`, así que no hay nada que quitar. El `0037` queda reservado |
@@ -155,7 +155,7 @@ El detalle y la razón de cada uno están en `CLAUDE.md`, sección 4.4.
 
 ### Dirección 2 — el cambio es solo de la nube, y allá no hay archivo
 
-**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023, 024, 025, 026 ni 027.** (La `029` local SÍ existe y es otra migración, ajena a la `0029`: ver la nota sobre el 29, más arriba.)
+**NO EXISTEN NI VAN A EXISTIR las migraciones locales 019, 020, 021, 023, 024, 025, 026, 027 ni 035.** (La `029` local SÍ existe y es otra migración, ajena a la `0029`: ver la nota sobre el 29, más arriba.)
 Las tres primeras de esta dirección llegaron juntas, con la fase 2.a de la
 sincronización, y nacen de la misma pregunta: qué tiene que haber en la nube que
 no tiene por qué estar en la terminal, y qué hay hoy en la nube que nunca debió
@@ -173,6 +173,9 @@ tabla, un concepto que en SQLite no existe.
 | `0024_privilegios_de_tabla.sql` | **(ninguna, a propósito)** | Revoca los privilegios de tabla que Supabase concede por omisión a `anon` y `authenticated`, y deja a `authenticated` con `SELECT` y nada más. **En SQLite no existe el concepto**: no hay roles ni privilegios de tabla, y el único que abre la base es el proceso principal. Se escribe `REVOKE ALL` + `GRANT SELECT` en vez de enumerar privilegios, porque enumerar dejó afuera `MAINTAIN` (nuevo en Postgres 17, invisible en `information_schema`). Ver CLAUDE.md §4.20. |
 | `0025_politicas_de_restauracion.sql` | **(ninguna, a propósito)** | Una política RLS `FOR SELECT` para el rol `restauracion` sobre cada una de las 13 tablas, y ninguna para la terminal. **En SQLite no hay RLS ni roles**: la base la abre un solo proceso y el control de acceso es el guard de permisos del IPC (§4.7). Ver CLAUDE.md §4.21. |
 | `0026_storage_de_archivos.sql` | **(ninguna, a propósito)** | Los buckets privados `fotos` y `recibos` y sus políticas, más una restrictiva que le cierra `storage.objects` a `anon`. **En SQLite no hay Storage**: los archivos viven en `<userData>` y su ruta relativa está en `productos.foto_path` y `recibos.pdf_path`, que esta migración no toca. Ver CLAUDE.md §4.21. |
+| `0027_sincronizar_asiento.sql` | **(ninguna, a propósito)** | La puerta de un asiento de auditoría SUELTO, sin fila principal de negocio. Es código que corre en Postgres. Ver CLAUDE.md §4.29. |
+| `0029_restauracion_ventas_por_mes.sql` | **(ninguna, a propósito; la `029` local es OTRA)** | La suma de control de la restauración, con `NUMERIC` en Postgres. Ver la nota sobre el 29. |
+| `0035_sincronizar_anulacion_de_venta.sql` | **(ninguna, a propósito)** | La puerta de la anulación de una venta (`docs/ANULACION-DE-VENTA.md` §7): la fila de `anulaciones_de_venta`, los productos que repone y su asiento `venta_anulada`, en una transacción, con el endurecimiento de la 0023. Código que corre en Postgres, con `auth.jwt()`. **Escrita el 2026-09-17 y NO aplicada en ningún proyecto.** El `035` local queda reservado. |
 
 **Las cuatro tienen la misma forma y conviene verla:** ninguna es «la nube va
 atrasada respecto de lo local». Dos de ellas *quitan* de la nube algo que lo
@@ -221,9 +224,16 @@ número que use queda reservado también del lado local.
 
 | `0028_limites_descuento_id_determinista.sql` | Sí — aplicada el 2026-09-14, después de probarse en `pos-pruebas-descartable` el mismo día. El CHECK `limites_descuento_id_fijo_por_rol` quedó `convalidated = true`, y los CUATRO CHECK de la tabla tienen `md5(pg_get_constraintdef)` idéntico en los dos proyectos. Falsificado en el real: un id sorteado y un id cruzado se rechazan los dos, sin dejar ninguna fila. |
 | `0029_restauracion_ventas_por_mes.sql` | Sí — aplicada el 2026-09-14, con la aprobación explícita de Julio, después de la 030 local y en ese orden; en `pos-pruebas-descartable` desde el mismo día (fase 4.b), verificada allí con `npm run verify:restauracion`. Crea `restauracion_ventas_por_mes()` —`SECURITY INVOKER`, solo rol `restauracion`, suma `ventas.total` por mes UTC con `NUMERIC` y la devuelve como texto— y reemplaza `contrato_de_sincronizacion` para que la enumere. Es puramente aditiva y la versión de contrato no sube. Leído del catálogo del real: registro con `md5 1b6247a51bfcbac7f69d66aaf863076c`, igual al archivo y al registro del descartable; las 16 funciones de `public` con `md5(pg_get_functiondef)` idéntico en los dos proyectos; la salida de `contrato_de_sincronizacion()` con los claims de restauración da `525d648ebbbf6a535bf6e46dfed3cc52` en los dos (13 tablas, 15 funciones, versión 1); `search_path=""`, ACL sin `anon`; sondas: `restauracion` → `[]`, `terminal` → `42501`, `anon` → `permission denied`. Ver CLAUDE.md §4.4. |
+| `0031_productos_precio_compra.sql` | Sí — aplicada el 2026-09-15 a las 20:59 UTC, con la aprobación de Julio después de ver el SQL; en `pos-pruebas-descartable` desde las 05:09 UTC del mismo día. Evidencia en CLAUDE.md §4.4. |
+| `0032_venta_detalle_costo_unitario_snap.sql` | Sí — aplicada el 2026-09-15 justo después de la `0031`, con la misma aprobación. Evidencia en CLAUDE.md §4.4. |
+| `0033_anulaciones_de_venta.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Se ensayó en un Postgres 17 LOCAL con las migraciones de esta carpeta (CLAUDE.md §4.53). Espera la aprobación de Julio, primero para `pos-pruebas-descartable`. |
+| `0035_sincronizar_anulacion_de_venta.sql` | **No — escrita el 2026-09-17, sin aplicar en NINGÚN proyecto.** Exige la `0033`. Mismo ensayo local y misma espera. |
 
-**NO QUEDA NINGUNA MIGRACIÓN PENDIENTE EN `pos-jimmy-cano`: los dos proyectos
-tienen las mismas 24.** La última fue la `0029`, el 2026-09-14, aplicada
+**ACTUALIZADO EL 2026-09-17: los dos proyectos tienen las mismas 26** (las 24
+de abajo más la `0031` y la `0032`, del 2026-09-15). **La `0033` y la `0035`
+están escritas y no aplicadas en ninguno.** El párrafo que sigue describe el
+estado del 2026-09-14: **no quedaba ninguna migración pendiente en
+`pos-jimmy-cano` y los dos proyectos tenían las mismas 24.** La última fue la `0029`, el 2026-09-14, aplicada
 después de la `0027` y la `0028` del mismo día; antes la `0025` y la `0026`,
 el 2026-09-13, y la `0023` y la `0024`, el 2026-09-12. Todas con la aprobación
 explícita de Julio y después de probarse en `pos-pruebas-descartable`.
