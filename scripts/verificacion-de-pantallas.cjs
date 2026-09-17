@@ -120,7 +120,17 @@ async function main() {
    * nunca el de la tienda, con una conexión aparte y de un solo uso: SQLite
    * en modo WAL admite otra conexión mientras la app tiene la suya abierta.
    */
-  function forzarLoteBloqueante(error) {
+  /**
+   * Siembra un lote BLOQUEANTE de verdad, con una conexión aparte contra el
+   * mismo archivo que la aplicación tiene abierto (SQLite en WAL lo permite).
+   *
+   * La tabla es un parámetro porque la pantalla la muestra con su NOMBRE
+   * LEGIBLE (`@shared/nombres-de-tabla`), y con `usuarios` esa traducción es
+   * invisible: el nombre técnico y el legible son la misma palabra. Con
+   * `venta_detalle` → «líneas de venta» sí se ve, que es el defecto que este
+   * arnés tiene que poder atrapar.
+   */
+  function forzarLoteBloqueante(error, tabla = 'usuarios') {
     const loteId = randomUUID();
     const ahora = new Date().toISOString();
     const conexion = new DatabaseConstructor(join(datos, 'pos-agricola.db'));
@@ -130,9 +140,9 @@ async function main() {
           `INSERT INTO sync_cola (
              id, entidad_tipo, entidad_id, operacion, payload, creado_en,
              lote_id, orden_en_lote, intentos, bloqueante, error
-           ) VALUES (?, 'usuarios', ?, 'insertar', '{}', ?, ?, 0, 1, 1, ?)`,
+           ) VALUES (?, ?, ?, 'insertar', '{}', ?, ?, 0, 1, 1, ?)`,
         )
-        .run(randomUUID(), randomUUID(), ahora, loteId, error);
+        .run(randomUUID(), tabla, randomUUID(), ahora, loteId, error);
     } finally {
       conexion.close();
     }
@@ -754,6 +764,7 @@ async function main() {
     // =======================================================================
     const loteParaReintentar = forzarLoteBloqueante(
       '{"code":"23505","message":"duplicate key value violates unique constraint"}',
+      'venta_detalle',
     );
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor();
@@ -769,6 +780,29 @@ async function main() {
         ? 'lo contiene'
         : `no lo contiene: "${errorCompleto}"`,
       errorCompleto.includes('23505') && errorCompleto.includes('duplicate key'),
+    );
+
+    /*
+      EL NOMBRE DE LA TABLA SE MUESTRA TRADUCIDO, NO CON SU NOMBRE TÉCNICO.
+
+      Es el defecto que costó dos mapas desincronizados: cuando llegó
+      `anulaciones_de_venta` (CLAUDE.md §4.45) solo se agregó a uno, y esta
+      pantalla mostró el nombre de la tabla a quien tenía que decidir si
+      reintentaba o saltaba un lote detenido. El lote de arriba es de
+      `venta_detalle` justamente para que la traducción se vea: con `usuarios`
+      el nombre técnico y el legible son la misma palabra y esto no probaría
+      nada.
+    */
+    const textoDelBloqueante =
+      (await prueba('sincronizacion-lote-bloqueante').textContent()) ?? '';
+    const traduce =
+      textoDelBloqueante.includes('líneas de venta') &&
+      !textoDelBloqueante.includes('venta_detalle');
+    comprobar(
+      'el lote detenido nombra la tabla en castellano, nunca con su nombre técnico',
+      '"líneas de venta", y en ninguna parte "venta_detalle"',
+      traduce ? 'traduce' : `NO traduce: "${textoDelBloqueante.replace(/\s+/g, ' ').trim()}"`,
+      traduce,
     );
 
     await prueba('sincronizacion-reintentar').click();
