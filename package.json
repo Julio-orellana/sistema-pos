@@ -34,6 +34,7 @@
     "verify:pantallas:teclado": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-teclado-en-pantalla.cjs",
     "verify:arranque:sin-respuesta-de-red": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-arranque-sin-respuesta-de-red.cjs",
     "verify:pantallas:historial-de-cajas": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-historial-de-cajas.cjs",
+    "verify:pantallas:anulacion": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-anulacion.cjs",
     "verify:paquete": "node scripts/verificacion-de-paquete.cjs",
     "seed:ejemplo": "npm run build && electron . --datos-de-ejemplo=sembrar",
     "seed:limpiar": "npm run build && electron . --datos-de-ejemplo=limpiar",
