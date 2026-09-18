@@ -34,6 +34,11 @@ export default defineConfig(
     // pertenecen a ningún tsconfig, así que las reglas con información de
     // tipos no pueden analizarlos.
     'scripts/*.cjs',
+    // Copias de trabajo de Claude Code (git worktree). Git las ignora por
+    // `.git/info/exclude`, pero ESLint no lee ese archivo: desde la raíz del
+    // repositorio principal las analizaba enteras, con información de tipos, y
+    // `npm run verify` se quedaba sin memoria (2026-09-18).
+    '.claude/**',
   ]),
 
   js.configs.recommended,
