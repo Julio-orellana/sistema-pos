@@ -1810,6 +1810,10 @@ reacomodaría entre recargas y el cajero que ya sabe dónde está el maíz tendr
 que volver a buscarlo. Mismo criterio de «nunca dejar un orden ambiguo» del
 reparto de centavos.
 
+**Desde el 2026-09-18 las CATEGORÍAS se ordenan con el mismo criterio**, sumando
+el `contador_ventas` de sus productos. Antes se ordenaban por un número escrito
+a mano (§4.63).
+
 La insignia de «más vendido» **solo aparece en productos con ventas reales**,
 así que en una instalación nueva no la lleva ninguno: poner el número igual
 sería decorar la pantalla con un dato falso.
@@ -10014,6 +10018,122 @@ aplicación que ya se cerró sola: punto 49 de §6.2.
   la página, y el sistema operativo sigue siendo el de esta Mac.
 - **El rendimiento en el i3**: los números de cuadros son de esta Mac.
 
+### 4.63 Las categorías se ordenan solas, por sus ventas (2026-09-18)
+
+**Qué se pidió.** Al crear una categoría había que escribir a mano un número de
+orden. Julio pidió que la posición sea automática, con el mismo criterio que ya
+ordena los productos (§4.12), y que el formulario no le pida nada a nadie.
+
+#### Cómo estaba, leído antes de tocar nada
+
+| Dónde | Qué hacía con `categorias.orden` |
+|---|---|
+| `RepositorioDeCategorias.crear` | Lo escribía (`datos.orden ?? 0`) |
+| `listar` / `listarActivas` | `ORDER BY orden, nombre`. Alimentan la barra de la venta, el selector de productos y la pantalla de categorías |
+| `actualizar` / `cambiarOrden` | Lo escribían. `cambiarOrden` no lo llamaba nadie |
+| `ServicioDeCategorias.validar` | Rechazaba lo que no fuera un entero ≥ 0, y lo ponía en los asientos |
+| Canal IPC y esquema Zod | Lo exigían, entre 0 y 9999 |
+| `PantallaDeCategorias` | Un campo «Orden (menor número, más arriba)» con el teclado de enteros |
+| Datos de ejemplo | Granos 1, Abarrotes 2, Huevos 3 |
+
+#### La regla nueva
+
+```sql
+SELECT c.*, COALESCE(SUM(p.contador_ventas), 0) AS ventas
+  FROM categorias c LEFT JOIN productos p ON p.categoria_id = c.id
+ [WHERE c.activo = 1]
+ GROUP BY c.id ORDER BY ventas DESC, c.nombre ASC
+```
+
+- **Se calcula al leer**; no se guarda en ningún lado.
+- **Es el criterio de los productos**: `contador_ventas DESC, nombre ASC`, con
+  la misma comparación binaria de SQLite. Hay una prueba que compara las dos
+  listas con los mismos nombres.
+- **Suma TODOS los productos de la categoría, activos o no**: lo vendido no se
+  borra al desactivar un producto.
+- **El desempate es determinista** porque `categorias.nombre` es UNIQUE. Una
+  categoría nueva tiene 0 y cae al final (o entre las de 0, por nombre).
+- **Sumar en SQL no contradice §4.15**: `contador_ventas` es INTEGER, y SQLite
+  lo suma exacto. La regla de §4.15 es para los decimales guardados como TEXT.
+- **Sube al vender y baja al anular** sin código nuevo: la venta y la anulación
+  ya mueven `contador_ventas` (§4.13, §4.45).
+- La pantalla muestra «N ventas · M productos» y explica que se ordenan solas.
+  El renderer no ordena nada: la lista llega ordenada.
+
+#### ¿Hizo falta migración? NO, y por qué
+
+La columna queda en la tabla, sin leerse ni escribirse. El esquema lo permite:
+es `INTEGER NOT NULL DEFAULT 0 CHECK (orden >= 0)`, así que un INSERT sin ella
+toma 0 y pasa el CHECK. Los valores viejos (Granos 1, …) quedan y no mueven a
+nadie (prueba propia). Quitarla era peor, por dos razones, una medida y otra
+leída:
+
+1. **En SQLite no se puede sin rehacer índices** (medido, SQLite 3.53.4):
+
+   ```
+   «ALTER TABLE categorias DROP COLUMN orden» -> error in index idx_categorias_orden after drop column: no such column: orden
+   «DROP INDEX idx_categorias_orden; ALTER TABLE categorias DROP COLUMN orden» -> error in index idx_categorias_activas after drop column: no such column: orden
+   ```
+
+   Habría que borrar y recrear `idx_categorias_activas (activo, orden)` en
+   cada terminal.
+2. **La nube tiene la columna y exige el payload exacto** (§4.20). La terminal
+   sube `SELECT *` de la fila, así que la columna sigue viajando igual que hoy
+   y nada cambia en la nube. Quitarla obligaría a una migración de la nube que
+   rechazaría los lotes de categorías de toda terminal con la 1.2.0 publicada.
+
+Un payload viejo con `orden` tampoco rompe nada: Zod descarta las claves que
+no declara.
+
+#### Las pruebas que protegían el orden manual, y qué pasó con cada una
+
+| Prueba | Qué protegía | Ahora |
+|---|---|---|
+| «RECHAZA un orden negativo» | Que no se guardara una posición inválida escrita a mano | **Reemplazada** por «NO pide ni guarda ningún orden»: un `orden` que llegue igual se ignora y la columna queda en 0 |
+| «cambia nombre y orden» | Que editar guardara las dos cosas | **Reemplazada** por «cambia el nombre» |
+| «deja conservar su propio nombre al editar solo el orden» | Que guardar sin cambiar el nombre no choque consigo mismo | **Reemplazada** por la misma regla sin el orden: sigue valiendo |
+| `verificacion-de-caja-y-teclado.cjs`: «el ORDEN abre el teclado de solo enteros» | Que el campo tuviera teclado | **Reemplazada** por «el formulario de categoría NO pide ningún orden» |
+
+Las demás llamadas con `orden: N` (unas 60, en 17 archivos de prueba y 4
+arneses) solo pasaban el dato; se quitó el argumento.
+
+Nuevas: 8 en `servicio-de-categorias.test.ts` (suma, categoría nueva al final,
+empate en cero y en 2, desempate binario igual al de los productos, productos
+desactivados, categoría desactivada, recálculo en cada lectura, columna vieja
+ignorada), más «editar no toca la columna vieja», y una con los servicios reales
+en `servicio-de-anulacion.test.ts`: vender pasa adelante a una categoría y anular
+la devuelve atrás.
+
+**Falsificado en Vitest**, archivo restaurado con el mismo sha256
+(`62c7f6fba7e3519d`):
+
+| Mutación | Qué cae |
+|---|---|
+| Volver a `ORDER BY c.orden, c.nombre` | 8 |
+| Sumar solo productos activos | 1 |
+| Desempatar por `creado_en` | 3 |
+
+**En la app real, a 1024×768** (`verify:pantallas:1024`, sección 8, 22 de 22):
+
+```
+barra de categorías con «Abarrotes» recién creada: ["Granos","Abarrotes"]
+catalogo.listarCategorias() tras 7 ventas de Jabón: ["Abarrotes=7","Granos=6"]
+barra de categorías tras 7 ventas de Jabón: ["Abarrotes","Granos"]
+pantalla de categorías: {"filas":["Abarrotes — 7 ventas · 1 producto","Granos — 6 ventas · 12 productos"],"camposDelFormulario":["categoria-nombre"],"campoDeOrden":0,…}
+```
+
+Falsificado ahí con `ORDER BY c.orden, c.nombre`: cae 1 de 22 («UNA CATEGORÍA
+NUEVA… aparece AL FINAL», real `["Abarrotes","Granos"]`). **La comprobación de
+«pasa adelante» NO cae con esa mutación**: con los dos `orden` en 0 el nombre
+pone primero a «Abarrotes» de todos modos. Las dos juntas sí distinguen.
+`verify:pantallas:caja`: 57 de 57.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- Los arneses de impresora, anulación e historial de recibos solo cambiaron el
+  argumento de `crearCategoria` y no se volvieron a correr.
+
 ### 4.64 «Cobrar» ya no espera a la impresora (2026-09-18)
 
 **El reporte.** En el equipo de la tienda, con la RPT004 conectada y
@@ -10440,6 +10560,7 @@ contesta hasta que la prueba lo decide, y 7 de la pantalla. Falsificado:
 | **Con el ticket angosto (< 500 px), COBRAR pone el monto abajo del texto, con `min-width: 0`; a 1920 se ve igual que antes.** | Achicar la letra en todos los tamaños; recortar el texto; cambiar el ancho de las columnas | El contenido mínimo de COBRAR era 340 px y el lugar a 1024, 186 (medido). La consulta de contenedor mira el ancho del ticket, no el de la pantalla, y deja intacta la venta en pantallas grandes. §4.62. | 2026-09-18 (número de prompt por confirmar) |
 | **La aceleración gráfica queda por omisión; lo que se agrega es medirla en la tienda: el diagnóstico y la bitácora dicen qué GPU usa Chromium y anotan cada caída de su proceso.** | Apagarla siempre con `app.disableHardwareAcceleration()`; un archivo de configuración para apagarla | Ninguna medición del equipo real dice que haga falta. En Windows, la lista de bloqueo de Chromium no apaga la HD 3000 entera (solo Graphite, entradas 184 y 187). En esta Mac las dos formas dan la misma cadencia y sin GPU se usa más memoria. `--disable-gpu` se puede probar en la tienda desde el acceso directo sin recompilar. §4.62. | 2026-09-18 (número de prompt por confirmar) |
 | **Un arnés termina la aplicación solo con `terminarAplicacion` (`scripts/terminar-aplicacion.cjs`), sobre el proceso guardado justo después de `electron.launch()`; una prueba recorre `scripts/` y lo exige.** | Envolver cada `app.process().kill()` en try/catch; usar `app.close()` | Medido: `app.process()` lanza en cuanto Playwright procesa el cierre de la aplicación, y el arnés de caja la cerraba a propósito antes de su `finally`. Envolver cada llamada deja la forma frágil disponible para el próximo arnés. `app.close()` pasa por la intercepción del cierre y pide PIN (§4.5). Punto 49 de §6.2. | 2026-09-18 (número de prompt por confirmar) |
+| **Las categorías se ordenan por la suma del `contador_ventas` de sus productos (activos o no), calculada al leer, con desempate por nombre; el formulario ya no pide orden. La columna `categorias.orden` queda sin uso y NO se migra.** | Seguir con el orden manual; guardar la suma en una columna; quitar la columna | Pedido de Julio: el mismo criterio que los productos (§4.12). Guardar la suma sería un segundo número que mantener al vender y al anular. Quitar la columna exige rehacer dos índices en SQLite (medido) y una migración de la nube que rompería los lotes de la 1.2.0 publicada; el esquema la deja sin uso con su DEFAULT 0. §4.63. | 2026-09-18 (número de prompt por confirmar) |
 | **El cobro responde con el PDF escrito y la impresión EN CURSO; el resultado del papel llega después por `recibos:impresion-terminada`, y los tickets salen uno por vez.** | Seguir esperando la impresora; no esperar tampoco el PDF; mandar la impresión sin fila | En la tienda, «Cobrar» tardaba 5–10 s porque el canal esperaba un `powershell.exe` por ticket con 1,5 s fijos adentro (leído en el código). Medido en la app real con una impresora que tarda 6 s: 384 ms contra 6382 ms del código anterior. El PDF se sigue esperando porque es el respaldo obligatorio. Sin fila, dos ventas seguidas lanzan dos PowerShell a la vez y los tickets pueden salir en otro orden. §4.64. | 2026-09-18 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor

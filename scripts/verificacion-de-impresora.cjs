@@ -273,7 +273,7 @@ async function main() {
 
     // ---- 7. Una venta imprime ------------------------------------------------
     const productoId = await ventana.evaluate(async () => {
-      const categoria = await window.pos.catalogo.crearCategoria('Granos', 1);
+      const categoria = await window.pos.catalogo.crearCategoria('Granos');
       if (!categoria.ok) throw new Error(categoria.error.mensaje);
       const producto = await window.pos.catalogo.crearProducto({
         nombre: 'Frijol negro', categoriaId: categoria.datos.id, tipoMedida: 'unidad', unidadPeso: null,

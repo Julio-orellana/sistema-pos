@@ -172,7 +172,7 @@ async function main() {
           await window.pos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pin: p.ana }),
           'crear Ana',
         );
-        const categoria = exigir(await window.pos.catalogo.crearCategoria('Granos', 1), 'categoría');
+        const categoria = exigir(await window.pos.catalogo.crearCategoria('Granos'), 'categoría');
         const maiz = exigir(
           await window.pos.catalogo.crearProducto({
             nombre: 'Maíz blanco',

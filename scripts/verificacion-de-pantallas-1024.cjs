@@ -267,7 +267,7 @@ async function main() {
         return respuesta.datos;
       };
       exigir(await window.pos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pin: '1357' }));
-      const categoria = exigir(await window.pos.catalogo.crearCategoria('Granos', 1));
+      const categoria = exigir(await window.pos.catalogo.crearCategoria('Granos'));
       const nombres = ['Maíz blanco', 'Maíz amarillo', 'Frijol negro', 'Frijol rojo', 'Arroz', 'Azúcar',
         'Sal', 'Café en grano', 'Avena', 'Harina', 'Huevos', 'Aceite'];
       const productos = [];
@@ -583,6 +583,94 @@ async function main() {
       'GPU … · composición: … · rasterizado: …',
       aceleracion,
       /composición: \S+ · rasterizado: \S+/.test(aceleracion),
+    );
+
+    // =======================================================================
+    // 8. Las categorías se ordenan SOLAS por sus ventas (§4.63), a 1024×768.
+    //    «Granos» ya tiene 6 ventas. Se crea «Abarrotes», que por nombre iría
+    //    antes: sin ventas tiene que quedar DESPUÉS; con más ventas, antes.
+    // =======================================================================
+    const nombresDeLaBarra = async () => {
+      await alMenu();
+      await prueba('ir-a-venta').click();
+      await prueba('pantalla-de-venta').waitFor({ timeout: ESPERA_CORTA });
+      await prueba('categoria').first().waitFor({ timeout: ESPERA_CORTA });
+      const textos = await prueba('categoria').allInnerTexts();
+      return textos.map((t) => t.split('\n')[0].trim());
+    };
+    const idJabon = await ventana.evaluate(async () => {
+      const exigir = (respuesta) => {
+        if (!respuesta.ok) {
+          throw new Error(respuesta.error.mensaje);
+        }
+        return respuesta.datos;
+      };
+      const abarrotes = exigir(await window.pos.catalogo.crearCategoria('Abarrotes'));
+      return exigir(await window.pos.catalogo.crearProducto({
+        nombre: 'Jabón', categoriaId: abarrotes.id, tipoMedida: 'unidad', unidadPeso: null,
+        cantidadPredefinidaIcono: '1', precioBase: '5.00', precioCompra: null, fotoPath: null, inventarioInicial: '50',
+      })).id;
+    });
+    const barraSinVentas = await nombresDeLaBarra();
+    anotar(`barra de categorías con «Abarrotes» recién creada: ${JSON.stringify(barraSinVentas)}`);
+    comprobar(
+      'UNA CATEGORÍA NUEVA, sin ventas, aparece AL FINAL de la barra de venta aunque su nombre vaya antes',
+      '["Granos","Abarrotes"]',
+      JSON.stringify(barraSinVentas),
+      JSON.stringify(barraSinVentas) === '["Granos","Abarrotes"]',
+    );
+    const ventasPorCategoria = await ventana.evaluate(async (productoId) => {
+      for (let k = 0; k < 7; k++) {
+        const r = await window.pos.venta.cobrar({
+          lineas: [{ productoId, cantidad: '1' }], descuento: null, formaPago: 'efectivo', numBoleta: null,
+        });
+        if (!r.ok) {
+          throw new Error(r.error.mensaje);
+        }
+      }
+      const lista = await window.pos.catalogo.listarCategorias();
+      return lista.datos.map((c) => `${c.nombre}=${String(c.ventas)}`);
+    }, idJabon);
+    anotar(`catalogo.listarCategorias() tras 7 ventas de Jabón: ${JSON.stringify(ventasPorCategoria)}`);
+    const barraConVentas = await nombresDeLaBarra();
+    anotar(`barra de categorías tras 7 ventas de Jabón: ${JSON.stringify(barraConVentas)}`);
+    comprobar(
+      'CON MÁS VENTAS PASA ADELANTE: 7 ventas de «Abarrotes» contra 6 de «Granos», sin que nadie toque ninguna categoría',
+      '["Abarrotes","Granos"]; canal: Abarrotes=7, Granos=6',
+      `${JSON.stringify(barraConVentas)}; canal: ${ventasPorCategoria.join(', ')}`,
+      JSON.stringify(barraConVentas) === '["Abarrotes","Granos"]'
+        && ventasPorCategoria.join(',') === 'Abarrotes=7,Granos=6',
+    );
+    await alMenu();
+    await prueba('ir-a-categorias').click();
+    await prueba('pantalla-de-categorias').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('lista-de-categorias').waitFor({ timeout: ESPERA_CORTA });
+    const pantalla = await ventana.evaluate(() => {
+      const raiz = document.querySelector('[data-prueba="pantalla-de-categorias"]');
+      const formulario = raiz.querySelector('section.tarjeta');
+      return {
+        filas: [...raiz.querySelectorAll('[data-prueba="lista-de-categorias"] li')].map((li) =>
+          `${li.querySelector('.lista__nombre').innerText} — ${li.querySelector('.lista__detalle').innerText.replace(/\s+/g, ' ')}`),
+        camposDelFormulario: [...formulario.querySelectorAll('input')].map((i) => i.getAttribute('data-prueba')),
+        campoDeOrden: raiz.querySelectorAll('[data-prueba="categoria-orden"]').length,
+        textoDeOrden: raiz.innerText.match(/orden/gi)?.length ?? 0,
+        aviso: raiz.querySelector('[data-prueba="categorias-orden-automatico"]')?.innerText ?? null,
+      };
+    });
+    anotar(`pantalla de categorías: ${JSON.stringify(pantalla)}`);
+    await ventana.screenshot({ path: join(capturas, 'categorias-orden-automatico.png') });
+    comprobar(
+      'LA PANTALLA DE CATEGORÍAS las lista en el mismo orden y dice cuántas ventas tiene cada una',
+      '["Abarrotes — 7 ventas · 1 producto","Granos — 6 ventas · 12 productos"]',
+      JSON.stringify(pantalla.filas),
+      JSON.stringify(pantalla.filas) === '["Abarrotes — 7 ventas · 1 producto","Granos — 6 ventas · 12 productos"]',
+    );
+    comprobar(
+      'EL FORMULARIO NO PIDE NINGÚN ORDEN: un solo campo (el nombre), y la pantalla explica que se ordenan solas',
+      'campos ["categoria-nombre"], 0 campos de orden, aviso visible',
+      `campos ${JSON.stringify(pantalla.camposDelFormulario)}, ${String(pantalla.campoDeOrden)} campos de orden, aviso: ${String(pantalla.aviso)}`,
+      JSON.stringify(pantalla.camposDelFormulario) === '["categoria-nombre"]'
+        && pantalla.campoDeOrden === 0 && pantalla.aviso !== null,
     );
   } catch (error) {
     comprobar('el arnés llegó al final sin errores', 'sin excepciones', String(error), false);

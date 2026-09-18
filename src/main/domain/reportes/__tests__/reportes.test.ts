@@ -95,8 +95,8 @@ beforeEach(() => {
     pinHash: generarHashDePin('1357'),
   }).id;
 
-  const granos = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
-  const abarrotes = repos.categorias.crear({ nombre: 'Abarrotes', orden: 2 }).id;
+  const granos = repos.categorias.crear({ nombre: 'Granos' }).id;
+  const abarrotes = repos.categorias.crear({ nombre: 'Abarrotes' }).id;
 
   idMaiz = repos.productos.crear({
     nombre: 'Maíz blanco',

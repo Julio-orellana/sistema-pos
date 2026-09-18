@@ -163,17 +163,13 @@ const apiPos: ApiPos = {
         RespuestaIpc<readonly CategoriaIpc[]>
       >,
 
-    crearCategoria: (nombre: string, orden: number): Promise<RespuestaIpc<CategoriaIpc>> =>
-      ipcRenderer.invoke(CANALES_IPC.categoriasCrear, { nombre, orden }) as Promise<
+    crearCategoria: (nombre: string): Promise<RespuestaIpc<CategoriaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasCrear, { nombre }) as Promise<
         RespuestaIpc<CategoriaIpc>
       >,
 
-    editarCategoria: (
-      id: string,
-      nombre: string,
-      orden: number,
-    ): Promise<RespuestaIpc<CategoriaIpc>> =>
-      ipcRenderer.invoke(CANALES_IPC.categoriasEditar, { id, nombre, orden }) as Promise<
+    editarCategoria: (id: string, nombre: string): Promise<RespuestaIpc<CategoriaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasEditar, { id, nombre }) as Promise<
         RespuestaIpc<CategoriaIpc>
       >,
 

@@ -172,7 +172,7 @@ describe('Con los topes sembrados, un descuento dentro del límite deja de pedir
       rol,
       pinHash: generarHashDePin('1357'),
     }).id;
-    const categoriaId = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+    const categoriaId = repos.categorias.crear({ nombre: 'Granos' }).id;
     const maiz = repos.productos.crear({
       nombre: 'Maíz',
       categoriaId,

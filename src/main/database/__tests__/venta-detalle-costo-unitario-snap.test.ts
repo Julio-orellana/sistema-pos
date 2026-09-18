@@ -43,7 +43,7 @@ function baseSinLa032(): Database {
 function sembrarLinea(base: Database, idLinea: string, nombre: string): void {
   const repos = crearRepositorios(base);
   const usuario = repos.usuarios.crear({ nombre: `Jimmy ${nombre}`, rol: 'administrativo', pinHash: 'hash-de-prueba' });
-  const categoria = repos.categorias.crear({ nombre: `Granos ${nombre}`, orden: 1 });
+  const categoria = repos.categorias.crear({ nombre: `Granos ${nombre}` });
   const producto = repos.productos.crear({
     nombre,
     categoriaId: categoria.id,

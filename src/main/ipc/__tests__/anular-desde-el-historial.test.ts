@@ -266,7 +266,7 @@ beforeEach(() => {
     rol: 'venta',
     pinHash: generarHashDePin(PIN_DE_ANA),
   }).id;
-  const idCategoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+  const idCategoria = repos.categorias.crear({ nombre: 'Granos' }).id;
   idMaiz = repos.productos.crear({
     nombre: 'Maíz blanco',
     categoriaId: idCategoria,
@@ -470,7 +470,7 @@ describe('EL RECIBO REIMPRESO de una venta anulada', () => {
  * **9.899999999999999`, medido con Node.
  */
 function productoDeDecimalesFeos(): string {
-  const categoria = repos.categorias.crear({ nombre: 'Feos', orden: 2 }).id;
+  const categoria = repos.categorias.crear({ nombre: 'Feos' }).id;
   return repos.productos.crear({
     nombre: 'Azúcar',
     categoriaId: categoria,

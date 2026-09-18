@@ -305,7 +305,7 @@ beforeEach(() => {
   idJimmy = repos.usuarios.crear({ nombre: 'Jimmy', rol: 'administrativo', pinHash: generarHashDePin(PIN_DE_JIMMY) }).id;
   sembrarAutorizacionRemota(repos.usuarios, cifrado, idJimmy);
   idAna = repos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pinHash: generarHashDePin(PIN_DE_ANA) }).id;
-  idCategoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+  idCategoria = repos.categorias.crear({ nombre: 'Granos' }).id;
   idMaiz = crearProducto('Maíz blanco', '4.25', '100');
   idFrijol = crearProducto('Frijol negro', '9.00', '50');
   idCaja = caja.abrir(idAna, { modo: 'simple', monto: '500' }).id;
@@ -419,6 +419,38 @@ describe('La reposición SUMA sobre el saldo de HOY (§2.1)', () => {
 
     expect(inventarioDe(idMaiz)).toBe('100.000');
     expect(inventarioDe(idFrijol)).toBe('50.000');
+  });
+});
+
+// ===========================================================================
+describe('EL ORDEN DE LAS CATEGORÍAS sigue a las ventas de verdad: sube al vender y baja al anular (§4.63)', () => {
+  it('con los servicios reales: una categoría nueva va al final, pasa adelante al venderse, y anular la devuelve atrás', async () => {
+    const orden = (): string[] => repos.categorias.listarActivas().map((c) => c.nombre);
+    // «Abarrotes» va antes que «Granos» por nombre: con las dos en cero, el
+    // desempate la pone primera.
+    const idAbarrotes = repos.categorias.crear({ nombre: 'Abarrotes' }).id;
+    const idAzucar = repos.productos.crear({
+      nombre: 'Azúcar',
+      categoriaId: idAbarrotes,
+      tipoMedida: 'peso',
+      unidadPeso: 'lb',
+      cantidadPredefinidaIcono: '1',
+      precioBase: '5.00',
+      inventarioDisponible: '100',
+    }).id;
+    expect(orden()).toEqual(['Abarrotes', 'Granos']);
+
+    const ventaA = vender([{ productoId: idMaiz, cantidad: '1' }]);
+    vender([{ productoId: idFrijol, cantidad: '1' }]);
+    vender([{ productoId: idAzucar, cantidad: '1' }]);
+    expect(orden()).toEqual(['Granos', 'Abarrotes']);
+    expect(repos.categorias.listarActivas().map((c) => c.ventas)).toEqual([2, 1]);
+
+    expect((await pedir(ventaA, PIN_DE_JIMMY)).anulada).toBe(true);
+
+    // 1 contra 1: vuelve a desempatar el nombre.
+    expect(repos.categorias.listarActivas().map((c) => c.ventas)).toEqual([1, 1]);
+    expect(orden()).toEqual(['Abarrotes', 'Granos']);
   });
 });
 

@@ -227,7 +227,7 @@ beforeEach(() => {
     pinHash: generarHashDePin('1357'),
   }).id;
 
-  idCategoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+  idCategoria = repos.categorias.crear({ nombre: 'Granos' }).id;
   idMaiz = sembrarProducto('Maíz blanco', '6.69', '100');
   idFrijol = sembrarProducto('Frijol negro', '9.25', '80');
 
@@ -457,7 +457,7 @@ describe('Gestión de usuarios: la fila del usuario antes que su asiento', () =>
 
 describe('Catálogo: categorías y productos encolan su fila y su asiento', () => {
   it('crear una categoría encola categorias y auditoría', () => {
-    const creada = categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    const creada = categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
 
     expect(tablasEncoladas()).toEqual(['categorias', 'auditoria_log']);
     expect(cola()[0]?.entidad_id).toBe(creada.id);
@@ -466,10 +466,10 @@ describe('Catálogo: categorías y productos encolan su fila y su asiento', () =
   });
 
   it('editar y desactivar una categoría encolan «actualizar»', () => {
-    const creada = categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    const creada = categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     vaciarCola();
 
-    categorias.editar(idJimmy, creada.id, { nombre: 'Abonos', orden: 2 });
+    categorias.editar(idJimmy, creada.id, { nombre: 'Abonos' });
     expect(cola().map((fila) => `${fila.entidad_tipo}:${fila.operacion}`)).toEqual([
       'categorias:actualizar',
       'auditoria_log:insertar',
@@ -650,7 +650,7 @@ describe('Las columnas excluidas no salen de esta terminal', () => {
   it('ninguna tabla local se encola nunca: sync_cola, bloqueos ni migraciones', () => {
     abrirCajaSimple();
     usuarios.crear(idJimmy, { nombre: 'Pedro', rol: 'venta', pin: '4321' });
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
 
     for (const local of ['sync_cola', 'bloqueos_de_autorizacion', 'migraciones_aplicadas']) {
       expect(tablasEncoladas()).not.toContain(local);
@@ -808,7 +808,7 @@ describe('Los decimales viajan como CADENA canónica, nunca como número', () =>
   });
 
   it('los booleanos viajan como 0 y 1, tal como los guarda SQLite', () => {
-    const creada = categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    const creada = categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     expect(payloadDe(cola()[0]!).activo).toBe(1);
 
     vaciarCola();
@@ -956,7 +956,7 @@ describe('Atomicidad: si la última fila de la cola falla, no queda NADA', () =>
 
 describe('Las filas nacen con los valores que el trabajador espera', () => {
   it('intentos en 0, proximo_intento_en en NULL, bloqueante en 0 y sin sincronizar', () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
 
     for (const fila of cola()) {
       expect(fila.intentos).toBe(0);
@@ -967,10 +967,10 @@ describe('Las filas nacen con los valores que el trabajador espera', () => {
   });
 
   it('dos operaciones seguidas NO comparten lote: son dos unidades de trabajo', () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     const primero = cola()[0]?.lote_id;
 
-    categorias.crear(idJimmy, { nombre: 'Semillas', orden: 3 });
+    categorias.crear(idJimmy, { nombre: 'Semillas' });
     const lotes = new Set(cola().map((fila) => fila.lote_id));
 
     expect(lotes.size).toBe(2);

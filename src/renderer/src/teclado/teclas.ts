@@ -13,7 +13,7 @@
  *   · `decimal` — dígitos y UN punto. Para precios y cantidades: un segundo
  *                 punto no significa nada y dejarlo escribir solo mueve el
  *                 error al momento de guardar.
- *   · `entero`  — solo dígitos. Para el orden de una categoría.
+ *   · `entero`  — solo dígitos. Para cantidades de lo que se vende por unidad.
  *
  * El texto SIEMPRE se agrega al final. Una caja táctil no tiene cursor que
  * mover con precisión, y editar en el medio de un nombre con el dedo es más
