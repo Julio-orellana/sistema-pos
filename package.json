@@ -37,6 +37,7 @@
     "verify:pantallas:anulacion": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-anulacion.cjs",
     "verify:pantallas:recibos": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-historial-de-recibos.cjs",
     "verify:pantallas:1024": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-pantallas-1024.cjs",
+    "verify:pantallas:copias": "POS_COMPILAR_SIN_NUBE=1 npm run build && node scripts/verificacion-de-copias-del-recibo.cjs",
     "verify:paquete": "node scripts/verificacion-de-paquete.cjs",
     "seed:ejemplo": "npm run build && electron . --datos-de-ejemplo=sembrar",
     "seed:limpiar": "npm run build && electron . --datos-de-ejemplo=limpiar",
