@@ -9,8 +9,10 @@
 ## 1. Dónde está hoy
 
 - **Versión 1.2.0**, empaquetada como instalador de Windows y marcada como la
-  versión de entrega a Jimmy. En la tienda corre hoy una instalación de
-  **prueba**, conectada al proyecto de nube descartable.
+  versión de entrega a Jimmy. **El build de producción (1.2.0) está instalado
+  en el equipo real de la tienda, sin conectar a ningún proyecto de nube
+  todavía**: se está probando el hardware antes del reseteo de la carpeta de
+  datos y del primer arranque real con Jimmy.
 - **El proyecto de nube real (`pos-jimmy-cano`)** tiene aplicado el esquema
   completo —las mismas migraciones que el descartable— y cero filas de negocio.
 - **Nada se verificó todavía en Windows ni en el hardware de la tienda.** Todo
