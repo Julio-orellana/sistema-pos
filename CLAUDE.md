@@ -263,6 +263,8 @@ propósito.
 | `productos.inventario_disponible` | **>= 0** | Piso obligatorio. Es la barrera que impide vender más de lo que hay. |
 | `productos.precio_base` | **>= 0** | Un producto no le paga al cliente por llevárselo. **0 se permite**; para qué le sirve un precio 0 a la tienda es una definición de negocio que Jimmy no confirmó, así que ni el mensaje ni esta tabla se la atribuyen. |
 | `productos.cantidad_predefinida_icono` | **> 0** | Estrictamente mayor. Un ícono que agrega cero unidades es un botón que no hace nada. |
+| `productos.precio_mayorista` | **> 0** (o NULL) | Desde el 2026-09-18, por decisión de Julio (punto 55): un mayorista de cero regalaría la mercadería a quien llegue al mínimo. Además, estrictamente menor que `precio_base` (§4.66). |
+| `productos.cantidad_minima_mayorista` | **> 0** (o NULL) | Con cero, todo se cobraría a precio mayorista. |
 | `precios_especiales.valor` | **>= 0** | Un descuento negativo sería un recargo encubierto que se saltaría el control de límites por rol. |
 | `limites_descuento.descuento_max_porcentaje` | **>= 0** | 0 es significativo: "este rol no puede dar descuento". |
 | `limites_descuento.descuento_max_monto_fijo` | **>= 0** | Igual que el porcentaje. |
@@ -10455,9 +10457,12 @@ columna no existe: el precio de lista es `productos.precio_base`.
 **Resuelve a medias el punto 3 de §6.2**: el precio mayorista se activa por
 cantidad comprada. Por tipo de cliente sigue abierto: no hay módulo de clientes.
 
-**Está en `develop` y no en el 1.2.0 instalado en la tienda.** Su espejo en la
+**Está en `develop` y no en el 1.2.0 instalado en la tienda.** ~~Su espejo en la
 nube, la `0039`, **no está aplicado en ningún proyecto** (leído del catálogo el
-2026-09-18 a las 17:58 UTC, ver abajo).
+2026-09-18 a las 17:58 UTC, ver abajo).~~ **Su espejo, la `0039`, está aplicado
+en `pos-pruebas-descartable` desde el 2026-09-18 a las 19:03 UTC, y NO en
+`pos-jimmy-cano`** (ver «Las tres decisiones de Julio», al final de esta
+sección).
 
 #### La regla, escrita una sola vez
 
@@ -10796,14 +10801,112 @@ avisos de siempre).
 #### Lo que NO se verificó
 
 - **Windows**, como siempre.
-- **Nada contra Supabase**: la 0039 no está aplicada en ningún proyecto. Lo
-  medido es contra un Postgres 17 local.
+- ~~**Nada contra Supabase**: la 0039 no está aplicada en ningún proyecto. Lo
+  medido es contra un Postgres 17 local.~~ **Desde el 2026-09-18 la 0039 está
+  en `pos-pruebas-descartable`** (abajo). Lo que sigue sin correrse contra la
+  nube es una venta con precio mayorista SUBIENDO de verdad a Supabase: el
+  lockstep se midió contra el Postgres 17 local.
 - **Un precio especial en la aplicación real**: no hay pantalla para crearlo
   (punto 18 de §6.2). Los escenarios con especial están probados en Vitest.
 - **Una observación de la pantalla, anterior a esta spec**: a 1024×768, el
   renglón de detalle de la línea del ticket («50 lb · Q5.50 c/u») se parte en
   cuatro renglones, porque la columna del nombre es angosta. Se ve en las
   capturas del arnés. La spec 002 no tocó ese renglón. Punto 58 de §6.2.
+
+#### Las tres decisiones de Julio, y la 0039 en el descartable (2026-09-18)
+
+| Pregunta | Decisión | Qué cambió |
+|---|---|---|
+| Decisión 1 (punto 54): ¿bajar la lista por debajo del mayorista se rechaza? | **Sí, A, como estaba construido.** | Nada en la regla. El MENSAJE, sí: ver abajo |
+| Punto 55: ¿Q0.00 como precio mayorista? | **No. Mayor que cero.** | La regla compartida (`precioNoPositivo`, se mira después de redondear: 0.004 → 0.00 se rechaza, 0.005 → 0.01 pasa), la 039 local (`AND precio_mayorista GLOB '*[1-9]*'`, la misma condición de la cantidad mínima), la 0039 (`> 0`, restricción renombrada de `_no_negativo` a `productos_precio_mayorista_positivo`) y el texto de `errores.ts`. Ni la 039 ni la 0039 estaban aplicadas en ninguna base que importe: la base de trabajo de esta Mac seguía en la 038, leído en una copia |
+| Punto 56: cambiar la unidad de un producto con mayorista | **Se limpia solo, en la misma edición.** | `ServicioDeProductos.editar`: si cambia `tipo_medida` o `unidad_peso` y el producto tenía mayorista, las dos columnas quedan en NULL **aunque el pedido las traiga**, dentro de la misma transacción, y el asiento `producto_editado` lleva `mayoristaQuitadoPor: 'cambio_de_unidad'` (los valores que tenía quedan en `valor_anterior`). Desmarcar la casilla no lleva esa clave. El formulario lo muestra antes de guardar: en lugar de la casilla, el aviso «Al cambiar cómo se vende este producto se quita su precio mayorista (Q5.50 desde 50.000 lb). Guardá el producto y después cargalo de nuevo en la unidad nueva.», y manda los dos en null. Volver a la unidad guardada devuelve la casilla con sus valores |
+
+**A REVISAR, una interpretación mía:** el servicio quita el mayorista aunque el
+pedido traiga uno NUEVO para la unidad nueva, porque no puede distinguir «los
+valores de antes» de «los mismos números tecleados otra vez». Por eso el
+formulario no deja cargar un mayorista en la misma edición que cambia la unidad:
+se carga en una segunda edición. Si Julio prefiere permitirlo en un solo paso,
+hay que decidir cómo se distingue.
+
+**El mensaje de la lista bajada (punto 3 del pedido).** Se verificó primero qué
+veía Jimmy, en la app real y en la pantalla normal de editar: **nunca vio el
+nombre crudo de la restricción**. La corrida anterior del arnés (17:53 UTC)
+muestra en el formulario «El precio mayorista (Q5.50) tiene que ser menor que el
+precio de lista (Q5.00). Bajá el precio mayorista o quitalo.», con «Guardar»
+deshabilitado, y lo mismo por el canal. Igual se cambió, como pidió: cuando el
+mayorista cumplía con la lista GUARDADA y no con la nueva
+(`precioBaseAnterior` en `revisarPrecioMayorista`, que pasan el formulario y
+`editar`), el texto es **«No podés bajar el precio de lista por debajo del
+precio mayorista de Q5.50: ajustá el mayorista primero, o quitalo.»** Subir el
+mayorista por encima de una lista que no cambió sigue con el mensaje general.
+El último recurso, `errores.ts`, no cambió: la base no sabe cuál de las dos se
+movió.
+
+**En la aplicación real (macOS, 1024×768), `npm run verify:pantallas:mayorista`, 33 de 33.** Salida cruda:
+
+```
+lista 5.00: casilla=marcada; campos=2; precio="5.50"; cantidad="50.000"; impedimento="No podés bajar el precio de lista por debajo del precio mayorista de Q5.50: ajustá el mayorista primero, o quitalo."; guardar deshabilitado
+asientos producto_editado del maíz antes/después del toque: 0/0; lista guardada 6.00
+OK    CA-24 · LO QUE VE JIMMY: tocar «Guardar» no guarda nada, y en toda la pantalla no aparece el nombre de la restricción ni el idioma de SQLite
+mayorista 0.00 con lista 6.00: …; impedimento="El precio mayorista tiene que ser mayor que cero."; guardar deshabilitado
+window.pos.catalogo.editarProducto(mayorista 0.00) → {"ok":false,"codigo":"DATO_INVALIDO","mensaje":"El precio mayorista tiene que ser mayor que cero."}
+UPDATE productos SET precio_mayorista = '0.00' (conexión aparte) → rechazada: SQLITE_CONSTRAINT_CHECK CHECK constraint failed: productos_precio_mayorista_canonico
+al pasar el maíz a kilogramos: aviso "Al cambiar cómo se vende este producto se quita su precio mayorista (Q5.50 desde 50.000 lb). Guardá el producto y después cargalo de nuevo en la unidad nueva."; casilla en pantalla: 0; campos: 0
+la fila después de guardar en kg: {"unidad_peso":"kg","precio_mayorista":null,"cantidad_minima_mayorista":null}
+asiento producto_editado: antes {…,"unidadPeso":"lb",…,"precioMayorista":"5.50","cantidadMinimaMayorista":"50.000",…} | después {…,"unidadPeso":"kg",…,"precioMayorista":null,"cantidadMinimaMayorista":null,"fotoPath":null,"mayoristaQuitadoPor":"cambio_de_unidad"}
+```
+
+**Falsificado**, una mutación por vez, restaurando desde una copia (no con `git
+checkout`) y comparando el sha256:
+
+| # | Mutación | Qué cayó |
+|---|---|---|
+| N1 | La regla compartida vuelve a admitir 0 | 4: las dos de R2 en `precio-mayorista.test.ts`, F6 del formulario y CA-21 del servicio |
+| N2 | La 039 sin el `GLOB '*[1-9]*'` del precio | 2: R2 en `productos-precio-mayorista.test.ts` y la de `errores.test.ts` |
+| N3 | La 0039 vuelve a `>= 0` | 1: CA-19 |
+| N4 | El servicio no limpia al cambiar la unidad | 6 en Vitest; **en la app real**, «PUNTO 56 · BASE Y ASIENTO» con `mayoristaQuitadoPor=undefined` |
+| N5 | Limpia solo si el pedido no trae el mayorista | 5 |
+| N6 | Limpia pero el asiento no dice el motivo | 1 |
+| N7 | El formulario no avisa ni vacía | 2 |
+| N8 | Sin el mensaje de la lista bajada | 4, en las tres capas |
+
+**La 039 nueva sobre una COPIA de la base de trabajo real** (sha256 del original
+`3ed72e5f5758b64e` antes y después): `aplicadasAhora: ["039_productos_precio_mayorista"]`,
+`integrity_check ok`, `foreign_key_check []`, las 8 filas pendientes de productos
+con las dos claves en `null`, y sobre el Frijol (lista 8.00) `UPDATE … '0.00'` →
+`SQLITE_CONSTRAINT_CHECK … productos_precio_mayorista_canonico`, `'0.01'` → aceptado.
+
+**Ensayo en el Postgres 17 local** antes de tocar la nube: la 0039 nueva aplica,
+los 4 CHECK con `convalidated=true`, el contrato coincide con la foto («SIN
+DIFERENCIAS»), y `0.00` → `23514 … productos_precio_mayorista_positivo`.
+
+**La 0039 en `pos-pruebas-descartable` (`ztidrshifrblhfraiowg`), 2026-09-18
+19:03 UTC**, con la aprobación de Julio para ese proyecto solamente. Antes: 29
+migraciones, 137 columnas, 0 columnas mayoristas, 0 filas de negocio, solo
+conexiones de la plataforma (PostgREST y pgbouncer) inactivas; se avisó a la
+otra sesión con acceso a las nubes. El encabezado del archivo se corrigió ANTES
+de aplicarlo (`9f05848`), para que el texto registrado coincida con el archivo
+final. Leído del catálogo después:
+
+```
+registro: version 20260918190337, name 0039_productos_precio_mayorista, md5 9cf8d81d15713cd2f1567d9fac40ef43, termina en ';': true
+archivo (sin el salto final): 4224 bytes, md5 9cf8d81d15713cd2f1567d9fac40ef43
+total de migraciones: 30; columnas en public: 139
+precio_mayorista: numeric(14,2), nulable YES, sin default, con su COMMENT
+cantidad_minima_mayorista: numeric(14,3), nulable YES, sin default, con su COMMENT
+productos_cantidad_minima_mayorista_positiva | CHECK (((cantidad_minima_mayorista IS NULL) OR (cantidad_minima_mayorista > (0)::numeric))) | convalidated=true
+productos_mayorista_completo | CHECK ((((precio_mayorista IS NULL) AND (cantidad_minima_mayorista IS NULL)) OR ((precio_mayorista IS NOT NULL) AND (cantidad_minima_mayorista IS NOT NULL)))) | convalidated=true
+productos_mayorista_menor_que_lista | CHECK (((precio_mayorista IS NULL) OR (precio_mayorista < precio_base))) | convalidated=true
+productos_precio_mayorista_positivo | CHECK (((precio_mayorista IS NULL) OR (precio_mayorista > (0)::numeric))) | convalidated=true
+filas: productos 0, ventas 0, usuarios 0, auditoria 0, denominaciones 11
+npm run verify:nube → «lo que la nube declara coincide con supabase/esquema-nube.json», contrato v1: 14 tablas, 17 funciones, 0 diferencias, exit 0
+linter: los mismos 7 authenticated_security_definer_function_executable y auth_leaked_password_protection; ninguno nuevo
+```
+
+`pos-jimmy-cano` no se tocó; leído en solo lectura después: 29 migraciones y 0
+columnas mayoristas.
+
+`npm run verify`: 123 archivos, **2924 pruebas**, 0 errores de lint.
 
 ## 5. Registro de decisiones técnicas
 
@@ -11147,12 +11250,16 @@ avisos de siempre).
 | **La copia del cliente tampoco dice quién autorizó una ANULACIÓN; la marca, su fecha y su motivo siguen.** Tercer dato de la lista cerrada, campo `autorizacionDeLaAnulacion`. **REVIERTE** la parte de la fila de las dos copias que dejaba la marca de anulada entera en la copia del cliente. | Dejar la marca entera, como el primer día; quitar la marca completa de la copia del cliente | Decisión de Julio del 2026-09-18 (punto 52): es el mismo tipo de dato que el autorizante del descuento. Quitar la marca entera no: el cliente tiene que poder ver que la venta se anuló, cuándo y por qué. §4.65 | 2026-09-18 (spec 001) |
 | **La copia de la tienda sale SIEMPRE, sin condición, y no es configurable por ahora.** Confirma la fila «A REVISAR — por ahora son SIEMPRE dos copias». | Solo cuando hay algo que controlar (descuento autorizado o tarjeta); configurable por negocio | Decisión de Julio del 2026-09-18 (punto 53). La recomendación para cuando otro cliente de Vixo POS lo pida sigue en el plan de la spec 001, §8. | 2026-09-18 (spec 001) |
 | **El precio de una línea es el MENOR entre la lista vigente, el precio especial vigente y el precio mayorista si la cantidad de ESA línea llega al mínimo. La lista participa siempre, como piso. La regla vive UNA vez, en `src/shared/precio-de-linea.ts`, y la usan el servicio de venta y el ticket.** Se congela en `precio_unitario_snap`, sin columna nueva en `venta_detalle`. | Que el mayorista reemplace al especial; calcular solo en el servicio y que la pantalla muestre la lista hasta cobrar; aplicar el mayorista solo a lo que pasa del mínimo | Decisión de negocio de Julio: el menor de los que aplican, con la lista como piso para que un mayorista fijo nunca quede más caro que una lista bajada después. Una sola función en `shared` por el mismo motivo que `@shared/descuento`: dos copias terminan cobrando un precio distinto del que se vio. Una prueba compara el `ticket.ts` real contra el cobro en 27 casos. Umbral inclusivo y sobre la línea entera: «desde 50 lb» incluye las 50. §4.66. | Spec 002 — 2026-09-18 |
-| **A REVISAR — DECISIÓN 1: R3 (mayorista estrictamente menor que la lista) es un CHECK de la base, `productos_mayorista_menor_que_lista`, que se evalúa en CADA escritura de la fila. Bajar la lista por debajo de un mayorista se rechaza.** | B: un disparador que exija R3 solo al guardar el mayorista, dejando que la lista baje y que el piso de seguridad cobre la lista | El pedido dice «validalo en la base con CHECK» y también pide un caso de seguridad con la lista bajada después: con un CHECK ese estado no se puede guardar. Se construyó A, que es la letra del pedido y la más estricta. El caso de seguridad se prueba sobre la función compartida, con su falsificación. B está en el plan de la spec, §11. **Se decide antes de aplicar la 0039 en cualquier nube.** §4.66. | Spec 002 — 2026-09-18 |
+| **CONFIRMADA POR JULIO EL 2026-09-18 (era «A REVISAR») — DECISIÓN 1: R3 (mayorista estrictamente menor que la lista) es un CHECK de la base, `productos_mayorista_menor_que_lista`, que se evalúa en CADA escritura de la fila. Bajar la lista por debajo de un mayorista se rechaza.** | B: un disparador que exija R3 solo al guardar el mayorista, dejando que la lista baje y que el piso de seguridad cobre la lista | El pedido dice «validalo en la base con CHECK» y también pide un caso de seguridad con la lista bajada después: con un CHECK ese estado no se puede guardar. Se construyó A, que es la letra del pedido y la más estricta. El caso de seguridad se prueba sobre la función compartida, con su falsificación. B está en el plan de la spec, §11. **Se decide antes de aplicar la 0039 en cualquier nube.** §4.66. | Spec 002 — 2026-09-18 |
 | **R3 en SQLite compara CENTAVOS ENTEROS, `CAST(replace(x, '.', '') AS INTEGER)`, nunca texto ni REAL.** | Comparar las columnas TEXT directamente; `CAST(… AS REAL)` | Como texto, `'10.00' < '9.00'` es verdadero (la trampa de §4.15), y REAL mete punto flotante en una regla de dinero. Con la forma canónica de dos decimales garantizada por R2 y por el CHECK de `precio_base`, quitar el punto da los centavos exactos. Falsificado: comparando texto, una lista de Q10.00 con un mayorista de Q9.00 se rechaza. §4.66. | Spec 002 — 2026-09-18 |
 | **A REVISAR — el empate se resuelve especial, lista, mayorista, en ese orden.** | Marcar el mayorista ante un empate con el especial | El precio cobrado es el mismo; el empate solo decide qué se muestra. Así un especial vigente se sigue marcando aunque rebaje cero, como antes de la spec, y el mayorista se marca solo cuando baja el precio. Pregunta 2 de la spec. §4.66. | Spec 002 — 2026-09-18 |
 | **A REVISAR — el asiento `venta_registrada` dice, por línea, el origen del precio (`lista`, `especial` o `mayorista`) y la configuración mayorista del producto en ese momento.** No lo pidió el pedido. | No agregarlo; guardarlo en una columna de `venta_detalle` | Un auditor que vea un precio distinto del de lista no tiene que reconstruir por qué. En el asiento cuesta cero en el esquema; una columna exigiría migración en las dos nubes. Pregunta 4 de la spec. §4.66. | Spec 002 — 2026-09-18 |
-| **La 039 local y la 0039 de la nube van juntas. La 0039 NO está aplicada en ningún proyecto; la versión de contrato no sube; la foto, `CLASES_DE_COLUMNA` y la batería de `verify:nube` ya conocen las dos columnas, así que la batería destructiva exige la 0039.** | Aplicar la 0039 temprano, como la 0027 | La 0027 se aplicó temprano porque era puramente aditiva para las terminales viejas. La 0039 no lo es: las funciones de la nube exigen el payload exacto, así que una terminal sin la 039 contra una nube con la 0039 detiene su cola, y al revés también (medido en un Postgres 17 local). Además espera la decisión 1 y la aprobación de Julio, proyecto por proyecto. §4.66. | Spec 002 — 2026-09-18 |
+| **(Precisada el 2026-09-18: desde las 19:03 UTC la 0039 está en `pos-pruebas-descartable`; ver la fila «La 0039 se aplica en `pos-pruebas-descartable`…».) La 039 local y la 0039 de la nube van juntas. La 0039 NO está aplicada en ningún proyecto; la versión de contrato no sube; la foto, `CLASES_DE_COLUMNA` y la batería de `verify:nube` ya conocen las dos columnas, así que la batería destructiva exige la 0039.** | Aplicar la 0039 temprano, como la 0027 | La 0027 se aplicó temprano porque era puramente aditiva para las terminales viejas. La 0039 no lo es: las funciones de la nube exigen el payload exacto, así que una terminal sin la 039 contra una nube con la 0039 detiene su cola, y al revés también (medido en un Postgres 17 local). Además espera la decisión 1 y la aprobación de Julio, proyecto por proyecto. §4.66. | Spec 002 — 2026-09-18 |
 | **`tsconfig.node.json` incluye `src/renderer/src/venta/ticket.ts`, y el DTO de la venta sale de un módulo propio, `ipc/producto-para-vender.ts`.** | Copiar la lógica del ticket en la prueba; probar solo cada capa por separado | Para que una prueba alimente el ticket REAL con el mismo DTO que manda el proceso principal y compare su precio con el que guarda el cobro (CA-13). Una copia en la prueba probaría la copia. §4.66. | Spec 002 — 2026-09-18 |
+| **El precio mayorista tiene que ser MAYOR QUE CERO: regla compartida, 039 (`GLOB '*[1-9]*'`) y 0039 (`> 0`, renombrada a `productos_precio_mayorista_positivo`).** | Dejarlo `>= 0`, como el precio de lista | Decisión de Julio (punto 55). Un mayorista de cero regalaría la mercadería a quien llegue al mínimo. Se cambió antes de aplicar la 0039 en ninguna nube y con la 039 sin aplicar en ninguna base que importe (la de trabajo seguía en la 038). §4.66. | Spec 002 — 2026-09-18 |
+| **Cambiar `tipo_medida` o `unidad_peso` de un producto con mayorista lo QUITA dentro de `editar`, en la misma transacción, aunque el pedido lo traiga; el asiento lleva `mayoristaQuitadoPor: 'cambio_de_unidad'`. El formulario lo avisa y no deja cargar uno nuevo en esa edición.** | Avisar y conservar el número; una limpieza aparte; conservar el que traiga el pedido | Decisión de Julio (punto 56): «desde 50» cambia de significado con la unidad. Una limpieza aparte se olvida. Conservar lo que traiga el pedido no se puede sin distinguir «los mismos números» de «los números nuevos», así que se carga en una segunda edición: **a revisar** si Julio lo quiere en un solo paso. §4.66. | Spec 002 — 2026-09-18 |
+| **Al editar, si el mayorista cumplía con la lista GUARDADA y no con la nueva, R3 dice «No podés bajar el precio de lista por debajo del precio mayorista de Q…: ajustá el mayorista primero, o quitalo.»** (`precioBaseAnterior` en `revisarPrecioMayorista`). | Un solo mensaje para las dos causas | Pedido de Julio. Medido antes: Jimmy nunca vio el nombre crudo de la restricción, pero el mensaje hablaba de un mayorista que nadie había tocado. La base no sabe cuál de las dos cambió, así que `errores.ts` conserva el general. §4.66. | Spec 002 — 2026-09-18 |
+| **La 0039 se aplica en `pos-pruebas-descartable` el 2026-09-18 y NO en `pos-jimmy-cano`.** | Aplicar las dos juntas | Aprobación de Julio para el descartable solamente; el real, con un pedido aparte el día que se instale la versión con la 039 (punto 57). El encabezado del archivo se ajustó antes de aplicar, para que el registro sea el archivo final (md5 `9cf8d81d…`). §4.66. | Spec 002 — 2026-09-18 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -11227,10 +11334,10 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 51 | **Cada ticket sigue tardando en SALIR lo mismo que antes**: solo dejó de bloquear la venta. | El script de `cola-de-windows.ts` compila el puente a `winspool` con `Add-Type` en cada ticket y espera 1,5 s fijos antes de leer el estado del trabajo. Achicarlo toca el script de impresión y cómo se clasifica un envío (§4.43), así que es una decisión aparte. | Abierto — decisión de Julio |
 | 52 | ~~**¿La copia del CLIENTE debe ocultar también quién autorizó una ANULACIÓN?**~~ | Desde la spec 001 (§4.65), la copia del cliente no dice quién autorizó un descuento, pero la marca de anulada sale entera en las dos copias, con «Autorizó: Jimmy». Es el mismo tipo de dato. No se ocultó porque el pedido dice que se oculta «específicamente» el autorizante del descuento y la boleta. `docs/ANULACION-DE-VENTA.md` §5.2 dice que el papel marcado se reimprime «por si el cliente quiere constancia», o sea que el cliente lo recibe. Si se decide ocultarlo, es una fila más en `QUE_LLEVA_CADA_DESTINO` y cambia la prueba de `copias-del-recibo.test.ts` que hoy lo exige. | **RESUELTO EL 2026-09-18, decisión de Julio: SÍ se oculta**, con el mismo criterio que el autorizante del descuento. La marca de anulada, su fecha y su motivo siguen en las dos copias. Tabla `QUE_LLEVA_CADA_DESTINO` (campo `autorizacionDeLaAnulacion`), spec 001 CA-19, §4.65 |
 | 53 | ~~**¿La copia de la TIENDA sale en todas las ventas, o solo cuando hay algo que controlar (un descuento autorizado o una tarjeta)?**~~ | Desde la spec 001 cada venta gasta el doble de rollo. En una venta en efectivo sin descuento autorizado, las dos copias dicen lo mismo salvo el encabezado (medido en la app real, §4.65). Se hizo lo pedido: siempre dos. La lista vive en una sola constante, así que cambiarlo es acotado. Si además se quiere que cada negocio lo elija, la recomendación del plan de la spec 001 (§8) es `configuracion_negocio`, con su migración en las dos nubes. | **RESUELTO EL 2026-09-18, decisión de Julio: SIEMPRE, sin condición, y no configurable por ahora.** Sin cambio de código: ya era así. Spec 001 CA-20, §4.65 |
-| 54 | **DECISIÓN 1 de la spec 002: ¿bajar el precio de lista por debajo de un precio mayorista se RECHAZA (A, lo construido) o se ACEPTA (B)?** | Con A, R3 es un CHECK que se evalúa en cada escritura: el día que Jimmy quiera bajar la lista de un producto con mayorista, el formulario le va a pedir que baje o quite el mayorista antes de guardar (medido en la aplicación real, §4.66). Con B, la lista baja y el mayorista queda sin efecto, porque la regla de precio cobra la lista como piso; exige un disparador en lugar del CHECK. Las dos migraciones todavía no están aplicadas en ninguna base que importe, así que cambiar a B es acotado (plan de la spec, §11). | Abierto — **bloquea aplicar la 0039** |
-| 55 | **¿Se permite un precio mayorista de Q0.00?** | Hoy sí, como el precio de lista (R2 solo exige que no sea negativo). Prohibirlo es una línea en la regla compartida y en los dos CHECK. Pregunta 3 de la spec 002. | Abierto — de bajo riesgo |
-| 56 | **Cambiar la unidad de un producto cambia lo que significa su cantidad mínima mayorista**: 50 lb pasan a ser 50 kg. | Hoy pasa lo mismo con el precio de lista, que también es por unidad, y no se agregó ningún aviso. Pregunta 5 de la spec 002. | Abierto |
-| 57 | **La 0039 se aplica en el MISMO momento en que se instala la versión que trae la 039.** | Medido en un Postgres 17 local (§4.66): una terminal con la 039 contra una nube sin la 0039 detiene su cola en el primer lote de productos, con `CONTRATO: el payload de public.productos trae columnas que la tabla no tiene`, y al revés también. Hoy ninguna de las dos nubes la tiene (leído el 2026-09-18) y el 1.2.0 de la tienda no trae la 039. Se aplica con la aprobación de Julio, proyecto por proyecto, y después de la decisión del punto 54. | Abierto — se hace el día que se publique la versión |
+| 54 | **DECISIÓN 1 de la spec 002: ¿bajar el precio de lista por debajo de un precio mayorista se RECHAZA (A, lo construido) o se ACEPTA (B)?** | Con A, R3 es un CHECK que se evalúa en cada escritura: el día que Jimmy quiera bajar la lista de un producto con mayorista, el formulario le va a pedir que baje o quite el mayorista antes de guardar (medido en la aplicación real, §4.66). Con B, la lista baja y el mayorista queda sin efecto, porque la regla de precio cobra la lista como piso; exige un disparador en lugar del CHECK. Las dos migraciones todavía no están aplicadas en ninguna base que importe, así que cambiar a B es acotado (plan de la spec, §11). | **RESUELTO EL 2026-09-18: A, tal como está.** §4.66 |
+| 55 | ~~**¿Se permite un precio mayorista de Q0.00?**~~ | ~~Hoy sí, como el precio de lista (R2 solo exige que no sea negativo).~~ | **RESUELTO EL 2026-09-18: NO.** Mayor que cero en las tres capas. §4.66 |
+| 56 | ~~**Cambiar la unidad de un producto cambia lo que significa su cantidad mínima mayorista**~~ | ~~No se agregó ningún aviso.~~ | **RESUELTO EL 2026-09-18: se limpia solo**, en la misma edición, con `mayoristaQuitadoPor: 'cambio_de_unidad'` en el asiento. §4.66 |
+| 57 | **La 0039 se aplica en el MISMO momento en que se instala la versión que trae la 039.** | Medido en un Postgres 17 local (§4.66): una terminal con la 039 contra una nube sin la 0039 detiene su cola en el primer lote de productos, con `CONTRATO: el payload de public.productos trae columnas que la tabla no tiene`, y al revés también. Hoy ninguna de las dos nubes la tiene (leído el 2026-09-18) y el 1.2.0 de la tienda no trae la 039. Se aplica con la aprobación de Julio, proyecto por proyecto, y después de la decisión del punto 54. **Aplicada en `pos-pruebas-descartable` el 2026-09-18, 19:03 UTC (§4.66).** | Abierto — **falta `pos-jimmy-cano`**, con un pedido aparte, el día que se instale la versión con la 039 |
 | 58 | **A 1024×768, el renglón de detalle de una línea del ticket («50 lb · Q5.50 c/u») se parte en cuatro renglones.** | Visto en las capturas de `verify:pantallas:mayorista`. La columna del nombre es angosta al lado del subtotal. Es anterior a la spec 002, que no tocó ese renglón; se lee, pero se ve mal en la pantalla de la tienda. | Abierto — cosmético |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
@@ -11393,9 +11500,9 @@ negocio:
 - **Sí existe, en `develop` y no en el 1.2.0 instalado, el precio mayorista
   por cantidad mínima** (§4.66): la casilla del formulario de producto, el
   recálculo en vivo del ticket y el menor de lista, especial y mayorista al
-  cobrar. **Su espejo en la nube, la 0039, no está aplicado en ningún
-  proyecto**, y hasta que se aplique esa versión no sincroniza (punto 57 de
-  §6.2). **No existen** el precio por tipo de cliente ni varios umbrales por
+  cobrar. **Su espejo en la nube, la 0039, está aplicado solo en
+  `pos-pruebas-descartable`**; contra `pos-jimmy-cano` esa versión no sincroniza
+  hasta que se aplique allá (punto 57 de §6.2). **No existen** el precio por tipo de cliente ni varios umbrales por
   producto.
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni

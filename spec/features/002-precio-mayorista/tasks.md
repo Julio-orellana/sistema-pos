@@ -30,11 +30,15 @@
 | T21 | Documentación: CLAUDE.md, constitución, README de migraciones | — | **Hecho** |
 | T22 | Mostrarle a Julio el SQL de la 039 y la 0039. **Ninguna nube se toca sin su aprobación, proyecto por proyecto** | — | **Mostrado en el informe de cierre.** Ninguna nube se tocó: solo lecturas del catálogo |
 
+| T23 | Las tres decisiones de Julio (2026-09-18): A se queda; Q0.00 no se permite (039, 0039, regla compartida, formulario, servicio); cambiar la unidad quita el mayorista en la misma edición, con su motivo en el asiento; el mensaje de la lista bajada | — | **Hecho** (`84c3a69`, `d367f88`, `5a7a8de`), con falsificaciones N1 a N8 y en la app real. CLAUDE.md §4.66 |
+| T24 | Aplicar la 0039 en `pos-pruebas-descartable` | CA-19 | **Hecho** el 2026-09-18, versión `20260918190337`, md5 del registro igual al del archivo; mitad B sin diferencias |
+
 ## Pendiente fuera de esta spec
 
-- **La decisión 1** (spec §4.3): A o B, antes de aplicar la 0039.
-- **Aplicar la 0039** en `pos-pruebas-descartable`, con aprobación; en
-  `pos-jimmy-cano`, solo con un pedido aparte. **Tiene que ir junto con la
-  instalación de la versión que trae la 039**: una terminal con la 039 contra
-  una nube sin la 0039 detiene su cola (medido, CLAUDE.md §4.66).
+- ~~**La decisión 1** (spec §4.3): A o B, antes de aplicar la 0039.~~ **A**,
+  confirmada por Julio el 2026-09-18.
+- ~~Aplicar la 0039 en `pos-pruebas-descartable`, con aprobación~~ **hecho el
+  2026-09-18**; en `pos-jimmy-cano`, solo con un pedido aparte. **Tiene que ir
+  junto con la instalación de la versión que trae la 039**: una terminal con la
+  039 contra una nube sin la 0039 detiene su cola (medido, CLAUDE.md §4.66).
 - **Windows.**

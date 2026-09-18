@@ -267,6 +267,13 @@ Los ejemplos usan: **Maíz** por libra, lista Q6.00, mayorista Q5.50 desde
 
 ## 11. Preguntas para Julio
 
+> **CONTESTADAS EL 2026-09-18** (las tres que bloqueaban): la 1 es **A**, tal
+> como está construida; la 3 es **NO**: el precio mayorista tiene que ser mayor
+> que cero; la 5 es **limpiar**: cambiar la unidad de un producto con mayorista
+> lo quita en la misma edición, y el asiento dice por qué. Detalle y evidencia en
+> CLAUDE.md §4.66, «Las tres decisiones de Julio». Las preguntas 2 y 4 siguen
+> como están construidas.
+
 1. **La decisión 1 (§4.3): ¿A o B?** Se construye A. Hay que decidirlo antes de
    aplicar la 0039.
 2. **El empate (P5).** Con el mismo precio, se marca el especial antes que el
