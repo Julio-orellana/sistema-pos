@@ -23,6 +23,14 @@
  * el Prompt 1 y no se negocia: la impresión física es una capa opcional encima
  * del PDF, nunca un requisito para cerrar una venta.
  *
+ * AL COBRAR, LA IMPRESIÓN NO SE ESPERA (2026-09-18, §4.64). `emitirSinEsperarLaImpresion`
+ * devuelve en cuanto el PDF quedó escrito, con la impresión todavía EN CURSO:
+ * en la tienda, mandar un ticket lanza un `powershell.exe` nuevo que compila
+ * su puente a `winspool` y además espera 1,5 s fijos para leer el estado del
+ * trabajo, y la cajera veía «Venta registrada» recién cuando todo eso
+ * terminaba. La venta ya estaba firme mucho antes. `emitir` sigue existiendo
+ * y espera las dos cosas: es el MISMO camino, con un `await` más al final.
+ *
  * REIMPRIMIR VUELVE A ARMAR TODO desde las filas guardadas, nunca desde el PDF
  * que ya está en el disco. Así, si mañana Jimmy carga por fin el nombre y el
  * NIT de su tienda, un recibo reimpreso sale con los datos correctos en vez de
@@ -47,6 +55,31 @@ import { resolverRutaDePdf, rutaRelativaDePdf } from './ruta-de-pdf';
 
 /** Convierte el HTML del recibo en un PDF guardado en `destino` (ruta absoluta). */
 export type GeneradorDePdf = (html: string, destino: string) => Promise<void>;
+
+/** Qué pasó al intentar mandar un recibo a la impresora térmica. */
+export interface ResultadoDeImpresion {
+  /** `true` si salió por la impresora térmica. */
+  readonly impreso: boolean;
+  /** Qué contarle al cajero sobre la impresión, en una frase. */
+  readonly mensaje: string;
+}
+
+/**
+ * Un recibo con el PDF ya escrito y la impresión TODAVÍA EN CURSO.
+ *
+ * `impresion` NUNCA se rechaza: un fallo de la impresora es un resultado, no
+ * una excepción (§4.14). Quien la reciba puede hacerle `then` sin `catch`.
+ */
+export interface EmisionConImpresionEnCurso {
+  readonly recibo: Recibo;
+  readonly modelo: ModeloDeRecibo;
+  /** Ruta ABSOLUTA del PDF en esta máquina. */
+  readonly rutaPdf: string;
+  /** `true` si el PDF quedó generado. Es la garantía del proyecto. */
+  readonly pdfGenerado: boolean;
+  /** La impresión, que sigue sola. */
+  readonly impresion: Promise<ResultadoDeImpresion>;
+}
 
 /** Qué pasó al emitir o reimprimir un recibo. */
 export interface ResultadoDeRecibo {
@@ -91,6 +124,8 @@ export class ServicioDeRecibos {
   private readonly dependencias: DependenciasDeRecibos;
   private readonly recibos: RepositorioDeRecibos;
   private readonly ahora: () => number;
+  /** La fila de impresión: el último ticket pedido. Ver `enLaColaDeImpresion`. */
+  private colaDeImpresion: Promise<void> = Promise.resolve();
 
   public constructor(dependencias: DependenciasDeRecibos) {
     this.dependencias = dependencias;
@@ -107,6 +142,18 @@ export class ServicioDeRecibos {
    * un corte de luz es un caso legítimo, no un error.
    */
   public async emitir(ventaId: string): Promise<ResultadoDeRecibo> {
+    return this.esperarLaImpresion(await this.emitirSinEsperarLaImpresion(ventaId));
+  }
+
+  /**
+   * Emite el recibo y devuelve EN CUANTO EL PDF QUEDÓ ESCRITO, con la
+   * impresión todavía en curso. Es lo que usa el cobro (§4.64).
+   *
+   * El PDF SÍ se espera: es el respaldo obligatorio y lo que la pantalla
+   * informa en el mismo aviso. Lo que no se espera es la impresora térmica,
+   * cuya velocidad es la de un proceso externo y un aparato.
+   */
+  public async emitirSinEsperarLaImpresion(ventaId: string): Promise<EmisionConImpresionEnCurso> {
     const existente = this.recibos.obtenerPorVenta(ventaId);
     if (existente !== null) {
       return this.producir(existente, { reimpresion: true });
@@ -170,7 +217,7 @@ export class ServicioDeRecibos {
         `recibo_id inexistente: ${reciboId}`,
       );
     }
-    return this.producir(recibo, { reimpresion: true });
+    return this.esperarLaImpresion(await this.producir(recibo, { reimpresion: true }));
   }
 
   /**
@@ -209,6 +256,7 @@ export class ServicioDeRecibos {
         return null;
       }
       const resultado = await this.producir(recibo, { reimpresion: false, imprimir: false });
+      await resultado.impresion;
       return resultado.rutaPdf;
     } catch (error) {
       const detalle = error instanceof Error ? error.message : String(error);
@@ -246,7 +294,11 @@ export class ServicioDeRecibos {
   // -------------------------------------------------------------------------
 
   /**
-   * Arma el modelo, escribe el PDF e intenta imprimir. En ese orden.
+   * Arma el modelo, escribe el PDF y ARRANCA la impresión. En ese orden.
+   *
+   * Devuelve con el PDF ya escrito y la impresión en curso: esperarla o no es
+   * decisión de quien llama. La impresión arranca DESPUÉS del PDF, igual que
+   * antes, porque el comprobante que se le pasa a la impresora nombra ese PDF.
    *
    * `imprimir` vale `true` salvo que se diga lo contrario, que es lo que hacen
    * emitir y reimprimir. La única que pasa `false` es la regeneración de la
@@ -256,7 +308,7 @@ export class ServicioDeRecibos {
   private async producir(
     recibo: Recibo,
     opciones: { readonly reimpresion: boolean; readonly imprimir?: boolean },
-  ): Promise<ResultadoDeRecibo> {
+  ): Promise<EmisionConImpresionEnCurso> {
     const modelo = armarModeloDeRecibo(this.dependencias, recibo, opciones);
     const rutaPdf = this.rutaAbsolutaDelPdf(recibo);
 
@@ -278,21 +330,46 @@ export class ServicioDeRecibos {
       );
     }
 
-    const impresion =
+    const impresion: Promise<ResultadoDeImpresion> =
       opciones.imprimir === false
         ? // Sin impresión: se conserva lo que la fila ya decía. Afirmar acá
           // `impreso: false` sería decir que el papel dejó de haber salido.
-          { impreso: recibo.impreso, mensaje: '' }
-        : await this.intentarImprimir(recibo, modelo, rutaPdf, pdfGenerado);
+          Promise.resolve({ impreso: recibo.impreso, mensaje: '' })
+        : this.enLaColaDeImpresion(() => this.intentarImprimir(recibo, modelo, rutaPdf, pdfGenerado));
 
+    return { recibo, modelo, rutaPdf, pdfGenerado, impresion };
+  }
+
+  /** Espera la impresión en curso y arma el resultado completo. */
+  private async esperarLaImpresion(emision: EmisionConImpresionEnCurso): Promise<ResultadoDeRecibo> {
+    const impresion = await emision.impresion;
     return {
-      recibo: this.recibos.obtenerPorId(recibo.id) ?? recibo,
-      modelo,
-      rutaPdf,
-      pdfGenerado,
+      // Se relee: si el papel salió, `impreso` acaba de cambiar en la fila.
+      recibo: this.recibos.obtenerPorId(emision.recibo.id) ?? emision.recibo,
+      modelo: emision.modelo,
+      rutaPdf: emision.rutaPdf,
+      pdfGenerado: emision.pdfGenerado,
       impreso: impresion.impreso,
       mensajeDeImpresion: impresion.mensaje,
     };
+  }
+
+  /**
+   * UN TICKET POR VEZ, en el orden en que se pidieron.
+   *
+   * Desde que el cobro no espera a la impresora, dos ventas seguidas podrían
+   * lanzar dos `powershell.exe` a la vez: en una máquina de 4 GB eso encarece
+   * los dos, y los tickets podrían salir en otro orden que el de las ventas.
+   * Esto NO reintenta nada: es solo una fila. `intentarImprimir` nunca lanza,
+   * y aun así la fila sigue andando si alguna vez lo hiciera.
+   */
+  private enLaColaDeImpresion<T>(tarea: () => Promise<T>): Promise<T> {
+    const turno = this.colaDeImpresion.then(tarea, tarea);
+    this.colaDeImpresion = turno.then(
+      () => undefined,
+      () => undefined,
+    );
+    return turno;
   }
 
   /**
@@ -307,7 +384,7 @@ export class ServicioDeRecibos {
     modelo: ModeloDeRecibo,
     rutaPdf: string,
     pdfGenerado: boolean,
-  ): Promise<{ readonly impreso: boolean; readonly mensaje: string }> {
+  ): Promise<ResultadoDeImpresion> {
     const comprobante: ComprobanteImprimible = {
       idComprobante: recibo.id,
       tipo: 'recibo',

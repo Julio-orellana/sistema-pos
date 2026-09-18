@@ -24,7 +24,13 @@ import { useState } from 'react';
 
 import { formatearQuetzales, montoACadena } from '@shared/money';
 import { LARGOS_DE_AUTORIZACION } from '@shared/pin';
-import type { PedidoDeCobro, ResultadoDeCobro, VentaRegistrada } from '@shared/types/ipc';
+import type {
+  ImpresionDeReciboTerminadaIpc,
+  PedidoDeCobro,
+  ResultadoDeCobro,
+  VentaRegistrada,
+} from '@shared/types/ipc';
+import { estadoDelPapel } from '../venta/impresion-del-recibo';
 import { CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 import {
@@ -50,12 +56,19 @@ export interface DialogoDeCobroProps {
   readonly alCancelar: () => void;
   /** La venta quedó registrada: la pantalla vacía el ticket y se recarga. */
   readonly alTerminar: (venta: VentaRegistrada) => void;
+  /**
+   * El último aviso de impresión terminada que recibió la pantalla. El cobro
+   * ya no espera a la impresora (§4.64): este aviso completa el renglón del
+   * papel, y se empareja por el id del recibo.
+   */
+  readonly impresionTerminada: ImpresionDeReciboTerminadaIpc | null;
 }
 
 export function DialogoDeCobro({
   lineas,
   alCancelar,
   alTerminar,
+  impresionTerminada,
 }: DialogoDeCobroProps): React.JSX.Element {
   const [paso, setPaso] = useState<PasoDeCobro>('descuento');
   const [borrador, setBorrador] = useState<BorradorDeCobro>(COBRO_EN_BLANCO);
@@ -139,6 +152,7 @@ export function DialogoDeCobro({
   // Paso 4: la venta quedó registrada
   // =========================================================================
   if (paso === 'listo' && registrada !== null) {
+    const papel = estadoDelPapel(registrada.recibo, impresionTerminada);
     return (
       <div className="capa-modal">
         <section className="modal cobro" data-prueba="cobro-listo">
@@ -159,14 +173,28 @@ export function DialogoDeCobro({
             al cliente en ese momento, no descubrirlo cuando el cliente estire
             la mano esperando un papel.
           */}
+          {/*
+            LA VENTA YA ESTÁ REGISTRADA aunque el papel todavía no haya salido:
+            la impresora se manda en segundo plano (§4.64) y este renglón se
+            completa solo cuando llega su resultado.
+          */}
           <p
-            className={registrada.recibo.impreso ? 'aviso-exito' : 'advertencia'}
+            className={
+              papel.tipo === 'impreso'
+                ? 'aviso-exito'
+                : papel.tipo === 'enviando'
+                  ? 'modal__texto'
+                  : 'advertencia'
+            }
             data-prueba="cobro-estado-del-recibo"
+            data-estado={papel.tipo}
           >
             Recibo No. {registrada.recibo.numeroRecibo}.{' '}
-            {registrada.recibo.impreso
+            {papel.tipo === 'impreso'
               ? 'Se imprimió.'
-              : registrada.recibo.mensajeDeImpresion}
+              : papel.tipo === 'enviando'
+                ? 'Enviando el recibo a la impresora…'
+                : papel.mensaje}
           </p>
 
           {/*

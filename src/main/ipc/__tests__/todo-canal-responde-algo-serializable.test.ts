@@ -139,7 +139,10 @@ async function llamar(canal: string, paso: string, payload?: unknown): Promise<R
   if (manejador === undefined) {
     throw new Error(`No hay manejador registrado para ${canal}`);
   }
-  const respuesta = (await manejador({ sender: {} }, payload)) as RespuestaIpc<unknown>;
+  // El `sender` es la ventana que llamó: el cobro le manda después el aviso de
+  // impresión terminada (§4.64), así que tiene que parecerse a un webContents.
+  const sender = { isDestroyed: (): boolean => false, send: (): void => undefined };
+  const respuesta = (await manejador({ sender }, payload)) as RespuestaIpc<unknown>;
   let noSeClona: string | null = null;
   try {
     structuredClone(respuesta);

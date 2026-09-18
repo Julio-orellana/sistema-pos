@@ -31,9 +31,27 @@ export function impresorasSimuladas(): readonly ImpresoraListada[] {
 }
 
 export class EnviadorSimulado implements EnviadorRaw {
-  public constructor(private readonly carpeta: string) {}
+  /**
+   * `demoraMs` imita lo que tarda el envío real en la tienda —arrancar
+   * `powershell.exe`, compilar su puente a `winspool` y los 1,5 s fijos de
+   * espera del script— para comprobar en la aplicación real que el cobro NO
+   * lo espera (§4.64). Con 0 contesta en el acto, como siempre.
+   */
+  public constructor(
+    private readonly carpeta: string,
+    private readonly demoraMs = 0,
+  ) {}
 
-  public enviar(nombreDeImpresora: string, bytes: Uint8Array): Promise<ResultadoDelEnvioRaw> {
+  public async enviar(nombreDeImpresora: string, bytes: Uint8Array): Promise<ResultadoDelEnvioRaw> {
+    if (this.demoraMs > 0) {
+      await new Promise((resolver) => {
+        setTimeout(resolver, this.demoraMs);
+      });
+    }
+    return this.enviarYa(nombreDeImpresora, bytes);
+  }
+
+  private enviarYa(nombreDeImpresora: string, bytes: Uint8Array): Promise<ResultadoDelEnvioRaw> {
     const base = {
       codigoWin32: null,
       trabajo: null,

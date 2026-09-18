@@ -162,6 +162,12 @@ export const CANALES_IPC = {
   recibosReimprimir: 'recibos:reimprimir',
   /** El recibo en texto plano, para mostrarlo en pantalla tal como sale. */
   recibosVer: 'recibos:ver',
+  /**
+   * Proceso principal -> renderer. Terminó de mandarse a la impresora el
+   * recibo de una venta. El cobro ya no lo espera (§4.64): este aviso es cómo
+   * se entera la pantalla de si el papel salió.
+   */
+  recibosImpresionTerminada: 'recibos:impresion-terminada',
 
   // --- Reportes -------------------------------------------------------------
   /**
@@ -1180,8 +1186,26 @@ export interface ReciboDeLaVentaIpc {
   readonly pdfGenerado: boolean;
   /** `true` si además salió por la impresora térmica. */
   readonly impreso: boolean;
+  /**
+   * `true` si la impresión SIGUE EN CURSO cuando se responde el cobro. Es lo
+   * normal desde el 2026-09-18: el cobro no espera a la impresora (§4.64), y
+   * el resultado llega después con `ImpresionDeReciboTerminadaIpc`.
+   */
+  readonly impresionPendiente: boolean;
   /** Qué decirle al cajero sobre la impresión, en una frase. */
   readonly mensajeDeImpresion: string;
+}
+
+/**
+ * El aviso que manda el proceso principal cuando terminó de intentar imprimir
+ * el recibo de una venta. Llega DESPUÉS de la respuesta del cobro, o antes si
+ * la impresión fue instantánea: la pantalla lo empareja por `reciboId`.
+ */
+export interface ImpresionDeReciboTerminadaIpc {
+  readonly reciboId: string;
+  readonly numeroRecibo: number;
+  readonly impreso: boolean;
+  readonly mensaje: string;
 }
 
 /**
@@ -2236,6 +2260,11 @@ export interface ApiPos {
     listar(filtro?: FiltroDeFormaPagoIpc): Promise<RespuestaIpc<HistorialDeRecibosIpc>>;
     ver(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
     reimprimir(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
+    /**
+     * Se suscribe al aviso de impresión terminada. Devuelve la función que
+     * cancela la suscripción, igual que `kiosko.alSolicitarSalida`.
+     */
+    alTerminarImpresion(alRecibir: (aviso: ImpresionDeReciboTerminadaIpc) => void): () => void;
   };
 
   /**
