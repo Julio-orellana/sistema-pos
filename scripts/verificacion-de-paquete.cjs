@@ -38,7 +38,12 @@
  *     npm run verify:paquete -- <ruta.asar>  # contra uno en particular
  *
  * Códigos de salida: 0 el paquete está limpio, 1 tiene algo que no debería
- * viajar, 2 no se pudo revisar (no hay asar, o no se pudo leer).
+ * viajar o el título de la ventana no es el esperado, 2 no se pudo revisar
+ * (no hay asar, o no se pudo leer).
+ *
+ * Desde la 1.3.1 revisa también el `<title>` del HTML de la ventana, leído
+ * DEL ASAR: es el nombre que Windows muestra en el Administrador de tareas
+ * (§4.68 de CLAUDE.md).
  */
 'use strict';
 
@@ -228,13 +233,86 @@ function proyectoDelPaquete(rutaDelAsar) {
 /** La referencia del proyecto REAL, para poder nombrarlo cuando aparezca. */
 const PROYECTO_REAL = require('./proyectos-de-prueba.cjs').PROYECTO_REAL;
 
-/** Revisa un asar de verdad: lista sus rutas y les aplica las reglas. */
+// ---------------------------------------------------------------------------
+// El título de la ventana
+// ---------------------------------------------------------------------------
+
+/**
+ * EL NOMBRE QUE VE LA PERSONA EN LA VENTANA (§4.68 de CLAUDE.md).
+ *
+ * La ventana principal no fija `title`, así que toma el `<title>` del HTML
+ * (medido con Electron 44.2.0: nace con el nombre de la aplicación y pasa al
+ * `<title>` antes de mostrarse). Ese texto es el que Windows muestra en el
+ * Administrador de tareas, en Alt+Tab y al pasar el mouse por la barra de
+ * tareas. Hasta la 1.3.0 decía el nombre de trabajo del proyecto, y se vio así
+ * en la computadora de la tienda.
+ *
+ * **Se lee del asar, no del código fuente**: lo que importa es lo que viaja.
+ * Es una regla más, así que un título equivocado detiene el empaquetado igual
+ * que un `.env`.
+ */
+const TITULO_ESPERADO = 'POS Jimmy Cano';
+
+/** Dónde queda, dentro del asar, el HTML que carga la ventana principal. */
+const HTML_DE_LA_VENTANA = 'dist/renderer/index.html';
+
+/** Los textos de todos los `<title>` de un HTML, sin espacios en los extremos. */
+function titulosDelHtml(html) {
+  return [...html.matchAll(/<title\b[^>]*>([\s\S]*?)<\/title\s*>/gi)].map((coincidencia) =>
+    // Chromium junta los espacios del título; acá alcanza con recortarlos.
+    (coincidencia[1] ?? '').replace(/\s+/g, ' ').trim(),
+  );
+}
+
+/**
+ * Revisa el título de un HTML. Separada de la lectura del asar para poder
+ * falsificarla sin armar un paquete, igual que `revisarRutas`.
+ *
+ * Devuelve `null` si hay EXACTAMENTE un `<title>` y dice exactamente
+ * `TITULO_ESPERADO`; si no, un hallazgo con lo que encontró.
+ */
+function revisarTitulo(html) {
+  const titulos = titulosDelHtml(html);
+  if (titulos.length === 1 && titulos[0] === TITULO_ESPERADO) {
+    return null;
+  }
+  const encontrado =
+    titulos.length === 0 ? 'no tiene ningún <title>' : `tiene ${titulos.map((t) => `«${t}»`).join(' y ')}`;
+  return {
+    regla: 'título de la ventana',
+    porque:
+      `el HTML de la ventana ${encontrado}, y tiene que decir exactamente «${TITULO_ESPERADO}»: ` +
+      'es lo que Windows muestra en el Administrador de tareas, en Alt+Tab y en la barra de tareas',
+    ruta: `/${HTML_DE_LA_VENTANA}`,
+  };
+}
+
+/** Lee el HTML de la ventana del asar y lo revisa. Si no está, eso también es un hallazgo. */
+function revisarTituloDelPaquete(rutaDelAsar) {
+  const asar = require('@electron/asar');
+  let html;
+  try {
+    html = asar.extractFile(rutaDelAsar, HTML_DE_LA_VENTANA).toString('utf8');
+  } catch {
+    return [
+      {
+        regla: 'título de la ventana',
+        porque: `no se encontró ${HTML_DE_LA_VENTANA} en el asar, así que no se pudo leer el título`,
+        ruta: `/${HTML_DE_LA_VENTANA}`,
+      },
+    ];
+  }
+  const hallazgo = revisarTitulo(html);
+  return hallazgo === null ? [] : [hallazgo];
+}
+
+/** Revisa un asar de verdad: lista sus rutas, les aplica las reglas y lee el título. */
 function revisarPaquete(rutaDelAsar) {
   const rutas = listarAsar(rutaDelAsar);
   const produccion = dependenciasDeProduccion();
   return {
     rutas,
-    hallazgos: revisarRutas(rutas, produccion),
+    hallazgos: [...revisarRutas(rutas, produccion), ...revisarTituloDelPaquete(rutaDelAsar)],
     produccion,
     proyecto: proyectoDelPaquete(rutaDelAsar),
   };
@@ -260,8 +338,11 @@ function informar(rutaDelAsar, resultado) {
       anotar(`  OK   sin ${regla.nombre}`);
     }
     anotar('  OK   sin dependencias que no sean de producción');
+    anotar(`  OK   título de la ventana: «${TITULO_ESPERADO}» (leído de ${HTML_DE_LA_VENTANA} dentro del asar)`);
     anotar(`\nEl paquete está limpio: nada de lo que no debe viajar está adentro.`);
-    console.info(`${MARCA_INFORME}${JSON.stringify({ asar: rutaDelAsar, entradas: rutas.length, hallazgos: 0, revisadoEn: new Date().toISOString() })}`);
+    console.info(
+      `${MARCA_INFORME}${JSON.stringify({ asar: rutaDelAsar, entradas: rutas.length, hallazgos: 0, titulo: TITULO_ESPERADO, revisadoEn: new Date().toISOString() })}`,
+    );
     return 0;
   }
 
@@ -274,7 +355,7 @@ function informar(rutaDelAsar, resultado) {
     porRegla.set(hallazgo.regla, lista);
   }
 
-  anotar(`\nEL PAQUETE TIENE ${String(hallazgos.length)} ARCHIVO(S) QUE NO DEBERÍAN VIAJAR:\n`);
+  anotar(`\nEL PAQUETE TIENE ${String(hallazgos.length)} PROBLEMA(S):\n`);
   for (const [regla, lista] of porRegla) {
     anotar(`  FALLA ${regla} — ${String(lista.length)} archivo(s)`);
     anotar(`        por qué: ${lista[0].porque}`);
@@ -283,9 +364,14 @@ function informar(rutaDelAsar, resultado) {
     }
     anotar('');
   }
-  anotar('Se corrige con los patrones `files` de electron-builder.yml. OJO: `files` no es una');
-  anotar('lista blanca —hay que excluir por nombre— y `win.files` REEMPLAZA a `files`, así que');
-  anotar('la lista va completa bajo `win:` (§4.37 de CLAUDE.md).');
+  if (hallazgos.some((hallazgo) => hallazgo.regla !== 'título de la ventana')) {
+    anotar('Los archivos se corrigen con los patrones `files` de electron-builder.yml. OJO: `files`');
+    anotar('no es una lista blanca —hay que excluir por nombre— y `win.files` REEMPLAZA a `files`,');
+    anotar('así que la lista va completa bajo `win:` (§4.37 de CLAUDE.md).');
+  }
+  if (porRegla.has('título de la ventana')) {
+    anotar(`El título se corrige en el <title> de src/renderer/index.html (§4.68 de CLAUDE.md).`);
+  }
   console.info(
     `${MARCA_INFORME}${JSON.stringify({
       asar: rutaDelAsar,
@@ -348,7 +434,7 @@ module.exports = function verificarDespuesDeEmpaquetar(contexto) {
       anotar('sería dejar a mano un .exe que alguien podría tomar por bueno.');
     }
     throw new Error(
-      `El paquete tiene ${String(resultado.hallazgos.length)} archivo(s) que no deberían viajar. ` +
+      `El paquete tiene ${String(resultado.hallazgos.length)} problema(s). ` +
         'El instalador NO se generó. La lista completa está arriba.',
     );
   }
@@ -414,5 +500,7 @@ if (require.main === module) {
 
 module.exports.revisarPaquete = revisarPaquete;
 module.exports.revisarRutas = revisarRutas;
+module.exports.revisarTitulo = revisarTitulo;
 module.exports.dependenciasDeProduccion = dependenciasDeProduccion;
 module.exports.REGLAS = REGLAS;
+module.exports.TITULO_ESPERADO = TITULO_ESPERADO;

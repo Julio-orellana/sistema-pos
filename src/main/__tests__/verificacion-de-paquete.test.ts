@@ -22,9 +22,11 @@
  * usa de verdad, y no una copia: es el mismo criterio con que
  * `seguro-del-proyecto-de-pruebas.test.ts` carga el seguro real (§4.20).
  */
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 const requerir = createRequire(import.meta.url);
 const RUTA_DEL_GUION = join(process.cwd(), 'scripts', 'verificacion-de-paquete.cjs');
@@ -37,8 +39,15 @@ interface Hallazgo {
 
 interface GuionDePaquete {
   revisarRutas: (rutas: readonly string[], admitidas: ReadonlySet<string>) => Hallazgo[];
+  revisarTitulo: (html: string) => Hallazgo | null;
+  revisarPaquete: (rutaDelAsar: string) => { readonly hallazgos: readonly Hallazgo[] };
   dependenciasDeProduccion: () => Set<string>;
   REGLAS: readonly { readonly nombre: string }[];
+  TITULO_ESPERADO: string;
+}
+
+interface Asar {
+  createPackage: (origen: string, destino: string) => Promise<void>;
 }
 
 const guion = requerir(RUTA_DEL_GUION) as GuionDePaquete;
@@ -213,5 +222,107 @@ describe('El informe alcanza para arreglar el problema', () => {
       'carpetas de prueba',
       'archivos de prueba (.test / .spec)',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// El título de la ventana (§4.68)
+// ---------------------------------------------------------------------------
+
+/** Un HTML mínimo con el `<title>` que se le pase, como el que arma Vite. */
+function htmlConTitulo(titulo: string): string {
+  return `<!doctype html><html lang="es-GT"><head><meta charset="UTF-8" /><title>${titulo}</title></head><body></body></html>`;
+}
+
+const carpetasTemporales: string[] = [];
+
+/**
+ * Arma un asar DE VERDAD con los archivos que se le pasen, con el mismo
+ * `@electron/asar` que usa electron-builder. Así la prueba ejercita la lectura
+ * del paquete construido, no solo la función pura.
+ */
+async function armarAsar(archivos: Readonly<Record<string, string>>): Promise<string> {
+  const carpeta = mkdtempSync(join(tmpdir(), 'titulo-del-paquete-'));
+  carpetasTemporales.push(carpeta);
+  const origen = join(carpeta, 'app');
+  for (const [ruta, contenido] of Object.entries(archivos)) {
+    const destino = join(origen, ruta);
+    mkdirSync(join(destino, '..'), { recursive: true });
+    writeFileSync(destino, contenido, 'utf8');
+  }
+  const rutaDelAsar = join(carpeta, 'app.asar');
+  await (requerir('@electron/asar') as Asar).createPackage(origen, rutaDelAsar);
+  return rutaDelAsar;
+}
+
+function hallazgosDeTitulo(rutaDelAsar: string): Hallazgo[] {
+  return guion.revisarPaquete(rutaDelAsar).hallazgos.filter((h) => h.regla === 'título de la ventana');
+}
+
+afterAll(() => {
+  for (const carpeta of carpetasTemporales) {
+    rmSync(carpeta, { recursive: true, force: true });
+  }
+});
+
+describe('EL TÍTULO DE LA VENTANA (§4.68): lo que Windows muestra en el Administrador de tareas', () => {
+  it('el nombre esperado es «POS Jimmy Cano», el mismo productName del instalador', () => {
+    expect(guion.TITULO_ESPERADO).toBe('POS Jimmy Cano');
+    const configuracion = readFileSync(join(process.cwd(), 'electron-builder.yml'), 'utf8');
+    expect(/^productName:\s*(.+)$/m.exec(configuracion)?.[1]?.trim()).toBe(guion.TITULO_ESPERADO);
+  });
+
+  it('un HTML con el título correcto no se marca (el control: sin esto, una regla que marcara todo también «pasaría»)', () => {
+    expect(guion.revisarTitulo(htmlConTitulo('POS Jimmy Cano'))).toBeNull();
+  });
+
+  it('acepta espacios y saltos de línea alrededor del título, que Chromium también recorta', () => {
+    expect(guion.revisarTitulo(htmlConTitulo('\n    POS Jimmy Cano\n  '))).toBeNull();
+  });
+
+  it('MARCA el título que tenía la 1.3.0, «POS Agrícola», diciendo qué encontró y qué espera', () => {
+    const hallazgo = guion.revisarTitulo(htmlConTitulo('POS Agrícola'));
+    expect(hallazgo?.regla).toBe('título de la ventana');
+    expect(hallazgo?.ruta).toBe('/dist/renderer/index.html');
+    expect(hallazgo?.porque).toContain('«POS Agrícola»');
+    expect(hallazgo?.porque).toContain('«POS Jimmy Cano»');
+  });
+
+  it('marca el nombre técnico del paquete, «pos-agricola»', () => {
+    expect(guion.revisarTitulo(htmlConTitulo('pos-agricola'))?.porque).toContain('«pos-agricola»');
+  });
+
+  it('distingue mayúsculas: «pos jimmy cano» no es el nombre', () => {
+    expect(guion.revisarTitulo(htmlConTitulo('pos jimmy cano'))).not.toBeNull();
+  });
+
+  it('marca un HTML sin ningún <title>', () => {
+    const hallazgo = guion.revisarTitulo('<!doctype html><html><head></head><body></body></html>');
+    expect(hallazgo?.porque).toContain('no tiene ningún <title>');
+  });
+
+  it('marca un HTML con DOS <title>, aunque uno sea el correcto', () => {
+    const html = '<html><head><title>POS Jimmy Cano</title><title>POS Agrícola</title></head></html>';
+    expect(guion.revisarTitulo(html)?.porque).toContain('«POS Jimmy Cano» y «POS Agrícola»');
+  });
+
+  it('el index.html del código fuente ya dice «POS Jimmy Cano»', () => {
+    const html = readFileSync(join(process.cwd(), 'src', 'renderer', 'index.html'), 'utf8');
+    expect(guion.revisarTitulo(html)).toBeNull();
+  });
+
+  it('LEE EL TÍTULO DEL ASAR CONSTRUIDO: un asar con «POS Agrícola» se marca y uno con «POS Jimmy Cano» no', async () => {
+    const viejo = await armarAsar({ 'dist/renderer/index.html': htmlConTitulo('POS Agrícola') });
+    const nuevo = await armarAsar({ 'dist/renderer/index.html': htmlConTitulo('POS Jimmy Cano') });
+    expect(hallazgosDeTitulo(viejo)).toHaveLength(1);
+    expect(hallazgosDeTitulo(viejo)[0]?.porque).toContain('«POS Agrícola»');
+    expect(hallazgosDeTitulo(nuevo)).toEqual([]);
+  });
+
+  it('un asar SIN el HTML de la ventana también se marca: sin él no hay título que leer', async () => {
+    const sinHtml = await armarAsar({ 'package.json': '{}' });
+    const hallazgos = hallazgosDeTitulo(sinHtml);
+    expect(hallazgos).toHaveLength(1);
+    expect(hallazgos[0]?.porque).toContain('no se encontró dist/renderer/index.html');
   });
 });

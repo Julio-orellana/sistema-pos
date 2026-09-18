@@ -24,7 +24,14 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: pos-foto: pos-foto:; connect-src 'self'"
     />
-    <title>POS Agrícola</title>
+    <!--
+      El título de la ventana. La ventana no fija `title`, así que Windows
+      muestra ESTE texto en el Administrador de tareas, en Alt+Tab y al pasar
+      el mouse por la barra de tareas. Hasta la 1.3.0 decía el nombre de
+      trabajo del proyecto (§4.68 de CLAUDE.md). `verify:paquete` lo lee del
+      paquete construido y detiene el empaquetado si no dice «POS Jimmy Cano».
+    -->
+    <title>POS Jimmy Cano</title>
   </head>
   <body>
     <div id="raiz"></div>
