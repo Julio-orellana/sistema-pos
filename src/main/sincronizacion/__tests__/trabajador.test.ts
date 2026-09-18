@@ -282,7 +282,7 @@ beforeEach(() => {
     rol: 'venta',
     pinHash: generarHashDePin('1357'),
   }).id;
-  idCategoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+  idCategoria = repos.categorias.crear({ nombre: 'Granos' }).id;
   idMaiz = repos.productos.crear({
     nombre: 'Maíz blanco',
     categoriaId: idCategoria,
@@ -328,7 +328,7 @@ describe('Un ciclo sube los lotes pendientes, completos y en orden de llegada', 
   });
 
   it('sube los lotes en ORDEN DE LLEGADA, no agrupados por tabla ni reordenados', async () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     caja.abrir(idCajera, { modo: 'simple', monto: '500' });
     cobrarUnaVenta();
 
@@ -372,7 +372,7 @@ describe('Un ciclo sube los lotes pendientes, completos y en orden de llegada', 
 
   it('funciona igual con el SimulatedSyncProvider real del proyecto', async () => {
     const simulado = new SimulatedSyncProvider();
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
 
     const resumen = await crearTrabajador({}, simulado).ejecutarCiclo();
 
@@ -391,8 +391,8 @@ describe('Un ciclo sube los lotes pendientes, completos y en orden de llegada', 
 
 describe('Un fallo transitorio reintenta con la espera correcta y respeta el orden', () => {
   beforeEach(() => {
-    categorias.crear(idJimmy, { nombre: 'Primera', orden: 1 });
-    categorias.crear(idJimmy, { nombre: 'Segunda', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Primera' });
+    categorias.crear(idJimmy, { nombre: 'Segunda' });
   });
 
   it('el primer fallo suma un intento y agenda el reintento a los 5 segundos', async () => {
@@ -508,7 +508,7 @@ describe('Después de un fallo TRANSITORIO, el trabajador pregunta si se llega a
     llamadas = [];
     enCursoAlMedir = [];
     bitacora = [];
-    categorias.crear(idJimmy, { nombre: 'Medida', orden: 1 });
+    categorias.crear(idJimmy, { nombre: 'Medida' });
     loteDeLaCategoria = colaPendiente()[0]?.lote_id ?? '';
   });
 
@@ -644,9 +644,9 @@ describe('Un fallo determinístico DETIENE la cola en ese lote, sin saltearlo', 
   let loteRoto: string;
 
   beforeEach(() => {
-    categorias.crear(idJimmy, { nombre: 'La que rompe', orden: 1 });
+    categorias.crear(idJimmy, { nombre: 'La que rompe' });
     loteRoto = colaPendiente()[0]?.lote_id ?? '';
-    categorias.crear(idJimmy, { nombre: 'La de atrás', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'La de atrás' });
   });
 
   it('marca el lote como bloqueante y guarda el error completo de la nube', async () => {
@@ -735,7 +735,7 @@ describe('Un fallo determinístico DETIENE la cola en ese lote, sin saltearlo', 
 
 describe('Cortar el proceso a mitad de un lote no pierde ni duplica nada', () => {
   it('un ciclo abandonado esperando la respuesta no marca NADA', async () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     proveedor.programar({ tipo: 'colgado' });
 
     // Se lanza el ciclo y se abandona: es lo que pasa cuando alguien mata el
@@ -750,7 +750,7 @@ describe('Cortar el proceso a mitad de un lote no pierde ni duplica nada', () =>
   });
 
   it('un trabajador NUEVO sobre la misma base retoma exactamente donde quedó', async () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     proveedor.programar({ tipo: 'colgado' });
     void crearTrabajador().ejecutarCiclo();
     await new Promise((resolver) => setTimeout(resolver, 10));
@@ -767,7 +767,7 @@ describe('Cortar el proceso a mitad de un lote no pierde ni duplica nada', () =>
   });
 
   it('si la respuesta 2xx se pierde, el reintento manda exactamente lo mismo', async () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     // La nube recibió las filas y contestó, pero la respuesta no llegó.
     proveedor.programar({ tipo: 'excepcion', mensaje: 'socket hang up' });
 
@@ -781,7 +781,7 @@ describe('Cortar el proceso a mitad de un lote no pierde ni duplica nada', () =>
   });
 
   it('confirmar DOS VECES el mismo lote no cambia la marca ni duplica filas', () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     const loteId = colaPendiente()[0]?.lote_id ?? '';
 
     expect(repos.syncCola.marcarLoteSincronizado(loteId)).toBe(2);
@@ -955,7 +955,7 @@ describe('El presupuesto por ciclo es el del diseño y se respeta', () => {
 
   it('se corta a los N lotes aunque queden pendientes, y el resto espera al ciclo siguiente', async () => {
     for (let i = 0; i < 5; i += 1) {
-      categorias.crear(idJimmy, { nombre: `Categoría ${String(i)}`, orden: i + 2 });
+      categorias.crear(idJimmy, { nombre: `Categoría ${String(i)}` });
     }
 
     const trabajador = crearTrabajador({ lotesMaximos: 3 });
@@ -973,7 +973,7 @@ describe('El presupuesto por ciclo es el del diseño y se respeta', () => {
 
   it('se corta también por TIEMPO, aunque no haya llegado al tope de lotes', async () => {
     for (let i = 0; i < 5; i += 1) {
-      categorias.crear(idJimmy, { nombre: `Categoría ${String(i)}`, orden: i + 2 });
+      categorias.crear(idJimmy, { nombre: `Categoría ${String(i)}` });
     }
 
     // Cada lectura del reloj avanza 11 segundos: al tercer lote ya pasaron 30.
@@ -1004,7 +1004,7 @@ describe('El presupuesto por ciclo es el del diseño y se respeta', () => {
     */
     const entradas: EntradaDelLote[] = [];
     for (let i = 0; i < 60; i += 1) {
-      const id = repos.categorias.crear({ nombre: `Masiva ${String(i)}`, orden: i + 10 }).id;
+      const id = repos.categorias.crear({ nombre: `Masiva ${String(i)}` }).id;
       entradas.push({ tabla: 'categorias' as const, id, operacion: 'insertar' as const });
     }
     base.prepare('DELETE FROM sync_cola').run();
@@ -1027,7 +1027,7 @@ describe('El presupuesto por ciclo es el del diseño y se respeta', () => {
 describe('Un ciclo largo NO bloquea el bucle de eventos del proceso principal', () => {
   it('un latido de 1 ms sigue latiendo durante un ciclo de 20 lotes', async () => {
     for (let i = 0; i < 20; i += 1) {
-      categorias.crear(idJimmy, { nombre: `Categoría ${String(i)}`, orden: i + 2 });
+      categorias.crear(idJimmy, { nombre: `Categoría ${String(i)}` });
     }
     proveedor.demoraMs = 1;
 
@@ -1064,7 +1064,7 @@ describe('Un ciclo largo NO bloquea el bucle de eventos del proceso principal', 
   });
 
   it('dos ciclos encimados no se pisan: el segundo cede', async () => {
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     proveedor.demoraMs = 20;
 
     const trabajador = crearTrabajador();
@@ -1145,7 +1145,7 @@ describe('La señal no es de la venta: la levanta TODA transacción de negocio',
     const trabajador = crearTrabajador();
     const espia = espiarDesdeAdentro(trabajador);
 
-    categorias.crear(idJimmy, { nombre: 'Fertilizantes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Fertilizantes' });
     observarLotesEncolados(null);
 
     expect(espia.senalVista()).toBe(true);

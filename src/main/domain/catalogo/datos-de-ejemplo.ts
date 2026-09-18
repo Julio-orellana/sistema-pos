@@ -41,7 +41,6 @@ export function esDeEjemplo(nombre: string): boolean {
 /** Una categoría de ejemplo, sin el prefijo (lo agrega la siembra). */
 interface CategoriaDeEjemplo {
   readonly nombre: string;
-  readonly orden: number;
 }
 
 /** Un producto de ejemplo, sin el prefijo. */
@@ -64,9 +63,9 @@ interface ProductoDeEjemplo {
  * unidad en dos presentaciones distintas.
  */
 const CATEGORIAS: readonly CategoriaDeEjemplo[] = [
-  { nombre: 'Granos', orden: 1 },
-  { nombre: 'Abarrotes', orden: 2 },
-  { nombre: 'Huevos', orden: 3 },
+  { nombre: 'Granos' },
+  { nombre: 'Abarrotes' },
+  { nombre: 'Huevos' },
 ];
 
 /**
@@ -190,7 +189,7 @@ export function sembrarDatosDeEjemplo(
         continue;
       }
 
-      const creada = repos.categorias.crear({ nombre, orden: plantilla.orden });
+      const creada = repos.categorias.crear({ nombre });
       idPorCategoria.set(plantilla.nombre, creada.id);
       categoriasCreadas += 1;
     }

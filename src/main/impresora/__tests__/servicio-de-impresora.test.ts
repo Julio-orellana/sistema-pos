@@ -400,7 +400,7 @@ describe('Quitar la impresora vuelve a «solo PDF» y los recibos se siguen emit
         log: new LogTecnicoSilencioso(),
       });
       const cajera = repos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pinHash: generarHashDePin('1357') }).id;
-      const categoriaId = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+      const categoriaId = repos.categorias.crear({ nombre: 'Granos' }).id;
       const maiz = repos.productos.crear({
         nombre: 'Maíz blanco',
         categoriaId,

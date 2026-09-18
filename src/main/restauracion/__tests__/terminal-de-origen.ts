@@ -171,7 +171,7 @@ export function sembrarTerminalDeOrigen(base: Database, carpetaDeDatos: string):
   limites.fijar(jimmy.id, { rol: 'venta', porcentaje: '10', montoFijo: '20' });
 
   // --- Catálogo: tres productos, dos con foto -------------------------------
-  const categoria = categorias.crear(jimmy.id, { nombre: 'Granos', orden: 1 });
+  const categoria = categorias.crear(jimmy.id, { nombre: 'Granos' });
   const origenDeFotos = join(carpetaDeDatos, 'origen-de-fotos');
   mkdirSync(origenDeFotos, { recursive: true });
   writeFileSync(join(origenDeFotos, 'maiz.png'), PNG_DE_UN_PIXEL);

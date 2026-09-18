@@ -160,7 +160,7 @@ describe('Limpiar el catálogo de ejemplo', () => {
 
     // Si solo se desactivaran, el UNIQUE seguiría ocupando el nombre y el
     // "Maíz blanco" de verdad de Jimmy chocaría contra el de mentira.
-    const categoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 });
+    const categoria = repos.categorias.crear({ nombre: 'Granos' });
     expect(() =>
       repos.productos.crear({
         nombre: 'Maíz blanco',
@@ -191,7 +191,7 @@ describe('Limpiar el catálogo de ejemplo', () => {
   });
 
   it('NO toca las categorías ni los productos reales de la tienda', () => {
-    const real = repos.categorias.crear({ nombre: 'Ferretería', orden: 9 });
+    const real = repos.categorias.crear({ nombre: 'Ferretería' });
     repos.productos.crear({
       nombre: 'Machete',
       categoriaId: real.id,

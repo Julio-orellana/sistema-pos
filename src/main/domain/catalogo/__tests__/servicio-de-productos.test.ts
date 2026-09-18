@@ -90,7 +90,7 @@ beforeEach(() => {
     rol: 'administrativo',
     pinHash: generarHashDePin('2468'),
   }).id;
-  idGranos = categorias.crear(idAdmin, { nombre: 'Granos', orden: 1 }).id;
+  idGranos = categorias.crear(idAdmin, { nombre: 'Granos' }).id;
   escriturasEnLaBase = 0;
 });
 

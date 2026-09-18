@@ -5,8 +5,11 @@
  * reglas que el repositorio no conoce:
  *
  *   · el nombre no puede estar vacío ni repetirse,
- *   · el orden es un entero no negativo,
  *   · una categoría NUNCA se borra, solo se desactiva.
+ *
+ * Su POSICIÓN no la decide nadie: la dan sus ventas, sumando las de sus
+ * productos, con el mismo criterio que ordena los productos (§4.63). Hasta el
+ * 2026-09-18 había que escribir un número de orden a mano al crearla.
  *
  * POR QUÉ NUNCA SE BORRA: `productos.categoria_id` la referencia con
  * ON DELETE RESTRICT, así que en cuanto tenga un producto la base impide
@@ -39,10 +42,9 @@ export const ACCIONES_DE_CATEGORIA = {
 /** Largo máximo del nombre de una categoría. */
 const LARGO_MAXIMO_DEL_NOMBRE = 60;
 
-/** Datos con los que se crea o se edita una categoría. */
+/** Datos con los que se crea o se edita una categoría. Solo el nombre (§4.63). */
 export interface DatosDeCategoria {
   readonly nombre: string;
-  readonly orden: number;
 }
 
 /** Dependencias del servicio. */
@@ -98,15 +100,8 @@ export class ServicioDeCategorias {
         `nombre de ${String(nombre.length)} caracteres.`,
       );
     }
-    if (!Number.isInteger(datos.orden) || datos.orden < 0) {
-      throw new ErrorDeNegocio(
-        'DATO_INVALIDO',
-        'El orden de la categoría debe ser un número entero de 0 en adelante.',
-        `orden recibido: ${String(datos.orden)}`,
-      );
-    }
 
-    return { nombre, orden: datos.orden };
+    return { nombre };
   }
 
   /**
@@ -166,7 +161,7 @@ export class ServicioDeCategorias {
         accion: ACCIONES_DE_CATEGORIA.creada,
         entidadTipo: 'categorias',
         entidadId: creada.id,
-        valorNuevo: { nombre: creada.nombre, orden: creada.orden },
+        valorNuevo: { nombre: creada.nombre },
         fecha: new Date(this.ahora()).toISOString(),
       });
 
@@ -193,7 +188,7 @@ export class ServicioDeCategorias {
         accion: ACCIONES_DE_CATEGORIA.editada,
         entidadTipo: 'categorias',
         entidadId: id,
-        valorAnterior: { nombre: anterior.nombre, orden: anterior.orden },
+        valorAnterior: { nombre: anterior.nombre },
         valorNuevo: validos,
         fecha: new Date(this.ahora()).toISOString(),
       });

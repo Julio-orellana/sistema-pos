@@ -36,7 +36,7 @@ afterEach(() => {
 /** Siembra un catálogo mínimo y devuelve los ids que hacen falta. */
 function sembrarCatalogo(): { usuarioId: string; categoriaId: string; productoId: string } {
   const usuario = repos.usuarios.crear({ nombre: 'Cajero', rol: 'venta', pinHash: 'hash' });
-  const categoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 });
+  const categoria = repos.categorias.crear({ nombre: 'Granos' });
   const producto = repos.productos.crear({
     nombre: 'Maíz',
     categoriaId: categoria.id,

@@ -109,7 +109,14 @@ export interface NuevoUsuario {
 export interface Categoria {
   readonly id: string;
   readonly nombre: string;
-  readonly orden: number;
+  /**
+   * Cuántas VECES se vendió algo de esta categoría: la suma del
+   * `contador_ventas` de TODOS sus productos, activos o no. Se calcula al
+   * leer, no se guarda, y es lo que decide la posición de la categoría
+   * (§4.63). La columna `categorias.orden` sigue existiendo en la tabla, pero
+   * ya no se lee ni se escribe.
+   */
+  readonly ventas: number;
   /**
    * Baja lógica: una categoría inactiva deja de ofrecerse al crear o editar un
    * producto, y NADA más. Los productos que ya la referencian siguen intactos
@@ -124,13 +131,14 @@ export interface Categoria {
 /** Datos para crear una categoría. */
 export interface NuevaCategoria {
   readonly nombre: string;
-  readonly orden?: number;
 }
 
-/** Campos editables de una categoría existente. */
+/**
+ * Campos editables de una categoría existente. Solo el nombre: su posición
+ * ya no la decide nadie a mano (§4.63).
+ */
 export interface CambiosDeCategoria {
   readonly nombre: string;
-  readonly orden: number;
 }
 
 // ---------------------------------------------------------------------------
