@@ -86,7 +86,7 @@ export const CANALES_IPC = {
   categoriasListar: 'catalogo:categorias-listar',
   /** Crea una categoría. */
   categoriasCrear: 'catalogo:categorias-crear',
-  /** Edita nombre y orden de una categoría. */
+  /** Edita el nombre de una categoría. Su posición la deciden las ventas (§4.63). */
   categoriasEditar: 'catalogo:categorias-editar',
   /** Activa o desactiva una categoría. Nunca la borra. */
   categoriasFijarActivo: 'catalogo:categorias-fijar-activo',
@@ -162,6 +162,12 @@ export const CANALES_IPC = {
   recibosReimprimir: 'recibos:reimprimir',
   /** El recibo en texto plano, para mostrarlo en pantalla tal como sale. */
   recibosVer: 'recibos:ver',
+  /**
+   * Proceso principal -> renderer. Terminó de mandarse a la impresora el
+   * recibo de una venta. El cobro ya no lo espera (§4.64): este aviso es cómo
+   * se entera la pantalla de si el papel salió.
+   */
+  recibosImpresionTerminada: 'recibos:impresion-terminada',
 
   // --- Reportes -------------------------------------------------------------
   /**
@@ -752,9 +758,6 @@ const LARGO_MAXIMO_MOTIVO = 200;
 /** Largo máximo de un número escrito a mano (precio, cantidad, inventario). */
 const LARGO_MAXIMO_NUMERO = 20;
 
-/** Orden máximo admitido en la frontera; más allá es un error de tecleo. */
-const ORDEN_MAXIMO = 9999;
-
 /** Largo máximo de una ruta relativa de foto. */
 const LARGO_MAXIMO_RUTA_FOTO = 300;
 
@@ -770,10 +773,13 @@ export type TipoMedidaIpc = (typeof TIPOS_DE_MEDIDA_IPC)[number];
 /** Unidad de peso, del lado de la interfaz. */
 export type UnidadPesoIpc = (typeof UNIDADES_DE_PESO_IPC)[number];
 
-/** Payload de creación de categoría. */
+/**
+ * Payload de creación de categoría. Solo el nombre: la posición la deciden
+ * las ventas (§4.63). Zod descarta las claves que no declara, así que una
+ * ventana vieja que todavía mande `orden` no rompe nada: se ignora.
+ */
 export const esquemaCategoriaNueva = z.object({
   nombre: z.string().min(1).max(LARGO_MAXIMO_NOMBRE_CATEGORIA),
-  orden: z.number().int().min(0).max(ORDEN_MAXIMO),
 });
 
 /** Payload de edición de categoría. */
@@ -840,7 +846,11 @@ export type ProductoEditadoIpc = z.infer<typeof esquemaProductoEditado>;
 export interface CategoriaIpc {
   readonly id: string;
   readonly nombre: string;
-  readonly orden: number;
+  /**
+   * Cuántas veces se vendió algo de esta categoría: la suma del contador de
+   * sus productos. Es lo que decide su posición en las listas (§4.63).
+   */
+  readonly ventas: number;
   readonly activo: boolean;
   /** Cuántos productos la referencian. Se muestra antes de desactivarla. */
   readonly productosAsociados: number;
@@ -1176,8 +1186,26 @@ export interface ReciboDeLaVentaIpc {
   readonly pdfGenerado: boolean;
   /** `true` si además salió por la impresora térmica. */
   readonly impreso: boolean;
+  /**
+   * `true` si la impresión SIGUE EN CURSO cuando se responde el cobro. Es lo
+   * normal desde el 2026-09-18: el cobro no espera a la impresora (§4.64), y
+   * el resultado llega después con `ImpresionDeReciboTerminadaIpc`.
+   */
+  readonly impresionPendiente: boolean;
   /** Qué decirle al cajero sobre la impresión, en una frase. */
   readonly mensajeDeImpresion: string;
+}
+
+/**
+ * El aviso que manda el proceso principal cuando terminó de intentar imprimir
+ * el recibo de una venta. Llega DESPUÉS de la respuesta del cobro, o antes si
+ * la impresión fue instantánea: la pantalla lo empareja por `reciboId`.
+ */
+export interface ImpresionDeReciboTerminadaIpc {
+  readonly reciboId: string;
+  readonly numeroRecibo: number;
+  readonly impreso: boolean;
+  readonly mensaje: string;
 }
 
 /**
@@ -2160,12 +2188,9 @@ export interface ApiPos {
   readonly catalogo: {
     /** Todas las categorías, con cuántos productos usa cada una. */
     listarCategorias(): Promise<RespuestaIpc<readonly CategoriaIpc[]>>;
-    crearCategoria(nombre: string, orden: number): Promise<RespuestaIpc<CategoriaIpc>>;
-    editarCategoria(
-      id: string,
-      nombre: string,
-      orden: number,
-    ): Promise<RespuestaIpc<CategoriaIpc>>;
+    /** Solo el nombre: la posición la deciden las ventas (§4.63). */
+    crearCategoria(nombre: string): Promise<RespuestaIpc<CategoriaIpc>>;
+    editarCategoria(id: string, nombre: string): Promise<RespuestaIpc<CategoriaIpc>>;
     /** Activa o desactiva. Nunca borra. */
     fijarActivoCategoria(id: string, activo: boolean): Promise<RespuestaIpc<CategoriaIpc>>;
 
@@ -2245,6 +2270,11 @@ export interface ApiPos {
     listar(filtro?: FiltroDeFormaPagoIpc): Promise<RespuestaIpc<HistorialDeRecibosIpc>>;
     ver(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
     reimprimir(id: string): Promise<RespuestaIpc<ReciboVistoIpc>>;
+    /**
+     * Se suscribe al aviso de impresión terminada. Devuelve la función que
+     * cancela la suscripción, igual que `kiosko.alSolicitarSalida`.
+     */
+    alTerminarImpresion(alRecibir: (aviso: ImpresionDeReciboTerminadaIpc) => void): () => void;
   };
 
   /**

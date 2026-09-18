@@ -273,7 +273,7 @@ async function main() {
 
     // ---- 7. Una venta imprime ------------------------------------------------
     const productoId = await ventana.evaluate(async () => {
-      const categoria = await window.pos.catalogo.crearCategoria('Granos', 1);
+      const categoria = await window.pos.catalogo.crearCategoria('Granos');
       if (!categoria.ok) throw new Error(categoria.error.mensaje);
       const producto = await window.pos.catalogo.crearProducto({
         nombre: 'Frijol negro', categoriaId: categoria.datos.id, tipoMedida: 'unidad', unidadPeso: null,
@@ -288,12 +288,30 @@ async function main() {
     const ventaConImpresora = await vender(productoId);
     anotar(`venta con impresora: ${JSON.stringify(ventaConImpresora.ok ? ventaConImpresora.datos.recibo : ventaConImpresora)}`);
     const reciboCon = ventaConImpresora.ok ? ventaConImpresora.datos.recibo : null;
+    // El cobro ya no espera a la impresora (§4.64): responde con la impresión
+    // en curso, y el ticket y la marca `impreso` llegan después.
+    for (let intento = 0; intento < 50 && !existsSync(archivoDelTicket); intento += 1) {
+      await new Promise((resolver) => { setTimeout(resolver, 100); });
+    }
     const bytesDelRecibo = existsSync(archivoDelTicket) ? readFileSync(archivoDelTicket) : Buffer.alloc(0);
+    let impresoEnElHistorial = null;
+    for (let intento = 0; intento < 50 && impresoEnElHistorial !== true; intento += 1) {
+      impresoEnElHistorial = await ventana.evaluate(async (numero) => {
+        const historial = await window.pos.recibos.listar('todas');
+        return historial.ok ? (historial.datos.recibos.find((r) => r.numeroRecibo === numero)?.impreso ?? null) : null;
+      }, reciboCon?.numeroRecibo ?? 0);
+      if (impresoEnElHistorial !== true) await new Promise((resolver) => { setTimeout(resolver, 100); });
+    }
     comprobar(
-      'UNA VENTA con impresora: PDF generado, impreso=true, y los bytes del recibo llegaron a la impresora',
-      'pdfGenerado=true; impreso=true; bytes > 0; PDF en disco',
-      `pdfGenerado=${String(reciboCon?.pdfGenerado)}; impreso=${String(reciboCon?.impreso)}; bytes=${String(bytesDelRecibo.length)}; PDF=${String(reciboCon !== null && existsSync(reciboCon.rutaPdf))}`,
-      reciboCon?.pdfGenerado === true && reciboCon.impreso === true && bytesDelRecibo.length > 0 && existsSync(reciboCon.rutaPdf),
+      'UNA VENTA con impresora: PDF generado, la impresión sale en segundo plano, los bytes llegan y el recibo queda impreso',
+      'pdfGenerado=true; impresionPendiente=true; bytes > 0; impreso en el historial=true; PDF en disco',
+      `pdfGenerado=${String(reciboCon?.pdfGenerado)}; impresionPendiente=${String(reciboCon?.impresionPendiente)}; bytes=${String(bytesDelRecibo.length)}; ` +
+        `impreso en el historial=${String(impresoEnElHistorial)}; PDF=${String(reciboCon !== null && existsSync(reciboCon.rutaPdf))}`,
+      reciboCon?.pdfGenerado === true &&
+        reciboCon.impresionPendiente === true &&
+        bytesDelRecibo.length > 0 &&
+        impresoEnElHistorial === true &&
+        existsSync(reciboCon.rutaPdf),
     );
 
     // ---- 8. Quitar y vender otra vez -----------------------------------------

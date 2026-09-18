@@ -9,6 +9,10 @@
  * Esta pantalla solo es alcanzable con rol administrativo, pero eso no lo
  * decide ella: el proceso principal rechaza cada canal con `requiereRol`.
  * Esconder el botón es comodidad, no control.
+ *
+ * NO SE LE PIDE NINGÚN ORDEN A NADIE (§4.63). La posición de cada categoría
+ * la calcula el proceso principal al leerla, sumando las ventas de sus
+ * productos, y la lista ya llega ordenada: esta pantalla no ordena nada.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -21,10 +25,9 @@ interface Borrador {
   /** `null` cuando se está creando una categoría nueva. */
   readonly id: string | null;
   readonly nombre: string;
-  readonly orden: string;
 }
 
-const BORRADOR_VACIO: Borrador = { id: null, nombre: '', orden: '0' };
+const BORRADOR_VACIO: Borrador = { id: null, nombre: '' };
 
 export function PantallaDeCategorias({
   alVolver,
@@ -60,18 +63,12 @@ export function PantallaDeCategorias({
   }, []);
 
   const guardar = useCallback((): void => {
-    const orden = Number.parseInt(borrador.orden, 10);
-    if (!Number.isInteger(orden) || orden < 0) {
-      setMensaje('El orden tiene que ser un número entero de 0 en adelante.');
-      return;
-    }
-
     setTrabajando(true);
     void (async (): Promise<void> => {
       const respuesta =
         borrador.id === null
-          ? await window.pos.catalogo.crearCategoria(borrador.nombre.trim(), orden)
-          : await window.pos.catalogo.editarCategoria(borrador.id, borrador.nombre.trim(), orden);
+          ? await window.pos.catalogo.crearCategoria(borrador.nombre.trim())
+          : await window.pos.catalogo.editarCategoria(borrador.id, borrador.nombre.trim());
       setTrabajando(false);
 
       if (!respuesta.ok) {
@@ -114,6 +111,10 @@ export function PantallaDeCategorias({
           Agrupan los productos en la pantalla de venta. Desactivar una categoría solo la retira
           de las opciones al crear un producto: los productos que ya la usan siguen vendiéndose.
         </p>
+        <p className="subtitulo" data-prueba="categorias-orden-automatico">
+          Se ordenan solas: primero las que más se venden. Una categoría nueva aparece al final
+          hasta que se venda algo de ella.
+        </p>
       </header>
 
       {mensaje !== null && <p className="alerta">{mensaje}</p>}
@@ -130,19 +131,6 @@ export function PantallaDeCategorias({
             data-prueba="categoria-nombre"
             alCambiar={(nombre) => {
               setBorrador((anterior) => ({ ...anterior, nombre }));
-            }}
-          />
-        </label>
-
-        <label className="campo">
-          <span className="campo__etiqueta">Orden (menor número, más arriba)</span>
-          <CampoDeTexto
-            etiqueta="Orden de la categoría"
-            disposicion="entero"
-            valor={borrador.orden}
-            data-prueba="categoria-orden"
-            alCambiar={(orden) => {
-              setBorrador((anterior) => ({ ...anterior, orden }));
             }}
           />
         </label>
@@ -186,7 +174,8 @@ export function PantallaDeCategorias({
                   <span className="lista__nombre">{categoria.nombre}</span>
                   {!categoria.activo && <span className="etiqueta">Desactivada</span>}
                   <span className="lista__detalle">
-                    orden {categoria.orden} · {categoria.productosAsociados}{' '}
+                    {categoria.ventas} {categoria.ventas === 1 ? 'venta' : 'ventas'} ·{' '}
+                    {categoria.productosAsociados}{' '}
                     {categoria.productosAsociados === 1 ? 'producto' : 'productos'}
                   </span>
                 </div>
@@ -199,7 +188,6 @@ export function PantallaDeCategorias({
                       setBorrador({
                         id: categoria.id,
                         nombre: categoria.nombre,
-                        orden: String(categoria.orden),
                       });
                       setMensaje(null);
                     }}

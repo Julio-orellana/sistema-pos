@@ -189,10 +189,11 @@ async function main() {
     );
     await capturar('1a-teclado-en-categorias');
 
-    await prueba('categoria-orden').click();
-    const disposicionDeOrden = await prueba('teclado-en-pantalla').getAttribute('data-disposicion');
-    comprobar('el ORDEN abre el teclado de solo enteros', 'entero', disposicionDeOrden, disposicionDeOrden === 'entero');
-    await tocarTeclas('borrar', 'borrar', '1');
+    // Hasta §4.63 acá se tocaba el campo ORDEN y se comprobaba que abriera el
+    // teclado de solo enteros. Ese campo ya no existe: la posición la deciden
+    // las ventas. Lo que se comprueba ahora es que el formulario no lo pida.
+    const camposDeOrden = await prueba('categoria-orden').count();
+    comprobar('el formulario de categoría NO pide ningún orden (§4.63)', '0 campos de orden', `${String(camposDeOrden)} campos de orden`, camposDeOrden === 0);
     await prueba('categoria-guardar').click();
     await ventana.locator('[data-prueba="lista-de-categorias"] li').first().waitFor({ timeout: ESPERA_CORTA });
     const tecladoTrasGuardar = await prueba('teclado-en-pantalla').count();

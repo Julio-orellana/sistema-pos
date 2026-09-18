@@ -417,11 +417,12 @@ describe('Quién autorizó la anulación, con un nombre que no entra en un rengl
   const NOMBRE_LARGO = 'María Fernanda de los Ángeles Castañeda Villagrán';
 
   function anuladaCon(autorizadaPor: string): ModeloDeRecibo {
-    const primero = grilla().find(({ modelo }) => modelo.anulacion !== null);
-    if (primero?.modelo.anulacion == null) {
+    const modelo = grilla().find(({ modelo: m }) => m.anulacion !== null)?.modelo;
+    const anulacion = modelo?.anulacion;
+    if (modelo === undefined || anulacion === undefined || anulacion === null) {
       throw new Error('la grilla no tiene ningún recibo anulado');
     }
-    return { ...primero.modelo, anulacion: { ...primero.modelo.anulacion, autorizadaPor } };
+    return { ...modelo, anulacion: { ...anulacion, autorizadaPor } };
   }
 
   it('el control: en la TIENDA el nombre largo ocupa MÁS DE UN renglón', () => {

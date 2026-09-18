@@ -167,7 +167,7 @@ async function main() {
           await window.pos.usuarios.crear({ nombre: 'Ana', rol: 'venta', pin: p.pinAna }),
           'crear Ana',
         );
-        const categoria = exigir(await window.pos.catalogo.crearCategoria('Granos', 1), 'categoría');
+        const categoria = exigir(await window.pos.catalogo.crearCategoria('Granos'), 'categoría');
         /*
           Q1.10 EL KILO, y el precio no es casual: todo múltiplo de 0.25 es
           exacto en binario, así que con el maíz a Q4.25 de los otros arneses

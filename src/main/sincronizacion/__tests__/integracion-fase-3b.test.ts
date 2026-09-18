@@ -156,7 +156,7 @@ beforeEach(() => {
     rol: 'venta',
     pinHash: generarHashDePin('1357'),
   }).id;
-  const idCategoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+  const idCategoria = repos.categorias.crear({ nombre: 'Granos' }).id;
   idMaiz = repos.productos.crear({
     nombre: 'Maíz blanco',
     categoriaId: idCategoria,
@@ -286,7 +286,7 @@ describe('CADA OPERACIÓN va a SU función, y no se confunden entre sí', () => 
   });
 
   it('una categoría llama a sincronizar_lote_simple', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
 
     await crearTrabajador().ejecutarCiclo();
 
@@ -294,7 +294,7 @@ describe('CADA OPERACIÓN va a SU función, y no se confunden entre sí', () => 
   });
 
   it('CUATRO OPERACIONES SEGUIDAS van cada una a su función, en orden de llegada', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
     usuarios.crear(idJimmy, { nombre: 'Otro cajero', rol: 'venta', pin: '8765' });
     const sesion = caja.abrir(idCajera, { modo: 'simple', monto: '500' });
     caja.intentarCerrar(sesion.id, { modo: 'simple', monto: '500' }, { usuarioQueCierra: idCajera });
@@ -451,7 +451,7 @@ describe('Sin credencial, la cola NO se toca y nada se pierde', () => {
   }
 
   it('no se hace NINGUNA llamada a la nube', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
 
     await trabajadorSinCredencial().ejecutarCiclo();
 
@@ -459,7 +459,7 @@ describe('Sin credencial, la cola NO se toca y nada se pierde', () => {
   });
 
   it('el lote sigue pendiente y NO queda bloqueante: se sube al reconectar', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
     const antes = repos.syncCola.contarPendientes();
 
     await trabajadorSinCredencial().ejecutarCiclo();
@@ -472,7 +472,7 @@ describe('Sin credencial, la cola NO se toca y nada se pierde', () => {
   });
 
   it('NO se suma un intento: la escalera de reintentos no se gasta esperando una credencial', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
 
     await trabajadorSinCredencial().ejecutarCiclo();
 
@@ -483,7 +483,7 @@ describe('Sin credencial, la cola NO se toca y nada se pierde', () => {
   });
 
   it('y cuando VUELVE la credencial, el mismo lote sube', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
     await trabajadorSinCredencial().ejecutarCiclo();
     expect(repos.syncCola.contarPendientes()).toBeGreaterThan(0);
 
@@ -512,7 +512,7 @@ describe('Un desajuste de contrato DETIENE la cola en ese lote', () => {
   }) as unknown as typeof fetch;
 
   it('el lote queda bloqueante, con el mensaje que nombra los dos números', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
 
     await crearTrabajador(rechazoDeContrato).ejecutarCiclo();
 
@@ -524,7 +524,7 @@ describe('Un desajuste de contrato DETIENE la cola en ese lote', () => {
   });
 
   it('y NO se sube nada detrás de él: la cola se detiene, no lo saltea', async () => {
-    categorias.crear(idJimmy, { nombre: 'Abarrotes', orden: 2 });
+    categorias.crear(idJimmy, { nombre: 'Abarrotes' });
     usuarios.crear(idJimmy, { nombre: 'Otro', rol: 'venta', pin: '5544' });
 
     await crearTrabajador(rechazoDeContrato).ejecutarCiclo();

@@ -72,6 +72,7 @@ import {
   type SesionIniciada,
   type SolicitudDiagnostico,
   type UsuarioParaIngreso,
+  type ImpresionDeReciboTerminadaIpc,
 } from '@shared/types/ipc';
 import { instalarBloqueosDeKioskoEnDom } from './kiosk-dom-guards';
 
@@ -162,17 +163,13 @@ const apiPos: ApiPos = {
         RespuestaIpc<readonly CategoriaIpc[]>
       >,
 
-    crearCategoria: (nombre: string, orden: number): Promise<RespuestaIpc<CategoriaIpc>> =>
-      ipcRenderer.invoke(CANALES_IPC.categoriasCrear, { nombre, orden }) as Promise<
+    crearCategoria: (nombre: string): Promise<RespuestaIpc<CategoriaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasCrear, { nombre }) as Promise<
         RespuestaIpc<CategoriaIpc>
       >,
 
-    editarCategoria: (
-      id: string,
-      nombre: string,
-      orden: number,
-    ): Promise<RespuestaIpc<CategoriaIpc>> =>
-      ipcRenderer.invoke(CANALES_IPC.categoriasEditar, { id, nombre, orden }) as Promise<
+    editarCategoria: (id: string, nombre: string): Promise<RespuestaIpc<CategoriaIpc>> =>
+      ipcRenderer.invoke(CANALES_IPC.categoriasEditar, { id, nombre }) as Promise<
         RespuestaIpc<CategoriaIpc>
       >,
 
@@ -270,6 +267,15 @@ const apiPos: ApiPos = {
       ipcRenderer.invoke(CANALES_IPC.recibosReimprimir, { id }) as Promise<
         RespuestaIpc<ReciboVistoIpc>
       >,
+    alTerminarImpresion: (alRecibir: (aviso: ImpresionDeReciboTerminadaIpc) => void): (() => void) => {
+      const manejador = (_evento: unknown, aviso: ImpresionDeReciboTerminadaIpc): void => {
+        alRecibir(aviso);
+      };
+      ipcRenderer.on(CANALES_IPC.recibosImpresionTerminada, manejador);
+      return (): void => {
+        ipcRenderer.removeListener(CANALES_IPC.recibosImpresionTerminada, manejador);
+      };
+    },
   },
 
   reportes: {

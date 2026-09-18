@@ -70,7 +70,7 @@ function aCategoriaIpc(
   return {
     id: categoria.id,
     nombre: categoria.nombre,
-    orden: categoria.orden,
+    ventas: categoria.ventas,
     activo: categoria.activo,
     productosAsociados: servicio.contarProductos(categoria.id),
   };
@@ -151,7 +151,6 @@ export function registrarManejadoresDeCatalogo(dependencias: DependenciasDeCatal
           const datos = esquemaCategoriaEditada.parse(payload);
           const editada = categorias.editar(usuarioEnSesion(sesion), datos.id, {
             nombre: datos.nombre,
-            orden: datos.orden,
           });
           return aCategoriaIpc(editada, categorias);
         }),

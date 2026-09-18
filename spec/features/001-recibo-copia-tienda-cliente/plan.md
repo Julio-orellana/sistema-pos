@@ -377,7 +377,7 @@ Nada se borra. Lo que dejó de ser cierto se tacha o se anota «CORREGIDO EL
 | `recibo.test.ts` (cabecera) | «Es el único papel que se lleva el cliente» | Una de las dos copias |
 | `receipt-printer.ts` y `docs/INTEGRACIONES.md` | El contrato con `copias: number` | El contrato nuevo |
 | `docs/GUIA-IMPRESORA.md` | No dice qué sale en cada venta | Una sección nueva: salen dos copias, cuál se entrega y cuál se guarda |
-| CLAUDE.md | — | §4.63 nueva, una fila en §5, los puntos abiertos en §6.2, el comando nuevo en §8, `spec/` en el mapa de §9 y una línea sobre el proceso en §10 |
+| CLAUDE.md | — | §4.65 nueva, una fila en §5, los puntos abiertos en §6.2, el comando nuevo en §8, `spec/` en el mapa de §9 y una línea sobre el proceso en §10 |
 
 ## 10. Riesgos
 

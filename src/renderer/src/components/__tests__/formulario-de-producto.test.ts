@@ -35,7 +35,7 @@ declare global {
 const GRANOS: CategoriaIpc = {
   id: 'cat-granos',
   nombre: 'Granos',
-  orden: 1,
+  ventas: 0,
   activo: true,
   productosAsociados: 2,
 };

@@ -139,7 +139,10 @@ async function llamar(canal: string, paso: string, payload?: unknown): Promise<R
   if (manejador === undefined) {
     throw new Error(`No hay manejador registrado para ${canal}`);
   }
-  const respuesta = (await manejador({ sender: {} }, payload)) as RespuestaIpc<unknown>;
+  // El `sender` es la ventana que llamó: el cobro le manda después el aviso de
+  // impresión terminada (§4.64), así que tiene que parecerse a un webContents.
+  const sender = { isDestroyed: (): boolean => false, send: (): void => undefined };
+  const respuesta = (await manejador({ sender }, payload)) as RespuestaIpc<unknown>;
   let noSeClona: string | null = null;
   try {
     structuredClone(respuesta);
@@ -421,10 +424,10 @@ describe('1. En una tienda con datos, cada canal devuelve algo que el puente pue
   it('catálogo: categorías, productos, ajuste y foto', async () => {
     await llamar(CANALES_IPC.categoriasListar, 'listar');
     const categoria = datosDe(
-      await llamar(CANALES_IPC.categoriasCrear, 'crear', { nombre: 'Semillas', orden: 2 }),
+      await llamar(CANALES_IPC.categoriasCrear, 'crear', { nombre: 'Semillas' }),
       'crear categoría',
     );
-    await llamar(CANALES_IPC.categoriasEditar, 'editar', { id: categoria.id, nombre: 'Semillas y abonos', orden: 2 });
+    await llamar(CANALES_IPC.categoriasEditar, 'editar', { id: categoria.id, nombre: 'Semillas y abonos' });
     await llamar(CANALES_IPC.categoriasFijarActivo, 'desactivar', { id: categoria.id, activo: false });
     await llamar(CANALES_IPC.productosListar, 'listar');
     const foto = datosDe(await llamar(CANALES_IPC.productosElegirFoto, 'elegir foto'), 'elegir foto');

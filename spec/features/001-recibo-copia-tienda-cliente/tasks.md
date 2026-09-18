@@ -2,7 +2,7 @@
 
 > Sale de [`plan.md`](plan.md). Cada tarea dice qué criterio de aceptación de
 > [`spec.md`](spec.md) cubre y con qué evidencia se cerró. La evidencia completa,
-> con su salida cruda, está en CLAUDE.md §4.63.
+> con su salida cruda, está en CLAUDE.md §4.65.
 
 | # | Tarea | Cubre | Estado |
 |---|---|---|---|
@@ -22,11 +22,11 @@
 | T13 | Falsificaciones del plan §6.5, una por vez, con sha256 | Todas | **Hecho.** Siete mutaciones, las siete atrapadas; el árbol de trabajo quedó con la misma huella antes y después |
 | T14 | `npm run verify` completo | Todas | **Hecho.** 117 archivos, 2766 pruebas, 0 errores de lint |
 | T15 | Arnés `verify:pantallas:copias` en la aplicación real, a 1024×768, con el texto completo de las dos copias en su salida | CA-1, CA-3, CA-4, CA-7, CA-9, CA-10, CA-14 | **Hecho.** 18 de 18 en macOS. Las dos copias salieron renglón por renglón como las predijo la spec §4.3 |
-| T16 | Documentación: CLAUDE.md (§4.14, §4.60, §4.63 nueva, §5, §6.2, §7, §8, §9, §10), `docs/ANULACION-DE-VENTA.md`, `docs/GUIA-IMPRESORA.md`, `docs/INTEGRACIONES.md`, comentarios de `ipc.ts`, `ipc/recibos.ts` y `PantallaDeRecibos.tsx` | CA-17 | **Hecho.** Lo que dejó de ser cierto quedó tachado o anotado, no borrado |
+| T16 | Documentación: CLAUDE.md (§4.14, §4.60, §4.65 nueva, §5, §6.2, §7, §8, §9, §10), `docs/ANULACION-DE-VENTA.md`, `docs/GUIA-IMPRESORA.md`, `docs/INTEGRACIONES.md`, comentarios de `ipc.ts`, `ipc/recibos.ts` y `PantallaDeRecibos.tsx` | CA-17 | **Hecho.** Lo que dejó de ser cierto quedó tachado o anotado, no borrado |
 | T17 | Commits atómicos en la rama de trabajo | — | Ver el historial de git |
 | T18 | Decisión 1 (2026-09-18): la tabla gana `autorizacionDeLaAnulacion`; el cliente no dice quién autorizó la anulación, con todos sus renglones de continuación | CA-3, CA-5, CA-19 | **Hecho.** La grilla la exige renglón por renglón; una prueba con un nombre largo tiene su control. Falsificado: tabla del cliente en `true` → 38 caen; plantilla que ignora el campo → 37; omitir solo el primer renglón → 1 |
 | T19 | Decisión 2 (2026-09-18): la copia de la tienda siempre | CA-20 | **Sin cambio de código**, ya era así. Documentado en spec §9 |
-| T20 | Traer `develop` a la rama y verificar el estado unido (verify y el arnés de la app real) | Todas | Ver CLAUDE.md §4.65 |
+| T20 | Traer `develop` a la rama y verificar el estado unido (verify y el arnés de la app real) | Todas | **Hecho.** 2796 pruebas; `verify:pantallas:copias` 19/19; el arnés del cobro sin esperar de develop 7/7. Dos pruebas de develop y una comprobación del arnés se ajustaron al mensaje de las dos copias y al cobro que no espera (CLAUDE.md §4.65) |
 
 ## Pendiente fuera de esta spec
 

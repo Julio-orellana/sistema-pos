@@ -15,6 +15,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import type {
+  ImpresionDeReciboTerminadaIpc,
   EstadoDeVenta,
   PedidoDeCobro,
   ProductoParaVender,
@@ -109,12 +110,29 @@ const VENTA_OK: ResultadoDeCobro = {
     rutaPdf: '/pdf/recibo-000001.pdf',
     pdfGenerado: true,
     impreso: false,
-    mensajeDeImpresion: 'No hay impresora configurada. El recibo quedó en PDF.',
+    impresionPendiente: true,
+    mensajeDeImpresion: 'Enviando el recibo a la impresora…',
   },
 };
 
+/**
+ * Los suscriptores al aviso de impresión terminada. La prueba manda el aviso
+ * cuando quiere, como lo haría el proceso principal al contestar la impresora.
+ */
+let suscriptoresDeImpresion: ((aviso: ImpresionDeReciboTerminadaIpc) => void)[] = [];
+
+async function avisarImpresion(aviso: ImpresionDeReciboTerminadaIpc): Promise<void> {
+  await act(async () => {
+    for (const suscriptor of suscriptoresDeImpresion) {
+      suscriptor(aviso);
+    }
+    await Promise.resolve();
+  });
+}
+
 function instalarApi(estado: EstadoDeVenta): void {
   fueACaja = 0;
+  suscriptoresDeImpresion = [];
   cobrosPedidos = [];
   respuestasDeCobro = [VENTA_OK];
   (window as unknown as { pos: unknown }).pos = {
@@ -124,6 +142,14 @@ function instalarApi(estado: EstadoDeVenta): void {
         cobrosPedidos.push(pedido);
         const respuesta = respuestasDeCobro.shift() ?? VENTA_OK;
         return Promise.resolve({ ok: true as const, datos: respuesta });
+      },
+    },
+    recibos: {
+      alTerminarImpresion: (alRecibir: (aviso: ImpresionDeReciboTerminadaIpc) => void): (() => void) => {
+        suscriptoresDeImpresion.push(alRecibir);
+        return (): void => {
+          suscriptoresDeImpresion = suscriptoresDeImpresion.filter((s) => s !== alRecibir);
+        };
       },
     },
   };
@@ -683,5 +709,75 @@ describe('Autorización de un descuento que excede el tope', () => {
 
     expect(porPrueba('cobro-autorizacion')).not.toBeNull();
     expect(porPrueba('cobro-aviso')?.textContent).toContain('no es correcto');
+  });
+});
+
+describe('LA VENTA SE CONFIRMA SIN ESPERAR A LA IMPRESORA (§4.64)', () => {
+  beforeEach(() => {
+    instalarApi(PUEDE_VENDER);
+  });
+
+  async function cobrarHastaElFinal(): Promise<void> {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('cobro-confirmar'));
+  }
+
+  it('«Venta registrada» aparece con el papel todavía EN CAMINO', async () => {
+    await cobrarHastaElFinal();
+    expect(porPrueba('cobro-listo')).not.toBeNull();
+    const papel = exigir('cobro-estado-del-recibo');
+    expect(papel.dataset.estado).toBe('enviando');
+    expect(papel.textContent).toContain('Enviando el recibo a la impresora');
+  });
+
+  it('cuando llega el aviso de ESE recibo, el renglón dice que se imprimió', async () => {
+    await cobrarHastaElFinal();
+    await avisarImpresion({ reciboId: 'r-1', numeroRecibo: 1, impreso: true, mensaje: 'Recibo enviado a la impresora.' });
+    const papel = exigir('cobro-estado-del-recibo');
+    expect(papel.dataset.estado).toBe('impreso');
+    expect(papel.textContent).toContain('Se imprimió.');
+  });
+
+  it('si no salió, lo dice con el mensaje de la impresora', async () => {
+    await cobrarHastaElFinal();
+    await avisarImpresion({ reciboId: 'r-1', numeroRecibo: 1, impreso: false, mensaje: 'La impresora reporta un problema.' });
+    const papel = exigir('cobro-estado-del-recibo');
+    expect(papel.dataset.estado).toBe('no-impreso');
+    expect(papel.textContent).toContain('La impresora reporta un problema.');
+  });
+
+  it('el aviso de OTRO recibo no se toma por el de esta venta', async () => {
+    await cobrarHastaElFinal();
+    await avisarImpresion({ reciboId: 'r-otro', numeroRecibo: 7, impreso: true, mensaje: 'ok' });
+    expect(exigir('cobro-estado-del-recibo').dataset.estado).toBe('enviando');
+  });
+
+  it('un aviso que llega ANTES que la respuesta del cobro igual se muestra', async () => {
+    await montar();
+    await tocarProducto('p-maiz');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await avisarImpresion({ reciboId: 'r-1', numeroRecibo: 1, impreso: true, mensaje: 'ok' });
+    await clic(exigir('cobro-confirmar'));
+    expect(exigir('cobro-estado-del-recibo').dataset.estado).toBe('impreso');
+  });
+
+  it('SI LA CAJERA YA SIGUIÓ con la próxima venta, un papel que no salió se avisa igual en la pantalla', async () => {
+    await cobrarHastaElFinal();
+    await clic(exigir('cobro-siguiente-venta'));
+    expect(porPrueba('venta-papel-del-recibo')).toBeNull();
+
+    await avisarImpresion({ reciboId: 'r-1', numeroRecibo: 1, impreso: false, mensaje: 'La impresora no contestó.' });
+    expect(porPrueba('venta-papel-del-recibo')?.textContent).toContain('Recibo No. 1: La impresora no contestó.');
+  });
+
+  it('un papel que SÍ salió no deja ningún aviso extra en la pantalla', async () => {
+    await cobrarHastaElFinal();
+    await clic(exigir('cobro-siguiente-venta'));
+    await avisarImpresion({ reciboId: 'r-1', numeroRecibo: 1, impreso: true, mensaje: 'ok' });
+    expect(porPrueba('venta-papel-del-recibo')).toBeNull();
   });
 });

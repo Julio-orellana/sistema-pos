@@ -5,6 +5,14 @@
 > completo antes de escribir código, y actualizá la tabla de decisiones y la
 > lista de pendientes al final de cada sesión de trabajo.
 
+> **Contexto estable y Spec-Driven Development (desde el 2026-09-18).** La
+> misión, el stack con sus decisiones de arquitectura y la hoja de ruta viven
+> en [`spec/constitution/`](spec/constitution/). Toda funcionalidad nueva nace
+> en `spec/features/NNN-<slug>/` (`spec.md`, `plan.md`, `tasks.md`, y recién
+> después el código). Las funcionalidades ya construidas **siguen documentadas
+> acá y en `docs/`** hasta que cada una se retome y se migre a su propio
+> `spec/features/NNN-<slug>/`; no hay migración retroactiva.
+
 ---
 
 ## 1. Qué estamos construyendo
@@ -1810,6 +1818,10 @@ reacomodaría entre recargas y el cajero que ya sabe dónde está el maíz tendr
 que volver a buscarlo. Mismo criterio de «nunca dejar un orden ambiguo» del
 reparto de centavos.
 
+**Desde el 2026-09-18 las CATEGORÍAS se ordenan con el mismo criterio**, sumando
+el `contador_ventas` de sus productos. Antes se ordenaban por un número escrito
+a mano (§4.63).
+
 La insignia de «más vendido» **solo aparece en productos con ventas reales**,
 así que en una instalación nueva no la lleva ninguno: poner el número igual
 sería decorar la pantalla con un dato falso.
@@ -2161,7 +2173,7 @@ una prueba que suma las líneas y exige que den el total.
 única copia que se lleva el cliente, y un descuento sin responsable visible es
 justo lo que el flujo de PIN existe para evitar.~~
 
-> **CORREGIDO EL 2026-09-18 (spec 001, §4.63): cada venta imprime DOS copias, y
+> **CORREGIDO EL 2026-09-18 (spec 001, §4.65): cada venta imprime DOS copias, y
 > quién autorizó el descuento va en la COPIA DE LA TIENDA —y en el PDF y en la
 > pantalla del historial—, no en la del cliente.** La razón de control del
 > párrafo tachado se conserva entera, en la copia que se queda la tienda. Lo que
@@ -2425,7 +2437,7 @@ que poder resolverlo solo y el recibo no muestra nada que el cliente no haya
 visto al comprar. **Configurar los datos del negocio sí exige rol
 administrativo**: cambia un documento que se le entrega al cliente.
 
-> **CORREGIDO EL 2026-09-18 (spec 001, §4.63):** «el recibo no muestra nada que
+> **CORREGIDO EL 2026-09-18 (spec 001, §4.65):** «el recibo no muestra nada que
 > el cliente no haya visto al comprar» dejó de ser cierto. La pantalla muestra
 > la versión COMPLETA, con quién autorizó el descuento y la boleta, que la copia
 > del cliente ya no lleva. Alcanza con tener sesión por otra razón: la ve
@@ -2437,7 +2449,7 @@ mismo texto que va a la impresora**. No es una versión bonita de los mismos
 datos: si la pantalla y el rollo se vieran distintos, cotejar uno contra otro
 dejaría de ser inmediato.
 
-> **PRECISADO EL 2026-09-18 (spec 001, §4.63):** desde que salen dos copias, la
+> **PRECISADO EL 2026-09-18 (spec 001, §4.65):** desde que salen dos copias, la
 > pantalla muestra la versión completa, que es **la copia de la tienda sin su
 > encabezado de copia**, idéntica byte a byte a lo que mostraba antes. Las dos
 > copias y la pantalla salen de la misma función (`reciboComoTexto`), así que no
@@ -9782,7 +9794,7 @@ prohíbe— o los totales serían de otro conjunto que el que se ve.
 | Lo que decía el pedido | Qué se hizo | Por qué |
 |---|---|---|
 | «Solo cuenta ventas con **`estado='completada'`** — mismo criterio que ya rige en el resto de los reportes» | **NO se mira `ventas.estado`.** Lo que decide es la ausencia de fila en `anulaciones_de_venta` | Las dos mitades de esa frase se contradicen **en este proyecto**: `ventas.estado` dice 'completada' TAMBIÉN en las anuladas (§4.45), y el criterio que rige en el resto de los reportes es `VENTA_SIN_ANULACION`, no el estado. **Lo delató una prueba que ya existía**: `anulacion-estructural.test.ts` recorre todo el código de producción y falla si alguna consulta decide por `ventas.estado` (§1.3 del diseño). La primera versión sí lo miraba y esa prueba se puso roja |
-| La línea de totales, sin decir quién la ve | **Las filas y el voucher los ve cualquiera con sesión; los TOTALES, solo el rol administrativo**, y lo decide el proceso principal | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo de la caja. ~~El voucher, en cambio, **ya sale impreso en el papel del cliente**, así que esconderlo no protegería nada.~~ **CORREGIDO EL 2026-09-18 (spec 001, §4.63): la copia del cliente ya no lleva el voucher; sale en la de la tienda. Que llegue a cualquiera con sesión se sostiene porque lo ve personal de la tienda y lo tecleó quien cobró.** Se dice la contrapartida: un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo, que es la misma distinción que §4.40 ya tomó. **Si Julio prefiere que la cajera los vea, es quitar una condición de `totalesParaLaVentana`** |
+| La línea de totales, sin decir quién la ve | **Las filas y el voucher los ve cualquiera con sesión; los TOTALES, solo el rol administrativo**, y lo decide el proceso principal | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo de la caja. ~~El voucher, en cambio, **ya sale impreso en el papel del cliente**, así que esconderlo no protegería nada.~~ **CORREGIDO EL 2026-09-18 (spec 001, §4.65): la copia del cliente ya no lleva el voucher; sale en la de la tienda. Que llegue a cualquiera con sesión se sostiene porque lo ve personal de la tienda y lo tecleó quien cobró.** Se dice la contrapartida: un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo, que es la misma distinción que §4.40 ya tomó. **Si Julio prefiere que la cajera los vea, es quitar una condición de `totalesParaLaVentana`** |
 
 #### 5. Lo anulado se informa aparte, no se esconde
 
@@ -10038,7 +10050,217 @@ aplicación que ya se cerró sola: punto 49 de §6.2.
   la página, y el sistema operativo sigue siendo el de esta Mac.
 - **El rendimiento en el i3**: los números de cuadros son de esta Mac.
 
-### 4.63 Dos copias impresas por venta: la del cliente y la de la tienda (2026-09-18)
+### 4.63 Las categorías se ordenan solas, por sus ventas (2026-09-18)
+
+**Qué se pidió.** Al crear una categoría había que escribir a mano un número de
+orden. Julio pidió que la posición sea automática, con el mismo criterio que ya
+ordena los productos (§4.12), y que el formulario no le pida nada a nadie.
+
+#### Cómo estaba, leído antes de tocar nada
+
+| Dónde | Qué hacía con `categorias.orden` |
+|---|---|
+| `RepositorioDeCategorias.crear` | Lo escribía (`datos.orden ?? 0`) |
+| `listar` / `listarActivas` | `ORDER BY orden, nombre`. Alimentan la barra de la venta, el selector de productos y la pantalla de categorías |
+| `actualizar` / `cambiarOrden` | Lo escribían. `cambiarOrden` no lo llamaba nadie |
+| `ServicioDeCategorias.validar` | Rechazaba lo que no fuera un entero ≥ 0, y lo ponía en los asientos |
+| Canal IPC y esquema Zod | Lo exigían, entre 0 y 9999 |
+| `PantallaDeCategorias` | Un campo «Orden (menor número, más arriba)» con el teclado de enteros |
+| Datos de ejemplo | Granos 1, Abarrotes 2, Huevos 3 |
+
+#### La regla nueva
+
+```sql
+SELECT c.*, COALESCE(SUM(p.contador_ventas), 0) AS ventas
+  FROM categorias c LEFT JOIN productos p ON p.categoria_id = c.id
+ [WHERE c.activo = 1]
+ GROUP BY c.id ORDER BY ventas DESC, c.nombre ASC
+```
+
+- **Se calcula al leer**; no se guarda en ningún lado.
+- **Es el criterio de los productos**: `contador_ventas DESC, nombre ASC`, con
+  la misma comparación binaria de SQLite. Hay una prueba que compara las dos
+  listas con los mismos nombres.
+- **Suma TODOS los productos de la categoría, activos o no**: lo vendido no se
+  borra al desactivar un producto.
+- **El desempate es determinista** porque `categorias.nombre` es UNIQUE. Una
+  categoría nueva tiene 0 y cae al final (o entre las de 0, por nombre).
+- **Sumar en SQL no contradice §4.15**: `contador_ventas` es INTEGER, y SQLite
+  lo suma exacto. La regla de §4.15 es para los decimales guardados como TEXT.
+- **Sube al vender y baja al anular** sin código nuevo: la venta y la anulación
+  ya mueven `contador_ventas` (§4.13, §4.45).
+- La pantalla muestra «N ventas · M productos» y explica que se ordenan solas.
+  El renderer no ordena nada: la lista llega ordenada.
+
+#### ¿Hizo falta migración? NO, y por qué
+
+La columna queda en la tabla, sin leerse ni escribirse. El esquema lo permite:
+es `INTEGER NOT NULL DEFAULT 0 CHECK (orden >= 0)`, así que un INSERT sin ella
+toma 0 y pasa el CHECK. Los valores viejos (Granos 1, …) quedan y no mueven a
+nadie (prueba propia). Quitarla era peor, por dos razones, una medida y otra
+leída:
+
+1. **En SQLite no se puede sin rehacer índices** (medido, SQLite 3.53.4):
+
+   ```
+   «ALTER TABLE categorias DROP COLUMN orden» -> error in index idx_categorias_orden after drop column: no such column: orden
+   «DROP INDEX idx_categorias_orden; ALTER TABLE categorias DROP COLUMN orden» -> error in index idx_categorias_activas after drop column: no such column: orden
+   ```
+
+   Habría que borrar y recrear `idx_categorias_activas (activo, orden)` en
+   cada terminal.
+2. **La nube tiene la columna y exige el payload exacto** (§4.20). La terminal
+   sube `SELECT *` de la fila, así que la columna sigue viajando igual que hoy
+   y nada cambia en la nube. Quitarla obligaría a una migración de la nube que
+   rechazaría los lotes de categorías de toda terminal con la 1.2.0 publicada.
+
+Un payload viejo con `orden` tampoco rompe nada: Zod descarta las claves que
+no declara.
+
+#### Las pruebas que protegían el orden manual, y qué pasó con cada una
+
+| Prueba | Qué protegía | Ahora |
+|---|---|---|
+| «RECHAZA un orden negativo» | Que no se guardara una posición inválida escrita a mano | **Reemplazada** por «NO pide ni guarda ningún orden»: un `orden` que llegue igual se ignora y la columna queda en 0 |
+| «cambia nombre y orden» | Que editar guardara las dos cosas | **Reemplazada** por «cambia el nombre» |
+| «deja conservar su propio nombre al editar solo el orden» | Que guardar sin cambiar el nombre no choque consigo mismo | **Reemplazada** por la misma regla sin el orden: sigue valiendo |
+| `verificacion-de-caja-y-teclado.cjs`: «el ORDEN abre el teclado de solo enteros» | Que el campo tuviera teclado | **Reemplazada** por «el formulario de categoría NO pide ningún orden» |
+
+Las demás llamadas con `orden: N` (unas 60, en 17 archivos de prueba y 4
+arneses) solo pasaban el dato; se quitó el argumento.
+
+Nuevas: 8 en `servicio-de-categorias.test.ts` (suma, categoría nueva al final,
+empate en cero y en 2, desempate binario igual al de los productos, productos
+desactivados, categoría desactivada, recálculo en cada lectura, columna vieja
+ignorada), más «editar no toca la columna vieja», y una con los servicios reales
+en `servicio-de-anulacion.test.ts`: vender pasa adelante a una categoría y anular
+la devuelve atrás.
+
+**Falsificado en Vitest**, archivo restaurado con el mismo sha256
+(`62c7f6fba7e3519d`):
+
+| Mutación | Qué cae |
+|---|---|
+| Volver a `ORDER BY c.orden, c.nombre` | 8 |
+| Sumar solo productos activos | 1 |
+| Desempatar por `creado_en` | 3 |
+
+**En la app real, a 1024×768** (`verify:pantallas:1024`, sección 8, 22 de 22):
+
+```
+barra de categorías con «Abarrotes» recién creada: ["Granos","Abarrotes"]
+catalogo.listarCategorias() tras 7 ventas de Jabón: ["Abarrotes=7","Granos=6"]
+barra de categorías tras 7 ventas de Jabón: ["Abarrotes","Granos"]
+pantalla de categorías: {"filas":["Abarrotes — 7 ventas · 1 producto","Granos — 6 ventas · 12 productos"],"camposDelFormulario":["categoria-nombre"],"campoDeOrden":0,…}
+```
+
+Falsificado ahí con `ORDER BY c.orden, c.nombre`: cae 1 de 22 («UNA CATEGORÍA
+NUEVA… aparece AL FINAL», real `["Abarrotes","Granos"]`). **La comprobación de
+«pasa adelante» NO cae con esa mutación**: con los dos `orden` en 0 el nombre
+pone primero a «Abarrotes» de todos modos. Las dos juntas sí distinguen.
+`verify:pantallas:caja`: 57 de 57.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- Los arneses de impresora, anulación e historial de recibos solo cambiaron el
+  argumento de `crearCategoria` y no se volvieron a correr.
+
+### 4.64 «Cobrar» ya no espera a la impresora (2026-09-18)
+
+**El reporte.** En el equipo de la tienda, con la RPT004 conectada y
+configurada, tocar «Cobrar» tardaba de 5 a 10 segundos. Los pasos con PIN ya
+estaban descartados (scrypt: menos de 1 s en el peor caso, con un solo
+administrador).
+
+#### El camino, leído en el código antes de cambiar nada
+
+| # | Dónde | Qué hacía |
+|---|---|---|
+| 1 | `DialogoDeCobro` → `window.pos.venta.cobrar` | La pantalla espera la respuesta para mostrar «Venta registrada» |
+| 2 | `ipc/venta.ts`, canal `venta:cobrar` | `ServicioDeVenta.registrar`: la transacción, sincrónica |
+| 3 | `ipc/venta.ts:348` (antes) | **`await recibos.emitir(ventaId)`**, y recién después responde |
+| 4 | `ServicioDeRecibos.producir` | `await generarPdf(...)`, y después **`await intentarImprimir(...)`** |
+| 5 | `ImpresoraPorColaDeWindows` → `EnviadorPorPowerShell` | Lanza un `powershell.exe` nuevo por ticket y espera a que termine (límite 12 s) |
+| 6 | El script (`cola-de-windows.ts`) | `Add-Type` compila el puente a `winspool` en C# **en cada ticket**, escribe los bytes y hace **`Start-Sleep -Milliseconds 1500` fijo** antes de `Get-PrintJob` y `Get-Printer` |
+
+O sea: **sí esperaba**, y el paso 6 tiene 1,5 s fijos que no dependen de la
+máquina. El arranque de PowerShell y el `Add-Type` en el i3 **no están
+medidos**: esta Mac no tiene PowerShell y no se instaló.
+
+#### Qué cambió, y qué no
+
+| Pieza | Cambio |
+|---|---|
+| `ServicioDeRecibos.emitirSinEsperarLaImpresion` | Devuelve **con el PDF ya escrito** y la impresión en curso (`impresion: Promise`, que nunca se rechaza) |
+| `ServicioDeRecibos.emitir` y `reimprimir` | Siguen esperando la impresión: es el mismo camino con un `await` más. Reimprimir lo pide una persona que quiere el papel |
+| La fila de impresión | Un ticket por vez, en el orden de las ventas (`enLaColaDeImpresion`). **No reintenta nada**: sin ella, dos ventas seguidas lanzarían dos `powershell.exe` a la vez en una máquina de 4 GB |
+| `venta:cobrar` | Responde con `recibo.impresionPendiente = true` y avisa después a la ventana que cobró por `recibos:impresion-terminada` (`ImpresionDeReciboTerminadaIpc`) |
+| La pantalla | El renglón del papel dice «Enviando el recibo a la impresora…» y se completa solo cuando llega el aviso, emparejado por `reciboId`. Si la cajera ya tocó «Siguiente venta» y el papel no salió, la pantalla de venta lo avisa igual |
+| La transacción de la venta | **No se tocó** |
+
+**Garantías que se conservan, cada una con su prueba:**
+
+- **El PDF se genera siempre, y se espera.** «Venta registrada» aparece con el
+  PDF ya en el disco (medido en la app real: 74 537 bytes al confirmar).
+- **Un fallo de impresión no toca `auditoria_log`.** Va a la bitácora técnica,
+  igual que antes (`impresion-sin-esperar.test.ts`, y la app real con la
+  impresora simulada «desconectada»).
+- **La persona ve el resultado.** En el cobro, el renglón pasa a «Se imprimió.»
+  o al mensaje del problema. La **prueba de impresión** de «Impresora de
+  recibos» no pasa por este camino (`servicio-de-impresora.ts:171` llama a su
+  propio enviador) y sigue esperando a propósito: ahí la persona pidió ver el
+  resultado.
+
+#### Verificado en la aplicación real (macOS), a 1024×768
+
+`npm run verify:pantallas:cobro-sin-esperar-impresora`: la impresora simulada
+tarda **6000 ms**, un número ELEGIDO para imitar la tienda, no medido. 7 de 7:
+
+```
+clic en «Confirmar cobro» → «Venta registrada» visible: 384 ms
+renglón del papel al confirmar: data-estado=enviando texto="Recibo No. 1. Enviando el recibo a la impresora…"
+al confirmar: ticket en la impresora=no; recibos=[{"numero_recibo":1,…,"impreso":0}]; PDF=74537 bytes
+clic → «Se imprimió.»: 6457 ms; texto="Recibo No. 1. Se imprimió."; bytes del ticket=707; impreso en la base=1
+segunda venta (impresora que reporta Offline): clic → «Venta registrada» 231 ms
+aviso en la pantalla de venta a los 6577 ms del clic: "Recibo No. 2: No se pudo imprimir. El recibo quedó guardado en PDF."
+auditoria_log después: […,{"accion":"venta_registrada","n":2}]
+```
+
+**Falsificado en la app real**, con el `venta.ts` de `HEAD` (que espera la
+impresora), 5 de 7 fallidas. Reproduce el síntoma de la tienda:
+
+```
+clic en «Confirmar cobro» → «Venta registrada» visible: 6382 ms
+renglón del papel al confirmar: data-estado=impreso texto="Recibo No. 1. Se imprimió."
+segunda venta (impresora que reporta Offline): clic → «Venta registrada» 6387 ms
+```
+
+Vitest: 10 pruebas del servicio, 4 del canal real con una impresora que no
+contesta hasta que la prueba lo decide, y 7 de la pantalla. Falsificado:
+
+| Mutación | Qué cae |
+|---|---|
+| El canal vuelve a `await emitir` | las 4 del canal, a los 2,07 s del límite |
+| `producir` espera la impresión | 13 |
+| Sin la fila de impresión | 1: «el segundo no se manda hasta que el primero terminó» |
+| La pantalla toma cualquier aviso sin mirar el recibo | 1 |
+| La pantalla no recuerda el último recibo | 1 |
+
+#### Lo que NO se verificó
+
+- **Windows y la RPT004**, que es donde pasó. Cuánto tarda el `powershell.exe`
+  en el i3 no está medido.
+- **El PDF sigue en el camino que se espera.** Abre una ventana oculta de
+  Chromium. En esta Mac la venta entera tardó 231 a 384 ms. En el i3 no está
+  medido: punto 50 de §6.2.
+- **Cada ticket sigue tardando lo mismo en salir**: solo dejó de bloquear. Los
+  1,5 s fijos y el `Add-Type` por ticket siguen en el script: punto 51.
+- **Si la aplicación se cierra con un ticket en la fila**, ese ticket puede no
+  salir y el recibo queda `impreso = 0`, visible en el historial para
+  reimprimirlo. No se probó.
+
+### 4.65 Dos copias impresas por venta: la del cliente y la de la tienda (2026-09-18)
 
 **Pedido de Julio.** Cada venta imprime dos copias por la térmica. La del
 cliente no lleva dos datos de control interno: **quién autorizó un descuento**
@@ -10141,8 +10363,9 @@ boleta, y no lleva «COPIA». Reimprimir **tocando el botón** sacó las dos cop
 con REIMPRESIÓN y el aviso «Recibo 1 vuelto a emitir. Recibo enviado a la
 impresora: copia del cliente y copia de la tienda.». Anular no escribió nada en
 la impresora (mismo sha256 antes y después). La copia del cliente de la venta
-anulada reimpresa lleva «Autorizó: Jimmy» en la marca de anulada: es la
-pregunta abierta del punto 50 de §6.2.
+anulada reimpresa lleva «Autorizó: Jimmy» en la marca de anulada: ~~es la
+pregunta abierta del punto 52 de §6.2~~ **ya no: desde la decisión de Julio del
+2026-09-18 la copia del cliente no lo lleva** (ver «Las dos decisiones», abajo).
 
 > **Un artefacto del arnés, no del producto.** En las capturas, la barra de
 > estado dice «Jimmy · administrativo» cuando la sesión del proceso principal es
@@ -10158,9 +10381,58 @@ pregunta abierta del punto 50 de §6.2.
 - **Cuánto tarda el trabajo con las dos copias** en el i3. Es un solo
   PowerShell, como antes, con más bytes: 1788 en la venta del arnés, medidos en
   macOS.
-- **Decisiones que no se tomaron acá**: si la copia del cliente oculta también
-  a quien autorizó una anulación (punto 50), y si la copia de la tienda sale
-  siempre o solo cuando hay algo que controlar (punto 51).
+- ~~**Decisiones que no se tomaron acá**: si la copia del cliente oculta también
+  a quien autorizó una anulación (punto 52), y si la copia de la tienda sale
+  siempre o solo cuando hay algo que controlar (punto 53).~~ **Tomadas el
+  2026-09-18**: ver abajo.
+
+#### Las dos decisiones de Julio (2026-09-18)
+
+| Pregunta | Decisión | Qué cambió |
+|---|---|---|
+| ¿La copia del cliente oculta quién autorizó una ANULACIÓN? (punto 52) | **Sí**, mismo criterio que el descuento | `QUE_LLEVA_CADA_DESTINO` gana `autorizacionDeLaAnulacion` (`false` solo para el cliente). Se omite el bloque «Autorizó: …» entero, también sus renglones de continuación si el nombre es largo. La marca, la fecha y el motivo siguen en las dos copias. La lista cerrada pasa de dos datos a tres. |
+| ¿La copia de la tienda sale siempre? (punto 53) | **Siempre, sin condición, no configurable por ahora** | Nada: `COPIAS_QUE_SE_IMPRIMEN` ya era `['cliente', 'tienda']`. |
+
+La prueba de la grilla que exigía «Autorizó: Jimmy» en la copia del cliente
+**se conservó**, con el bloque «ESTA PRUEBA CAMBIÓ EL 2026-09-18» que dice qué
+exigía antes. Ahora exige que no esté, y que la copia de la tienda sí lo tenga.
+Hay además una prueba con un nombre de 50 caracteres que parte en dos renglones,
+con su control (en la tienda ocupa más de uno).
+
+**Falsificado**, una mutación por vez, con sha256 del archivo antes y después
+(`ff7deb0a14dd1f66` las dos veces):
+
+| # | Mutación | Qué cae |
+|---|---|---|
+| M8 | La tabla del cliente con `autorizacionDeLaAnulacion: true` | 38 |
+| M9 | La plantilla ignora el campo | 37 |
+| M10 | Se omite solo el primer renglón del bloque (el resto del nombre se filtra) | 1: la del nombre largo |
+
+#### Al unir develop (2026-09-18): el merge limpio escondía dos incompatibilidades
+
+`git merge develop` trajo §4.63 (categorías), §4.64 (el cobro no espera a la
+impresora) y `spec/constitution/`. Conflictos de texto: CLAUDE.md (esta sección
+era la §4.63 y los puntos 52 y 53 eran el 50 y el 51; se renumeraron con el
+número más alto disponible, en orden de integración) y `servicio-de-recibos.ts`
+(las declaraciones nuevas de develop y el mensaje de las dos copias, uno al lado
+del otro; `git diff develop` de ese archivo muestra solo lo de la spec 001, así
+que el desacople quedó intacto: `copiasEnTexto` va dentro de `intentarImprimir`,
+que develop ahora corre en su fila de impresión).
+
+**Lo que Git no marcó**, y lo encontraron las pruebas:
+
+| Dónde | Qué pasaba | Qué se hizo |
+|---|---|---|
+| `impresion-sin-esperar.test.ts` y `cobro-no-espera-la-impresora.test.ts` (de develop) | Esperaban «Recibo enviado a la impresora.», y el servicio ahora nombra las dos copias. Medido con los archivos de develop sobre el código unido: `Tests 2 failed | 12 passed`, `- "Recibo enviado a la impresora."` / `+ "Recibo enviado a la impresora: copia del cliente y copia de la tienda."` | Se ajustó solo el texto esperado, con un comentario que dice qué decía antes. Lo que esas pruebas fijan no cambió |
+| `verify:pantallas:copias` | Leía `impreso=true` en la respuesta del cobro, que ahora llega con la impresión en curso: `real: impreso=false; pdfGenerado=true; «Enviando el recibo a la impresora…»` (19 comprobaciones, 1 fallida) | El arnés escucha `recibos:impresion-terminada` antes de cobrar y espera el aviso antes de leer los bytes |
+
+Sobre el estado unido: `npm run verify` 119 archivos, **2796 pruebas**, 0 errores
+de lint (los 4 avisos de siempre); `verify:pantallas:copias` **19 de 19**, con el
+aviso `{"impreso":true,"mensaje":"Recibo enviado a la impresora: copia del
+cliente y copia de la tienda."}` y la bitácora «(1788 bytes, 2 copia(s) en un
+solo trabajo)»; y el arnés de develop `verify:pantallas:cobro-sin-esperar-impresora`
+**7 de 7**, con «(1527 bytes, 2 copia(s) en un solo trabajo)» en su bitácora.
+Todo en macOS.
 
 ## 5. Registro de decisiones técnicas
 
@@ -10486,7 +10758,7 @@ pregunta abierta del punto 50 de §6.2.
 | **El historial de recibos filtra por método de pago, totaliza lo filtrado y muestra el voucher con su estado. REEMPLAZA al reporte «Cobros con tarjeta» de §3.5 del diseño, que nunca se construyó.** | Construir §3.5 como una cuarta sección de la pantalla de reportes, tal como estaba diseñada; dejar las dos cosas | Decisión de Julio. Las dos pantallas mostrarían casi lo mismo —fecha, recibo, total, quién vendió— y el cajero ya busca por número de recibo en el historial, que además es el punto de entrada de la anulación (§4.3 del diseño). Lo que §3.5 aportaba de propio, el voucher y el estado derivado de la fila de anulación, se mueve tal cual. No hace falta canal nuevo: `recibos:listar` gana un payload con el filtro. §4.60 | 2026-09-17 (número de prompt por confirmar) |
 | **El reparto por forma de pago vive en UNA sola función (`totales-por-forma-de-pago.ts`), y una prueba estructural falla si otro archivo vuelve a hacer un `.filter()` sobre `formaPago`.** | Copiar los dos `filter` y los tres `sumarLista` del resumen de ventas al historial | Es literalmente lo que el pedido decía que no hiciera, y la razón vale más allá de este caso: dos lugares que contestan «cuánto entró y cómo se pagó» pueden empezar a contestarlo distinto —uno excluyendo las anuladas y el otro no— **sin que nada falle**. Es el defecto de patrón que ya costó una vuelta con el nombre legible de las tablas (§4.57), y se cierra igual: con una prueba que recorre el árbol sintáctico y sus dos controles. Falsificado: reintroducir la copia en el reporte hace caer 2 pruebas nombrando archivo y línea. §4.60 | 2026-09-17 (número de prompt por confirmar) |
 | **CORREGIDO SOBRE LA MARCHA: los totales del historial NO miran `ventas.estado`; lo que decide es la ausencia de fila en `anulaciones_de_venta`.** | Filtrar por `estado = 'completada'`, que es lo que el pedido decía literalmente | **Las dos mitades de esa instrucción se contradicen en este proyecto**, y la contradicción no es de matiz: `ventas.estado` dice `'completada'` TAMBIÉN en las anuladas (§4.45), así que filtrar por ahí no excluiría ninguna; y «el mismo criterio que ya rige en el resto de los reportes» es `VENTA_SIN_ANULACION`, que es justo el otro. **Lo delató una prueba que ya existía**: `anulacion-estructural.test.ts` recorre todo el código de producción y falla si alguna consulta vuelve a decidir por `ventas.estado` (§1.3 del diseño, con su control). La primera versión lo miraba «como red defensiva» y puso esa prueba en rojo. Se quitó, y con él la dependencia del repositorio de ventas que se había agregado solo para eso. Hay una prueba que fija la regla al revés: una venta marcada `'anulada'` a mano SIGUE contando. §4.60 | 2026-09-17 (número de prompt por confirmar) |
-| **A REVISAR — los TOTALES del historial solo viajan al rol administrativo; las filas y el voucher, a cualquiera con sesión.** | Mostrarle los totales a cualquiera con sesión, que es lo que el historial ya hacía con las filas; exigir rol administrativo para toda la pantalla, como §3.5 preveía | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo para que quien cuenta el cajón no copie el número en vez de contar. Exigir el rol para toda la pantalla sería peor: el historial existe para que **el cajero** reimprima con el cliente enfrente, y ~~el voucher ya sale impreso en el papel de ese cliente~~ el voucher lo tecleó ese mismo cajero y sale en la copia de la tienda (**corregido el 2026-09-18, spec 001, §4.63**: la copia del cliente ya no lo lleva). **La contrapartida, dicha en voz alta:** un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo. Lo decide el proceso principal y no la pantalla, por la razón medida en §4.40: el canal se llama desde la consola. **Es una decisión que el pedido no tomó, y se señala para que Julio la confirme o la cambie**: es quitar una condición. §4.60 | 2026-09-17 (número de prompt por confirmar) |
+| **A REVISAR — los TOTALES del historial solo viajan al rol administrativo; las filas y el voucher, a cualquiera con sesión.** | Mostrarle los totales a cualquiera con sesión, que es lo que el historial ya hacía con las filas; exigir rol administrativo para toda la pantalla, como §3.5 preveía | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo para que quien cuenta el cajón no copie el número en vez de contar. Exigir el rol para toda la pantalla sería peor: el historial existe para que **el cajero** reimprima con el cliente enfrente, y ~~el voucher ya sale impreso en el papel de ese cliente~~ el voucher lo tecleó ese mismo cajero y sale en la copia de la tienda (**corregido el 2026-09-18, spec 001, §4.65**: la copia del cliente ya no lo lleva). **La contrapartida, dicha en voz alta:** un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo. Lo decide el proceso principal y no la pantalla, por la razón medida en §4.40: el canal se llama desde la consola. **Es una decisión que el pedido no tomó, y se señala para que Julio la confirme o la cambie**: es quitar una condición. §4.60 | 2026-09-17 (número de prompt por confirmar) |
 | **El nombre LEGIBLE de cada tabla vive UNA sola vez, en `src/shared/nombres-de-tabla.ts`, y una prueba sobre el árbol sintáctico falla si un archivo del renderer o del proceso principal declara su propio mapa. Otra exige que el mapa cubra EXACTAMENTE las trece tablas.** | Corregir los dos mapas a mano cada vez, como el 2026-09-17; derivar `TablaSincronizable` o `ORDEN_DE_RESTAURACION` de este mapa; dejarlo solo en el compilador | El mapa estaba escrito a mano en las DOS pantallas que nombran tablas —sincronización y restauración—, en distinto orden y sin nada que las atara, y **agregar una tabla y olvidarse de una copia no hacía fallar nada**. Se desincronizaron con la primera tabla nueva: `anulaciones_de_venta` (§4.45) entró en un solo mapa y la pantalla de sincronización mostró el nombre TÉCNICO de una anulación pendiente a quien tenía que decidir si reintentaba o saltaba un lote detenido. Arreglarlos a mano (§4.53) dejó el defecto vivo para la próxima tabla. **No se invierten las dependencias de los tipos de dominio**: `TablaSincronizable` es una lista cerrada que obliga a preguntarse si algo es dato de negocio, y el orden de `ORDEN_DE_RESTAURACION` es el grafo de llaves foráneas; derivarlos de un mapa de etiquetas ataría dos cosas que se deciden por razones distintas. La cobertura se comprueba al revés —el mapa contra esas listas—, con **tres fuentes independientes**: la igualdad con `ORDEN_DE_RESTAURACION` en runtime, la presencia de `TIPO_DE_ENTRADA_DE_FOTO`, y una asignación de tipo que hace fallar `typecheck` si una tabla entra en `TablaSincronizable` y no en el mapa. **Dejarlo solo en el compilador no alcanzaba**: los dos mapas eran `Record<string, string>`, así que TypeScript nunca vio que faltara una clave. La auditoría recorrió `src/renderer` y `src/shared` y no encontró ningún otro mapa; `resumenDeFila` de la restauración describe la FILA y no la tabla, y su `switch` exhaustivo ya lo protege el compilador. §4.57. | 2026-09-17 (número de prompt por confirmar) |
 | **La 1.2.0 es una renumeración sin cambios de código respecto de `b20c7fd`; la línea «Versión:» de la licencia pasa a 1.2.0 y su huella aprobada cambia con ella.** | Publicar como 1.1.0 recompilada; subir `package.json` sin tocar la licencia | Decisión de Julio: marcar la versión de entrega final. La prueba de §4.48 ata la licencia a la versión del paquete, así que sin cambiar la licencia el instalador 1.2.0 mostraría «Versión: 1.1.0» o `verify` fallaría. Solo cambió un carácter del texto legal, autorizado explícitamente. §4.61. | 2026-09-17 (número de prompt por confirmar) |
 | **La barra de desplazamiento de la ventana mide 44 px, siempre visible mientras haya algo que desplazar, con flechas; las listas internas de la venta conservan la suya.** | Una barra propia en React; la del sistema; la misma barra ancha también dentro del ticket y la cuadrícula | La del sistema mide 17 px en Windows y en macOS se superpone y se esconde. 44 px es lo que un dedo acierta. `::-webkit-scrollbar` sobre `html` no agrega código, aparece solo si hay desbordamiento y su pulgar se arrastra con mouse y con toque (medido). Dentro del ticket de 360 px, 44 más lo dejarían sin lugar. §4.62. | 2026-09-18 (número de prompt por confirmar) |
@@ -10494,11 +10766,15 @@ pregunta abierta del punto 50 de §6.2.
 | **Con el ticket angosto (< 500 px), COBRAR pone el monto abajo del texto, con `min-width: 0`; a 1920 se ve igual que antes.** | Achicar la letra en todos los tamaños; recortar el texto; cambiar el ancho de las columnas | El contenido mínimo de COBRAR era 340 px y el lugar a 1024, 186 (medido). La consulta de contenedor mira el ancho del ticket, no el de la pantalla, y deja intacta la venta en pantallas grandes. §4.62. | 2026-09-18 (número de prompt por confirmar) |
 | **La aceleración gráfica queda por omisión; lo que se agrega es medirla en la tienda: el diagnóstico y la bitácora dicen qué GPU usa Chromium y anotan cada caída de su proceso.** | Apagarla siempre con `app.disableHardwareAcceleration()`; un archivo de configuración para apagarla | Ninguna medición del equipo real dice que haga falta. En Windows, la lista de bloqueo de Chromium no apaga la HD 3000 entera (solo Graphite, entradas 184 y 187). En esta Mac las dos formas dan la misma cadencia y sin GPU se usa más memoria. `--disable-gpu` se puede probar en la tienda desde el acceso directo sin recompilar. §4.62. | 2026-09-18 (número de prompt por confirmar) |
 | **Un arnés termina la aplicación solo con `terminarAplicacion` (`scripts/terminar-aplicacion.cjs`), sobre el proceso guardado justo después de `electron.launch()`; una prueba recorre `scripts/` y lo exige.** | Envolver cada `app.process().kill()` en try/catch; usar `app.close()` | Medido: `app.process()` lanza en cuanto Playwright procesa el cierre de la aplicación, y el arnés de caja la cerraba a propósito antes de su `finally`. Envolver cada llamada deja la forma frágil disponible para el próximo arnés. `app.close()` pasa por la intercepción del cierre y pide PIN (§4.5). Punto 49 de §6.2. | 2026-09-18 (número de prompt por confirmar) |
-| **Cada venta y cada reimpresión sacan DOS copias por la térmica: primero la del cliente y después la de la tienda. La del cliente no lleva quién autorizó un descuento ni el número de boleta; la de la tienda lleva todo; el PDF y la pantalla no cambian.** **REVIERTE la regla de §4.14 «Quién autorizó el descuento va EN EL PAPEL»**, que se conservó tachada y anotada. | Un solo papel, como antes; ocultar además quién autorizó una anulación; imprimir la de la tienda primero | Pedido de Julio: el papel del cliente no debe mostrar datos de control interno. La razón de control de §4.14 (un descuento con responsable visible) se conserva entera en la copia que se queda la tienda. El autorizante de una anulación NO se ocultó porque el pedido dice «específicamente» el descuento y la boleta; queda como pregunta (punto 50). Cliente primero porque es la que alguien espera en el mostrador. §4.63 | 2026-09-18 (spec 001) |
-| **La diferencia entre copias es un parámetro OBLIGATORIO de `reciboComoTexto` (`'cliente' \| 'tienda' \| 'pantalla'`) más UNA tabla, `QUE_LLEVA_CADA_DESTINO`, que decide qué lleva cada destino. Una prueba estructural exige que `'pantalla'` solo se pida en `ipc/recibos.ts` y que el `copiasEnTexto` de un recibo solo salga de `textosDeLasCopias`.** | Dos plantillas; tachar el modelo antes de dibujar (`autorizadoPor` y `numBoleta` en `null`); un destino con valor por omisión | Dos plantillas se desincronizan con el primer cambio: es el defecto de patrón de §4.57. Un modelo tachado es indistinguible de uno sin autorizante ni boleta, y pasado al PDF lo dejaría incompleto sin que nada lo detecte. Con un valor por omisión, un camino nuevo que imprimiera sin pensarlo mandaría la versión completa al papel del cliente sin que nada fallara. La lista de lo que se oculta es cerrada: un dato futuro sale en las dos copias salvo decisión explícita, y la comparación renglón por renglón falla si se oculta otro. §4.63 | 2026-09-18 (spec 001) |
-| **Las copias viajan en UN solo trabajo de impresión**, cada una un recibo ESC/POS entero con su propio corte (`copiasComoEscPos`). El contrato pasa a `ComprobanteImprimible.copiasEnTexto: readonly string[]` y reemplaza a `contenidoTexto` y `copias: number`. | Llamar a la impresora una vez por copia; mantener `copias: number` | Cada envío por la cola de Windows arranca PowerShell, compila el `Add-Type` y espera 1,5 s (§4.43), y la venta espera la impresión antes de contestarle a la pantalla. Dos envíos duplicarían un costo que nadie midió en el i3. Una térmica no contesta, así que dos trabajos no darían más información que uno. `copias: number` solo sabía repetir el mismo texto. **No medido en la RPT004:** que corte bien entre las dos copias (punto 9). §4.63 | 2026-09-18 (spec 001) |
-| **A REVISAR — por ahora son SIEMPRE dos copias, fijas en una constante (`COPIAS_QUE_SE_IMPRIMEN`). Recomendación: configurable recién cuando otro cliente de Vixo POS lo pida, en `configuracion_negocio`.** | Construir ya la configuración; guardarla en `impresora.json` | No hay un segundo cliente, y una opción sin él es una definición de negocio inventada. Cuántas copias imprime un negocio es política de control interno, no estado de una máquina: le corresponde `configuracion_negocio`, que exige migración local, espejo en las dos nubes con aprobación, y un campo en «Datos del negocio». Pasar a configurable no rompe nada de lo hecho: la lista pasa a leerse de la configuración. Las opciones razonables y la pregunta del papel están en el plan de la spec 001, §8, y en el punto 51. | 2026-09-18 (spec 001) |
+| **Las categorías se ordenan por la suma del `contador_ventas` de sus productos (activos o no), calculada al leer, con desempate por nombre; el formulario ya no pide orden. La columna `categorias.orden` queda sin uso y NO se migra.** | Seguir con el orden manual; guardar la suma en una columna; quitar la columna | Pedido de Julio: el mismo criterio que los productos (§4.12). Guardar la suma sería un segundo número que mantener al vender y al anular. Quitar la columna exige rehacer dos índices en SQLite (medido) y una migración de la nube que rompería los lotes de la 1.2.0 publicada; el esquema la deja sin uso con su DEFAULT 0. §4.63. | 2026-09-18 (número de prompt por confirmar) |
+| **El cobro responde con el PDF escrito y la impresión EN CURSO; el resultado del papel llega después por `recibos:impresion-terminada`, y los tickets salen uno por vez.** | Seguir esperando la impresora; no esperar tampoco el PDF; mandar la impresión sin fila | En la tienda, «Cobrar» tardaba 5–10 s porque el canal esperaba un `powershell.exe` por ticket con 1,5 s fijos adentro (leído en el código). Medido en la app real con una impresora que tarda 6 s: 384 ms contra 6382 ms del código anterior. El PDF se sigue esperando porque es el respaldo obligatorio. Sin fila, dos ventas seguidas lanzan dos PowerShell a la vez y los tickets pueden salir en otro orden. §4.64. | 2026-09-18 (número de prompt por confirmar) |
+| **Cada venta y cada reimpresión sacan DOS copias por la térmica: primero la del cliente y después la de la tienda. La del cliente no lleva quién autorizó un descuento ni el número de boleta; la de la tienda lleva todo; el PDF y la pantalla no cambian.** **REVIERTE la regla de §4.14 «Quién autorizó el descuento va EN EL PAPEL»**, que se conservó tachada y anotada. | Un solo papel, como antes; ocultar además quién autorizó una anulación; imprimir la de la tienda primero | Pedido de Julio: el papel del cliente no debe mostrar datos de control interno. La razón de control de §4.14 (un descuento con responsable visible) se conserva entera en la copia que se queda la tienda. El autorizante de una anulación NO se ocultó porque el pedido dice «específicamente» el descuento y la boleta; queda como pregunta (punto 52). Cliente primero porque es la que alguien espera en el mostrador. §4.65 | 2026-09-18 (spec 001) |
+| **La diferencia entre copias es un parámetro OBLIGATORIO de `reciboComoTexto` (`'cliente' \| 'tienda' \| 'pantalla'`) más UNA tabla, `QUE_LLEVA_CADA_DESTINO`, que decide qué lleva cada destino. Una prueba estructural exige que `'pantalla'` solo se pida en `ipc/recibos.ts` y que el `copiasEnTexto` de un recibo solo salga de `textosDeLasCopias`.** | Dos plantillas; tachar el modelo antes de dibujar (`autorizadoPor` y `numBoleta` en `null`); un destino con valor por omisión | Dos plantillas se desincronizan con el primer cambio: es el defecto de patrón de §4.57. Un modelo tachado es indistinguible de uno sin autorizante ni boleta, y pasado al PDF lo dejaría incompleto sin que nada lo detecte. Con un valor por omisión, un camino nuevo que imprimiera sin pensarlo mandaría la versión completa al papel del cliente sin que nada fallara. La lista de lo que se oculta es cerrada: un dato futuro sale en las dos copias salvo decisión explícita, y la comparación renglón por renglón falla si se oculta otro. §4.65 | 2026-09-18 (spec 001) |
+| **Las copias viajan en UN solo trabajo de impresión**, cada una un recibo ESC/POS entero con su propio corte (`copiasComoEscPos`). El contrato pasa a `ComprobanteImprimible.copiasEnTexto: readonly string[]` y reemplaza a `contenidoTexto` y `copias: number`. | Llamar a la impresora una vez por copia; mantener `copias: number` | Cada envío por la cola de Windows arranca PowerShell, compila el `Add-Type` y espera 1,5 s (§4.43), y la venta espera la impresión antes de contestarle a la pantalla. Dos envíos duplicarían un costo que nadie midió en el i3. Una térmica no contesta, así que dos trabajos no darían más información que uno. `copias: number` solo sabía repetir el mismo texto. **No medido en la RPT004:** que corte bien entre las dos copias (punto 9). §4.65 | 2026-09-18 (spec 001) |
+| **A REVISAR — por ahora son SIEMPRE dos copias, fijas en una constante (`COPIAS_QUE_SE_IMPRIMEN`). Recomendación: configurable recién cuando otro cliente de Vixo POS lo pida, en `configuracion_negocio`.** | Construir ya la configuración; guardarla en `impresora.json` | No hay un segundo cliente, y una opción sin él es una definición de negocio inventada. Cuántas copias imprime un negocio es política de control interno, no estado de una máquina: le corresponde `configuracion_negocio`, que exige migración local, espejo en las dos nubes con aprobación, y un campo en «Datos del negocio». Pasar a configurable no rompe nada de lo hecho: la lista pasa a leerse de la configuración. Las opciones razonables y la pregunta del papel están en el plan de la spec 001, §8, y en el punto 53. | 2026-09-18 (spec 001) |
 | **Toda funcionalidad nueva sigue Spec-Driven Development: `spec/features/NNN-<slug>/spec.md` (qué hace y criterios de aceptación), `plan.md` (cómo, decisiones y riesgos) y `tasks.md`, y recién después código.** | Documentar después de construir, como hasta la spec 001 (los documentos de diseño de sincronización y anulación se escribían en `docs/`) | Preferencia de Julio (2026-09-18). Verifica comparando esperado contra real, y un spec con criterios de aceptación escritos antes del código le da la lista contra la que comparar. **La premisa de que el proceso «ya estaba establecido» no se sostuvo**: no existía ninguna carpeta `spec/`, y la primera es la 001. | 2026-09-18 (spec 001) |
+| **La copia del cliente tampoco dice quién autorizó una ANULACIÓN; la marca, su fecha y su motivo siguen.** Tercer dato de la lista cerrada, campo `autorizacionDeLaAnulacion`. **REVIERTE** la parte de la fila de las dos copias que dejaba la marca de anulada entera en la copia del cliente. | Dejar la marca entera, como el primer día; quitar la marca completa de la copia del cliente | Decisión de Julio del 2026-09-18 (punto 52): es el mismo tipo de dato que el autorizante del descuento. Quitar la marca entera no: el cliente tiene que poder ver que la venta se anuló, cuándo y por qué. §4.65 | 2026-09-18 (spec 001) |
+| **La copia de la tienda sale SIEMPRE, sin condición, y no es configurable por ahora.** Confirma la fila «A REVISAR — por ahora son SIEMPRE dos copias». | Solo cuando hay algo que controlar (descuento autorizado o tarjeta); configurable por negocio | Decisión de Julio del 2026-09-18 (punto 53). La recomendación para cuando otro cliente de Vixo POS lo pida sigue en el plan de la spec 001, §8. | 2026-09-18 (spec 001) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -10529,7 +10805,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? **Y quién tiene en la práctica el rol `administrativo`: solo el dueño, o también un encargado de confianza?** | Define la matriz de permisos (RBAC). Desde el Prompt 21 se pueden crear usuarios de los dos roles desde la pantalla, así que la pregunta dejó de ser teórica: el día que Jimmy le dé el rol administrativo a alguien más, hay que revisar el tope de descuento. **Y de esto depende el tope de descuento del rol administrativo**, que hoy se siembra en 100 % asumiendo que lo tiene el dueño (§4.13): si lo tuviera un empleado, ese 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere, y el número habría que revisarlo. | Abierto |
 | 7 | ¿Qué se hace con la merma (diferencia entre lo que entró al inventario y la suma de lo vendido)? ¿Se ajusta el saldo a mano y queda en auditoría? ¿Hace falta autorización de administrador para bajar inventario, como la hay para un descuadre de caja? | Sin regla, el inventario nunca cuadrará contra la realidad física del bodegón. **Ya hay un hueco concreto esperándola:** `ServicioDeProductos.ajustarInventario` solo SUMA y rechaza cualquier cantidad no positiva, a propósito, para no convertir la recepción de mercadería en una vía de bajar inventario sin controles. El módulo de mermas tiene que traer su propia regla de autorización. | Abierto |
 | 8 | ~~¿El sistema debe impedir una venta que deje el inventario en negativo, o solo advertir?~~ | — | **RESUELTO (Prompt 6): la impide.** `inventario_disponible` tiene piso 0 en la base. Ver secciones 4.2 y 4.3. |
-| 9 | ~~**Modelo y marca de la impresora térmica. LLEGA EL JUEVES.**~~ **MODELO CONFIRMADO (2026-09-17): 3nStar RPT004.** Falta la prueba de impresión FÍSICA. | **El ancho de 48 columnas ya no es una suposición.** Según la ficha técnica del RPT004 (la aportó Julio; no se leyó desde esta sesión): 576 puntos por línea, 72 mm de ancho máximo de impresión y Font A de 12×24 puntos. 576 ÷ 12 = **48 caracteres por línea**, que es exactamente `COLUMNAS_80MM = 48` en `plantilla-de-recibo.ts` (leído en el código el 2026-09-17, sin cambios). Lo que el cálculo supone y no está medido: que el RPT004 arranca en Font A después de `ESC @`, que es lo que manda el estándar. Ver §4.43 para el modelo. **Sigue pendiente, y lo hace Julio con el RPT004 en la mano:** instalarlo en Windows (`docs/GUIA-IMPRESORA.md`), elegirlo en «Impresora de recibos», tocar «Imprimir recibo de prueba» y contestar cómo salió (acentos, eñe, corte). **Ojo: el ticket de prueba NO comprueba las 48 columnas**: sus renglones son cortos y no tiene separador ni montos alineados. Las 48 columnas se ven en un recibo de verdad (reimprimir uno desde el historial): la línea de guiones tiene que ocupar exactamente un renglón y los montos tienen que quedar pegados al borde derecho. **Desde la spec 001 (§4.63), ese recibo sale en DOS copias en un solo trabajo**: hay que mirar además que la impresora corte entre la copia del cliente y la de la tienda, y que la segunda empiece bien (lleva su propio `ESC @`). | Abierto — **falta la prueba física en la tienda**, junto con el catálogo |
+| 9 | ~~**Modelo y marca de la impresora térmica. LLEGA EL JUEVES.**~~ **MODELO CONFIRMADO (2026-09-17): 3nStar RPT004.** Falta la prueba de impresión FÍSICA. | **El ancho de 48 columnas ya no es una suposición.** Según la ficha técnica del RPT004 (la aportó Julio; no se leyó desde esta sesión): 576 puntos por línea, 72 mm de ancho máximo de impresión y Font A de 12×24 puntos. 576 ÷ 12 = **48 caracteres por línea**, que es exactamente `COLUMNAS_80MM = 48` en `plantilla-de-recibo.ts` (leído en el código el 2026-09-17, sin cambios). Lo que el cálculo supone y no está medido: que el RPT004 arranca en Font A después de `ESC @`, que es lo que manda el estándar. Ver §4.43 para el modelo. **Sigue pendiente, y lo hace Julio con el RPT004 en la mano:** instalarlo en Windows (`docs/GUIA-IMPRESORA.md`), elegirlo en «Impresora de recibos», tocar «Imprimir recibo de prueba» y contestar cómo salió (acentos, eñe, corte). **Ojo: el ticket de prueba NO comprueba las 48 columnas**: sus renglones son cortos y no tiene separador ni montos alineados. Las 48 columnas se ven en un recibo de verdad (reimprimir uno desde el historial): la línea de guiones tiene que ocupar exactamente un renglón y los montos tienen que quedar pegados al borde derecho. **Desde la spec 001 (§4.65), ese recibo sale en DOS copias en un solo trabajo**: hay que mirar además que la impresora corte entre la copia del cliente y la de la tienda, y que la segunda empiece bien (lleva su propio `ESC @`). | Abierto — **falta la prueba física en la tienda**, junto con el catálogo |
 | 10 | ¿Habrá más de una caja o sucursal sincronizando contra la misma nube? | Define si la sincronización necesita resolución de conflictos o solo respaldo. **Y define algo de seguridad:** con más de una caja, el bloqueo por intentos de un usuario necesita fuente de verdad centralizada o sincronización en tiempo real, o el presupuesto para adivinar un PIN se multiplica por el número de terminales. Ver la sección 4.4. | Abierto |
 | 13 | **El catálogo real de Jimmy.** Nombres, categorías, precios, unidades e inventario inicial de verdad. Iba a entregarlo al día siguiente del Prompt 15. | Mientras no llegue, la tienda corre con el catálogo de ejemplo (`npm run seed:ejemplo`), que está marcado con el prefijo `[Ejemplo] ` justamente para que nadie lo confunda con el real. El día que llegue: `npm run seed:limpiar` y cargar el verdadero. | Abierto — **es lo próximo que hace falta del cliente** |
 | 14 | ~~¿Qué debe ordenar los íconos de la pantalla de venta: `contador_ventas` o `cantidad_vendida`?~~ | — | **RESUELTO (Prompt 20): ordena `contador_ventas`, y no se cambia nada.** Julio lo decidió sin necesidad de consultarlo con Jimmy: contar VECES es la única medida comparable entre productos, porque las libras de maíz y las unidades de huevo no se suman en un mismo número. `cantidad_vendida` existe para **reportes futuros**, no para el orden de los íconos. |
@@ -10569,8 +10845,10 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 47 | **En el equipo de la tienda, ¿el dedo llega como `touch` o como `mouse`?** | Decide cuál de los dos arreglos del desplazamiento es el que trabaja allá (§4.62). La respuesta está en el diagnóstico técnico del menú, tarjeta «Pantalla y entrada»: tocar cualquier parte y leer «Último toque llegó como», y «Puntos táctiles que anuncia el sistema». Con `touch` desplaza el navegador; con `mouse`, el arrastre nuevo y la barra de 44 px. | Abierto — **hace falta mirarlo en el equipo real** |
 | 48 | **¿La Intel HD 3000 de la tienda es estable con la aceleración de Chromium?** | Todo lo que se sabe de esa tarjeta es inferencia (§4.62). En el equipo real: leer «Aceleración gráfica» en el diagnóstico técnico, y buscar en `log-tecnico.log` las líneas «aceleración gráfica:» y «el proceso de la GPU terminó». Si hay caídas o la pantalla se ve con defectos, probar agregando `--disable-gpu` al destino del acceso directo, sin recompilar, y comparar. | Abierto — **hace falta el equipo real** |
 | 49 | ~~**`npm run verify:pantallas:caja` termina a veces con código 1 DESPUÉS de pasar sus 57 comprobaciones.**~~ | ~~Anotado el 2026-09-18, para revisar con calma **después de la entrega**; no se resuelve ahora. Medido, recontado en los logs crudos: con los cambios de §4.62, 2 de 3 corridas con código 1; **sin ellos, sobre `27fd207`, 1 de 3**, así que no lo introdujo §4.62. En las 6 corridas las 57 comprobaciones dieron OK, y las que fallan terminan con `[verificacion-de-caja-y-teclado] Falló antes de poder comprobar nada: Cannot read properties of undefined (reading '_object')`. Causa probable (inferida, no medida): el último paso cierra la aplicación a propósito con la salida controlada, y el `finally` del arnés llama a `app.process().kill('SIGKILL')`; si Playwright ya procesó ese cierre, `app.process()` lanza y el error escapa como exit 1. **Consecuencia mientras tanto**: un código 1 de este arnés no alcanza para decir que algo se rompió; hay que mirar si hay alguna línea `FALLA` antes del error.~~ **RESUELTO EL 2026-09-18, con la causa MEDIDA y no solo inferida.** En playwright-core 1.63.0, `app.process()` no devuelve un proceso guardado: lo busca en el registro de la conexión (`_dispatcherByGuid.get(guid)._object`), y ese registro se BORRA cuando Playwright procesa el cierre de la aplicación. Medido forzando el orden: antes del evento `close`, `app.process()` respondió; después, lanzó exactamente «Cannot read properties of undefined (reading '_object')». `kill()` sobre el proceso GUARDADO no lanzó en ningún caso. Con la hipótesis tal como estaba escrita no alcanzaba: en 6 corridas instrumentadas, con `exitCode=0` antes de matar, `app.process()` respondió en las 6. Lo que decide es si llegó el `close` de Playwright, no si el proceso terminó. **Arreglo estructural**: `scripts/terminar-aplicacion.cjs` es la única vía para terminar la aplicación; cada arnés guarda el proceso justo después de `electron.launch()`. El mismo `kill` en la limpieza, sin guardar el proceso ni preguntar si seguía vivo, estaba en 5 arneses más —historial de cajas, impresora (dos veces), pantallas, pantallas-1024 y restauración en pantalla—; teclado y el ensayo de restauración ya lo hacían bien y pasaron a la misma vía. `arneses-terminan-la-aplicacion.test.ts` recorre `scripts/` y falla, con archivo y línea, ante un `.kill(` fuera de esa vía o un `.process()` usado en el acto. Después: `verify:pantallas:caja` 3 de 3 con exit 0, y los demás arneses tocados, en verde. | **Resuelto** — 2026-09-18 |
-| 50 | **¿La copia del CLIENTE debe ocultar también quién autorizó una ANULACIÓN?** | Desde la spec 001 (§4.63), la copia del cliente no dice quién autorizó un descuento, pero la marca de anulada sale entera en las dos copias, con «Autorizó: Jimmy». Es el mismo tipo de dato. No se ocultó porque el pedido dice que se oculta «específicamente» el autorizante del descuento y la boleta. `docs/ANULACION-DE-VENTA.md` §5.2 dice que el papel marcado se reimprime «por si el cliente quiere constancia», o sea que el cliente lo recibe. Si se decide ocultarlo, es una fila más en `QUE_LLEVA_CADA_DESTINO` y cambia la prueba de `copias-del-recibo.test.ts` que hoy lo exige. | Abierto — decisión de Julio |
-| 51 | **¿La copia de la TIENDA sale en todas las ventas, o solo cuando hay algo que controlar (un descuento autorizado o una tarjeta)?** | Desde la spec 001 cada venta gasta el doble de rollo. En una venta en efectivo sin descuento autorizado, las dos copias dicen lo mismo salvo el encabezado (medido en la app real, §4.63). Se hizo lo pedido: siempre dos. La lista vive en una sola constante, así que cambiarlo es acotado. Si además se quiere que cada negocio lo elija, la recomendación del plan de la spec 001 (§8) es `configuracion_negocio`, con su migración en las dos nubes. | Abierto — pregunta para Jimmy |
+| 50 | **¿Cuánto tarda el PDF del recibo en el i3?** Es lo único que el cobro sigue esperando. | Abre una ventana oculta de Chromium por recibo (`printToPDF`). En esta Mac la venta entera, PDF incluido, tardó 231–384 ms (§4.64). En el i3 no está medido. Si el cobro sigue lento en la tienda después de §4.64, es lo primero que hay que medir. | Abierto — **hace falta el equipo real** |
+| 51 | **Cada ticket sigue tardando en SALIR lo mismo que antes**: solo dejó de bloquear la venta. | El script de `cola-de-windows.ts` compila el puente a `winspool` con `Add-Type` en cada ticket y espera 1,5 s fijos antes de leer el estado del trabajo. Achicarlo toca el script de impresión y cómo se clasifica un envío (§4.43), así que es una decisión aparte. | Abierto — decisión de Julio |
+| 52 | ~~**¿La copia del CLIENTE debe ocultar también quién autorizó una ANULACIÓN?**~~ | Desde la spec 001 (§4.65), la copia del cliente no dice quién autorizó un descuento, pero la marca de anulada sale entera en las dos copias, con «Autorizó: Jimmy». Es el mismo tipo de dato. No se ocultó porque el pedido dice que se oculta «específicamente» el autorizante del descuento y la boleta. `docs/ANULACION-DE-VENTA.md` §5.2 dice que el papel marcado se reimprime «por si el cliente quiere constancia», o sea que el cliente lo recibe. Si se decide ocultarlo, es una fila más en `QUE_LLEVA_CADA_DESTINO` y cambia la prueba de `copias-del-recibo.test.ts` que hoy lo exige. | **RESUELTO EL 2026-09-18, decisión de Julio: SÍ se oculta**, con el mismo criterio que el autorizante del descuento. La marca de anulada, su fecha y su motivo siguen en las dos copias. Tabla `QUE_LLEVA_CADA_DESTINO` (campo `autorizacionDeLaAnulacion`), spec 001 CA-19, §4.65 |
+| 53 | ~~**¿La copia de la TIENDA sale en todas las ventas, o solo cuando hay algo que controlar (un descuento autorizado o una tarjeta)?**~~ | Desde la spec 001 cada venta gasta el doble de rollo. En una venta en efectivo sin descuento autorizado, las dos copias dicen lo mismo salvo el encabezado (medido en la app real, §4.65). Se hizo lo pedido: siempre dos. La lista vive en una sola constante, así que cambiarlo es acotado. Si además se quiere que cada negocio lo elija, la recomendación del plan de la spec 001 (§8) es `configuracion_negocio`, con su migración en las dos nubes. | **RESUELTO EL 2026-09-18, decisión de Julio: SIEMPRE, sin condición, y no configurable por ahora.** Sin cambio de código: ya era así. Spec 001 CA-20, §4.65 |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -10611,7 +10889,7 @@ negocio:
 - **Sí existe** el módulo de comprobantes: datos del negocio, generación del
   PDF, impresión térmica por ESC/POS, historial y reimpresión. Ver la sección
   4.14. La impresión **está escrita contra el estándar y NO probada contra la
-  impresora real**, que llega el jueves. **Desde la spec 001 (§4.63) cada recibo
+  impresora real**, que llega el jueves. **Desde la spec 001 (§4.65) cada recibo
   sale en DOS copias**, la del cliente y la de la tienda, en un solo trabajo.
 - **Sí existen** los tres reportes: resumen de ventas por período, ventas por
   producto e inventario, con su selector de período en hora de Guatemala. Ver la
@@ -10792,12 +11070,16 @@ npm run verify:pantallas:copias   # la app real con la impresora SIMULADA, a 102
                          # spec 001 (descuento autorizado, tarjeta) manda UN trabajo con DOS copias; el arnés
                          # las decodifica de los bytes, las muestra enteras y las compara renglón por renglón
                          # con la spec; «Ver», el PDF del disco, reimprimir tocando el botón, una venta en
-                         # efectivo y una anulación que no imprime (§4.63).
+                         # efectivo y una anulación que no imprime (§4.65).
 npm run verify:pantallas:recibos  # la app real: el filtro por método de pago, los totales del conjunto
                          # filtrado con decimales feos (1.10+2.20+4.40 y 3.30+6.60+2.20), el voucher con
                          # «Activo», una venta con tarjeta anulada por la interfaz que pasa a «Anulado el
                          # <fecha>» y deja de contar, que el botón «Anular» sigue intacto con el filtro
                          # puesto, y que la CAJERA ve las filas y el voucher pero ningún total (§4.60).
+npm run verify:pantallas:cobro-sin-esperar-impresora  # la app real a 1024×768 con una impresora simulada
+                         # que tarda 6 s: «Venta registrada» aparece antes de que conteste, el PDF ya
+                         # está, el papel se completa solo, y un papel que no salió se avisa aunque la
+                         # cajera ya haya seguido. Nada va a auditoria_log (§4.64).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
@@ -10889,7 +11171,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     venta/      precio efectivo, descuento, topes por rol, la transacción de la venta y su anulación
     reportes/   los tres reportes y el período en hora de Guatemala. NUNCA agrega en SQL
     negocio/    los datos de la tienda que encabezan el recibo
-    recibo/     modelo, plantilla (y las dos copias impresas, §4.63), ESC/POS y emisión del comprobante
+    recibo/     modelo, plantilla (y las dos copias impresas, §4.65), ESC/POS y emisión del comprobante
   sincronizacion/  el trabajador que lee sync_cola, sus reintentos y su cadencia
   restauracion/    la operación inversa (fase 4.b): cliente de solo lectura con sesión
                    efímera, conversión de tipos, orden por llaves foráneas, puesto de
@@ -10924,7 +11206,7 @@ supabase/       espejo del esquema en Postgres (migraciones para la nube)
   esquema-nube.json  la FOTO del catálogo de la nube que coteja la prueba de deriva
 spec/features/  Spec-Driven Development: una carpeta por funcionalidad, NNN-<slug>/, con spec.md
                 (qué hace y criterios de aceptación), plan.md (cómo, decisiones, riesgos) y tasks.md
-  001-recibo-copia-tienda-cliente/  las dos copias impresas del recibo (§4.63)
+  001-recibo-copia-tienda-cliente/  las dos copias impresas del recibo (§4.65)
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
   SINCRONIZACION.md  diseño de la sincronización. APROBADO; fases 1.a, 1.b, 2.a y 2.b construidas
   ANULACION-DE-VENTA.md  diseño de la anulación de una venta. APROBADO; núcleo local (§4.45), sincronización y restauración del lado de la terminal (§4.53)

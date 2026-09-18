@@ -573,7 +573,7 @@ el sistema no tiene cómo verlo.**
 >
 > | De 3.5 | Qué quedó | Por qué |
 > |---|---|---|
-> | «Quién la ve: **rol administrativo**, como los otros tres reportes» | **Las filas y el voucher los ve cualquiera con sesión; los TOTALES, solo el rol administrativo** | El historial ya era de cualquiera con sesión, y ~~el voucher ya sale impreso en el papel del cliente (§4.14): esconderlo no protegería nada~~ **CORREGIDO EL 2026-09-18 (spec 001): la copia del cliente ya no lleva el voucher, solo la de la tienda. La decisión se sostiene por otra razón: lo ve personal de la tienda, y lo tecleó quien cobró (CLAUDE.md §4.63).** Lo que sí es «información de dueño» es cuánto entró, y por eso los totales sí llevan rol (§4.15, §4.40) |
+> | «Quién la ve: **rol administrativo**, como los otros tres reportes» | **Las filas y el voucher los ve cualquiera con sesión; los TOTALES, solo el rol administrativo** | El historial ya era de cualquiera con sesión, y ~~el voucher ya sale impreso en el papel del cliente (§4.14): esconderlo no protegería nada~~ **CORREGIDO EL 2026-09-18 (spec 001): la copia del cliente ya no lleva el voucher, solo la de la tienda. La decisión se sostiene por otra razón: lo ve personal de la tienda, y lo tecleó quien cobró (CLAUDE.md §4.65).** Lo que sí es «información de dueño» es cuánto entró, y por eso los totales sí llevan rol (§4.15, §4.40) |
 > | Canal nuevo `reportes:cobros-con-tarjeta`, y la prueba de guards de reportes pasa de 5 a 6 | **Ningún canal nuevo**: `recibos:listar` gana un payload con el filtro. Los guards de reportes siguen siendo 5 | No hace falta un canal para lo que otro ya devuelve |
 > | «Período: **ninguno, muestra todos**» | **Los 200 recibos más recientes**, que es lo que el historial ya traía | No se agregó un selector de período: no se pidió, y el historial nunca lo tuvo |
 > | «Totales: **no muestra sumas**» | **Sí los muestra**, pedidos explícitamente: efectivo, tarjeta y general, sumados con Decimal y nunca con `SUM()` | Se pidió. La regla de cómo sumarlos es la que esta misma fila ya anticipaba |
@@ -756,12 +756,14 @@ anuló, con fecha, responsable y motivo. El papel lo dice en ese orden.
 | El historial de recibos | Muestra «Anulada» junto al número. |
 | Si la tienda pasa a facturar con FEL/SAT | Anular un documento tributario es un trámite legal propio, y esta decisión se revisa ese día (§6.2, punto 2). |
 
-> **Desde el 2026-09-18 (spec 001, CLAUDE.md §4.63)** reimprimir el recibo
-> marcado saca DOS copias: la del cliente y la de la tienda. Las dos llevan la
-> marca de anulada entera, con quién autorizó la anulación. La del cliente no
-> lleva quién autorizó el descuento ni la boleta. Si también debe omitir a
+> **Desde el 2026-09-18 (spec 001, CLAUDE.md §4.65)** reimprimir el recibo
+> marcado saca DOS copias: la del cliente y la de la tienda. ~~Las dos llevan la
+> marca de anulada entera, con quién autorizó la anulación.~~ La del cliente no
+> lleva quién autorizó el descuento ni la boleta. ~~Si también debe omitir a
 > quien autorizó la anulación es una pregunta abierta (CLAUDE.md §6.2, punto
-> 50).
+> 50).~~ **CORREGIDO EL 2026-09-18 (decisión de Julio, CLAUDE.md §6.2, punto
+> 52):** la copia del cliente lleva la marca, la fecha y el motivo, pero NO
+> quién autorizó la anulación; la de la tienda, el PDF y la pantalla sí.
 
 ---
 

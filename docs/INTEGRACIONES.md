@@ -56,15 +56,145 @@ no una falla. La venta se cierra igual, respaldada por su PDF.
 `consultarEstado()` reporta `disponible: false`, para que la interfaz pueda
 avisarle al cajero antes de cobrar.
 
-### Implementación real (pendiente): `EscPosPrinterProvider`
+> **CORREGIDO EL 2026-09-18:** hoy ninguna pantalla llama a
+> `consultarEstado()` del proveedor de impresión. Leído en el código: fuera de
+> las pruebas, solo aparece donde se define. El estado que se ve en el
+> diagnóstico técnico y en «Impresora de recibos» sale de
+> `ServicioDeImpresora.estado()`, que lee `impresora.json` directamente. El
+> aviso «antes de cobrar» no existe.
 
-- **Cuándo:** cuando Jimmy defina el modelo de impresora térmica
-  (punto 9 de "Pendiente de confirmación" en `CLAUDE.md`).
-- **Cómo se activa:** `POS_PRINTER_PROVIDER=escpos` en `.env`.
-- **Qué NO cambia al activarla:** ni una línea del módulo de ventas ni del de
-  comprobantes. El PDF se sigue generando siempre.
-- **Requisito de diseño:** no debe lanzar excepciones. Un fallo de impresión se
-  reporta como `{ ok: false }` con su mensaje; nunca puede tumbar una venta.
+Desde el 2026-09-15 (CLAUDE.md §4.43), `NullPrinterProvider` ya no es lo que
+la aplicación construye: es lo que usa `ImpresoraSegunElArchivo` cuando la
+terminal no tiene impresora configurada. Ver abajo.
+
+### Qué construye la aplicación: `ImpresoraSegunElArchivo`
+
+**Archivo:** `src/main/adapters/impresora-configurada.ts`. Se construye en
+`src/main/index.ts`, alrededor de la línea 607, y se le pasa a
+`ServicioDeRecibos`.
+
+**Vuelve a leer `<userData>/impresora.json` en CADA impresión.** Así, guardar
+o quitar la impresora desde la pantalla vale para el próximo recibo sin
+reiniciar. Según lo que diga el archivo, delega en uno de tres proveedores:
+
+| Qué dice `impresora.json` | Proveedor | Qué hace |
+|---|---|---|
+| No existe, está vacío o no se puede leer | `NullPrinterProvider` | No imprime. El recibo queda solo en PDF. **No es un error**: es el estado normal de una terminal sin impresora |
+| `{ "impresora": "<nombre>" }` | `ImpresoraPorColaDeWindows` | Imprime por la cola de Windows en RAW. Es el formato **actual** |
+| `{ "dispositivo": "<ruta>" }` | `EscPosPrinterProvider` (`src/main/adapters/escpos-printer.ts`) | Escribe los bytes en esa ruta con `node:fs`. Se lee **solo por compatibilidad** con archivos anteriores al 2026-09-15 |
+
+Un archivo roto se anota en `log-tecnico.log` y se trata como «sin impresora»:
+el punto de venta arranca igual. Si el archivo trae los dos campos, gana
+`impresora`.
+
+`impresora.json` es configuración de ESTA terminal y no dato del negocio. Por
+eso no vive en `configuracion_negocio`, que se espeja en la nube (CLAUDE.md
+§4.14).
+
+### Cómo se configura: la pantalla «Impresora de recibos»
+
+Solo para el rol administrativo. Lista las impresoras que Windows ya tiene
+instaladas (`webContents.getPrintersAsync()`), guarda la elegida, manda un
+ticket de prueba y la quita. Después de un ticket de prueba que Windows
+aceptó, la persona contesta cómo salió. «Salió con símbolos raros o sin
+cortar» queda guardado como señal de que el modelo podría no entender los
+comandos ESC/POS. Una térmica no contesta, así que ningún software puede
+saberlo por su cuenta. Detalle en CLAUDE.md §4.43.
+
+Guardar exige que el nombre esté en la lista del sistema en ese momento. La
+pantalla ya no ofrece el formato viejo con `dispositivo`.
+
+La instalación de la impresora en Windows (controlador oficial o
+«Generic / Text Only») está en `docs/GUIA-IMPRESORA.md`.
+
+### Cómo imprime: la cola de Windows en RAW, con PowerShell
+
+**Archivo:** `src/main/adapters/cola-de-windows.ts` (`EnviadorPorPowerShell`).
+
+- Los bytes ESC/POS salen de `reciboComoEscPos`
+  (`src/main/domain/recibo/escpos.ts`). Se mandan por el spooler con
+  `OpenPrinter → StartDocPrinter("RAW") → StartPagePrinter → WritePrinter`,
+  declaradas con `Add-Type` sobre `winspool.drv`. Con el tipo de dato RAW, el
+  controlador no toca los bytes.
+- PowerShell recibe un script **constante** con `-EncodedCommand`. El nombre de
+  la impresora y los bytes viajan solo en las variables de entorno
+  `POS_IMPRESION_NOMBRE` y `POS_IMPRESION_DATOS`, y el script los lee con
+  `$env:`. Ningún dato se arma como código, y no hay `Invoke-Expression`.
+- Límite de 12 s por envío (`LIMITE_DE_POWERSHELL_MS`).
+- Cada envío se clasifica en `no_encontrada`, `no_se_pudo_enviar`,
+  `trabajo_con_error`, `entorno` o `enviado`.
+- **Lo que la documentación de Microsoft dice sobre `-EncodedCommand`, la
+  política `Restricted` y el modo `ConstrainedLanguage` NO se midió en
+  Windows** (CLAUDE.md §4.43).
+
+Fuera del instalador, `POS_IMPRESORAS_SIMULADAS=<carpeta>` reemplaza el
+enviador por uno simulado, que escribe los bytes en archivos. Con la aplicación
+empaquetada esa variable se ignora (`app.isPackaged`).
+
+**Requisito de diseño, sin cambios:** ningún proveedor lanza excepciones. Un
+fallo de impresión se reporta como `{ ok: false }` y queda en
+`log-tecnico.log`. Nunca tumba una venta: el PDF se genera siempre.
+
+### El modelo de la tienda: 3nStar RPT004
+
+**Confirmado el 2026-09-17** (CLAUDE.md §4.43 y punto 9 de §6.2). Según su
+ficha técnica, que aportó Julio, la Font A de 12×24 puntos da **48 caracteres
+por línea**. Es el mismo valor de `COLUMNAS_80MM` en
+`src/main/domain/recibo/plantilla-de-recibo.ts`.
+
+**Pendiente, y solo se puede hacer con el RPT004 en la mano:** la prueba de
+impresión física en Windows (acentos, eñe, corte) y un recibo real reimpreso
+desde el historial para ver las 48 columnas. Hasta entonces, nada de esta
+sección está probado contra el hardware.
+
+### ~~Implementación real (pendiente): `EscPosPrinterProvider`~~ — SUPERADA
+
+> **CORREGIDO EL 2026-09-18.** Esta subsección decía:
+>
+> - ~~**Cuándo:** cuando Jimmy defina el modelo de impresora térmica (punto 9
+>   de "Pendiente de confirmación" en `CLAUDE.md`).~~
+> - ~~**Cómo se activa:** `POS_PRINTER_PROVIDER=escpos` en `.env`.~~
+> - **Qué NO cambia al activarla:** ni una línea del módulo de ventas ni del de
+>   comprobantes. El PDF se sigue generando siempre. *(Sigue siendo cierto.)*
+> - **Requisito de diseño:** no debe lanzar excepciones. *(Sigue siendo
+>   cierto; ver arriba.)*
+>
+> **Qué era `POS_PRINTER_PROVIDER`.** Desde el Prompt 1, la impresora real
+> se iba a elegir como la sincronización: una variable de entorno leída por la
+> fábrica `crearReceiptPrinterProvider` (`src/shared/adapters/index.ts`). El
+> valor `escpos` iba a construir el adaptador real cuando se conociera el
+> modelo. **Nunca llegó a construirlo**: esa rama devuelve `NullPrinterProvider`
+> con una advertencia.
+>
+> **Por qué dejó de ser el camino real.** El Prompt 23 (§4.14) decidió que la
+> impresora de una terminal se configura en un archivo local, porque es estado
+> de esa máquina y no del negocio. El proceso principal pasó a construir el
+> proveedor según `impresora.json` y no según el entorno. Desde el 2026-09-15
+> (§4.43), ese proveedor es `ImpresoraSegunElArchivo`. Una variable de entorno
+> tampoco serviría en un `.exe` instalado: nadie la define en el mostrador
+> (§4.38).
+>
+> **Hoy `POS_PRINTER_PROVIDER` NO TIENE NINGÚN EFECTO.** Se lee y no la usa
+> nadie. Verificado en el código el 2026-09-18:
+>
+> 1. `leerConfiguracionAdaptadoresDelEntorno` la lee y la guarda en
+>    `configuracion.impresion` (`src/shared/adapters/index.ts:111`).
+> 2. El único que lee `configuracion.impresion` es `crearReceiptPrinterProvider`
+>    (`index.ts:49`), y a esa fábrica solo la llaman las pruebas
+>    (`src/shared/__tests__/adapters.test.ts`).
+> 3. Los dos lugares del proceso principal que leen esa configuración —
+>    `src/main/index.ts` (`crearSyncProvider`, para la sincronización) y el
+>    diagnóstico de `src/main/ipc/register-handlers.ts`— se la pasan solo a
+>    `crearSyncProvider`, que mira `sincronizacion` y nada más.
+> 4. Aunque alguien llamara a la fábrica, las dos ramas devuelven
+>    `NullPrinterProvider`.
+>
+> Ponerla en `escpos` no imprime nada, y ponerla en `nulo` no apaga una
+> impresora configurada en `impresora.json`. **PENDIENTE para Julio:** decidir
+> si se quitan la variable, `crearReceiptPrinterProvider`, el campo
+> `impresion` y su entrada en `.env.example`. No se quitaron sin preguntar. Las
+> secciones 3 de este documento y `docs/ARCHITECTURE.md` (línea 99) todavía la
+> describen como si funcionara.
 
 ## 2. `SyncProvider` — sincronización con la nube
 

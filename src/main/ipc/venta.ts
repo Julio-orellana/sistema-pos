@@ -23,6 +23,7 @@ import {
   esquemaCobro,
   type CategoriaDeVenta,
   type EstadoDeVenta,
+  type ImpresionDeReciboTerminadaIpc,
   type ProductoParaVender,
   type ResultadoDeCobro,
   type RespuestaIpc,
@@ -228,7 +229,7 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
   // =========================================================================
   ipcMain.handle(
     CANALES_IPC.ventaCobrar,
-    async (_evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeCobro>> =>
+    async (evento, payload: unknown): Promise<RespuestaIpc<ResultadoDeCobro>> =>
       ejecutarConRespuesta('COBRO_FALLIDO', async () =>
         requiereSesion(sesion, async () => {
           const pedido = esquemaCobro.parse(payload);
@@ -344,8 +345,36 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
 
             Por eso `emitir` nunca lanza hacia acá: el PDF y la impresión
             reportan lo que pasó en el resultado, y la venta ya está firme.
+
+            Y LA IMPRESORA NO SE ESPERA (2026-09-18, §4.64). Se espera el PDF,
+            que es el respaldo obligatorio, y se responde: la cajera ve «Venta
+            registrada» sin depender de cuánto tarde un `powershell.exe` en
+            arrancar ni de si la impresora contesta. La impresión sigue sola, y
+            cuando termina se le avisa a ESTA ventana —la que cobró— con
+            `recibosImpresionTerminada`. Un fallo sigue yendo solo a la
+            bitácora técnica, nunca a `auditoria_log` (§4.14).
           */
-          const emision = await dependencias.recibos.emitir(resultado.venta.id);
+          const emision = await dependencias.recibos.emitirSinEsperarLaImpresion(resultado.venta.id);
+          const ventana = evento.sender;
+          void emision.impresion.then((impresion) => {
+            const aviso: ImpresionDeReciboTerminadaIpc = {
+              reciboId: emision.recibo.id,
+              numeroRecibo: emision.recibo.numeroRecibo,
+              impreso: impresion.impreso,
+              mensaje: impresion.mensaje,
+            };
+            // Si la ventana se cerró mientras tanto, no hay a quién avisar: el
+            // resultado ya quedó en la fila (`impreso`) y, si falló, en la
+            // bitácora técnica. Un aviso que no se pudo mandar no es un error
+            // de la venta, así que tampoco puede dejar una promesa rechazada.
+            try {
+              if (!ventana.isDestroyed()) {
+                ventana.send(CANALES_IPC.recibosImpresionTerminada, aviso);
+              }
+            } catch {
+              // Ver arriba: el aviso es secundario.
+            }
+          });
 
           const registrada: ResultadoDeCobro = {
             registrada: true,
@@ -363,8 +392,9 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
               numeroRecibo: emision.recibo.numeroRecibo,
               rutaPdf: emision.rutaPdf,
               pdfGenerado: emision.pdfGenerado,
-              impreso: emision.impreso,
-              mensajeDeImpresion: emision.mensajeDeImpresion,
+              impreso: false,
+              impresionPendiente: true,
+              mensajeDeImpresion: 'Enviando el recibo a la impresora…',
             },
           };
           return registrada;

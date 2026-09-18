@@ -152,7 +152,7 @@ beforeEach(() => {
     pinHash: generarHashDePin('1357'),
   }).id;
 
-  idCategoria = repos.categorias.crear({ nombre: 'Granos', orden: 1 }).id;
+  idCategoria = repos.categorias.crear({ nombre: 'Granos' }).id;
 });
 
 afterEach(() => {

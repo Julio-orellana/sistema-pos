@@ -225,6 +225,29 @@ async function main() {
 
   const prueba = (nombre) => ventana.locator(`[data-prueba="${nombre}"]`);
   const pos = (codigo, argumento) => ventana.evaluate(codigo, argumento);
+  /**
+   * Cobra y ESPERA EL PAPEL. Desde que el cobro no espera a la impresora
+   * (CLAUDE.md §4.64, llegado de develop el 2026-09-18), la respuesta del cobro
+   * trae la impresión EN CURSO («Enviando el recibo a la impresora…») y el
+   * resultado del papel llega después, por `recibos:impresion-terminada`. Se
+   * escucha ese aviso ANTES de cobrar, para no perderlo, y se espera hasta 15 s
+   * antes de leer los bytes de la térmica.
+   */
+  const cobrarYEsperarElPapel = (pedido) =>
+    ventana.evaluate(async (p) => {
+      let quitar = () => undefined;
+      const aviso = new Promise((resolver) => {
+        quitar = window.pos.recibos.alTerminarImpresion((a) => resolver(a));
+      });
+      const respuesta = await window.pos.venta.cobrar(p);
+      if (!respuesta.ok || !respuesta.datos.registrada || !respuesta.datos.recibo.impresionPendiente) {
+        quitar();
+        return { respuesta, aviso: null };
+      }
+      const llegado = await Promise.race([aviso, new Promise((r) => setTimeout(() => r(null), 15000))]);
+      quitar();
+      return { respuesta, aviso: llegado };
+    }, pedido);
   /** 1024×768 EXACTOS. Se vuelve a poner antes de cada clic y cada captura (ver verify:pantallas:1024). */
   const fijarVentana = async () => {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ALTO, deviceScaleFactor: 1, mobile: false });
@@ -326,7 +349,8 @@ async function main() {
       `registrada=${String(sinPin.ok && sinPin.datos.registrada)}; requiereAutorizacion=${String(sinPin.ok && sinPin.datos.requiereAutorizacion)}; impreso=${existsSync(archivoDeLaTermica) ? 'sí' : 'no'}`,
       sinPin.ok && sinPin.datos.registrada === false && sinPin.datos.requiereAutorizacion === true && !existsSync(archivoDeLaTermica),
     );
-    const cobro = await pos((p) => window.pos.venta.cobrar(p), { ...pedido, pinDescuento: PIN_JIMMY });
+    const { respuesta: cobro, aviso: avisoDelPapel } = await cobrarYEsperarElPapel({ ...pedido, pinDescuento: PIN_JIMMY });
+    anotar(`aviso de fin de impresión (recibos:impresion-terminada): ${JSON.stringify(avisoDelPapel)}`);
     if (!cobro.ok || !cobro.datos.registrada) {
       throw new Error(`el cobro con el PIN de Jimmy no se registró: ${JSON.stringify(cobro)}`);
     }
@@ -396,12 +420,19 @@ async function main() {
         distintos.length === 0 && esperada.split('\n').length === impresa.split('\n').length,
       );
     }
+    /*
+      CAMBIÓ AL UNIR develop (2026-09-18): antes esta comprobación leía
+      `impreso=true` y el mensaje de las dos copias en la RESPUESTA del cobro.
+      Con el cobro que no espera a la impresora (§4.64), la respuesta dice que
+      la impresión sigue en curso y el resultado llega en el aviso aparte.
+    */
     comprobar(
-      'EL COBRO lo informa: impreso=true, PDF generado, y el mensaje nombra las dos copias',
-      'impreso=true; pdfGenerado=true; «Recibo enviado a la impresora: copia del cliente y copia de la tienda.»',
-      `impreso=${String(venta1.recibo.impreso)}; pdfGenerado=${String(venta1.recibo.pdfGenerado)}; «${venta1.recibo.mensajeDeImpresion}»`,
-      venta1.recibo.impreso === true && venta1.recibo.pdfGenerado === true &&
-        venta1.recibo.mensajeDeImpresion === 'Recibo enviado a la impresora: copia del cliente y copia de la tienda.',
+      'EL COBRO responde sin esperar el papel (PDF generado, impresión en curso) y EL AVISO posterior dice impreso y nombra las dos copias',
+      'respuesta: pdfGenerado=true, impresionPendiente=true; aviso: impreso=true, «Recibo enviado a la impresora: copia del cliente y copia de la tienda.»',
+      `respuesta: pdfGenerado=${String(venta1.recibo.pdfGenerado)}, impresionPendiente=${String(venta1.recibo.impresionPendiente)}; aviso: ${avisoDelPapel === null ? 'NO LLEGÓ' : `impreso=${String(avisoDelPapel.impreso)}, «${avisoDelPapel.mensaje}», recibo ${avisoDelPapel.reciboId === venta1.recibo.id ? 'el de esta venta' : 'OTRO'}`}`,
+      venta1.recibo.pdfGenerado === true && venta1.recibo.impresionPendiente === true && avisoDelPapel !== null &&
+        avisoDelPapel.reciboId === venta1.recibo.id && avisoDelPapel.impreso === true &&
+        avisoDelPapel.mensaje === 'Recibo enviado a la impresora: copia del cliente y copia de la tienda.',
     );
     const filaDelReciboEnLaBase = leerBase('SELECT numero_recibo, impreso, pdf_path FROM recibos WHERE venta_id = ?', venta1.ventaId)[0];
     anotar(`recibos en la base: ${JSON.stringify(filaDelReciboEnLaBase)}`);
@@ -481,10 +512,13 @@ async function main() {
     // =======================================================================
     // 7. Una venta en efectivo sin descuento
     // =======================================================================
-    const cobroEnEfectivo = await pos(
-      (id) => window.pos.venta.cobrar({ lineas: [{ productoId: id, cantidad: '2' }], descuento: null, formaPago: 'efectivo', numBoleta: null }),
-      armado.maiz,
-    );
+    const { respuesta: cobroEnEfectivo, aviso: avisoEnEfectivo } = await cobrarYEsperarElPapel({
+      lineas: [{ productoId: armado.maiz, cantidad: '2' }],
+      descuento: null,
+      formaPago: 'efectivo',
+      numBoleta: null,
+    });
+    anotar(`aviso de fin de impresión de la venta en efectivo: ${JSON.stringify(avisoEnEfectivo)}`);
     if (!cobroEnEfectivo.ok || !cobroEnEfectivo.datos.registrada) {
       throw new Error(`la venta en efectivo no se registró: ${JSON.stringify(cobroEnEfectivo)}`);
     }
