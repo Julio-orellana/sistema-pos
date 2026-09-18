@@ -626,6 +626,16 @@
         "nombre": "precio_compra",
         "nulable": true,
         "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "precio_mayorista",
+        "nulable": true,
+        "tipo": "numeric(14,2)"
+      },
+      {
+        "nombre": "cantidad_minima_mayorista",
+        "nulable": true,
+        "tipo": "numeric(14,3)"
       }
     ],
     "recibos": [

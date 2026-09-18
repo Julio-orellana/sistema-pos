@@ -48,6 +48,7 @@ import sqlSuperficieAnulacionDeVenta from './migrations/034_superficie_anulacion
 import sqlTotpDeAutorizacionRemota from './migrations/036_totp_de_autorizacion_remota.sql?raw';
 import sqlQuitarPinRemotoHash from './migrations/037_quitar_pin_remoto_hash.sql?raw';
 import sqlAnulacionSoloPresencial from './migrations/038_anulacion_solo_presencial.sql?raw';
+import sqlProductosPrecioMayorista from './migrations/039_productos_precio_mayorista.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -167,6 +168,14 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 38,
     nombre: '038_anulacion_solo_presencial',
     sql: sqlAnulacionSoloPresencial,
+  },
+  // Con espejo en la nube (`0039_productos_precio_mayorista`): el precio
+  // mayorista es dato de negocio y viaja en el payload de `productos`. Van
+  // JUNTAS: con una sola, la cola se detiene (spec 002, §8).
+  {
+    orden: 39,
+    nombre: '039_productos_precio_mayorista',
+    sql: sqlProductosPrecioMayorista,
   },
 ];
 

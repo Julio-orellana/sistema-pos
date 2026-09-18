@@ -121,6 +121,22 @@ const REGLAS: readonly ReglaDeTraduccion[] = [
     mensaje: 'Stock insuficiente para completar la venta.',
     coincide: (_error, restriccion) => restriccion === 'productos_inventario_no_negativo',
   },
+  /*
+    Las dos reglas de tabla del precio mayorista (migración 039, spec 002). El
+    servicio de productos las revisa ANTES con `revisarPrecioMayorista`, que da
+    el mensaje exacto; estas son la última red, por si algo llegara a la base
+    sin pasar por él. Van antes del DATO_INVALIDO genérico, que las taparía.
+  */
+  {
+    codigo: 'DATO_INVALIDO',
+    mensaje: 'El precio mayorista y su cantidad mínima van juntos: se ponen los dos o ninguno.',
+    coincide: (_error, restriccion) => restriccion === 'productos_mayorista_completo',
+  },
+  {
+    codigo: 'DATO_INVALIDO',
+    mensaje: 'El precio mayorista tiene que ser menor que el precio de lista. Bajá el precio mayorista o quitalo.',
+    coincide: (_error, restriccion) => restriccion === 'productos_mayorista_menor_que_lista',
+  },
   {
     codigo: 'CAJA_YA_ABIERTA',
     // El mensaje NO dice de quién es la caja, y es deliberado: desde la

@@ -387,6 +387,11 @@ const filaProducto = (id, nombre, categoriaId, precio, inventario, contador, ven
   // Migración 031/0031 (§4.39): el payload es la fila entera, así que la
   // columna tiene que venir aunque sea null. La batería exige la 0031 aplicada.
   precio_compra: null,
+  // Migración 039/0039 (spec 002): lo mismo con el precio mayorista. DESDE ESTE
+  // CAMBIO LA BATERÍA EXIGE LA 0039 APLICADA: contra una nube sin ella, los
+  // lotes de productos se rechazan por «columnas de más», como pasó con la 0031.
+  precio_mayorista: null,
+  cantidad_minima_mayorista: null,
 });
 
 /** `cierre` en null es una caja abierta; con valores, una cerrada. */

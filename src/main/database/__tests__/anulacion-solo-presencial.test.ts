@@ -160,7 +160,16 @@ describe('LA 038 sobre una terminal que ya tiene datos', () => {
     insertarAnulacion(base, 'presencial', 'ffffffff-ffff-4fff-8fff-ffffffffffff');
     const antes = base.prepare('SELECT * FROM anulaciones_de_venta').all();
 
-    const resultado = aplicarMigraciones(base, MIGRACIONES);
+    /*
+      Se migra HASTA LA 038 y no con todas. Hasta el 2026-09-18 esta línea
+      pasaba `MIGRACIONES` entero, y era lo mismo porque la 038 era la última.
+      Desde la 039 (spec 002) aplicaría también esa, y la prueba mediría otra
+      cosa: lo que importa acá es qué hace la 038 con estas filas.
+    */
+    const resultado = aplicarMigraciones(
+      base,
+      MIGRACIONES.filter((m) => m.orden <= 38),
+    );
 
     expect(resultado.aplicadasAhora).toEqual(['038_anulacion_solo_presencial']);
     expect(base.prepare('SELECT * FROM anulaciones_de_venta').all()).toEqual(antes);
