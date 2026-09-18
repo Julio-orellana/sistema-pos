@@ -24,12 +24,13 @@
 | T15 | Arnés `verify:pantallas:copias` en la aplicación real, a 1024×768, con el texto completo de las dos copias en su salida | CA-1, CA-3, CA-4, CA-7, CA-9, CA-10, CA-14 | **Hecho.** 18 de 18 en macOS. Las dos copias salieron renglón por renglón como las predijo la spec §4.3 |
 | T16 | Documentación: CLAUDE.md (§4.14, §4.60, §4.63 nueva, §5, §6.2, §7, §8, §9, §10), `docs/ANULACION-DE-VENTA.md`, `docs/GUIA-IMPRESORA.md`, `docs/INTEGRACIONES.md`, comentarios de `ipc.ts`, `ipc/recibos.ts` y `PantallaDeRecibos.tsx` | CA-17 | **Hecho.** Lo que dejó de ser cierto quedó tachado o anotado, no borrado |
 | T17 | Commits atómicos en la rama de trabajo | — | Ver el historial de git |
+| T18 | Decisión 1 (2026-09-18): la tabla gana `autorizacionDeLaAnulacion`; el cliente no dice quién autorizó la anulación, con todos sus renglones de continuación | CA-3, CA-5, CA-19 | **Hecho.** La grilla la exige renglón por renglón; una prueba con un nombre largo tiene su control. Falsificado: tabla del cliente en `true` → 38 caen; plantilla que ignora el campo → 37; omitir solo el primer renglón → 1 |
+| T19 | Decisión 2 (2026-09-18): la copia de la tienda siempre | CA-20 | **Sin cambio de código**, ya era así. Documentado en spec §9 |
+| T20 | Traer `develop` a la rama y verificar el estado unido (verify y el arnés de la app real) | Todas | Ver CLAUDE.md §4.65 |
 
 ## Pendiente fuera de esta spec
 
 - **Windows y la 3nStar RPT004**: que corte bien entre las dos copias (CLAUDE.md
   §6.2, punto 9).
-- **Pregunta 1 de la spec**: ¿la copia del cliente oculta también a quien
-  autorizó una anulación? (§6.2, punto 50).
-- **Pregunta 2 de la spec**: ¿la copia de la tienda sale siempre o solo cuando
-  hay algo que controlar? (§6.2, punto 51).
+- ~~**Pregunta 1 de la spec**~~: decidida el 2026-09-18 (sí se oculta). T18.
+- ~~**Pregunta 2 de la spec**~~: decidida el 2026-09-18 (siempre). T19.

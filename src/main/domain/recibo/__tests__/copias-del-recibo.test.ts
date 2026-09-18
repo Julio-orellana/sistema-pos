@@ -3,8 +3,9 @@
  * (spec/features/001-recibo-copia-tienda-cliente).
  *
  * LA PREGUNTA QUE CONTESTAN ESTAS PRUEBAS: ¿la copia del cliente oculta
- * EXACTAMENTE los dos datos de control interno —quién autorizó un descuento y
- * el número de boleta— y NADA MÁS? No alcanza con buscar que falten esos dos:
+ * EXACTAMENTE los datos de control interno —quién autorizó un descuento, el
+ * número de boleta y, desde el 2026-09-18, quién autorizó la anulación— y NADA
+ * MÁS? No alcanza con buscar que falten esos dos:
  * una plantilla que además ocultara el cajero pasaría esa búsqueda. Por eso se
  * compara la copia del cliente contra la de la tienda renglón por renglón, y
  * se exige que la diferencia sea justamente esa.
@@ -128,17 +129,31 @@ function renglonDeLaLeyenda(lineas: readonly string[]): number {
   return indice;
 }
 
-/** Los renglones que la copia del cliente puede NO tener. Nada más. */
+/**
+ * Los renglones que la copia del cliente puede NO tener. Nada más.
+ * «Autorizó: » (quién autorizó la ANULACIÓN) se sumó el 2026-09-18, por la
+ * decisión de Julio sobre la pregunta 1 de la spec.
+ */
 const esRenglonReservado = (linea: string): boolean =>
-  linea.startsWith('Autorizado por: ') || /^Boleta +\S+$/.test(linea);
+  linea.startsWith('Autorizado por: ') || /^Boleta +\S+$/.test(linea) || linea.startsWith('Autorizó: ');
 
 // ===========================================================================
 describe('Qué lleva cada copia (spec 001, §3)', () => {
-  it('la tabla QUE_LLEVA_CADA_DESTINO: la pantalla y la tienda llevan los dos datos reservados; el cliente, NINGUNO', () => {
+  it('la tabla QUE_LLEVA_CADA_DESTINO: la pantalla y la tienda llevan los tres datos reservados; el cliente, NINGUNO', () => {
     expect(QUE_LLEVA_CADA_DESTINO).toEqual({
-      pantalla: { encabezado: [], autorizacionDelDescuento: true, boleta: true },
-      tienda: { encabezado: ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA, autorizacionDelDescuento: true, boleta: true },
-      cliente: { encabezado: ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE, autorizacionDelDescuento: false, boleta: false },
+      pantalla: { encabezado: [], autorizacionDelDescuento: true, boleta: true, autorizacionDeLaAnulacion: true },
+      tienda: {
+        encabezado: ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA,
+        autorizacionDelDescuento: true,
+        boleta: true,
+        autorizacionDeLaAnulacion: true,
+      },
+      cliente: {
+        encabezado: ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE,
+        autorizacionDelDescuento: false,
+        boleta: false,
+        autorizacionDeLaAnulacion: false,
+      },
     });
   });
 
@@ -195,7 +210,7 @@ describe('Las copias comparadas renglón por renglón, en los 24 recibos de la g
   );
 
   it.each(casos)(
-    'LA DEL CLIENTE difiere de la de la tienda EXACTAMENTE en el encabezado, el autorizante y la boleta: $nombre',
+    'LA DEL CLIENTE difiere de la de la tienda EXACTAMENTE en el encabezado, los dos autorizantes y la boleta: $nombre',
     ({ modelo }) => {
       const tienda = renglones(reciboComoTexto(modelo, 'tienda'));
       const cliente = renglones(reciboComoTexto(modelo, 'cliente'));
@@ -217,6 +232,7 @@ describe('Las copias comparadas renglón por renglón, en los 24 recibos de la g
       );
       // Los que se quitaron son exactamente los que el modelo tiene: ni uno más.
       const esperados = [
+        ...(modelo.anulacion === null ? [] : [`Autorizó: ${modelo.anulacion.autorizadaPor}`]),
         ...(modelo.descuento?.autorizadoPor ? [`Autorizado por: ${modelo.descuento.autorizadoPor}`] : []),
         ...(modelo.numBoleta === null ? [] : [expect.stringMatching(new RegExp(`^Boleta +${modelo.numBoleta}$`))]),
       ];
@@ -225,10 +241,12 @@ describe('Las copias comparadas renglón por renglón, en los 24 recibos de la g
   );
 
   it.each(casos)(
-    'en LA DEL CLIENTE no aparece, en NINGÚN renglón, ni quién autorizó el descuento ni el número de boleta: $nombre',
+    'en LA DEL CLIENTE no aparece, en NINGÚN renglón, ni quién autorizó el descuento, ni quién autorizó la anulación, ni el número de boleta: $nombre',
     ({ modelo }) => {
       const cliente = reciboComoTexto(modelo, 'cliente');
       expect(cliente).not.toContain(AUTORIZO_EL_DESCUENTO);
+      expect(cliente).not.toContain(AUTORIZO_LA_ANULACION);
+      expect(cliente).not.toContain('Autorizó');
       expect(cliente).not.toContain('Autorizado por');
       expect(cliente).not.toContain(VOUCHER);
       expect(cliente).not.toContain('Boleta');
@@ -254,20 +272,31 @@ describe('Las copias comparadas renglón por renglón, en los 24 recibos de la g
       expect(cliente.includes('** REIMPRESIÓN **')).toBe(modelo.reimpresion);
       if (modelo.anulacion !== null) {
         /*
-          LA MARCA DE ANULADA SALE ENTERA, con quién autorizó la anulación. El
-          pedido dice que se oculta «específicamente» el autorizante del
-          descuento y la boleta; el de la anulación es la pregunta 1 de la spec,
-          sin decidir. Si se decide ocultarlo, esta prueba es la que cambia.
+          ESTA PRUEBA CAMBIÓ EL 2026-09-18 (spec 001, pregunta 1), Y NO SE BORRÓ.
+          Antes decía: «LA MARCA DE ANULADA SALE ENTERA, con quién autorizó la
+          anulación», y exigía `Autorizó: Jimmy` en la copia del cliente, porque
+          el pedido original ocultaba «específicamente» el autorizante del
+          descuento y la boleta. Julio decidió ocultar también el de la
+          anulación, con el mismo criterio. La MARCA sigue: el cliente tiene que
+          saber que la venta se anuló, cuándo y por qué.
         */
         expect(cliente).toContain('** VENTA ANULADA **');
-        expect(cliente).toContain(`Autorizó: ${AUTORIZO_LA_ANULACION}`);
+        expect(cliente).toContain(`Anulada: ${modelo.anulacion.fecha} ${modelo.anulacion.hora}`);
         expect(cliente).toContain('Motivo: el cliente devolvió el producto');
+        expect(cliente).not.toContain('Autorizó:');
+        // Y la de la tienda sí lo lleva.
+        expect(reciboComoTexto(modelo, 'tienda')).toContain(`Autorizó: ${AUTORIZO_LA_ANULACION}`);
       }
     },
   );
 
-  it.each(casos.filter(({ modelo }) => (modelo.descuento?.autorizadoPor ?? null) === null && modelo.numBoleta === null))(
-    'sin autorizante y sin boleta, las dos copias difieren SOLO en el encabezado: $nombre',
+  it.each(
+    casos.filter(
+      ({ modelo }) =>
+        (modelo.descuento?.autorizadoPor ?? null) === null && modelo.numBoleta === null && modelo.anulacion === null,
+    ),
+  )(
+    'sin autorizantes, sin boleta y sin anular, las dos copias difieren SOLO en el encabezado: $nombre',
     ({ modelo }) => {
       const sinEncabezado = (destino: 'cliente' | 'tienda'): string[] => {
         const encabezado = QUE_LLEVA_CADA_DESTINO[destino].encabezado;
@@ -380,5 +409,47 @@ describe('Las dos copias del ejemplo de la spec (§4.3), tal cual salen', () => 
       '',
       '            ¡Gracias por su compra!',
     ]);
+  });
+});
+
+// ===========================================================================
+describe('Quién autorizó la anulación, con un nombre que no entra en un renglón (spec 001, pregunta 1)', () => {
+  const NOMBRE_LARGO = 'María Fernanda de los Ángeles Castañeda Villagrán';
+
+  function anuladaCon(autorizadaPor: string): ModeloDeRecibo {
+    const primero = grilla().find(({ modelo }) => modelo.anulacion !== null);
+    if (primero?.modelo.anulacion == null) {
+      throw new Error('la grilla no tiene ningún recibo anulado');
+    }
+    return { ...primero.modelo, anulacion: { ...primero.modelo.anulacion, autorizadaPor } };
+  }
+
+  it('el control: en la TIENDA el nombre largo ocupa MÁS DE UN renglón', () => {
+    const tienda = renglones(reciboComoTexto(anuladaCon(NOMBRE_LARGO), 'tienda'));
+    const inicio = tienda.findIndex((linea) => linea.startsWith('Autorizó: '));
+    const motivo = tienda.findIndex((linea) => linea.startsWith('Motivo: '));
+    expect(inicio).toBeGreaterThan(0);
+    // Sin este control, la prueba de abajo pasaría igual con un nombre corto.
+    expect(motivo - inicio).toBeGreaterThan(1);
+  });
+
+  it('en la del CLIENTE no queda NINGÚN pedazo del nombre: se omite el bloque entero, con sus renglones de continuación', () => {
+    const modelo = anuladaCon(NOMBRE_LARGO);
+    const cliente = reciboComoTexto(modelo, 'cliente');
+    for (const palabra of NOMBRE_LARGO.split(' ').filter((p) => p.length > 3)) {
+      expect(cliente, palabra).not.toContain(palabra);
+    }
+    // La tienda, en cambio, lo lleva: el ANTES y el DESPUÉS del bloque son iguales en las dos.
+    const tienda = renglones(reciboComoTexto(modelo, 'tienda'));
+    const inicio = tienda.findIndex((linea) => linea.startsWith('Autorizó: '));
+    const motivo = tienda.findIndex((linea) => linea.startsWith('Motivo: '));
+    const bloque = tienda.slice(inicio, motivo);
+    expect(bloque.join(' ').replace(/\s+/g, ' ')).toBe(`Autorizó: ${NOMBRE_LARGO}`);
+    const clienteRenglones = renglones(cliente);
+    const altoTienda = ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA.length;
+    const altoCliente = ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE.length;
+    const sinElBloque = [...tienda.slice(0, inicio), ...tienda.slice(motivo)];
+    const leyenda = renglonDeLaLeyenda(tienda);
+    expect(clienteRenglones.slice(leyenda + 1 + altoCliente)).toEqual(sinElBloque.slice(leyenda + 1 + altoTienda));
   });
 });

@@ -527,12 +527,25 @@ async function main() {
     mostrarCopia('VENTA ANULADA REIMPRESA — COPIA 1', anuladaReimpresa.copias[0] ?? '');
     mostrarCopia('VENTA ANULADA REIMPRESA — COPIA 2', anuladaReimpresa.copias[1] ?? '');
     const clienteAnulada = anuladaReimpresa.copias[0] ?? '';
+    const tiendaAnulada = anuladaReimpresa.copias[1] ?? '';
+    /*
+      CAMBIÓ EL 2026-09-18 (spec 001, pregunta 1, decidida por Julio): antes esta
+      comprobación exigía «Autorizó: Jimmy» en la copia del cliente. Ahora la
+      copia del cliente conserva la marca, la fecha y el motivo, y NO dice quién
+      autorizó la anulación; la de la tienda sí.
+    */
     comprobar(
-      'LA COPIA DEL CLIENTE de una venta anulada lleva la marca ENTERA —con «Autorizó: Jimmy» de la anulación— y sigue sin el autorizante del descuento ni la boleta (spec §9, pregunta 1)',
-      '** VENTA ANULADA **; Autorizó: Jimmy; Motivo: …; sin «Autorizado por»; sin 004512',
-      `${clienteAnulada.includes('** VENTA ANULADA **')}/${clienteAnulada.includes('Autorizó: Jimmy')}/${clienteAnulada.includes(`Motivo: ${MOTIVO}`)}; autorizante del descuento ${String(clienteAnulada.includes('Autorizado por'))}; boleta ${String(clienteAnulada.includes(VOUCHER))}`,
-      clienteAnulada.includes('** VENTA ANULADA **') && clienteAnulada.includes('Autorizó: Jimmy') &&
-        clienteAnulada.includes(`Motivo: ${MOTIVO}`) && !clienteAnulada.includes('Autorizado por') && !clienteAnulada.includes(VOUCHER),
+      'LA COPIA DEL CLIENTE de una venta anulada lleva la marca y el motivo, pero NO quién autorizó la anulación, ni el autorizante del descuento ni la boleta (spec §9, pregunta 1)',
+      '** VENTA ANULADA **; Motivo: …; sin «Autorizó»; sin «Autorizado por»; sin 004512',
+      `marca ${String(clienteAnulada.includes('** VENTA ANULADA **'))}; motivo ${String(clienteAnulada.includes(`Motivo: ${MOTIVO}`))}; «Autorizó» ${String(clienteAnulada.includes('Autorizó'))}; autorizante del descuento ${String(clienteAnulada.includes('Autorizado por'))}; boleta ${String(clienteAnulada.includes(VOUCHER))}`,
+      clienteAnulada.includes('** VENTA ANULADA **') && clienteAnulada.includes(`Motivo: ${MOTIVO}`) &&
+        !clienteAnulada.includes('Autorizó') && !clienteAnulada.includes('Autorizado por') && !clienteAnulada.includes(VOUCHER),
+    );
+    comprobar(
+      'LA COPIA DE LA TIENDA de la venta anulada SÍ dice quién autorizó la anulación',
+      'Autorizó: Jimmy',
+      `«Autorizó: Jimmy» ${String(tiendaAnulada.includes('Autorizó: Jimmy'))}`,
+      tiendaAnulada.includes('Autorizó: Jimmy'),
     );
   } catch (error) {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);

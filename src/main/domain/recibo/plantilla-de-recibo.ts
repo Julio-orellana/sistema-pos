@@ -107,13 +107,22 @@ export interface LoQueLlevaElTexto {
   readonly autorizacionDelDescuento: boolean;
   /** El renglón «Boleta …»: el voucher de la terminal del banco. */
   readonly boleta: boolean;
+  /**
+   * El renglón «Autorizó: …» de la marca de venta anulada: quién tecleó el PIN
+   * de la anulación. La marca misma —«VENTA ANULADA», la fecha y el motivo— sale
+   * en todos los destinos. Decisión de Julio del 2026-09-18 (spec 001,
+   * pregunta 1): mismo criterio que el autorizante del descuento.
+   */
+  readonly autorizacionDeLaAnulacion: boolean;
 }
 
 /**
  * QUÉ LLEVA CADA DESTINO. Es EL ÚNICO LUGAR que decide qué ve el cliente.
  *
- * La copia del cliente oculta una LISTA CERRADA de dos datos de control
- * interno: quién autorizó un descuento y el número de boleta. Todo lo demás
+ * La copia del cliente oculta una LISTA CERRADA de TRES datos de control
+ * interno: quién autorizó un descuento, el número de boleta y quién autorizó
+ * la anulación (este último desde el 2026-09-18, spec 001, pregunta 1, que al
+ * principio decía «dos»: la marca de anulada salía entera). Todo lo demás
  * —incluido cualquier dato que se agregue al papel en el futuro, como el nombre
  * del cliente— sale en las tres versiones, porque la plantilla no tiene ningún
  * otro `if` sobre el destino. Hay una prueba que compara las copias renglón
@@ -123,9 +132,19 @@ export interface LoQueLlevaElTexto {
  * no deja agregarlo sin decidir qué lleva.
  */
 export const QUE_LLEVA_CADA_DESTINO: Readonly<Record<DestinoDelTexto, LoQueLlevaElTexto>> = {
-  pantalla: { encabezado: [], autorizacionDelDescuento: true, boleta: true },
-  tienda: { encabezado: ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA, autorizacionDelDescuento: true, boleta: true },
-  cliente: { encabezado: ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE, autorizacionDelDescuento: false, boleta: false },
+  pantalla: { encabezado: [], autorizacionDelDescuento: true, boleta: true, autorizacionDeLaAnulacion: true },
+  tienda: {
+    encabezado: ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA,
+    autorizacionDelDescuento: true,
+    boleta: true,
+    autorizacionDeLaAnulacion: true,
+  },
+  cliente: {
+    encabezado: ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE,
+    autorizacionDelDescuento: false,
+    boleta: false,
+    autorizacionDeLaAnulacion: false,
+  },
 };
 
 // ===========================================================================
@@ -248,8 +267,12 @@ export function reciboComoTexto(
   if (modelo.anulacion !== null) {
     lineas.push(centrado(MARCA_DE_VENTA_ANULADA, ancho));
     lineas.push(`Anulada: ${modelo.anulacion.fecha} ${modelo.anulacion.hora}`);
-    for (const parte of enVariasLineas(`Autorizó: ${modelo.anulacion.autorizadaPor}`, ancho)) {
-      lineas.push(parte);
+    // Quién autorizó la anulación NO va en la copia del cliente (spec 001).
+    // Se omite el bloque entero, también sus renglones de continuación.
+    if (lleva.autorizacionDeLaAnulacion) {
+      for (const parte of enVariasLineas(`Autorizó: ${modelo.anulacion.autorizadaPor}`, ancho)) {
+        lineas.push(parte);
+      }
     }
     for (const parte of enVariasLineas(`Motivo: ${modelo.anulacion.motivo}`, ancho)) {
       lineas.push(parte);

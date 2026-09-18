@@ -233,9 +233,12 @@ En `copias-del-recibo.test.ts`, sobre la **misma grilla de 24 recibos** de §4:
   calcula la diferencia y se exige que sea esa. Así, ocultar cualquier otro
   dato hace fallar la prueba.
 - Ni el nombre del autorizante del descuento ni el número de boleta aparecen
-  en ningún renglón de la copia del cliente fuera de lo permitido. El nombre
+  en ningún renglón de la copia del cliente fuera de lo permitido. ~~El nombre
   del autorizante sí puede aparecer en la marca de anulada: es la pregunta 1
-  del spec, y la prueba lo deja escrito.
+  del spec, y la prueba lo deja escrito.~~ **Desde el 2026-09-18 (decisión 1
+  del spec) tampoco aparece el de la anulación**: la tabla gana
+  `autorizacionDeLaAnulacion`, y la comparación renglón por renglón suma
+  «Autorizó: » a los renglones reservados.
 - Ningún renglón de ningún destino pasa de 48 columnas.
 - Los encabezados son ASCII, entran en 48 columnas y son distintos.
 - `textosDeLasCopias(modelo)` es `[cliente, tienda]`.
@@ -320,7 +323,9 @@ la ventana a **1024×768** con CDP antes de cada captura, como
 6. Una venta en efectivo sin descuento: las dos copias difieren solo en el
    encabezado.
 7. Se anula la venta con tarjeta y se reimprime: el informe muestra cómo sale
-   la copia del cliente de una venta anulada (pregunta 1 del spec).
+   la copia del cliente de una venta anulada ~~(pregunta 1 del spec)~~ y, desde
+   el 2026-09-18, exige que NO diga quién autorizó la anulación y que la de la
+   tienda sí.
 
 ## 8. ¿Siempre dos copias, o configurable? Recomendación
 
@@ -383,5 +388,5 @@ Nada se borra. Lo que dejó de ser cierto se tacha o se anota «CORREGIDO EL
 | La RPT004 no corta bien entre las dos copias, o el segundo `ESC @` hace algo inesperado | No se puede medir sin el aparato (§2.3). Queda como pendiente físico en el punto 9 de §6.2, con la salida de una línea escrita. |
 | Un camino futuro manda a la térmica la versión completa | El parámetro obligatorio (§1.1) y la prueba estructural (§6.3). |
 | Alguien oculta otro dato en la copia del cliente sin decidirlo | La comparación renglón por renglón (§6.1): la diferencia entre copias tiene que ser exactamente la lista cerrada. |
-| El cliente sigue viendo quién autorizó una anulación | No es un riesgo técnico, es una decisión pendiente (spec §9, pregunta 1). |
+| ~~El cliente sigue viendo quién autorizó una anulación~~ | **Cerrado el 2026-09-18**: Julio decidió ocultarlo (spec §9, pregunta 1; CA-19). |
 | Documentación que afirma algo que dejó de ser cierto | La lista de §9, recorrida con `grep` antes de cerrar. |
