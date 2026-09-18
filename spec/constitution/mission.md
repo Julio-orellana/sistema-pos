@@ -82,8 +82,11 @@ Para no atribuirle capacidades que no tiene:
 - **No emite factura fiscal.** El recibo es una proforma y lo dice en el papel.
 - **No es multi-caja ni multi-sucursal.** Admite una sola caja abierta y está
   diseñado para una terminal por proyecto de nube.
-- **No distingue precio al detalle de precio al por mayor**, aunque la tienda
-  venda de las dos formas.
+- ~~**No distingue precio al detalle de precio al por mayor**, aunque la tienda
+  venda de las dos formas.~~
+  **Corregido el 2026-09-18:** desde la spec 002 (en `develop`, todavía no en el
+  1.2.0 instalado) distingue el precio al por mayor **según la cantidad** de la
+  línea. **No** distingue por tipo de cliente: no hay módulo de clientes.
 - **No maneja ventas al crédito, mermas ni ajustes de inventario a la baja,
   alertas de stock mínimo, código de barras ni básculas digitales.**
 - **No está verificado en Windows**, que es su plataforma de producción. Todo

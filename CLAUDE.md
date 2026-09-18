@@ -266,7 +266,7 @@ propósito.
 | `precios_especiales.valor` | **>= 0** | Un descuento negativo sería un recargo encubierto que se saltaría el control de límites por rol. |
 | `limites_descuento.descuento_max_porcentaje` | **>= 0** | 0 es significativo: "este rol no puede dar descuento". |
 | `limites_descuento.descuento_max_monto_fijo` | **>= 0** | Igual que el porcentaje. |
-| `venta_detalle.precio_unitario_snap` | **>= 0** | Es la foto de `precio_base` y hereda su regla. |
+| `venta_detalle.precio_unitario_snap` | **>= 0** | ~~Es la foto de `precio_base` y hereda su regla.~~ Es la foto del precio que se COBRÓ: la lista, el precio especial (desde el Prompt 19) o el precio mayorista (desde la spec 002, §4.66). Los tres tienen piso 0, así que hereda la regla. *Precisado el 2026-09-18.* |
 | `caja_sesiones.monto_inicial` | **>= 0** | El fondo con que se abre la caja no puede ser negativo. |
 | `caja_sesiones.monto_real` | **>= 0** | El efectivo contado físicamente no puede ser negativo. |
 | `ventas.subtotal` | **SIN PISO** | Reservado para devoluciones. |
@@ -1931,6 +1931,11 @@ Es la distinción que `src/main/domain/venta/precios.ts` existe para mantener:
 
 Un mismo ticket puede llevar los dos, y se aplican en ese orden: primero el
 precio especial de cada línea, después el descuento sobre el total.
+
+> **Desde la spec 002 (2026-09-18) hay un tercer precio posible por línea, el
+> MAYORISTA**, que aplica cuando la cantidad de la línea llega a un mínimo. La
+> línea se cobra al MENOR de lista, especial y mayorista, y el descuento
+> discrecional se sigue aplicando después, sobre el total, sin cambios (§4.66).
 
 **Si hay varios precios especiales vigentes para un producto, gana el más
 reciente por `vigente_desde` y NO se acumulan.** Dos promociones encimadas
@@ -10434,6 +10439,372 @@ solo trabajo)»; y el arnés de develop `verify:pantallas:cobro-sin-esperar-impr
 **7 de 7**, con «(1527 bytes, 2 copia(s) en un solo trabajo)» en su bitácora.
 Todo en macOS.
 
+### 4.66 El precio mayorista por cantidad mínima (spec 002, 2026-09-18)
+
+**Qué se pidió.** Que un producto pueda tener un precio mayorista que se cobra
+desde una cantidad mínima, y que cuando aplican varios precios a la vez se
+cobre el MENOR. El precio de lista participa siempre, como piso: un mayorista
+fijo nunca puede terminar más caro que la lista vigente. Es la segunda
+funcionalidad hecha con Spec-Driven Development: el spec, el plan y las tareas
+están en `spec/features/002-precio-mayorista/`, en un commit anterior al
+código (`a6b7563`).
+
+**Una premisa del pedido, corregida.** El pedido nombra `precio_venta`, y esa
+columna no existe: el precio de lista es `productos.precio_base`.
+
+**Resuelve a medias el punto 3 de §6.2**: el precio mayorista se activa por
+cantidad comprada. Por tipo de cliente sigue abierto: no hay módulo de clientes.
+
+**Está en `develop` y no en el 1.2.0 instalado en la tienda.** Su espejo en la
+nube, la `0039`, **no está aplicado en ningún proyecto** (leído del catálogo el
+2026-09-18 a las 17:58 UTC, ver abajo).
+
+#### La regla, escrita una sola vez
+
+`precioDeLinea` (`src/shared/precio-de-linea.ts`) arma los candidatos —el
+precio especial vigente si lo hay, la lista siempre, y el mayorista si la
+cantidad de ESA línea llega al mínimo— y se queda con el menor.
+
+| Precisión | Qué se decidió |
+|---|---|
+| El umbral | Inclusivo: con mínimo 50 lb, 50.000 lb califica y 49.999 lb no |
+| A qué se aplica | A la línea entera, no solo a lo que pasa del mínimo |
+| En qué unidad | La del producto: libras, kilogramos o unidades |
+| El empate | Especial, lista, mayorista, en ese orden. Un especial vigente se sigue marcando aunque rebaje cero, como antes; el mayorista se marca solo si BAJA el precio |
+| El precio especial | Entra su RESULTADO como un candidato más. Su regla —vigencia, el más reciente, porcentaje o quetzales— sigue en `precioEfectivoDe`, sin tocar |
+| El descuento discrecional | Sin cambios: se aplica sobre el subtotal que resulta. 50 lb a Q5.50 (Q275.00) con un 10 % dan Q247.50 (CA-15) |
+
+**Vive en `shared` porque la usan las dos capas**, con el mismo argumento que
+`@shared/descuento`. El servicio de venta decide lo que se cobra y lo congela
+en `precio_unitario_snap` —**`venta_detalle` no tiene ninguna columna
+nueva**—, y el ticket recalcula en vivo, en `agregarAlTicket` y en
+`fijarCantidad`. Escrita dos veces, tarde o temprano el cliente pagaría un
+precio distinto del que vio.
+
+Las reglas del formulario y del servicio también están una sola vez:
+`revisarPrecioMayorista` (`src/shared/precio-mayorista.ts`), con los textos en
+`MENSAJES_DEL_PRECIO_MAYORISTA`.
+
+**El asiento `venta_registrada`** gana, en cada línea, `origenDelPrecio`
+(`lista`, `especial` o `mayorista`) y la configuración mayorista del producto
+en ese momento. `precioEspecialId` va lleno solo si el especial fijó el precio.
+
+#### El esquema: la 039 local y su espejo 0039
+
+| Regla | SQLite (039) | Postgres (0039) |
+|---|---|---|
+| R1: los dos o ninguno | `productos_mayorista_completo` | el mismo nombre |
+| R2: dos decimales y no negativo | `productos_precio_mayorista_canonico` | `productos_precio_mayorista_no_negativo` |
+| R3: ESTRICTAMENTE menor que la lista | `productos_mayorista_menor_que_lista` | el mismo nombre |
+| R4: tres decimales y mayor que cero | `productos_cantidad_minima_mayorista_canonica` | `productos_cantidad_minima_mayorista_positiva` |
+
+- **R3 compara CENTAVOS ENTEROS en SQLite**:
+  `CAST(replace(precio_mayorista, '.', '') AS INTEGER) < CAST(replace(precio_base, '.', '') AS INTEGER)`.
+  Las columnas son TEXT, y como texto `'10.00' < '9.00'` da verdadero: es la
+  trampa de §4.15. Falsificado (M6b): comparando texto, una lista de Q10.00 con
+  un mayorista de Q9.00 se rechaza.
+- Ninguna de las cuatro puede dar NULL: `checks-con-null.test.ts` pasa sin
+  agregar excepciones.
+- **La última sentencia de la 039 agrega las dos claves, en `null`, a los
+  payloads de productos que esperaban en la cola**, igual que la 031.
+- **La 0039 no toca ninguna función, y la versión de contrato no sube.** La
+  foto `esquema-nube.json`, `CLASES_DE_COLUMNA` y la batería de `verify:nube`
+  ya conocen las dos columnas, así que **la batería destructiva exige la
+  0039**.
+- `errores.ts` traduce las CUATRO por su nombre. Las dos de columna faltaban y
+  se agregaron después (`5ba6ab2`), cuando se notó que el comentario de la 039
+  las prometía. Se corrigió el código, no la migración.
+
+#### DECISIÓN 1, A REVISAR: el CHECK se evalúa en cada escritura
+
+El pedido pedía dos cosas que no se cumplen a la vez: R3 «con CHECK» en la
+base, y un caso de seguridad donde la lista se **baja después** por debajo del
+mayorista. Un CHECK se evalúa en cada escritura de la fila, así que con él ese
+estado **no se puede guardar**. Se construyó la opción A (el CHECK, que es la
+letra del pedido). La consecuencia, medida en la aplicación real, es que bajar
+la lista por debajo del mayorista se rechaza en las tres capas:
+
+```
+lista 5.00: … impedimento="El precio mayorista (Q5.50) tiene que ser menor que el precio de lista (Q5.00). Bajá el precio mayorista o quitalo."; guardar deshabilitado
+window.pos.catalogo.editarProducto(lista 5.00, mayorista 5.50) → {"ok":false,"codigo":"DATO_INVALIDO","mensaje":"El precio mayorista (Q5.50) tiene que ser menor que el precio de lista (Q5.00). Bajá el precio mayorista o quitalo."}
+UPDATE productos SET precio_base = '5.00' (conexión aparte) → rechazada: SQLITE_CONSTRAINT_CHECK CHECK constraint failed: productos_mayorista_menor_que_lista
+```
+
+Por eso **el caso de seguridad se prueba sobre la función compartida** que usan
+la venta y la pantalla (CA-7), y no sobre datos guardados. La opción B —R3 solo
+al guardar el mayorista, con un disparador— está descrita en el plan §11. **Se
+decide antes de aplicar la 0039 en cualquier nube** (punto 54 de §6.2).
+
+#### Los tres escenarios de precedencia y el caso de seguridad
+
+Con el servicio real sobre SQLite real (`precio-mayorista-en-la-venta.test.ts`),
+leyendo `precio_unitario_snap` y el origen que quedó en el asiento:
+
+| Escenario | Configuración | Cantidad | Se cobró |
+|---|---|---|---|
+| Solo mayorista | Maíz: lista Q6.00, mayorista Q5.50 desde 50 lb | 49.999 / 50 / 80 lb | 6.00 lista / 5.50 mayorista / 5.50 mayorista |
+| Solo especial | Maíz sin mayorista, especial del 10 % | 1 / 500 lb | 5.40 especial / 5.40 especial |
+| Los dos, gana el mayorista | Especial del 5 % (Q5.70) y mayorista Q5.50 | 50 / 49.999 lb | 5.50 mayorista / 5.70 especial |
+| Los dos, gana el especial | Especial del 10 % (Q5.40) y mayorista Q5.50 | 60 lb | 5.40 especial |
+| Empate | Especial de Q0.50 menos (Q5.50) y mayorista Q5.50 | 60 lb | 5.50, marca de especial |
+| Por kilogramo | Azúcar: Q9.00, mayorista Q8.20 desde 25.5 kg | 25.499 / 25.500 kg | 9.00 lista / 8.20 mayorista |
+| Por unidad | Huevo: Q1.25, mayorista Q1.10 desde 30 | 29 / 30 | 1.25 lista / 1.10 mayorista |
+| **SEGURIDAD** (sobre `precioDeLinea`) | Mayorista Q5.50, con la lista bajada a Q5.00 | 60 lb | **5.00 lista**, nunca 5.50; con un especial del 10 % sobre la lista nueva, 4.50 especial |
+
+**Lo que la pantalla muestra es lo que se cobra (CA-13).** El `ticket.ts` REAL,
+alimentado con el mismo DTO que manda el proceso principal
+(`productoParaVender`, en `ipc/producto-para-vender.ts`), contra lo que guarda
+el cobro, en 27 casos. El sufijo del nombre es el precio especial: 0 sin
+especial, 1 con 5 % y 2 con 10 %. Para esta prueba `tsconfig.node.json` incluye
+`src/renderer/src/venta/ticket.ts`.
+
+```
+[CA-13]
+Maíz 0 × 49.999: pantalla 6.00 lista · cobro 6.00 lista
+Maíz 0 × 50: pantalla 5.50 mayorista · cobro 5.50 mayorista
+Maíz 0 × 80: pantalla 5.50 mayorista · cobro 5.50 mayorista
+Maíz 1 × 49.999: pantalla 5.70 especial · cobro 5.70 especial
+Maíz 1 × 50: pantalla 5.50 mayorista · cobro 5.50 mayorista
+Maíz 1 × 80: pantalla 5.50 mayorista · cobro 5.50 mayorista
+Maíz 2 × 49.999: pantalla 5.40 especial · cobro 5.40 especial
+Maíz 2 × 50: pantalla 5.40 especial · cobro 5.40 especial
+Maíz 2 × 80: pantalla 5.40 especial · cobro 5.40 especial
+Azúcar 0 × 25.499: pantalla 9.00 lista · cobro 9.00 lista
+Azúcar 0 × 25.5: pantalla 8.20 mayorista · cobro 8.20 mayorista
+Azúcar 0 × 40: pantalla 8.20 mayorista · cobro 8.20 mayorista
+Azúcar 1 × 25.499: pantalla 8.55 especial · cobro 8.55 especial
+Azúcar 1 × 25.5: pantalla 8.20 mayorista · cobro 8.20 mayorista
+Azúcar 1 × 40: pantalla 8.20 mayorista · cobro 8.20 mayorista
+Azúcar 2 × 25.499: pantalla 8.10 especial · cobro 8.10 especial
+Azúcar 2 × 25.5: pantalla 8.10 especial · cobro 8.10 especial
+Azúcar 2 × 40: pantalla 8.10 especial · cobro 8.10 especial
+Huevo 0 × 29: pantalla 1.25 lista · cobro 1.25 lista
+Huevo 0 × 30: pantalla 1.10 mayorista · cobro 1.10 mayorista
+Huevo 0 × 45: pantalla 1.10 mayorista · cobro 1.10 mayorista
+Huevo 1 × 29: pantalla 1.19 especial · cobro 1.19 especial
+Huevo 1 × 30: pantalla 1.10 mayorista · cobro 1.10 mayorista
+Huevo 1 × 45: pantalla 1.10 mayorista · cobro 1.10 mayorista
+Huevo 2 × 29: pantalla 1.13 especial · cobro 1.13 especial
+Huevo 2 × 30: pantalla 1.10 mayorista · cobro 1.10 mayorista
+Huevo 2 × 45: pantalla 1.10 mayorista · cobro 1.10 mayorista
+```
+
+**El margen del reporte (CA-16) no necesitó ningún cambio**, y se comprobó:
+con un costo de Q4.00, 50 lb vendidas a Q5.50 dan un margen de **Q75.00** (a
+precio de lista habría dado Q100.00), y un caso mixto da Q95.00
+(`reportes.test.ts`).
+
+#### Falsificaciones
+
+**El piso de seguridad (CA-8).** Quitando la lista de los candidatos
+(`precio-de-linea.ts`, sha256 `e6b2a85ac6e21bb0` → `819e560d13d1ee22`, y
+restaurado a `e6b2a85ac6e21bb0`), caen 14 de 35 pruebas. Las dos del caso de
+seguridad:
+
+```
+× … CA-7 — EL CASO DE SEGURIDAD … > con 60 lb se cobra la LISTA (Q5.00), nunca el mayorista (Q5.50)
+AssertionError: expected '5.50 mayorista' to be '5.00 lista' // Object.is equality
+× … CA-7 — EL CASO DE SEGURIDAD … > el precio cobrado nunca pasa del de lista, en ninguna combinación de la grilla
+Error: precioDeLinea: no hay ningún candidato de precio.
+```
+
+La segunda cae porque, sin la lista, una línea sin especial y sin un mayorista
+que califique se queda sin ningún candidato.
+
+Las demás, una por vez, con el archivo restaurado y su sha256 comparado:
+
+| # | Mutación | Qué cayó |
+|---|---|---|
+| M2 | Umbral exclusivo | 17 de 77. **La de acoplamiento CA-13 NO cae**: las dos capas usan la misma función y cambian juntas. La atrapan las pruebas que escriben el borde |
+| M3 | El mayorista ignora la cantidad | 10 de 35 |
+| M4 | El teclado no recalcula (`fijarCantidad`) | 5 de 101, entre ellas CA-13 |
+| M5 | El servicio ignora el mayorista | 10 de 57, entre ellas CA-13 y las dos del margen |
+| M6 | Sin el CHECK de R3 en la 039 | 7 de 91. Las del servicio no caen: validan antes |
+| M6b | R3 compara texto | 2 de 19 |
+| M7 | Desmarcar la casilla no borra los campos | 1 de 25 |
+| M8 | La 039 no reescribe la cola | 1 de 19 |
+| M9 | La marca dice «especial» | 1 de 45 |
+| M10 | R1 escrita con la forma que deja pasar NULL | 3 de 32, entre ellas `checks-con-null` |
+| M11 | `errores.ts` sin la traducción de R2 | 1 de 20: `Received: "Los datos de la operación no cumplen una regla del sistema."` |
+| M12 | `errores.ts` sin la traducción de R4 | 1 de 20, el mismo mensaje genérico |
+
+> **Un error mío en la falsificación, dicho en voz alta.** La primera vuelta de
+> M11 restauró `errores.ts` con `git checkout`, y el archivo tenía las dos
+> reglas nuevas SIN commitear: el checkout se las llevó. Lo delató la
+> comparación del sha256 («igual: NO»). Se volvió a aplicar el cambio —dio el
+> mismo sha256 que la primera vez, `07106caf97da114c`— y M11 y M12 se
+> repitieron restaurando desde una copia.
+
+#### En la aplicación real: `npm run verify:pantallas:mayorista`, 28 de 28
+
+macOS, 1024×768 exactos. Arma el producto con el formulario y el teclado en
+pantalla, prueba las reglas mientras se escribe, y vende cruzando el umbral en
+vivo. La subida con el teclado empieza desde una línea NUEVA a precio de lista:
+si empezara desde la bajada anterior, un teclado que no recalculara la pasaría
+por casualidad (se vio falsificando). Salida cruda, recortada:
+
+```
+formulario nuevo: casilla=desmarcada; campos=0; precio=null; cantidad=null; impedimento="Falta el nombre del producto."; guardar deshabilitado
+al marcar la casilla: casilla=marcada; campos=2; precio=""; cantidad=""; impedimento="Falta el precio mayorista."; guardar deshabilitado
+teclados: precio mayorista=decimal (0 teclas de letra); cantidad mínima (por peso)=decimal (tecla del punto: 1)
+mayorista 6.00 (igual a la lista) y cantidad 50: … impedimento="El precio mayorista (Q6.00) tiene que ser menor que el precio de lista (Q6.00). Bajá el precio mayorista o quitalo."; guardar deshabilitado
+al DESMARCAR: casilla=desmarcada; campos=0; precio=null; cantidad=null; impedimento=null; guardar habilitado
+al volver a MARCAR: casilla=marcada; campos=2; precio=""; cantidad=""; impedimento="Falta el precio mayorista."; guardar deshabilitado
+por unidad: etiquetas ["Precio mayorista en quetzales (por unidad)","Cantidad mínima para el precio mayorista (en unidades)"]; teclado de la cantidad mínima=entero (tecla del punto: 0)
+fila de productos: {…,"tipo_medida":"peso","unidad_peso":"lb","cantidad_predefinida_icono":"25.000","precio_base":"6.00","precio_mayorista":"5.50","cantidad_minima_mayorista":"50.000","inventario_disponible":"200.000"}
+línea del ticket: «25 lb · Q6.00 c/u»; subtotal Q150.00; marca (ninguna); marcas de especial 0; total del ticket Q150.00
+línea del ticket: «50 lb · Q5.50 c/u»; subtotal Q275.00; marca «Precio mayorista · desde 50 lb · antes Q6.00»; marcas de especial 0; total del ticket Q275.00
+teclado de la venta: se tecleó "49.999", el teclado muestra "49.999lb"
+línea del ticket: «49.999 lb · Q6.00 c/u»; subtotal Q299.99; marca (ninguna); marcas de especial 0; total del ticket Q299.99
+línea del ticket: «25 lb · Q6.00 c/u»; subtotal Q150.00; marca (ninguna); marcas de especial 0; total del ticket Q150.00
+teclado de la venta: se tecleó "60", el teclado muestra "60lb"
+línea del ticket: «60 lb · Q5.50 c/u»; subtotal Q330.00; marca «Precio mayorista · desde 50 lb · antes Q6.00»; marcas de especial 0; total del ticket Q330.00
+antes de cobrar: total del ticket Q330.00; total en el diálogo de cobro Q330.00
+«Venta registrada»: total cobrado en pantalla Q330.00
+venta_detalle: [{"producto_nombre_snap":"Maíz blanco","cantidad":"60.000","precio_unitario_snap":"5.50","subtotal_exacto":"330","subtotal_impreso":"330.00"}]
+asiento venta_registrada, línea 1: {"cantidad":"60.000","precioBase":"6.00","precioUnitario":"5.50","origenDelPrecio":"mayorista","precioEspecialId":null,"mayorista":{"precio":"5.50","cantidadMinima":"50.000"}}
+recibo:   60 lb x 5.50                            330.00
+la fila después de guardar sin mayorista: {"precio_base":"6.00","precio_mayorista":null,"cantidad_minima_mayorista":null}
+línea del ticket: «50 lb · Q6.00 c/u»; subtotal Q300.00; marca (ninguna); marcas de especial 0; total del ticket Q300.00
+28 comprobaciones, 0 fallidas.
+```
+
+**Falsificado en la aplicación**, con el archivo restaurado y su sha256
+comparado (`ticket.ts`, `a0fb6d301140138e` antes y después):
+
+| Mutación | Qué cayó |
+|---|---|
+| El teclado no recalcula | 3 de 28: la bajada a 49.999 (se quedó en «Q5.50 c/u», Q274.99), la subida a 60 (se quedó en «Q6.00 c/u», Q360.00), y **«se cobró lo que la pantalla mostraba»**: `ticket Q360.00 = diálogo Q360.00 = «Venta registrada» Q330.00` |
+| El ícono no recalcula | 1 de 28: el segundo toque, 50 lb, se quedó en «Q6.00 c/u», Q300.00 |
+
+La primera versión del arnés tenía una comprobación que prometía de más: «la
+pantalla cobró lo que mostraba» comparaba dos totales que salen los dos del
+proceso principal, y con el teclado roto pasaba igual. Ahora compara el total
+del ticket y el del diálogo, que calcula la pantalla, con el cobrado.
+
+#### La 039 sobre una COPIA de la base de trabajo real
+
+Por el mismo camino que la aplicación (`abrirBaseDeDatos` y
+`cerrarBaseDeDatosOrdenadamente`), con una sonda temporal que no quedó en el
+repositorio. El original no se abrió: se copió el archivo. No había `-wal` ni
+`-shm` al lado.
+
+```
+[copia] sha256 del ORIGINAL antes: "3ed72e5f5758b64e"
+[copia] ANTES: últimas migraciones: [{"orden":38,"nombre":"038_anulacion_solo_presencial","aplicada_en":"2026-09-17T18:27:09.993Z"},{"orden":37,"nombre":"037_quitar_pin_remoto_hash","aplicada_en":"2026-09-17T16:39:42.705Z"}]
+[copia] ANTES: filas: {"usuarios":2,"productos":6,"ventas":4,"venta_detalle":10,"auditoria_log":55,"sync_cola":63}
+[copia] ANTES: payloads de productos PENDIENTES en la cola, y cuántos traen la clave precio_mayorista: {"pendientes":8,"con_la_clave":0}
+[copia] migraciones al abrir: "aplicadasAhora":["039_productos_precio_mayorista"], "totalConocidas":29, "ultimaAplicada":"039_productos_precio_mayorista"
+[copia] integrity_check: [{"integrity_check":"ok"}]
+[copia] foreign_key_check: []
+[copia] DESPUÉS: filas: {"usuarios":2,"productos":6,"ventas":4,"venta_detalle":10,"auditoria_log":55,"sync_cola":63}
+[copia] columnas nuevas de productos: [{"name":"precio_mayorista","type":"TEXT","notnull":0},{"name":"cantidad_minima_mayorista","type":"TEXT","notnull":0}]
+[copia] los productos: los 6 con "precio_mayorista":null y "cantidad_minima_mayorista":null
+[copia] DESPUÉS: payloads PENDIENTES de productos, y cuántos traen las dos claves en null: {"pendientes":8,"precio_en_null":8,"cantidad_en_null":8}
+[copia] restricciones con nombre en el esquema guardado de productos: ["productos_precio_mayorista_canonico=está","productos_cantidad_minima_mayorista_canonica=está","productos_mayorista_completo=está","productos_mayorista_menor_que_lista=está"]
+[copia] UPDATE con el mayorista IGUAL a la lista, sobre la copia: "SQLITE_CONSTRAINT_CHECK CHECK constraint failed: productos_mayorista_menor_que_lista"
+[copia] cierre ordenado: {"cerrada":true,"puntoDeControlAplicado":true,"mensaje":"Base de datos consolidada y cerrada correctamente."}
+[copia] SEGUNDA apertura (como el próximo arranque): "aplicadasAhora":[], "totalConocidas":29
+[copia] integrity_check de la segunda apertura: [{"integrity_check":"ok"}]
+[copia] sha256 del ORIGINAL después: "3ed72e5f5758b64e"
+```
+
+**La base de trabajo real NO se migró**: sigue en la 038. La abrirá la primera
+versión con la 039 que se arranque sobre esa carpeta.
+
+#### La 0039 ensayada en un Postgres 17 LOCAL (no es Supabase)
+
+Un Postgres 17.10 de Homebrew, con lo mínimo de Supabase simulado y las
+migraciones de `supabase/migrations/` salvo la 0026 (Storage). El contrato que
+declara, comparado con la foto del repositorio:
+
+```
+== contrato de la base «sin_0039» contra supabase/esquema-nube.json
+contrato v1: 14 tablas, 17 funciones; productos con 16 columnas
+2 diferencia(s):
+  productos.precio_mayorista: foto {"nombre":"precio_mayorista","nulable":true,"tipo":"numeric(14,2)"} · Postgres local (no está)
+  productos.cantidad_minima_mayorista: foto {"nombre":"cantidad_minima_mayorista","nulable":true,"tipo":"numeric(14,3)"} · Postgres local (no está)
+   columnas en public: 137
+== contrato de la base «ensayo» contra supabase/esquema-nube.json
+contrato v1: 14 tablas, 17 funciones; productos con 18 columnas
+SIN DIFERENCIAS con la foto
+JSON canónico idéntico a la foto: sí
+   columnas en public: 139
+```
+
+Las cuatro restricciones, con `convalidated=true`, y las reglas ejercitadas
+dentro de una transacción que se revierte:
+
+```
+NOTICE:  producto sin mayorista (los dos NULL) -> aceptado
+NOTICE:  mayorista 5.50 desde 50 con lista 6.00 -> aceptado
+NOTICE:  mayorista IGUAL a la lista -> 23514 new row for relation "productos" violates check constraint "productos_mayorista_menor_que_lista"
+NOTICE:  bajar la LISTA a 5.00 con mayorista 5.50 -> 23514 new row for relation "productos" violates check constraint "productos_mayorista_menor_que_lista"
+NOTICE:  precio sin cantidad -> 23514 new row for relation "productos" violates check constraint "productos_mayorista_completo"
+NOTICE:  cantidad mínima 0 -> 23514 new row for relation "productos" violates check constraint "productos_cantidad_minima_mayorista_positiva"
+NOTICE:  precio mayorista negativo -> 23514 new row for relation "productos" violates check constraint "productos_precio_mayorista_no_negativo"
+NOTICE:  lista 10.00 y mayorista 9.00 (la trampa del texto en SQLite) -> aceptado
+NOTICE:  fin del ensayo: se revierte todo
+```
+
+#### La 039 y la 0039 van JUNTAS, y está medido
+
+La terminal real —servicios, bandeja de salida, `TrabajadorDeSincronizacion` y
+`SupabaseSyncProvider`— subiendo a ese Postgres local por un puente que pasa
+cada llamada a `psql` con los claims de la terminal. Sonda temporal, sin
+commitear. Una venta de 60 lb de Maíz (a precio mayorista) y 2 de Frijol:
+
+```
+== con la 0039 (base limpia, 28 migraciones)
+[puente] sincronizar_usuario -> HTTP 200
+[puente] sincronizar_lote_simple -> HTTP 200
+[puente] sincronizar_lote_simple -> HTTP 200
+[puente] sincronizar_lote_simple -> HTTP 200
+[puente] sincronizar_apertura_de_caja -> HTTP 200
+[puente] sincronizar_venta -> HTTP 200
+[sonda] ciclo: {"motivo":"cola_vaciada","lotesSubidos":6,"filasSubidas":16,"loteEnEspera":null,"error":null,"proximoIntentoEn":null,"duracionMs":164}
+[postgres] productos: [{"nombre" : "Frijol", "precio_base" : 9.00, "precio_mayorista" : null, "cantidad_minima_mayorista" : null}, {"nombre" : "Maíz", "precio_base" : 6.00, "precio_mayorista" : 5.50, "cantidad_minima_mayorista" : 50.000}]
+[postgres] venta_detalle: [{"producto" : "Maíz", "cantidad" : 60.000, "precio_unitario_snap" : 5.50, "subtotal_impreso" : 330.00}, {"producto" : "Frijol", "cantidad" : 2.000, "precio_unitario_snap" : 9.00, "subtotal_impreso" : 18.00}]
+[postgres] origen en el asiento: ["mayorista", "lista"]
+
+== sin la 0039 (base limpia, 27 migraciones, 137 columnas como los dos proyectos)
+[puente] sincronizar_usuario -> HTTP 200
+[puente] sincronizar_lote_simple -> HTTP 200
+[puente] sincronizar_lote_simple -> HTTP 400 ERROR:  CONTRATO: el payload de public.productos trae columnas que la tabla no tiene: cantidad_minima_mayorista, precio_mayorista
+[sonda] ciclo: {"motivo":"cola_detenida","lotesSubidos":2,"filasSubidas":4,…}
+[sonda] pendientes en la cola local: {"n":12}
+```
+
+O sea: **una terminal con la 039 contra una nube sin la 0039 detiene su cola
+en el primer lote de productos**, y por el mismo mecanismo (§4.39) una sin la
+039 contra una nube con la 0039 también. La 0039 se aplica en el mismo momento
+en que se instala la versión que trae la 039 (punto 57 de §6.2).
+
+**Estado de las dos nubes, leído con consultas de solo lectura el 2026-09-18 a
+las 17:58 UTC:** `list_migrations` da 29 migraciones en cada una, la última
+`0038_anulacion_solo_presencial`; 137 columnas en `public`, la misma huella de
+columnas en las dos (`9064d3d85d0e37ea473c94f00f4d4ff5`, calculada con una
+fórmula distinta de la de §4.4, así que no se compara con aquel número);
+**ninguna columna mayorista**; y 0 productos, 0 ventas, 0 usuarios y 0 asientos
+en las dos. De paso se encontró que el README de migraciones seguía diciendo
+que la 0033, la 0035 y la 0038 no estaban en el real: se corrigió (§4.4 ya lo
+decía bien).
+
+`npm run verify`: 123 archivos, **2903 pruebas**, 0 errores de lint (los 4
+avisos de siempre).
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **Nada contra Supabase**: la 0039 no está aplicada en ningún proyecto. Lo
+  medido es contra un Postgres 17 local.
+- **Un precio especial en la aplicación real**: no hay pantalla para crearlo
+  (punto 18 de §6.2). Los escenarios con especial están probados en Vitest.
+- **Una observación de la pantalla, anterior a esta spec**: a 1024×768, el
+  renglón de detalle de la línea del ticket («50 lb · Q5.50 c/u») se parte en
+  cuatro renglones, porque la columna del nombre es angosta. Se ve en las
+  capturas del arnés. La spec 002 no tocó ese renglón. Punto 58 de §6.2.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -10775,6 +11146,13 @@ Todo en macOS.
 | **Toda funcionalidad nueva sigue Spec-Driven Development: `spec/features/NNN-<slug>/spec.md` (qué hace y criterios de aceptación), `plan.md` (cómo, decisiones y riesgos) y `tasks.md`, y recién después código.** | Documentar después de construir, como hasta la spec 001 (los documentos de diseño de sincronización y anulación se escribían en `docs/`) | Preferencia de Julio (2026-09-18). Verifica comparando esperado contra real, y un spec con criterios de aceptación escritos antes del código le da la lista contra la que comparar. **La premisa de que el proceso «ya estaba establecido» no se sostuvo**: no existía ninguna carpeta `spec/`, y la primera es la 001. | 2026-09-18 (spec 001) |
 | **La copia del cliente tampoco dice quién autorizó una ANULACIÓN; la marca, su fecha y su motivo siguen.** Tercer dato de la lista cerrada, campo `autorizacionDeLaAnulacion`. **REVIERTE** la parte de la fila de las dos copias que dejaba la marca de anulada entera en la copia del cliente. | Dejar la marca entera, como el primer día; quitar la marca completa de la copia del cliente | Decisión de Julio del 2026-09-18 (punto 52): es el mismo tipo de dato que el autorizante del descuento. Quitar la marca entera no: el cliente tiene que poder ver que la venta se anuló, cuándo y por qué. §4.65 | 2026-09-18 (spec 001) |
 | **La copia de la tienda sale SIEMPRE, sin condición, y no es configurable por ahora.** Confirma la fila «A REVISAR — por ahora son SIEMPRE dos copias». | Solo cuando hay algo que controlar (descuento autorizado o tarjeta); configurable por negocio | Decisión de Julio del 2026-09-18 (punto 53). La recomendación para cuando otro cliente de Vixo POS lo pida sigue en el plan de la spec 001, §8. | 2026-09-18 (spec 001) |
+| **El precio de una línea es el MENOR entre la lista vigente, el precio especial vigente y el precio mayorista si la cantidad de ESA línea llega al mínimo. La lista participa siempre, como piso. La regla vive UNA vez, en `src/shared/precio-de-linea.ts`, y la usan el servicio de venta y el ticket.** Se congela en `precio_unitario_snap`, sin columna nueva en `venta_detalle`. | Que el mayorista reemplace al especial; calcular solo en el servicio y que la pantalla muestre la lista hasta cobrar; aplicar el mayorista solo a lo que pasa del mínimo | Decisión de negocio de Julio: el menor de los que aplican, con la lista como piso para que un mayorista fijo nunca quede más caro que una lista bajada después. Una sola función en `shared` por el mismo motivo que `@shared/descuento`: dos copias terminan cobrando un precio distinto del que se vio. Una prueba compara el `ticket.ts` real contra el cobro en 27 casos. Umbral inclusivo y sobre la línea entera: «desde 50 lb» incluye las 50. §4.66. | Spec 002 — 2026-09-18 |
+| **A REVISAR — DECISIÓN 1: R3 (mayorista estrictamente menor que la lista) es un CHECK de la base, `productos_mayorista_menor_que_lista`, que se evalúa en CADA escritura de la fila. Bajar la lista por debajo de un mayorista se rechaza.** | B: un disparador que exija R3 solo al guardar el mayorista, dejando que la lista baje y que el piso de seguridad cobre la lista | El pedido dice «validalo en la base con CHECK» y también pide un caso de seguridad con la lista bajada después: con un CHECK ese estado no se puede guardar. Se construyó A, que es la letra del pedido y la más estricta. El caso de seguridad se prueba sobre la función compartida, con su falsificación. B está en el plan de la spec, §11. **Se decide antes de aplicar la 0039 en cualquier nube.** §4.66. | Spec 002 — 2026-09-18 |
+| **R3 en SQLite compara CENTAVOS ENTEROS, `CAST(replace(x, '.', '') AS INTEGER)`, nunca texto ni REAL.** | Comparar las columnas TEXT directamente; `CAST(… AS REAL)` | Como texto, `'10.00' < '9.00'` es verdadero (la trampa de §4.15), y REAL mete punto flotante en una regla de dinero. Con la forma canónica de dos decimales garantizada por R2 y por el CHECK de `precio_base`, quitar el punto da los centavos exactos. Falsificado: comparando texto, una lista de Q10.00 con un mayorista de Q9.00 se rechaza. §4.66. | Spec 002 — 2026-09-18 |
+| **A REVISAR — el empate se resuelve especial, lista, mayorista, en ese orden.** | Marcar el mayorista ante un empate con el especial | El precio cobrado es el mismo; el empate solo decide qué se muestra. Así un especial vigente se sigue marcando aunque rebaje cero, como antes de la spec, y el mayorista se marca solo cuando baja el precio. Pregunta 2 de la spec. §4.66. | Spec 002 — 2026-09-18 |
+| **A REVISAR — el asiento `venta_registrada` dice, por línea, el origen del precio (`lista`, `especial` o `mayorista`) y la configuración mayorista del producto en ese momento.** No lo pidió el pedido. | No agregarlo; guardarlo en una columna de `venta_detalle` | Un auditor que vea un precio distinto del de lista no tiene que reconstruir por qué. En el asiento cuesta cero en el esquema; una columna exigiría migración en las dos nubes. Pregunta 4 de la spec. §4.66. | Spec 002 — 2026-09-18 |
+| **La 039 local y la 0039 de la nube van juntas. La 0039 NO está aplicada en ningún proyecto; la versión de contrato no sube; la foto, `CLASES_DE_COLUMNA` y la batería de `verify:nube` ya conocen las dos columnas, así que la batería destructiva exige la 0039.** | Aplicar la 0039 temprano, como la 0027 | La 0027 se aplicó temprano porque era puramente aditiva para las terminales viejas. La 0039 no lo es: las funciones de la nube exigen el payload exacto, así que una terminal sin la 039 contra una nube con la 0039 detiene su cola, y al revés también (medido en un Postgres 17 local). Además espera la decisión 1 y la aprobación de Julio, proyecto por proyecto. §4.66. | Spec 002 — 2026-09-18 |
+| **`tsconfig.node.json` incluye `src/renderer/src/venta/ticket.ts`, y el DTO de la venta sale de un módulo propio, `ipc/producto-para-vender.ts`.** | Copiar la lógica del ticket en la prueba; probar solo cada capa por separado | Para que una prueba alimente el ticket REAL con el mismo DTO que manda el proceso principal y compare su precio con el que guarda el cobro (CA-13). Una copia en la prueba probaría la copia. §4.66. | Spec 002 — 2026-09-18 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -10799,7 +11177,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 |---|---|---|---|
 | 1 | ¿Qué unidades de medida usa Jimmy y con qué factores de conversión (libra, arroba, quintal, kilogramo)? | Define la lógica de conversión de `src/shared` y cómo se captura el peso en la caja. | Abierto |
 | 2 | ¿La tienda emite factura fiscal (FEL/SAT) o solo recibo y proforma internos? | Cambia por completo el módulo de comprobantes y las obligaciones legales. **Y de esto depende una decisión ya tomada:** que una reimpresión muestre los datos VIGENTES del negocio en vez de un snapshot por venta (§4.14) se sostiene porque el papel dice de frente que es proforma y no vale como factura fiscal. Con facturación fiscal real, el emisor de un comprobante viejo pasa a ser un dato que no puede cambiar retroactivamente, y hay que revisar esa decisión. | Abierto |
-| 3 | ¿El precio de mayoreo se activa por cantidad comprada, por tipo de cliente, o ambos? | Define el modelo de precios del catálogo. | Abierto |
+| 3 | ¿El precio de mayoreo se activa por cantidad comprada, por tipo de cliente, o ambos? | Define el modelo de precios del catálogo. | ~~Abierto~~ **Por cantidad comprada: construido** (spec 002, 2026-09-18, en `develop`; §4.66). **Por tipo de cliente sigue abierto**: no hay módulo de clientes |
 | 4 | ¿Hay ventas al crédito / cuentas por cobrar? | Agregaría un módulo completo de clientes y saldos. | Abierto |
 | 5 | ~~¿El PIN de autorización es por usuario administrador o uno solo para la tienda?~~ | — | **RESUELTO (Prompt 10): por usuario.** Cada usuario tiene su PIN con hash scrypt y sal propia; la auditoría registra el `usuario_id` real de quien autorizó. `POS_PIN_ADMINISTRADOR` ya no existe. Ver la sección 4.7. |
 | 6 | ¿Qué roles exactos existen además de "venta" y "administrativo"? **Y quién tiene en la práctica el rol `administrativo`: solo el dueño, o también un encargado de confianza?** | Define la matriz de permisos (RBAC). Desde el Prompt 21 se pueden crear usuarios de los dos roles desde la pantalla, así que la pregunta dejó de ser teórica: el día que Jimmy le dé el rol administrativo a alguien más, hay que revisar el tope de descuento. **Y de esto depende el tope de descuento del rol administrativo**, que hoy se siembra en 100 % asumiendo que lo tiene el dueño (§4.13): si lo tuviera un empleado, ese 100 % le daría la capacidad de regalar mercadería sin que nadie más se entere, y el número habría que revisarlo. | Abierto |
@@ -10849,6 +11227,11 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 51 | **Cada ticket sigue tardando en SALIR lo mismo que antes**: solo dejó de bloquear la venta. | El script de `cola-de-windows.ts` compila el puente a `winspool` con `Add-Type` en cada ticket y espera 1,5 s fijos antes de leer el estado del trabajo. Achicarlo toca el script de impresión y cómo se clasifica un envío (§4.43), así que es una decisión aparte. | Abierto — decisión de Julio |
 | 52 | ~~**¿La copia del CLIENTE debe ocultar también quién autorizó una ANULACIÓN?**~~ | Desde la spec 001 (§4.65), la copia del cliente no dice quién autorizó un descuento, pero la marca de anulada sale entera en las dos copias, con «Autorizó: Jimmy». Es el mismo tipo de dato. No se ocultó porque el pedido dice que se oculta «específicamente» el autorizante del descuento y la boleta. `docs/ANULACION-DE-VENTA.md` §5.2 dice que el papel marcado se reimprime «por si el cliente quiere constancia», o sea que el cliente lo recibe. Si se decide ocultarlo, es una fila más en `QUE_LLEVA_CADA_DESTINO` y cambia la prueba de `copias-del-recibo.test.ts` que hoy lo exige. | **RESUELTO EL 2026-09-18, decisión de Julio: SÍ se oculta**, con el mismo criterio que el autorizante del descuento. La marca de anulada, su fecha y su motivo siguen en las dos copias. Tabla `QUE_LLEVA_CADA_DESTINO` (campo `autorizacionDeLaAnulacion`), spec 001 CA-19, §4.65 |
 | 53 | ~~**¿La copia de la TIENDA sale en todas las ventas, o solo cuando hay algo que controlar (un descuento autorizado o una tarjeta)?**~~ | Desde la spec 001 cada venta gasta el doble de rollo. En una venta en efectivo sin descuento autorizado, las dos copias dicen lo mismo salvo el encabezado (medido en la app real, §4.65). Se hizo lo pedido: siempre dos. La lista vive en una sola constante, así que cambiarlo es acotado. Si además se quiere que cada negocio lo elija, la recomendación del plan de la spec 001 (§8) es `configuracion_negocio`, con su migración en las dos nubes. | **RESUELTO EL 2026-09-18, decisión de Julio: SIEMPRE, sin condición, y no configurable por ahora.** Sin cambio de código: ya era así. Spec 001 CA-20, §4.65 |
+| 54 | **DECISIÓN 1 de la spec 002: ¿bajar el precio de lista por debajo de un precio mayorista se RECHAZA (A, lo construido) o se ACEPTA (B)?** | Con A, R3 es un CHECK que se evalúa en cada escritura: el día que Jimmy quiera bajar la lista de un producto con mayorista, el formulario le va a pedir que baje o quite el mayorista antes de guardar (medido en la aplicación real, §4.66). Con B, la lista baja y el mayorista queda sin efecto, porque la regla de precio cobra la lista como piso; exige un disparador en lugar del CHECK. Las dos migraciones todavía no están aplicadas en ninguna base que importe, así que cambiar a B es acotado (plan de la spec, §11). | Abierto — **bloquea aplicar la 0039** |
+| 55 | **¿Se permite un precio mayorista de Q0.00?** | Hoy sí, como el precio de lista (R2 solo exige que no sea negativo). Prohibirlo es una línea en la regla compartida y en los dos CHECK. Pregunta 3 de la spec 002. | Abierto — de bajo riesgo |
+| 56 | **Cambiar la unidad de un producto cambia lo que significa su cantidad mínima mayorista**: 50 lb pasan a ser 50 kg. | Hoy pasa lo mismo con el precio de lista, que también es por unidad, y no se agregó ningún aviso. Pregunta 5 de la spec 002. | Abierto |
+| 57 | **La 0039 se aplica en el MISMO momento en que se instala la versión que trae la 039.** | Medido en un Postgres 17 local (§4.66): una terminal con la 039 contra una nube sin la 0039 detiene su cola en el primer lote de productos, con `CONTRATO: el payload de public.productos trae columnas que la tabla no tiene`, y al revés también. Hoy ninguna de las dos nubes la tiene (leído el 2026-09-18) y el 1.2.0 de la tienda no trae la 039. Se aplica con la aprobación de Julio, proyecto por proyecto, y después de la decisión del punto 54. | Abierto — se hace el día que se publique la versión |
+| 58 | **A 1024×768, el renglón de detalle de una línea del ticket («50 lb · Q5.50 c/u») se parte en cuatro renglones.** | Visto en las capturas de `verify:pantallas:mayorista`. La columna del nombre es angosta al lado del subtotal. Es anterior a la spec 002, que no tocó ese renglón; se lee, pero se ve mal en la pantalla de la tienda. | Abierto — cosmético |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -11007,6 +11390,13 @@ negocio:
   `npm run diagnostico:credencial` y `npm run diagnostico:imagen`, guiones de
   desarrollo. La `0029` está en el real desde el 2026-09-14 (§4.4): los dos
   proyectos tienen las mismas 24 migraciones y las mismas funciones.
+- **Sí existe, en `develop` y no en el 1.2.0 instalado, el precio mayorista
+  por cantidad mínima** (§4.66): la casilla del formulario de producto, el
+  recálculo en vivo del ticket y el menor de lista, especial y mayorista al
+  cobrar. **Su espejo en la nube, la 0039, no está aplicado en ningún
+  proyecto**, y hasta que se aplique esa versión no sincroniza (punto 57 de
+  §6.2). **No existen** el precio por tipo de cliente ni varios umbrales por
+  producto.
 - **`precios_especiales` se puede CONSUMIR pero no CREAR.** La venta lee los
   precios especiales vigentes y los aplica (§4.13), pero no hay servicio, ni
   canal IPC, ni pantalla que cree uno: la tabla se llena solo desde las pruebas.
@@ -11071,6 +11461,11 @@ npm run verify:pantallas:copias   # la app real con la impresora SIMULADA, a 102
                          # las decodifica de los bytes, las muestra enteras y las compara renglón por renglón
                          # con la spec; «Ver», el PDF del disco, reimprimir tocando el botón, una venta en
                          # efectivo y una anulación que no imprime (§4.65).
+npm run verify:pantallas:mayorista  # la app real a 1024×768: la casilla «¿Aplica precio mayorista?» y sus dos
+                         # campos con el teclado en pantalla, las reglas mientras se escribe, bajar la lista
+                         # por debajo del mayorista rechazado en el formulario, el canal y la base, y una
+                         # venta que cruza el umbral en vivo con el ícono y con el teclado; se cobra lo que
+                         # mostraba la pantalla y la base guarda 5.50 en precio_unitario_snap (§4.66).
 npm run verify:pantallas:recibos  # la app real: el filtro por método de pago, los totales del conjunto
                          # filtrado con decimales feos (1.10+2.20+4.40 y 3.30+6.60+2.20), el voucher con
                          # «Activo», una venta con tarjeta anulada por la interfaz que pasa a «Anulado el
@@ -11163,6 +11558,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
     migrator.ts      aplica las migraciones y verifica sus checksums
   ipc/          manejadores IPC, con validación Zod de cada payload
     respuesta.ts   envoltorio único de respuesta; todo manejador pasa por aquí
+    producto-para-vender.ts  el DTO de un producto en la venta; lo usa también la prueba de acoplamiento (§4.66)
   preload/      único puente hacia el renderer (expone window.pos)
   domain/       módulos de dominio
     usuarios/   autenticación, bloqueo por intentos, sesión, permisos y gestión de usuarios
@@ -11190,6 +11586,8 @@ src/shared/     código compartido main <-> renderer
   pin.ts        reglas de formato del PIN (sí va al renderer)
   money.ts      aritmética exacta con Decimal.js
   descuento.ts  cálculo del descuento discrecional (lo usan las DOS capas)
+  precio-de-linea.ts  el precio de una línea: el menor de lista, especial y mayorista (las DOS capas, §4.66)
+  precio-mayorista.ts  las reglas R1 a R4 del precio mayorista y sus textos: UNA sola copia (§4.66)
   estado-de-sincronizacion.ts  los estados de la barra de nube, su color y su texto: UNA sola copia (§4.51)
   nombres-de-tabla.ts  el nombre legible de cada tabla: UNA sola copia, y una prueba lo exige (§4.57)
   contrato-de-sincronizacion.ts  la versión de contrato y las listas cerradas de la 0023
@@ -11207,6 +11605,7 @@ supabase/       espejo del esquema en Postgres (migraciones para la nube)
 spec/features/  Spec-Driven Development: una carpeta por funcionalidad, NNN-<slug>/, con spec.md
                 (qué hace y criterios de aceptación), plan.md (cómo, decisiones, riesgos) y tasks.md
   001-recibo-copia-tienda-cliente/  las dos copias impresas del recibo (§4.65)
+  002-precio-mayorista/  el precio mayorista por cantidad mínima (§4.66)
 docs/           arquitectura, guía de desarrollo, núcleo vs. negocio, integraciones
   SINCRONIZACION.md  diseño de la sincronización. APROBADO; fases 1.a, 1.b, 2.a y 2.b construidas
   ANULACION-DE-VENTA.md  diseño de la anulación de una venta. APROBADO; núcleo local (§4.45), sincronización y restauración del lado de la terminal (§4.53)

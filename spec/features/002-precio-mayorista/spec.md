@@ -4,6 +4,10 @@
 > [`plan.md`](plan.md) (cómo se construye) y [`tasks.md`](tasks.md) (la lista de
 > tareas).
 >
+> **Construido en `develop` el mismo día**, con la evidencia en CLAUDE.md §4.66.
+> Queda abierto: **la decisión 1 (§4.3)** y **la 0039, escrita y sin aplicar en
+> ninguna nube**. Verificado en macOS; no en Windows.
+>
 > **Pedido por:** Julio Orellana. **Cliente:** Jimmy Cano.
 >
 > **Resuelve a medias el punto 3 de §6.2 de CLAUDE.md** («¿El precio de mayoreo

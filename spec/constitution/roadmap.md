@@ -15,6 +15,13 @@
   datos y del primer arranque real con Jimmy.
 - **El proyecto de nube real (`pos-jimmy-cano`)** tiene aplicado el esquema
   completo —las mismas migraciones que el descartable— y cero filas de negocio.
+  **Desde el 2026-09-18 el repositorio tiene una migración de nube más, la
+  `0039` del precio mayorista, escrita y sin aplicar en ninguno de los dos**
+  (leído del catálogo ese día: 29 migraciones en cada uno, la última la
+  `0038`). Una versión con la `039` local no sincroniza contra ellos hasta que
+  se aplique (CLAUDE.md §4.66).
+- **En `develop`, sin publicar todavía:** el precio mayorista por cantidad
+  mínima (spec 002). El 1.2.0 instalado en la tienda no lo tiene.
 - **La verificación en el hardware real de la tienda está en curso**, no
   terminada: ya se confirmaron y corrigieron ahí varios problemas (ver §3.1
   para lo que sigue pendiente). El resto de lo medido en este documento sigue
@@ -37,6 +44,7 @@ cuenta con su evidencia.
 | **Anulación de venta** | Desde el historial de recibos, solo con la caja abierta, con PIN presencial de administrador y voucher si fue con tarjeta; repone inventario y marca el recibo | §4.45, §4.58, §4.59 |
 | **Recibos** | Datos del negocio, PDF siempre, impresión térmica ESC/POS por la cola de Windows con pantalla para elegir y probar la impresora, historial, reimpresión, filtro por método de pago con voucher y estado | §4.14, §4.43, §4.60 |
 | **Recibo en dos copias** | Cada venta y cada reimpresión sacan por la térmica, en un solo trabajo, la copia del cliente y la de la tienda. La del cliente no lleva quién autorizó un descuento, el número de boleta ni quién autorizó una anulación; la de la tienda lleva todo; el PDF y la pantalla siguen siendo la versión completa. Siempre dos, no configurable por ahora. Spec `spec/features/001-recibo-copia-tienda-cliente/` | §4.65 |
+| **Precio mayorista por cantidad** *(en `develop`, sin publicar)* | Un producto puede tener un precio mayorista desde una cantidad mínima. La línea se cobra al MENOR de lista, precio especial vigente y mayorista si la cantidad de esa línea llega al umbral; el precio de lista participa siempre, como piso. Se recalcula en vivo al cambiar la cantidad y se congela en `precio_unitario_snap`. La base no deja guardar un mayorista que no sea menor que la lista. **El espejo `0039` no está aplicado en ninguna nube.** Spec `spec/features/002-precio-mayorista/` | §4.66 |
 | **Reportes** | Resumen de ventas, ventas por producto con margen, inventario; en hora de Guatemala y sin sumar en SQL | §4.15, §4.39 |
 | **Topes de descuento** | Configurables desde la aplicación, con auditoría | §4.16 |
 | **Auditoría** | Bitácora inmutable de todo hecho sensible, que también se respalda | §4.26 |
@@ -66,7 +74,7 @@ cuenta con su evidencia.
 | Qué **unidades** usa y con qué conversiones (libra, arroba, quintal) | Abierto |
 | Qué **roles** existen de verdad, y quién tiene el administrativo | Abierto; condiciona el tope del rol administrativo |
 | Umbral de **stock bajo** por producto | Abierto; bloquea las alertas |
-| Cómo se activa el **precio de mayoreo** | Abierto |
+| Cómo se activa el **precio de mayoreo** | ~~Abierto~~ **Por cantidad comprada: construido** (spec 002, CLAUDE.md §4.66). **Por tipo de cliente sigue abierto**: no hay módulo de clientes. Queda por decidir si bajar la lista por debajo de un mayorista se rechaza o se acepta (decisión 1 de la spec) |
 | Si hay **ventas al crédito** | Abierto |
 | Cada cuánto y adónde se hace un **respaldo local** de la base | Abierto; es la respuesta para restaurar una terminal que ya tiene datos |
 | Pasar la nube al **plan pagado** antes de la entrega | Sin él, el proyecto gratuito se pausa solo tras una semana sin actividad |
@@ -85,7 +93,7 @@ módulo pendiente:
 | **Alertas de stock mínimo** | Espera el umbral de §3.2 |
 | **Devoluciones parciales** | La anulación es de la venta entera; los campos sin piso de ventas y líneas están reservados para esto |
 | **Pantalla de precios especiales** | La venta los aplica, pero nada en la aplicación los crea |
-| **Precio de mayoreo y ventas al crédito** | Esperan las definiciones de §3.2 |
+| ~~**Precio de mayoreo y ventas al crédito**~~ **Ventas al crédito, y precio por tipo de cliente** | Esperan las definiciones de §3.2. El precio mayorista por CANTIDAD ya está construido (spec 002, §2) |
 | **Código de barras** | De la propuesta original |
 | **Básculas digitales** | De la propuesta original; se agregaría detrás de un adaptador, como la impresora |
 | **Aplicación móvil** | De la propuesta original |
