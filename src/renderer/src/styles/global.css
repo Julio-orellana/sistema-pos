@@ -1272,6 +1272,50 @@ button:disabled {
   opacity: 0.85;
 }
 
+/*
+  COBRAR NO PUEDE IMPONER SU ANCHO (§4.62). Texto y monto en una fila miden
+  340 px, y a 1024 px el ticket mide 360: descontando su relleno y «Cancelar»
+  a COBRAR le quedaban 186, y como un flex no achica por debajo de su
+  contenido, el botón se salía 60 a 133 px por el borde derecho de la
+  pantalla. Medido en la aplicación real a 1024×768; a 1280 y a 1366 también
+  se salía.
+
+  Con el ticket angosto el monto pasa ABAJO del texto: los dos siguen grandes y
+  el botón conserva sus 96 px de alto. `min-width: 0` garantiza que nunca más
+  el contenido empuje al botón afuera. A 1920 el ticket mide 552 px y nada de
+  esto aplica: se ve igual que antes.
+*/
+.ticket {
+  container-type: inline-size;
+  container-name: ticket;
+}
+
+.ticket__cobrar {
+  min-width: 0;
+}
+
+@container ticket (width < 500px) {
+  /* 108 y no menos: con 96 la palabra «Cancelar» se salía 3 px de su botón
+     (medido con la auditoría de §4.62, que compara el contenido del botón
+     con su ancho). */
+  .ticket__cancelar {
+    width: 108px;
+  }
+
+  .ticket__cobrar {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ticket__cobrar-texto {
+    font-size: 26px;
+  }
+
+  .ticket__cobrar-monto {
+    font-size: 24px;
+  }
+}
+
 /* --- Los diálogos de esta pantalla siguen su misma paleta clara ----------- */
 
 .venta .modal {
