@@ -22,8 +22,9 @@
 -- aplicar este archivo en ninguna nube; se llamaba `_no_negativo` y admitía 0).
 --
 -- `productos_mayorista_menor_que_lista` SE EVALÚA EN CADA ESCRITURA DE LA FILA,
--- también cuando cambia el precio de lista. Es la decisión 1 de la spec (§4.3):
--- se decide antes de aplicar este archivo en cualquier nube.
+-- también cuando cambia el precio de lista. Es la decisión 1 de la spec (§4.3),
+-- opción A, confirmada por Julio el 2026-09-18: bajar la lista por debajo del
+-- mayorista se rechaza.
 --
 -- NO SE TOCA NINGUNA FUNCIÓN. `escribir_fila` y `exigir_claves_conocidas` leen
 -- las columnas del catálogo al ejecutar (CLAUDE.md §4.20), así que las dos
@@ -41,9 +42,9 @@
 -- Se aplica en el mismo momento en que se instala la versión que trae la 039.
 -- Es la misma situación que se midió con la 0031 (§4.39).
 --
--- Estado: escrita el 2026-09-18. NO APLICADA EN NINGÚN PROYECTO. Se aplica en
--- `pos-pruebas-descartable` solo con la aprobación explícita de Julio, y en
--- `pos-jimmy-cano` nunca sin un pedido aparte.
+-- Estado: escrita el 2026-09-18 y aplicada ese día en `pos-pruebas-descartable`,
+-- con la aprobación explícita de Julio. En `pos-jimmy-cano` se aplica solo con
+-- un pedido aparte, el mismo día en que se instale la versión que trae la 039.
 -- ===========================================================================
 
 ALTER TABLE public.productos
