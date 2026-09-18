@@ -9846,6 +9846,173 @@ Antes de compilar se leyó el estado de `pos-jimmy-cano` en solo lectura: las
 `pos-pruebas-descartable`, y el real tiene 0 filas de negocio. No se aplicó
 nada contra ninguna nube.
 
+### 4.62 La pantalla de la tienda: 1024×768, COBRAR y el desplazamiento con el dedo (2026-09-18)
+
+**El hallazgo.** Julio probó en el equipo real de la tienda —pantalla de
+**1024×768**, un i3 de segunda generación con gráfico **Intel HD Graphics
+3000**— y encontró dos cosas: el botón COBRAR quedaba cortado en el borde
+derecho (con foto), y en las pantallas más altas que la ventana no se podía
+bajar con el dedo. Los arneses anteriores corrían en ventanas de 1100×900 o
+más, que escondían lo primero por casualidad.
+
+#### 1. La auditoría, a 1024×768 EXACTOS
+
+La ventana se fija con CDP (`Emulation.setDeviceMetricsOverride`) **antes de
+cada medición**, y el arnés se niega a medir si no mide eso. **Medido: una
+emulación puesta antes de que la ventana entre en pantalla completa se pierde**,
+y la medición siguiente salió a 1440×900; la primera auditoría que dijo «todo
+bien» en la venta era por eso, y se descartó.
+
+Se recorrieron **30 estados de 18 pantallas**: configuración inicial y su PIN,
+menú con el diagnóstico, venta (ticket vacío, con 7 líneas, cobro en sus dos
+pasos), caja (abierta, conteo simple y por denominación), recibos, productos
+(lista, formulario, formulario con teclado), categorías, usuarios, historial de
+cajas, reportes (vacío, resumen, por producto, inventario), topes, negocio,
+impresora, nube, sincronización, autorización remota, diálogo de salida,
+ingreso y su PIN. Para cada control se mide si queda recortado por un
+contenedor que no se desplaza, fuera de la ventana, debajo de la ventana dentro
+de algo fijo, o con el texto saliéndose de su botón.
+
+| Resultado ANTES del arreglo | Estados |
+|---|---|
+| **Control cortado**: `button[cobrar]` se sale 60 px (ticket vacío) y 78 px (7 líneas) por la derecha | los 4 de la venta |
+| Más altos que la ventana (solo se usan si se desplazan) | 12: menú, diálogo de salida (abierto sobre el menú), caja (los dos conteos), recibos, productos (los 3), usuarios, reportes por producto e inventario, autorización remota |
+| Caben enteros | los 14 restantes |
+
+**Solo la venta tenía un control cortado**, y solo esa se tocó en su maquetación.
+
+#### 2. COBRAR: la causa, medida
+
+Texto (125 px) + separación (16) + monto (163) + relleno = **340 px de contenido
+mínimo**, y un flex no achica por debajo de su contenido. A 1024 el ticket mide
+360: menos 22 px de relleno por lado y «Cancelar» (120 + 10), a COBRAR le
+quedaban 186. Con un total de Q9,876.00 terminaba en `x 1157`. **También se
+salía a 1280 (1337) y a 1366 (1394)**; a 1920 no.
+
+**Arreglo** (`global.css`): el ticket es un contenedor de consulta
+(`container-type: inline-size`), COBRAR lleva `min-width: 0`, y **con el ticket
+por debajo de 500 px** el monto pasa abajo del texto (26 y 24 px), «Cancelar»
+mide 108 px y el botón conserva sus 96 px de alto. A 1920 el ticket mide 552 y
+nada de eso aplica: se ve igual que antes (medido, `flex-direction: row`).
+
+> **Un defecto propio, encontrado midiendo.** La primera versión dejaba
+> «Cancelar» en 96 px, y el texto se salía 3 px de su botón. La auditoría no lo
+> veía porque medía cajas y no texto; se le agregó la regla del texto que
+> desborda su botón, lo encontró, y se pasó a 108.
+
+#### 3. El desplazamiento con el dedo: la causa, medida
+
+**Los bloqueos del kiosko NO interceptan el desplazamiento.** Medido a 1024×768
+sobre el menú (1064 px de alto): un arrastre táctil por CDP
+(`Input.dispatchTouchEvent`) y un gesto táctil (`synthesizeScrollGesture`) lo
+bajan hasta el máximo (296), con `defaultPrevented` en 0 en los 24 eventos. Los
+escuchadores del preload (`kiosk-dom-guards.ts`) son de menú contextual,
+Ctrl+rueda, teclado y `gesturestart`; ninguno toca `touchmove` ni la rueda sin
+Ctrl, y no hay `touch-action` en el CSS.
+
+**Un arrastre de MOUSE no desplaza nada** (medido: `scrollY` sigue en 0), y
+esa es la causa probable: **las pantallas táctiles de esa época suelen
+presentarse ante Windows como un mouse**, y entonces cada arrastre del dedo es
+un arrastre de mouse. **Eso es INFERENCIA, no medición**: no hay forma de
+leerlo desde acá. Por eso el diagnóstico técnico lo dice ahora (punto 5).
+
+**Arreglos**, que cubren los dos casos sin depender de cuál sea:
+
+| Pieza | Qué hace | Medido |
+|---|---|---|
+| Barra de la ventana de 44 px (`html::-webkit-scrollbar`) | Siempre visible mientras haya desplazamiento, y NO aparece si la pantalla cabe. Pulgar de 96 px mínimo y flechas de 44 px | 44 px en los 12 estados más altos que la ventana y 0 en los 18 que caben; el pulgar se arrastra con mouse y con toque; la flecha baja un paso |
+| `desplazamiento/desplazamiento-por-arrastre.ts` | Con un puntero que NO es táctil, un arrastre vertical de más de 10 px desplaza el contenedor de abajo (o la ventana) y ANULA el clic de ese arrastre | El menú baja 200 px con un arrastre de mouse; la lista del ticket se desplaza sin quitar ninguna línea |
+
+La barra es **solo la de la ventana**: las listas internas de la venta
+(cuadrícula, ticket, categorías) conservan la suya, porque 44 px de más dentro
+del ticket de 360 lo dejarían sin lugar. Esas se desplazan con el dedo y con el
+arrastre.
+
+**Con la barra presente el contenido mide 980 px de ancho**, y la auditoría
+volvió a pasar los 30 estados sin ningún recorte con ese ancho.
+
+**Con toque de verdad, el arrastre no hace nada**, a propósito: ese lo desplaza
+el navegador, y hacerlo también acá lo movería el doble. **La barra y el
+teclado en pantalla no se tapan**: el teclado termina en `x 980`, donde empieza
+la barra, y con el teclado abierto se arrastra el pulgar hasta el fondo sin
+cerrarlo, con «Guardar» por encima del teclado.
+
+#### 4. La aceleración gráfica: qué es medición y qué es inferencia
+
+| Qué | Medición o inferencia |
+|---|---|
+| En ESTA Mac (GPU Apple, `0x106b`), con aceleración y con `--disable-gpu`, el desplazamiento táctil a 1024×768 da la misma cadencia: mediana 16,7 ms, p95 17,3–17,4, **0 cuadros de más de 33 ms** en ~970 cuadros | **Medido** (no dice nada de una HD 3000) |
+| Con `--disable-gpu` todo pasa a `disabled_software` y la memoria sube (proceso de GPU 154 contra 75 MB; pestaña 179 contra 142) | **Medido** en esta Mac |
+| Con `--disable-gpu`, `app.getGPUInfo('basic')` **se rechaza** («GPU access not allowed»); la primera versión del diagnóstico se habría caído entera por eso y se corrigió | **Medido** |
+| Un interruptor de Chromium pasado por la línea de comandos llega a la app (probado con el binario de Electron y la carpeta del proyecto) | **Medido** en desarrollo; en el `.exe` instalado es inferencia |
+| En la lista de bloqueo de Chromium (`software_rendering_list.json`, rama `lkgr`), las entradas que nombran a Sandy Bridge (HD 2000/3000) son la **17** (Linux con Mesa viejo) y la **112** («Intel HD 3000 driver crashes frequently on Mac», solo macOS): **ninguna es de Windows**. En Windows le aplican la **184** y la **187**, que solo apagan Graphite | **Leído** del archivo de Chromium; que la versión de Electron 44 tenga las mismas entradas es inferencia |
+| Que en la tienda Chromium use composición por GPU con la HD 3000, y que esa tarjeta con controladores de 2011 sea menos estable que el software | **Inferencia** |
+
+**Decisión: la aceleración queda como está (por omisión).** No hay ninguna
+medición de inestabilidad en el equipo real, y Chromium ya apaga solo lo que
+tiene registrado como problemático. Lo que se agregó es la forma de medirlo
+allá:
+
+- **El diagnóstico técnico** muestra «Aceleración gráfica»: qué tarjeta vio
+  Chromium (fabricante y modelo en hexadecimal; una HD 3000 es `0x8086` con
+  modelo `0x0102`/`0x0106`/`0x0112`/`0x0116`/`0x0122`/`0x0126`) y qué aceleró.
+- **La bitácora técnica** anota eso en cada arranque, ya con la ventana
+  visible, y **cada vez que el proceso de la GPU se cae** («el proceso de la
+  GPU terminó: …»).
+
+Si en la tienda aparece esa línea de caída, o la pantalla se ve con defectos,
+la prueba siguiente es abrir la aplicación con `--disable-gpu` agregado al
+destino del acceso directo, sin recompilar nada (punto 48 de §6.2).
+
+#### 5. El diagnóstico técnico dice cómo llega el dedo
+
+Tarjeta nueva «Pantalla y entrada» en el panel del menú: tamaño de la ventana,
+densidad de píxeles, **cuántos puntos táctiles anuncia el sistema** y **cómo
+llegó el último toque** (`touch`, `mouse` o `pen`). En el equipo real, tocar la
+pantalla y leer esa línea contesta la pregunta del punto 3.
+
+#### Verificado
+
+`npm run verify:pantallas:1024` (nuevo), **18 de 18** en macOS: los 30 estados
+sin problemas; la barra exactamente donde hace falta; COBRAR a 1024, 1280, 1366
+y 1920; el menú con arrastre táctil, con arrastre de mouse, con el pulgar y con
+la flecha; tocar sin arrastrar sigue abriendo «Caja»; barra y teclado; la lista
+del ticket; y la tarjeta del diagnóstico (`touch` y después `mouse`).
+
+**Falsificado**, una mutación a la vez y restaurando con sha256:
+
+| Mutación | Qué cae |
+|---|---|
+| COBRAR sin la consulta de contenedor ni `min-width: 0` | 4 en el arnés: la auditoría (`sobra 60` y `133`) y COBRAR a 1024, 1280 y 1366 (`derecha 1157`, `1337`, `1394`) |
+| Sin la barra de 44 px | 5: la barra en los 12 estados, el pulgar, la flecha y los dos del teclado |
+| Sin instalar el arrastre | 2: la lista del ticket (`scrollTop 0`) y el menú con arrastre de mouse |
+| El arrastre también con toque de verdad | 1 de Vitest |
+| El arrastre sin anular el clic | 3 de Vitest |
+| Sin umbral de 10 px | 2 de Vitest |
+
+> **Lo que el arnés NO distingue, dicho en voz alta.** «El arrastre que empieza
+> sobre “Caja” no la activa» siguió pasando sin el módulo: al soltar 200 px más
+> arriba el puntero ya no está sobre el botón y Chromium no le manda el clic de
+> todos modos. Esa garantía la sostienen las pruebas de Vitest, que sí caen.
+
+`npm run verify`: 114 archivos, 2574 pruebas, 0 errores de lint. Los arneses
+existentes siguen pasando: `verify:pantallas` 49/49, `teclado` 36/36,
+`anulacion` 38/38 y `caja` 57/57. **`caja` terminó con exit 1 en 2 de 4
+corridas con este cambio, siempre DESPUÉS de sus 57 comprobaciones en OK**, con
+«Cannot read properties of undefined (reading '_object')» en la limpieza.
+**Pasa lo mismo sin este cambio**: sobre `develop` (`27fd207`), 1 de 3 corridas
+falló igual. Es una carrera del arnés al cerrar una aplicación que ya se cerró
+sola, y quedó como tarea aparte.
+
+#### Lo que NO se verificó
+
+- **Windows y el equipo real**, que es donde pasó todo. En particular: si el
+  dedo llega como `touch` o como `mouse`, la barra de 44 px con el tema oscuro
+  de Windows, y el comportamiento de la HD 3000.
+- **Una pantalla que de verdad mida 1024×768**: la emulación fija la ventana de
+  la página, y el sistema operativo sigue siendo el de esta Mac.
+- **El rendimiento en el i3**: los números de cuadros son de esta Mac.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -10173,6 +10340,10 @@ nada contra ninguna nube.
 | **A REVISAR — los TOTALES del historial solo viajan al rol administrativo; las filas y el voucher, a cualquiera con sesión.** | Mostrarle los totales a cualquiera con sesión, que es lo que el historial ya hacía con las filas; exigir rol administrativo para toda la pantalla, como §3.5 preveía | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo para que quien cuenta el cajón no copie el número en vez de contar. Exigir el rol para toda la pantalla sería peor: el historial existe para que **el cajero** reimprima con el cliente enfrente, y el voucher ya sale impreso en el papel de ese cliente. **La contrapartida, dicha en voz alta:** un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo. Lo decide el proceso principal y no la pantalla, por la razón medida en §4.40: el canal se llama desde la consola. **Es una decisión que el pedido no tomó, y se señala para que Julio la confirme o la cambie**: es quitar una condición. §4.60 | 2026-09-17 (número de prompt por confirmar) |
 | **El nombre LEGIBLE de cada tabla vive UNA sola vez, en `src/shared/nombres-de-tabla.ts`, y una prueba sobre el árbol sintáctico falla si un archivo del renderer o del proceso principal declara su propio mapa. Otra exige que el mapa cubra EXACTAMENTE las trece tablas.** | Corregir los dos mapas a mano cada vez, como el 2026-09-17; derivar `TablaSincronizable` o `ORDEN_DE_RESTAURACION` de este mapa; dejarlo solo en el compilador | El mapa estaba escrito a mano en las DOS pantallas que nombran tablas —sincronización y restauración—, en distinto orden y sin nada que las atara, y **agregar una tabla y olvidarse de una copia no hacía fallar nada**. Se desincronizaron con la primera tabla nueva: `anulaciones_de_venta` (§4.45) entró en un solo mapa y la pantalla de sincronización mostró el nombre TÉCNICO de una anulación pendiente a quien tenía que decidir si reintentaba o saltaba un lote detenido. Arreglarlos a mano (§4.53) dejó el defecto vivo para la próxima tabla. **No se invierten las dependencias de los tipos de dominio**: `TablaSincronizable` es una lista cerrada que obliga a preguntarse si algo es dato de negocio, y el orden de `ORDEN_DE_RESTAURACION` es el grafo de llaves foráneas; derivarlos de un mapa de etiquetas ataría dos cosas que se deciden por razones distintas. La cobertura se comprueba al revés —el mapa contra esas listas—, con **tres fuentes independientes**: la igualdad con `ORDEN_DE_RESTAURACION` en runtime, la presencia de `TIPO_DE_ENTRADA_DE_FOTO`, y una asignación de tipo que hace fallar `typecheck` si una tabla entra en `TablaSincronizable` y no en el mapa. **Dejarlo solo en el compilador no alcanzaba**: los dos mapas eran `Record<string, string>`, así que TypeScript nunca vio que faltara una clave. La auditoría recorrió `src/renderer` y `src/shared` y no encontró ningún otro mapa; `resumenDeFila` de la restauración describe la FILA y no la tabla, y su `switch` exhaustivo ya lo protege el compilador. §4.57. | 2026-09-17 (número de prompt por confirmar) |
 | **La 1.2.0 es una renumeración sin cambios de código respecto de `b20c7fd`; la línea «Versión:» de la licencia pasa a 1.2.0 y su huella aprobada cambia con ella.** | Publicar como 1.1.0 recompilada; subir `package.json` sin tocar la licencia | Decisión de Julio: marcar la versión de entrega final. La prueba de §4.48 ata la licencia a la versión del paquete, así que sin cambiar la licencia el instalador 1.2.0 mostraría «Versión: 1.1.0» o `verify` fallaría. Solo cambió un carácter del texto legal, autorizado explícitamente. §4.61. | 2026-09-17 (número de prompt por confirmar) |
+| **La barra de desplazamiento de la ventana mide 44 px, siempre visible mientras haya algo que desplazar, con flechas; las listas internas de la venta conservan la suya.** | Una barra propia en React; la del sistema; la misma barra ancha también dentro del ticket y la cuadrícula | La del sistema mide 17 px en Windows y en macOS se superpone y se esconde. 44 px es lo que un dedo acierta. `::-webkit-scrollbar` sobre `html` no agrega código, aparece solo si hay desbordamiento y su pulgar se arrastra con mouse y con toque (medido). Dentro del ticket de 360 px, 44 más lo dejarían sin lugar. §4.62. | 2026-09-18 (número de prompt por confirmar) |
+| **Con un puntero que NO es táctil, arrastrar más de 10 px desplaza lo que haya debajo y anula el clic de ese arrastre (`desplazamiento-por-arrastre.ts`); con toque de verdad no hace nada.** | Solo la barra; hacerlo también con toque; cambiar la pantalla táctil de la tienda a modo táctil desde Windows | Medido: un arrastre de mouse no desplaza nada en Chromium, y la pantalla de la tienda probablemente llegue como mouse (inferencia). Sin anular el clic, arrastrar sobre un producto lo agregaría al ticket. Con toque de verdad el navegador ya desplaza, y hacerlo acá lo movería el doble. No depende de reconfigurar el equipo. §4.62. | 2026-09-18 (número de prompt por confirmar) |
+| **Con el ticket angosto (< 500 px), COBRAR pone el monto abajo del texto, con `min-width: 0`; a 1920 se ve igual que antes.** | Achicar la letra en todos los tamaños; recortar el texto; cambiar el ancho de las columnas | El contenido mínimo de COBRAR era 340 px y el lugar a 1024, 186 (medido). La consulta de contenedor mira el ancho del ticket, no el de la pantalla, y deja intacta la venta en pantallas grandes. §4.62. | 2026-09-18 (número de prompt por confirmar) |
+| **La aceleración gráfica queda por omisión; lo que se agrega es medirla en la tienda: el diagnóstico y la bitácora dicen qué GPU usa Chromium y anotan cada caída de su proceso.** | Apagarla siempre con `app.disableHardwareAcceleration()`; un archivo de configuración para apagarla | Ninguna medición del equipo real dice que haga falta. En Windows, la lista de bloqueo de Chromium no apaga la HD 3000 entera (solo Graphite, entradas 184 y 187). En esta Mac las dos formas dan la misma cadencia y sin GPU se usa más memoria. `--disable-gpu` se puede probar en la tienda desde el acceso directo sin recompilar. §4.62. | 2026-09-18 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -10240,6 +10411,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 44 | **Una base que ya subió su historia a un proyecto no la vuelve a subir a otro.** | Leído en el código, no medido: `sync_cola` no guarda a qué proyecto subió cada lote, y nada reinicia `sincronizado_en` si cambia la nube incrustada. Si una base que sincronizó con `pos-pruebas-descartable` pasa a apuntar a `pos-jimmy-cano`, el real recibe solo lo nuevo, y el primer lote que nombre un usuario, una categoría o un producto viejo fallaría con `23503`. Importa si la tienda conserva su base de prueba al pasar a producción. **El 2026-09-17 se esquivó, no se resolvió:** la decisión para la base A fue arrancar con una carpeta de datos nueva (§4.55), justamente porque reencolar su historia no tiene mecanismo. | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** Hay que decidirlo antes del paso a producción si la tienda conserva su base |
 | 45 | **Protección estructural de UNA SOLA TERMINAL POR PROYECTO.** Que cada instalación tenga un id de terminal propio, que viaje en cada lote, y que la nube rechace el lote de una segunda terminal que no haya sido autorizada a reemplazar a la primera. | Hoy nada lo impide: la credencial de terminal es una sola por proyecto, los lotes no dicen de qué instalación vienen, y la sincronización es solo de subida, así que dos bases pueden escribir la misma nube sin enterarse una de la otra. Es lo que pasó el 2026-09-15 (§4.55). Mientras no exista, lo que lo evita es la regla operativa del recuadro de §4, que es humana y no del sistema. Toca el contrato con la nube —un campo más en cada lote y una comprobación en las siete funciones de escritura—, así que es diseño, no un parche. Se relaciona con el punto 10 (multi-sucursal) y con §1.5 del diseño (la terminal robada). | Abierto — **mejora futura, no bloqueante para la entrega de Jimmy.** A evaluar antes de escalar a más clientes o sucursales |
 | 46 | ~~**El PDF de una venta anulada solo se marca cuando alguien lo ve o lo reimprime.**~~ | ~~§5.2 del diseño dice que el PDF se regenera «después de confirmar la anulación, fuera de la transacción y sobre el mismo `pdf_path`». No se hizo: la marca aparece al ver o reimprimir desde el historial, que es lo que este prompt pidió y lo que regenera el PDF desde las mismas filas. Mientras tanto, el archivo que quedó en el disco al emitirse **no tiene la marca**, así que alguien que abra la carpeta de recibos y lea ese PDF no se entera de que la venta se anuló. Nadie lee esos PDF hoy más que por la pantalla; el día que se entreguen por otra vía —un respaldo, un correo— hay que cerrarlo. El cambio es acotado: llamar a la reimpresión desde el flujo, fuera de la transacción, y dejar la falla en la bitácora técnica si el PDF no se puede escribir.~~ **RESUELTO EL 2026-09-17, por decisión de Julio: no se espera a esa otra vía.** El PDF se regenera en el mismo momento en que la anulación se confirma, reusando la misma `producir` de la reimpresión, sin imprimir y sin marcar el papel como reimpresión. La prueba abre el archivo del disco y lee lo que dice adentro. §4.59. | **Resuelto** — 2026-09-17 |
+| 47 | **En el equipo de la tienda, ¿el dedo llega como `touch` o como `mouse`?** | Decide cuál de los dos arreglos del desplazamiento es el que trabaja allá (§4.62). La respuesta está en el diagnóstico técnico del menú, tarjeta «Pantalla y entrada»: tocar cualquier parte y leer «Último toque llegó como», y «Puntos táctiles que anuncia el sistema». Con `touch` desplaza el navegador; con `mouse`, el arrastre nuevo y la barra de 44 px. | Abierto — **hace falta mirarlo en el equipo real** |
+| 48 | **¿La Intel HD 3000 de la tienda es estable con la aceleración de Chromium?** | Todo lo que se sabe de esa tarjeta es inferencia (§4.62). En el equipo real: leer «Aceleración gráfica» en el diagnóstico técnico, y buscar en `log-tecnico.log` las líneas «aceleración gráfica:» y «el proceso de la GPU terminó». Si hay caídas o la pantalla se ve con defectos, probar agregando `--disable-gpu` al destino del acceso directo, sin recompilar, y comparar. | Abierto — **hace falta el equipo real** |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -10452,6 +10625,10 @@ npm run verify:arranque:sin-respuesta-de-red  # la app real contra redes que NUN
                          # de verdad, solo Auth y SIN filas pendientes. F: credencial que no se descifra: «credencial
                          # dañada», en rojo, sin llamar a Auth (§4.52). Lee también el COLOR: C en ámbar;
                          # A, B y E sin color. `-- --solo=AB` elige. ~10 min.
+npm run verify:pantallas:1024     # la app real a 1024×768 EXACTOS, la pantalla de la tienda: 30 estados sin
+                         # nada recortado, la barra de 44 px solo donde hace falta, COBRAR en cuatro
+                         # tamaños, el desplazamiento con toque, con arrastre de mouse, con el pulgar y
+                         # con la flecha, barra y teclado sin taparse, y el diagnóstico de la entrada (§4.62).
 npm run verify:pantallas:recibos  # la app real: el filtro por método de pago, los totales del conjunto
                          # filtrado con decimales feos (1.10+2.20+4.40 y 3.30+6.60+2.20), el voucher con
                          # «Activo», una venta con tarjeta anulada por la interfaz que pasa a «Anulado el
@@ -10559,6 +10736,7 @@ src/main/       proceso principal de Electron: ventana, SQLite, IPC
   windows/      creación y bloqueos de la ventana kiosko, y cuándo se muestra (mostrar-ventana.ts)
 src/renderer/   interfaz React (sin acceso a Node, a SQLite ni a la red)
   src/venta/    lógica pura del ticket en memoria (sin DOM, sin IPC)
+  src/desplazamiento/  arrastrar para desplazar cuando el dedo llega como mouse (§4.62)
 src/shared/     código compartido main <-> renderer
   adapters/     interfaces de integración + implementaciones seguras
   types/        contrato IPC y DTOs con Zod
