@@ -18,6 +18,12 @@
  * mayorista. Sus reglas se revisan mientras se escribe con
  * `revisarPrecioMayorista`, la MISMA función y los MISMOS textos que usa el
  * servicio: el formulario no puede dejar pasar algo que el servicio rechaza.
+ *
+ * CAMBIAR LA UNIDAD DE UN PRODUCTO QUE YA TIENE MAYORISTA LO QUITA (punto 56 de
+ * CLAUDE.md §6.2). El servicio lo hace en la misma edición; el formulario lo
+ * muestra antes de guardar: en vez de la casilla aparece un aviso con lo que se
+ * va a quitar, y no deja cargar un mayorista nuevo en esa misma edición, porque
+ * el servicio lo quitaría igual. Volver a la unidad guardada lo devuelve.
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -107,7 +113,20 @@ function borradorInicial(
  * Devuelve UN solo motivo, el primero: una lista de cinco errores a la vez es
  * más difícil de accionar que decir qué corregir ahora.
  */
-function motivoParaNoGuardar(borrador: Borrador, esNuevo: boolean): string | null {
+/**
+ * `true` si el borrador cambia la unidad de un producto que YA tenía precio
+ * mayorista guardado: al guardar, el servicio lo quita (punto 56).
+ */
+function mayoristaSeQuitaPorCambioDeUnidad(borrador: Borrador, producto: ProductoIpc | null): boolean {
+  return (
+    producto !== null &&
+    producto.mayorista !== null &&
+    (borrador.tipoMedida !== producto.tipoMedida || borrador.unidadPeso !== producto.unidadPeso)
+  );
+}
+
+function motivoParaNoGuardar(borrador: Borrador, producto: ProductoIpc | null): string | null {
+  const esNuevo = producto === null;
   if (borrador.nombre.trim().length === 0) {
     return 'Falta el nombre del producto.';
   }
@@ -126,7 +145,7 @@ function motivoParaNoGuardar(borrador: Borrador, esNuevo: boolean): string | nul
   if (borrador.precioBase.trim().length === 0) {
     return 'Falta el precio.';
   }
-  if (borrador.aplicaMayorista) {
+  if (borrador.aplicaMayorista && !mayoristaSeQuitaPorCambioDeUnidad(borrador, producto)) {
     // Con la casilla marcada los dos datos son obligatorios (`exigido`), y el
     // texto de cada rechazo es el del servicio: sale de la misma función.
     const revision = revisarPrecioMayorista({
@@ -134,6 +153,9 @@ function motivoParaNoGuardar(borrador: Borrador, esNuevo: boolean): string | nul
       precioMayorista: borrador.precioMayorista,
       cantidadMinima: borrador.cantidadMinimaMayorista,
       exigido: true,
+      // Al editar, la lista guardada: si la regla se rompe por bajar la lista,
+      // el aviso lo dice así, con el mismo texto que el servicio.
+      ...(producto === null ? {} : { precioBaseAnterior: producto.precioBase }),
     });
     if (!revision.ok) {
       return revision.mensaje;
@@ -156,10 +178,8 @@ export function FormularioDeProducto({
   const [mensaje, setMensaje] = useState<string | null>(null);
   const [trabajando, setTrabajando] = useState(false);
 
-  const impedimento = useMemo(
-    () => motivoParaNoGuardar(borrador, esNuevo),
-    [borrador, esNuevo],
-  );
+  const impedimento = useMemo(() => motivoParaNoGuardar(borrador, producto), [borrador, producto]);
+  const seQuitaElMayorista = mayoristaSeQuitaPorCambioDeUnidad(borrador, producto);
 
   /**
    * Cambiar el tipo de medida ajusta la unidad de una vez.
@@ -230,8 +250,11 @@ export function FormularioDeProducto({
       precioCompra: borrador.precioCompra.trim() === '' ? null : borrador.precioCompra.trim(),
       // Con la casilla desmarcada viajan los dos en `null`: quita el precio
       // mayorista, si lo había. Es un valor explícito, no «dejarlo como estaba».
-      precioMayorista: borrador.aplicaMayorista ? borrador.precioMayorista.trim() : null,
-      cantidadMinimaMayorista: borrador.aplicaMayorista ? borrador.cantidadMinimaMayorista.trim() : null,
+      // Con la unidad cambiada también: el servicio lo quita igual (punto 56).
+      precioMayorista:
+        borrador.aplicaMayorista && !seQuitaElMayorista ? borrador.precioMayorista.trim() : null,
+      cantidadMinimaMayorista:
+        borrador.aplicaMayorista && !seQuitaElMayorista ? borrador.cantidadMinimaMayorista.trim() : null,
       fotoPath: borrador.fotoPath,
     };
 
@@ -253,7 +276,7 @@ export function FormularioDeProducto({
       setMensaje(null);
       alGuardar();
     })();
-  }, [borrador, impedimento, producto, alGuardar]);
+  }, [borrador, impedimento, producto, alGuardar, seQuitaElMayorista]);
 
   return (
     <section className="tarjeta" data-prueba="formulario-de-producto">
@@ -391,23 +414,32 @@ export function FormularioDeProducto({
         </span>
       </label>
 
-      <div className="campo" data-prueba="producto-seccion-mayorista">
-        <label className="opcion">
-          <input
-            type="checkbox"
-            checked={borrador.aplicaMayorista}
-            data-prueba="producto-aplica-mayorista"
-            onChange={(evento) => {
-              cambiarMayorista(evento.target.checked);
-            }}
-          />
-          ¿Aplica precio mayorista?
-        </label>
-      </div>
+      {seQuitaElMayorista && producto?.mayorista ? (
+        <p className="advertencia" role="status" data-prueba="producto-aviso-mayorista-quitado">
+          Al cambiar cómo se vende este producto se quita su precio mayorista (Q
+          {producto.mayorista.precio} desde {producto.mayorista.cantidadMinima}{' '}
+          {producto.tipoMedida === 'peso' ? (producto.unidadPeso ?? 'lb') : 'unidades'}). Guardá el
+          producto y después cargalo de nuevo en la unidad nueva.
+        </p>
+      ) : (
+        <div className="campo" data-prueba="producto-seccion-mayorista">
+          <label className="opcion">
+            <input
+              type="checkbox"
+              checked={borrador.aplicaMayorista}
+              data-prueba="producto-aplica-mayorista"
+              onChange={(evento) => {
+                cambiarMayorista(evento.target.checked);
+              }}
+            />
+            ¿Aplica precio mayorista?
+          </label>
+        </div>
+      )}
 
       {/* Los dos campos solo EXISTEN con la casilla marcada: no están ocultos
           con estilos, no están. */}
-      {borrador.aplicaMayorista && (
+      {borrador.aplicaMayorista && !seQuitaElMayorista && (
         <>
           <label className="campo">
             <span className="campo__etiqueta">

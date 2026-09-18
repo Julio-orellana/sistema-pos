@@ -662,7 +662,10 @@ describe('EL PRECIO MAYORISTA (spec 002): las reglas R1 a R4 se revisan ANTES de
       [{ cantidadMinimaMayorista: null }, 'Falta la cantidad mínima para el precio mayorista.'],
       [{ precioMayorista: null }, 'Falta el precio mayorista.'],
       [{ precioMayorista: 'barato' }, 'El precio mayorista tiene que ser un número.'],
-      [{ precioMayorista: '-1' }, 'El precio mayorista no puede ser negativo.'],
+      [{ precioMayorista: '-1' }, 'El precio mayorista tiene que ser mayor que cero.'],
+      // Desde el 2026-09-18, Q0.00 también se rechaza (punto 55 de §6.2).
+      [{ precioMayorista: '0' }, 'El precio mayorista tiene que ser mayor que cero.'],
+      [{ precioMayorista: '0.00' }, 'El precio mayorista tiene que ser mayor que cero.'],
       [
         { precioMayorista: '6.00' },
         'El precio mayorista (Q6.00) tiene que ser menor que el precio de lista (Q6.00). Bajá el precio mayorista o quitalo.',
@@ -711,11 +714,32 @@ describe('EL PRECIO MAYORISTA (spec 002): las reglas R1 a R4 se revisan ANTES de
       conMayorista();
     escriturasEnLaBase = 0;
 
+    // ESTA PRUEBA CAMBIÓ EL 2026-09-18: esperaba el mensaje general de R3
+    // («El precio mayorista (Q5.50) tiene que ser menor que el precio de lista
+    // (Q5.00)…»). Julio pidió que bajar la LISTA se diga como lo que es.
     expect(() => productos.editar(idAdmin, creado.id, { ...soloLaLista, precioBase: '5.00' })).toThrow(
-      'El precio mayorista (Q5.50) tiene que ser menor que el precio de lista (Q5.00). Bajá el precio mayorista o quitalo.',
+      'No podés bajar el precio de lista por debajo del precio mayorista de Q5.50: ajustá el mayorista primero, o quitalo.',
     );
     expect(escriturasEnLaBase).toBe(0);
     expect(repos.productos.obtenerPorId(creado.id)?.precioBase.toFixed(2)).toBe('6.00');
+  });
+
+  it('CA-24 — lo mismo cuando el pedido TRAE el mayorista que ya tenía, que es lo que manda el formulario', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { inventarioInicial: _i, ...datos } = conMayorista();
+    escriturasEnLaBase = 0;
+    expect(() => productos.editar(idAdmin, creado.id, { ...datos, precioBase: '5.00' })).toThrow(
+      'No podés bajar el precio de lista por debajo del precio mayorista de Q5.50: ajustá el mayorista primero, o quitalo.',
+    );
+    expect(escriturasEnLaBase).toBe(0);
+  });
+
+  it('SUBIR el mayorista por encima de una lista que no cambió sigue con el mensaje general (control)', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { inventarioInicial: _i, ...datos } = conMayorista();
+    expect(() => productos.editar(idAdmin, creado.id, { ...datos, precioMayorista: '6.50' })).toThrow(
+      'El precio mayorista (Q6.50) tiene que ser menor que el precio de lista (Q6.00). Bajá el precio mayorista o quitalo.',
+    );
   });
 
   it('CA-24 — bajar la lista Y el mayorista en la misma edición sí se puede', () => {
@@ -755,6 +779,125 @@ describe('EL PRECIO MAYORISTA (spec 002): las reglas R1 a R4 se revisan ANTES de
       .get(creado.id) as { payload: string };
     expect(JSON.parse(fila.payload)).toEqual(
       expect.objectContaining({ precio_mayorista: '5.50', cantidad_minima_mayorista: '50.000' }),
+    );
+  });
+});
+
+// ===========================================================================
+describe('CAMBIAR LA UNIDAD QUITA EL PRECIO MAYORISTA, en la misma edición (punto 56 de §6.2)', () => {
+  /** El maíz a Q6.00 la libra, con mayorista Q5.50 desde 50 lb. */
+  const conMayorista = (cambios: Partial<DatosDeProductoNuevo> = {}): DatosDeProductoNuevo =>
+    maiz({ precioBase: '6.00', precioMayorista: '5.50', cantidadMinimaMayorista: '50', ...cambios });
+
+  /** Los datos para editar, sin el inventario inicial, que editar no acepta. */
+  const paraEditar = (cambios: Partial<DatosDeProductoNuevo> = {}): Omit<DatosDeProductoNuevo, 'inventarioInicial'> => {
+    const { inventarioInicial: _i, ...datos } = conMayorista(cambios);
+    return datos;
+  };
+
+  function ultimoAsientoDeEdicion(): { anterior: Record<string, unknown>; nuevo: Record<string, unknown> } {
+    const fila = base
+      .prepare(
+        "SELECT valor_anterior, valor_nuevo FROM auditoria_log WHERE accion = 'producto_editado' ORDER BY rowid DESC LIMIT 1",
+      )
+      .get() as { valor_anterior: string; valor_nuevo: string };
+    return { anterior: JSON.parse(fila.valor_anterior), nuevo: JSON.parse(fila.valor_nuevo) };
+  }
+
+  function columnasDelMayorista(id: string): unknown {
+    return base.prepare('SELECT precio_mayorista, cantidad_minima_mayorista FROM productos WHERE id = ?').get(id);
+  }
+
+  it('de LIBRAS a KILOGRAMOS: los dos campos quedan vacíos en la base', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const editado = productos.editar(idAdmin, creado.id, paraEditar({ unidadPeso: 'kg' }));
+    expect(editado.unidadPeso).toBe('kg');
+    expect(editado.mayorista).toBeNull();
+    expect(columnasDelMayorista(creado.id)).toEqual({ precio_mayorista: null, cantidad_minima_mayorista: null });
+  });
+
+  it('de PESO a UNIDAD: también se quitan', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const editado = productos.editar(
+      idAdmin,
+      creado.id,
+      paraEditar({ tipoMedida: 'unidad', unidadPeso: null, cantidadPredefinidaIcono: '1' }),
+    );
+    expect(editado.tipoMedida).toBe('unidad');
+    expect(editado.mayorista).toBeNull();
+  });
+
+  it('SE QUITA AUNQUE EL PEDIDO TRAIGA LOS VALORES VIEJOS: no alcanza con que la pantalla se acuerde de vaciarlos', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    // El pedido manda Q5.50 desde 50, tal cual estaba, y otra unidad.
+    const editado = productos.editar(idAdmin, creado.id, paraEditar({ unidadPeso: 'kg' }));
+    expect(editado.mayorista).toBeNull();
+  });
+
+  it('si la edición NO cambia la unidad, el mayorista se conserva (control)', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const editado = productos.editar(idAdmin, creado.id, paraEditar({ nombre: 'Maíz blanco fino' }));
+    expect(editado.mayorista?.precio.toFixed(2)).toBe('5.50');
+    expect(editado.mayorista?.cantidadMinima.toFixed(3)).toBe('50.000');
+    expect(ultimoAsientoDeEdicion().nuevo).not.toHaveProperty('mayoristaQuitadoPor');
+  });
+
+  it('EL ASIENTO DICE EL MOTIVO, y los valores que tenía quedan en «antes»', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    productos.editar(idAdmin, creado.id, paraEditar({ unidadPeso: 'kg' }));
+    const { anterior, nuevo } = ultimoAsientoDeEdicion();
+    expect(anterior).toEqual(
+      expect.objectContaining({ unidadPeso: 'lb', precioMayorista: '5.50', cantidadMinimaMayorista: '50.000' }),
+    );
+    expect(nuevo).toEqual(
+      expect.objectContaining({
+        unidadPeso: 'kg',
+        precioMayorista: null,
+        cantidadMinimaMayorista: null,
+        mayoristaQuitadoPor: 'cambio_de_unidad',
+      }),
+    );
+  });
+
+  it('DESMARCAR LA CASILLA NO es lo mismo: el asiento no dice «cambio_de_unidad»', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    productos.editar(idAdmin, creado.id, paraEditar({ precioMayorista: null, cantidadMinimaMayorista: null }));
+    const { nuevo } = ultimoAsientoDeEdicion();
+    expect(nuevo).toEqual(expect.objectContaining({ precioMayorista: null, cantidadMinimaMayorista: null }));
+    expect(nuevo).not.toHaveProperty('mayoristaQuitadoPor');
+  });
+
+  it('un producto SIN mayorista cambia de unidad sin que el asiento invente un motivo', () => {
+    const creado = productos.crear(idAdmin, maiz());
+    const { inventarioInicial: _i, ...datos } = maiz({ unidadPeso: 'kg' });
+    productos.editar(idAdmin, creado.id, datos);
+    expect(ultimoAsientoDeEdicion().nuevo).not.toHaveProperty('mayoristaQuitadoPor');
+  });
+
+  it('cambiar la unidad Y bajar la lista por debajo del mayorista viejo NO se rechaza: el mayorista ya no está', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { precioMayorista: _p, cantidadMinimaMayorista: _c, ...sinMayorista } = paraEditar({
+      unidadPeso: 'kg',
+      precioBase: '5.00',
+    });
+    const editado = productos.editar(idAdmin, creado.id, sinMayorista);
+    expect(editado.precioBase.toFixed(2)).toBe('5.00');
+    expect(editado.mayorista).toBeNull();
+  });
+
+  it('es UNA sola operación: la fila y su asiento salen en el MISMO lote de la cola', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    productos.editar(idAdmin, creado.id, paraEditar({ unidadPeso: 'kg' }));
+    const filas = base
+      .prepare(
+        `SELECT lote_id, entidad_tipo, payload FROM sync_cola
+          WHERE lote_id = (SELECT lote_id FROM sync_cola ORDER BY rowid DESC LIMIT 1)
+          ORDER BY orden_en_lote`,
+      )
+      .all() as { lote_id: string; entidad_tipo: string; payload: string }[];
+    expect(filas.map((f) => f.entidad_tipo)).toEqual(['productos', 'auditoria_log']);
+    expect(JSON.parse(filas[0]?.payload ?? '{}')).toEqual(
+      expect.objectContaining({ unidad_peso: 'kg', precio_mayorista: null, cantidad_minima_mayorista: null }),
     );
   });
 });

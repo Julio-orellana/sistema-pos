@@ -519,6 +519,10 @@ describe('SPEC 002 — La casilla «¿Aplica precio mayorista?»', () => {
       ['5.50', '', 'Falta la cantidad mínima para el precio mayorista.'],
       ['6.00', '50', 'El precio mayorista (Q6.00) tiene que ser menor que el precio de lista (Q6.00). Bajá el precio mayorista o quitalo.'],
       ['5.50', '0', 'La cantidad mínima para el precio mayorista tiene que ser mayor que cero.'],
+      // Desde el 2026-09-18 el precio mayorista de cero se rechaza acá, antes
+      // de llegar al servicio y a la base (punto 55 de §6.2).
+      ['0', '50', 'El precio mayorista tiene que ser mayor que cero.'],
+      ['0.00', '50', 'El precio mayorista tiene que ser mayor que cero.'],
     ];
     for (const [precio, cantidad, aviso] of casos) {
       await escribir(exigirCampo('producto-precio-mayorista'), precio);
@@ -555,9 +559,91 @@ describe('SPEC 002 — La casilla «¿Aplica precio mayorista?»', () => {
     );
     await escribir(exigirCampo('producto-precio'), '3.50');
 
+    // ESTA PRUEBA CAMBIÓ EL 2026-09-18: esperaba el mensaje general de R3. Julio
+    // pidió que bajar la LISTA se diga como lo que es (punto 3 del pedido).
     expect(exigir('producto-impedimento').textContent).toBe(
-      'El precio mayorista (Q3.90) tiene que ser menor que el precio de lista (Q3.50). Bajá el precio mayorista o quitalo.',
+      'No podés bajar el precio de lista por debajo del precio mayorista de Q3.90: ajustá el mayorista primero, o quitalo.',
     );
     expect(exigirBoton('producto-guardar').disabled).toBe(true);
+  });
+});
+
+/*
+  PUNTO 56 DE CLAUDE.md §6.2: cambiar la unidad de un producto que YA tiene
+  precio mayorista lo quita. El formulario lo dice ANTES de guardar y manda los
+  dos en null; el servicio lo quita igual (servicio-de-productos.test.ts).
+*/
+describe('CAMBIAR LA UNIDAD QUITA EL PRECIO MAYORISTA: el formulario lo avisa antes de guardar', () => {
+  const MAIZ_CON_MAYORISTA: ProductoIpc = {
+    ...MAIZ,
+    precioBase: '6.00',
+    mayorista: { precio: '5.50', cantidadMinima: '50.000' },
+  };
+
+  async function editarMaizConMayorista(): Promise<void> {
+    await montar(
+      createElement(FormularioDeProducto, {
+        producto: MAIZ_CON_MAYORISTA,
+        categorias: [GRANOS],
+        alGuardar: () => undefined,
+        alCancelar: () => undefined,
+      }),
+    );
+  }
+
+  it('de libras a kilogramos: la casilla y los campos se reemplazan por el aviso con lo que se va a quitar', async () => {
+    await editarMaizConMayorista();
+    expect(porPrueba('producto-aviso-mayorista-quitado')).toBeNull();
+
+    const unidad = exigirDesplegable('producto-unidad-peso');
+    await act(async () => {
+      unidad.value = 'kg';
+      unidad.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(exigir('producto-aviso-mayorista-quitado').textContent).toBe(
+      'Al cambiar cómo se vende este producto se quita su precio mayorista (Q5.50 desde 50.000 lb). ' +
+        'Guardá el producto y después cargalo de nuevo en la unidad nueva.',
+    );
+    expect(porPrueba('producto-aplica-mayorista')).toBeNull();
+    expect(porPrueba('producto-precio-mayorista')).toBeNull();
+    expect(porPrueba('producto-impedimento')).toBeNull();
+  });
+
+  it('guardar con la unidad cambiada manda los dos en null', async () => {
+    await editarMaizConMayorista();
+    await clic(exigir('producto-tipo-unidad'));
+    await clic(exigir('producto-guardar'));
+    expect(payloads.editarProducto).toEqual(
+      expect.objectContaining({ tipoMedida: 'unidad', precioMayorista: null, cantidadMinimaMayorista: null }),
+    );
+  });
+
+  it('volver a la unidad guardada devuelve la casilla marcada con los valores de antes', async () => {
+    await editarMaizConMayorista();
+    await clic(exigir('producto-tipo-unidad'));
+    await clic(exigir('producto-tipo-peso'));
+    expect(porPrueba('producto-aviso-mayorista-quitado')).toBeNull();
+    expect((exigir('producto-aplica-mayorista') as HTMLInputElement).checked).toBe(true);
+    expect(exigirCampo('producto-precio-mayorista').value).toBe('5.50');
+    await clic(exigir('producto-guardar'));
+    expect(payloads.editarProducto).toEqual(
+      expect.objectContaining({ unidadPeso: 'lb', precioMayorista: '5.50', cantidadMinimaMayorista: '50.000' }),
+    );
+  });
+
+  it('un producto SIN mayorista cambia de unidad sin ningún aviso (control)', async () => {
+    await montar(
+      createElement(FormularioDeProducto, {
+        producto: MAIZ,
+        categorias: [GRANOS],
+        alGuardar: () => undefined,
+        alCancelar: () => undefined,
+      }),
+    );
+    await clic(exigir('producto-tipo-unidad'));
+    expect(porPrueba('producto-aviso-mayorista-quitado')).toBeNull();
+    expect(porPrueba('producto-aplica-mayorista')).not.toBeNull();
   });
 });

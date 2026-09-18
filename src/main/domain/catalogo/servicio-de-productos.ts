@@ -242,7 +242,7 @@ export class ServicioDeProductos {
   }
 
   /** Normaliza y valida todo lo que comparten crear y editar. */
-  private verificar(datos: DatosDeProducto): DatosVerificados {
+  private verificar(datos: DatosDeProducto, alEditar?: ContextoDeEdicion): DatosVerificados {
     const nombre = datos.nombre.trim();
 
     if (nombre.length === 0) {
@@ -335,13 +335,17 @@ export class ServicioDeProductos {
     // formulario (`@shared/precio-mayorista`). Si no vino ninguno de los dos
     // datos queda en `undefined`: al editar se conserva el que había, y
     // `editar` lo vuelve a revisar contra el precio de lista nuevo.
+    // Si la edición cambia la unidad de un producto con mayorista, lo que traiga
+    // el pedido no se revisa: `editar` lo va a quitar igual (punto 56).
     const mayorista =
-      datos.precioMayorista === undefined && datos.cantidadMinimaMayorista === undefined
+      alEditar?.mayoristaSeQuita === true ||
+      (datos.precioMayorista === undefined && datos.cantidadMinimaMayorista === undefined)
         ? undefined
         : this.exigirPrecioMayoristaValido(
             precio,
             datos.precioMayorista ?? null,
             datos.cantidadMinimaMayorista ?? null,
+            alEditar?.precioBaseAnterior,
           );
 
     return {
@@ -366,11 +370,13 @@ export class ServicioDeProductos {
     precioBase: Decimal,
     precioMayorista: string | null,
     cantidadMinima: string | null,
+    precioBaseAnterior?: Decimal,
   ): PrecioMayoristaRevisado | null {
     const revision = revisarPrecioMayorista({
       precioBase: montoACadena(precioBase),
       precioMayorista,
       cantidadMinima,
+      ...(precioBaseAnterior === undefined ? {} : { precioBaseAnterior: montoACadena(precioBaseAnterior) }),
     });
     if (!revision.ok) {
       throw new ErrorDeNegocio('DATO_INVALIDO', revision.mensaje, revision.causaTecnica);
@@ -525,7 +531,27 @@ export class ServicioDeProductos {
    */
   public editar(usuarioId: string, id: string, datos: DatosDeProducto): Producto {
     const anterior = this.exigirProducto(id);
-    const verificados = this.verificar(datos);
+    /*
+      CAMBIAR LA UNIDAD QUITA EL PRECIO MAYORISTA, EN ESTA MISMA OPERACIÓN
+      (decisión de Julio del 2026-09-18, punto 56 de CLAUDE.md §6.2). La
+      cantidad mínima está en la unidad del producto: «desde 50» con libras no
+      es lo mismo que «desde 50» con kilogramos, y el precio mayorista es por
+      unidad. Conservar los números después de cambiar la unidad sería cobrar
+      con una configuración que nadie decidió.
+
+      Vive ACÁ, dentro de `editar`, y no en una limpieza aparte: una limpieza
+      que hubiera que acordarse de llamar se olvida. Y se aplica aunque el
+      pedido traiga un mayorista, porque el formulario no deja cargar uno nuevo
+      en la misma edición que cambia la unidad: se carga después, en la unidad
+      nueva. El asiento dice por qué se quitó.
+    */
+    const cambioLaUnidad = datos.tipoMedida !== anterior.tipoMedida || datos.unidadPeso !== anterior.unidadPeso;
+    const mayoristaQuitadoPorCambioDeUnidad = cambioLaUnidad && anterior.mayorista !== null;
+
+    const verificados = this.verificar(datos, {
+      precioBaseAnterior: anterior.precioBase,
+      mayoristaSeQuita: mayoristaQuitadoPorCambioDeUnidad,
+    });
     this.exigirNombreLibre(verificados.nombre, id);
 
     // Al editar sí se admite una categoría desactivada, pero solo si es la que
@@ -556,8 +582,9 @@ export class ServicioDeProductos {
       (decisión 1 de la spec 002, §4.3), y tiene que rechazarse con el mensaje
       de la regla, no con el error de la base.
     */
-    const mayorista =
-      verificados.mayorista !== undefined
+    const mayorista = mayoristaQuitadoPorCambioDeUnidad
+      ? null
+      : verificados.mayorista !== undefined
         ? verificados.mayorista
         : anterior.mayorista === null
           ? null
@@ -565,6 +592,7 @@ export class ServicioDeProductos {
               verificados.precioBase,
               montoACadena(anterior.mayorista.precio),
               cantidadACadena(anterior.mayorista.cantidadMinima),
+              anterior.precioBase,
             );
 
     return conBandejaDeSalida(this.base, () => {
@@ -604,6 +632,11 @@ export class ServicioDeProductos {
           precioCompra: precioCompra === null ? null : montoACadena(precioCompra),
           ...camposDelMayoristaParaElAsiento(mayorista),
           fotoPath: verificados.fotoPath,
+          // Solo cuando pasó: distingue esta limpieza de alguien que desmarcó
+          // la casilla. Los valores que tenía están en `valorAnterior`.
+          ...(mayoristaQuitadoPorCambioDeUnidad
+            ? { mayoristaQuitadoPor: MOTIVO_MAYORISTA_QUITADO_POR_CAMBIO_DE_UNIDAD }
+            : {}),
         },
         fecha: new Date(this.ahora()).toISOString(),
       });
@@ -770,6 +803,20 @@ export class ServicioDeProductos {
  * `null` en los dos es «sin precio mayorista»: se anota igual, porque en una
  * edición que lo QUITA el `null` es justamente el dato.
  */
+/** Lo que `verificar` necesita saber cuando la operación es una edición. */
+interface ContextoDeEdicion {
+  /** El precio de lista guardado, para decir «bajaste la lista» (R3). */
+  readonly precioBaseAnterior: Decimal;
+  /** `true` si esta edición cambia la unidad de un producto con mayorista. */
+  readonly mayoristaSeQuita: boolean;
+}
+
+/**
+ * El motivo que queda en el asiento `producto_editado` cuando el precio
+ * mayorista se quitó solo, porque cambió la unidad del producto.
+ */
+export const MOTIVO_MAYORISTA_QUITADO_POR_CAMBIO_DE_UNIDAD = 'cambio_de_unidad';
+
 function camposDelMayoristaParaElAsiento(mayorista: PrecioMayoristaDeProducto | PrecioMayoristaRevisado | null): {
   precioMayorista: string | null;
   cantidadMinimaMayorista: string | null;
