@@ -10908,6 +10908,33 @@ columnas mayoristas.
 
 `npm run verify`: 123 archivos, **2924 pruebas**, 0 errores de lint.
 
+### 4.67 Release 1.3.0 (2026-09-18)
+
+**1.3.0 — incluye el precio mayorista por cantidad mínima (spec 002), sobre la
+base de la 1.2.0.** El pedido decía «1.4.0, sobre la base de la 1.3.0», y **no
+existía ninguna 1.3.0**: `package.json` decía 1.2.0 y el último tag era
+`v1.2.0-produccion` (`27fd207`). Julio eligió 1.3.0, sin hueco. Desde la 1.2.0
+entraron 40 commits: la pantalla a 1024×768 (§4.62), el orden automático de las
+categorías (§4.63), el cobro que no espera a la impresora (§4.64), las dos
+copias del recibo (spec 001, §4.65) y el precio mayorista (spec 002, §4.66).
+
+**El repositorio es PRIVADO** (`gh repo view`: `visibility PRIVATE`), aunque el
+pedido lo daba por público. Julio decidió dejarlo así: los releases se publican
+como no-borrador, pero solo los descarga quien tiene acceso al repositorio.
+
+**La licencia cambió solo en la línea `Versión:`** (1.2.0 → 1.3.0): el byte
+117, de `2` a `3`, mismo largo (1901 bytes), BOM y 39 CRLF intactos. La huella
+aprobada pasa de `4935c4bc…f30a45` a `6bff38ea…33145e`.
+
+**El instalador de producción 1.3.0 NO sincroniza todavía contra
+`pos-jimmy-cano`.** Leído en solo lectura el 2026-09-18: el real tiene 29
+migraciones y **0** columnas mayoristas (y 0 filas de negocio); el descartable
+tiene 30, la última `0039_productos_precio_mayorista`. Una terminal con la 039
+contra una nube sin la 0039 detiene su cola en el primer lote de productos
+(medido, §4.66). La 0039 se aplica en el real con un pedido aparte de Julio, en
+el momento de instalar esta versión en la tienda (punto 57 de §6.2). No se
+aplicó nada contra ninguna nube en este release.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -11260,6 +11287,7 @@ columnas mayoristas.
 | **Cambiar `tipo_medida` o `unidad_peso` de un producto con mayorista lo QUITA dentro de `editar`, en la misma transacción, aunque el pedido lo traiga; el asiento lleva `mayoristaQuitadoPor: 'cambio_de_unidad'`. El formulario lo avisa y no deja cargar uno nuevo en esa edición.** | Avisar y conservar el número; una limpieza aparte; conservar el que traiga el pedido | Decisión de Julio (punto 56): «desde 50» cambia de significado con la unidad. Una limpieza aparte se olvida. Conservar lo que traiga el pedido no se puede sin distinguir «los mismos números» de «los números nuevos», así que se carga en una segunda edición: **a revisar** si Julio lo quiere en un solo paso. §4.66. | Spec 002 — 2026-09-18 |
 | **Al editar, si el mayorista cumplía con la lista GUARDADA y no con la nueva, R3 dice «No podés bajar el precio de lista por debajo del precio mayorista de Q…: ajustá el mayorista primero, o quitalo.»** (`precioBaseAnterior` en `revisarPrecioMayorista`). | Un solo mensaje para las dos causas | Pedido de Julio. Medido antes: Jimmy nunca vio el nombre crudo de la restricción, pero el mensaje hablaba de un mayorista que nadie había tocado. La base no sabe cuál de las dos cambió, así que `errores.ts` conserva el general. §4.66. | Spec 002 — 2026-09-18 |
 | **La 0039 se aplica en `pos-pruebas-descartable` el 2026-09-18 y NO en `pos-jimmy-cano`.** | Aplicar las dos juntas | Aprobación de Julio para el descartable solamente; el real, con un pedido aparte el día que se instale la versión con la 039 (punto 57). El encabezado del archivo se ajustó antes de aplicar, para que el registro sea el archivo final (md5 `9cf8d81d…`). §4.66. | Spec 002 — 2026-09-18 |
+| **El release que sigue a la 1.2.0 es la 1.3.0, publicado como no-borrador en el repositorio PRIVADO; la licencia cambia solo en su línea «Versión:».** | Numerarlo 1.4.0, como decía el pedido; hacer público el repositorio | No había ninguna 1.3.0 y un hueco no significaría nada; el repositorio es privado y hacerlo público expondría todo el historial, no solo dos instaladores. Las dos cosas las decidió Julio. §4.67. | 2026-09-18 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 

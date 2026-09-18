@@ -4,24 +4,24 @@
 > está construido y qué queda por hacer. **No es un changelog**: el detalle de
 > cada funcionalidad construida sigue en `CLAUDE.md` §4 y en `docs/`, hasta que
 > se retome y se migre a su propio `spec/features/NNN-<slug>/`.
-> Estado al 2026-09-18, versión 1.2.0.
+> Estado al 2026-09-18, versión 1.3.0.
 
 ## 1. Dónde está hoy
 
-- **Versión 1.2.0**, empaquetada como instalador de Windows y marcada como la
-  versión de entrega a Jimmy. **El build de producción (1.2.0) está instalado
+- **Versión 1.3.0** (2026-09-18), con el precio mayorista por cantidad mínima
+  (CLAUDE.md §4.67), publicada en GitHub en dos instaladores: prueba y
+  producción. La 1.2.0 fue la versión de entrega a Jimmy. **El build de producción (1.2.0) está instalado
   en el equipo real de la tienda, sin conectar a ningún proyecto de nube
   todavía**: se está probando el hardware antes del reseteo de la carpeta de
   datos y del primer arranque real con Jimmy.
 - **El proyecto de nube real (`pos-jimmy-cano`)** tiene aplicado el esquema
   completo —las mismas migraciones que el descartable— y cero filas de negocio.
-  **Desde el 2026-09-18 el repositorio tiene una migración de nube más, la
-  `0039` del precio mayorista, escrita y sin aplicar en ninguno de los dos**
-  (leído del catálogo ese día: 29 migraciones en cada uno, la última la
-  `0038`). Una versión con la `039` local no sincroniza contra ellos hasta que
-  se aplique (CLAUDE.md §4.66).
-- **En `develop`, sin publicar todavía:** el precio mayorista por cantidad
-  mínima (spec 002). El 1.2.0 instalado en la tienda no lo tiene.
+  **La `0039` del precio mayorista está aplicada en `pos-pruebas-descartable`
+  (30 migraciones) y NO en `pos-jimmy-cano` (29)**, leído del catálogo el
+  2026-09-18. El instalador de producción 1.3.0 no sincroniza contra el real
+  hasta que se aplique allá, con un pedido aparte (CLAUDE.md §4.66, §4.67).
+- **Publicado en la 1.3.0:** el precio mayorista por cantidad mínima
+  (spec 002). El 1.2.0 instalado en la tienda no lo tiene.
 - **La verificación en el hardware real de la tienda está en curso**, no
   terminada: ya se confirmaron y corrigieron ahí varios problemas (ver §3.1
   para lo que sigue pendiente). El resto de lo medido en este documento sigue
@@ -44,7 +44,7 @@ cuenta con su evidencia.
 | **Anulación de venta** | Desde el historial de recibos, solo con la caja abierta, con PIN presencial de administrador y voucher si fue con tarjeta; repone inventario y marca el recibo | §4.45, §4.58, §4.59 |
 | **Recibos** | Datos del negocio, PDF siempre, impresión térmica ESC/POS por la cola de Windows con pantalla para elegir y probar la impresora, historial, reimpresión, filtro por método de pago con voucher y estado | §4.14, §4.43, §4.60 |
 | **Recibo en dos copias** | Cada venta y cada reimpresión sacan por la térmica, en un solo trabajo, la copia del cliente y la de la tienda. La del cliente no lleva quién autorizó un descuento, el número de boleta ni quién autorizó una anulación; la de la tienda lleva todo; el PDF y la pantalla siguen siendo la versión completa. Siempre dos, no configurable por ahora. Spec `spec/features/001-recibo-copia-tienda-cliente/` | §4.65 |
-| **Precio mayorista por cantidad** *(en `develop`, sin publicar)* | Un producto puede tener un precio mayorista desde una cantidad mínima. La línea se cobra al MENOR de lista, precio especial vigente y mayorista si la cantidad de esa línea llega al umbral; el precio de lista participa siempre, como piso. Se recalcula en vivo al cambiar la cantidad y se congela en `precio_unitario_snap`. La base no deja guardar un mayorista que no sea menor que la lista. **El espejo `0039` no está aplicado en ninguna nube.** Spec `spec/features/002-precio-mayorista/` | §4.66 |
+| **Precio mayorista por cantidad** *(desde la 1.3.0)* | Un producto puede tener un precio mayorista desde una cantidad mínima. La línea se cobra al MENOR de lista, precio especial vigente y mayorista si la cantidad de esa línea llega al umbral; el precio de lista participa siempre, como piso. Se recalcula en vivo al cambiar la cantidad y se congela en `precio_unitario_snap`. La base no deja guardar un mayorista que no sea menor que la lista. **El espejo `0039` está aplicado solo en `pos-pruebas-descartable`.** Spec `spec/features/002-precio-mayorista/` | §4.66 |
 | **Reportes** | Resumen de ventas, ventas por producto con margen, inventario; en hora de Guatemala y sin sumar en SQL | §4.15, §4.39 |
 | **Topes de descuento** | Configurables desde la aplicación, con auditoría | §4.16 |
 | **Auditoría** | Bitácora inmutable de todo hecho sensible, que también se respalda | §4.26 |
@@ -74,7 +74,7 @@ cuenta con su evidencia.
 | Qué **unidades** usa y con qué conversiones (libra, arroba, quintal) | Abierto |
 | Qué **roles** existen de verdad, y quién tiene el administrativo | Abierto; condiciona el tope del rol administrativo |
 | Umbral de **stock bajo** por producto | Abierto; bloquea las alertas |
-| Cómo se activa el **precio de mayoreo** | ~~Abierto~~ **Por cantidad comprada: construido** (spec 002, CLAUDE.md §4.66). **Por tipo de cliente sigue abierto**: no hay módulo de clientes. Queda por decidir si bajar la lista por debajo de un mayorista se rechaza o se acepta (decisión 1 de la spec) |
+| Cómo se activa el **precio de mayoreo** | ~~Abierto~~ **Por cantidad comprada: construido** (spec 002, CLAUDE.md §4.66). **Por tipo de cliente sigue abierto**: no hay módulo de clientes. Bajar la lista por debajo de un mayorista se rechaza (decisión 1, confirmada por Julio el 2026-09-18) |
 | Si hay **ventas al crédito** | Abierto |
 | Cada cuánto y adónde se hace un **respaldo local** de la base | Abierto; es la respuesta para restaurar una terminal que ya tiene datos |
 | Pasar la nube al **plan pagado** antes de la entrega | Sin él, el proyecto gratuito se pausa solo tras una semana sin actividad |
