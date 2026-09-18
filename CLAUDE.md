@@ -5,6 +5,14 @@
 > completo antes de escribir código, y actualizá la tabla de decisiones y la
 > lista de pendientes al final de cada sesión de trabajo.
 
+> **Contexto estable y Spec-Driven Development (desde el 2026-09-18).** La
+> misión, el stack con sus decisiones de arquitectura y la hoja de ruta viven
+> en [`spec/constitution/`](spec/constitution/). Toda funcionalidad nueva nace
+> en `spec/features/NNN-<slug>/` (`spec.md`, `plan.md`, `tasks.md`, y recién
+> después el código). Las funcionalidades ya construidas **siguen documentadas
+> acá y en `docs/`** hasta que cada una se retome y se migre a su propio
+> `spec/features/NNN-<slug>/`; no hay migración retroactiva.
+
 ---
 
 ## 1. Qué estamos construyendo
