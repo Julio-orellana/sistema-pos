@@ -28,7 +28,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { EstadoDeVenta, ProductoParaVender } from '@shared/types/ipc';
+import type {
+  EstadoDeVenta,
+  ImpresionDeReciboTerminadaIpc,
+  ProductoParaVender,
+  ReciboDeLaVentaIpc,
+} from '@shared/types/ipc';
+import { estadoDelPapel } from '../venta/impresion-del-recibo';
 import { formatearQuetzales } from '@shared/money';
 import { CuadriculaDeProductos, TODAS_LAS_CATEGORIAS } from './CuadriculaDeProductos';
 import { DialogoDeCobro } from './DialogoDeCobro';
@@ -83,6 +89,22 @@ export function PantallaDeVenta({
   const [ultimaVenta, setUltimaVenta] = useState<string | null>(null);
 
   /**
+   * El recibo de la última venta cobrada, para seguir su impresión después de
+   * cerrar el diálogo: si el papel no sale, la cajera se tiene que enterar
+   * aunque ya haya tocado «Siguiente venta».
+   */
+  const [ultimoRecibo, setUltimoRecibo] = useState<ReciboDeLaVentaIpc | null>(null);
+
+  /**
+   * El último aviso de impresión terminada. La suscripción vive lo que vive la
+   * pantalla, no lo que vive el diálogo: el aviso puede llegar antes de que el
+   * diálogo sepa qué recibo se emitió, o después de cerrarlo (§4.64).
+   */
+  const [impresionTerminada, setImpresionTerminada] = useState<ImpresionDeReciboTerminadaIpc | null>(null);
+
+  useEffect(() => window.pos.recibos.alTerminarImpresion(setImpresionTerminada), []);
+
+  /**
    * Se incrementa después de cada venta para volver a pedir el estado.
    *
    * Hace falta releer y no solo vaciar el ticket: la venta acaba de bajar el
@@ -111,6 +133,7 @@ export function PantallaDeVenta({
 
   const tocarProducto = useCallback((producto: ProductoParaVender): void => {
     setUltimaVenta(null);
+    setUltimoRecibo(null);
     setLineas((anteriores) => agregarAlTicket(anteriores, producto));
   }, []);
 
@@ -141,7 +164,14 @@ export function PantallaDeVenta({
     setConfirmandoVaciar(false);
     setEnEdicion(null);
     setUltimaVenta(null);
+    setUltimoRecibo(null);
   }, []);
+
+  // El papel de la última venta, después de cerrado el diálogo. Solo se avisa
+  // lo que NO salió: que sí salió ya lo ve la cajera en la mano, y un aviso
+  // verde por venta sería ruido.
+  const papelDelUltimoRecibo =
+    ultimoRecibo === null ? null : estadoDelPapel(ultimoRecibo, impresionTerminada);
 
   const turno = estado?.turnoAbierto ?? null;
 
@@ -250,6 +280,12 @@ export function PantallaDeVenta({
         </p>
       )}
 
+      {ultimoRecibo !== null && papelDelUltimoRecibo?.tipo === 'no-impreso' && (
+        <p className="advertencia" data-prueba="venta-papel-del-recibo">
+          Recibo No. {ultimoRecibo.numeroRecibo}: {papelDelUltimoRecibo.mensaje}
+        </p>
+      )}
+
       <div className="venta__cuerpo">
         <CuadriculaDeProductos
           productos={estado.productos}
@@ -282,6 +318,7 @@ export function PantallaDeVenta({
           alCancelar={() => {
             setCobrando(false);
           }}
+          impresionTerminada={impresionTerminada}
           alTerminar={(venta) => {
             // LA PANTALLA VUELVE A CERO. El ticket se vacía, el diálogo se
             // cierra y se relee el catálogo, que acaba de cambiar.
@@ -290,6 +327,7 @@ export function PantallaDeVenta({
             setEnEdicion(null);
             setCantidadTecleada('');
             setBusqueda('');
+            setUltimoRecibo(venta.recibo);
             setUltimaVenta(
               `Venta registrada por ${formatearQuetzales(venta.total)}. Lista para la siguiente.`,
             );
