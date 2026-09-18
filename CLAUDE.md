@@ -10014,6 +10014,100 @@ aplicación que ya se cerró sola: punto 49 de §6.2.
   la página, y el sistema operativo sigue siendo el de esta Mac.
 - **El rendimiento en el i3**: los números de cuadros son de esta Mac.
 
+### 4.64 «Cobrar» ya no espera a la impresora (2026-09-18)
+
+**El reporte.** En el equipo de la tienda, con la RPT004 conectada y
+configurada, tocar «Cobrar» tardaba de 5 a 10 segundos. Los pasos con PIN ya
+estaban descartados (scrypt: menos de 1 s en el peor caso, con un solo
+administrador).
+
+#### El camino, leído en el código antes de cambiar nada
+
+| # | Dónde | Qué hacía |
+|---|---|---|
+| 1 | `DialogoDeCobro` → `window.pos.venta.cobrar` | La pantalla espera la respuesta para mostrar «Venta registrada» |
+| 2 | `ipc/venta.ts`, canal `venta:cobrar` | `ServicioDeVenta.registrar`: la transacción, sincrónica |
+| 3 | `ipc/venta.ts:348` (antes) | **`await recibos.emitir(ventaId)`**, y recién después responde |
+| 4 | `ServicioDeRecibos.producir` | `await generarPdf(...)`, y después **`await intentarImprimir(...)`** |
+| 5 | `ImpresoraPorColaDeWindows` → `EnviadorPorPowerShell` | Lanza un `powershell.exe` nuevo por ticket y espera a que termine (límite 12 s) |
+| 6 | El script (`cola-de-windows.ts`) | `Add-Type` compila el puente a `winspool` en C# **en cada ticket**, escribe los bytes y hace **`Start-Sleep -Milliseconds 1500` fijo** antes de `Get-PrintJob` y `Get-Printer` |
+
+O sea: **sí esperaba**, y el paso 6 tiene 1,5 s fijos que no dependen de la
+máquina. El arranque de PowerShell y el `Add-Type` en el i3 **no están
+medidos**: esta Mac no tiene PowerShell y no se instaló.
+
+#### Qué cambió, y qué no
+
+| Pieza | Cambio |
+|---|---|
+| `ServicioDeRecibos.emitirSinEsperarLaImpresion` | Devuelve **con el PDF ya escrito** y la impresión en curso (`impresion: Promise`, que nunca se rechaza) |
+| `ServicioDeRecibos.emitir` y `reimprimir` | Siguen esperando la impresión: es el mismo camino con un `await` más. Reimprimir lo pide una persona que quiere el papel |
+| La fila de impresión | Un ticket por vez, en el orden de las ventas (`enLaColaDeImpresion`). **No reintenta nada**: sin ella, dos ventas seguidas lanzarían dos `powershell.exe` a la vez en una máquina de 4 GB |
+| `venta:cobrar` | Responde con `recibo.impresionPendiente = true` y avisa después a la ventana que cobró por `recibos:impresion-terminada` (`ImpresionDeReciboTerminadaIpc`) |
+| La pantalla | El renglón del papel dice «Enviando el recibo a la impresora…» y se completa solo cuando llega el aviso, emparejado por `reciboId`. Si la cajera ya tocó «Siguiente venta» y el papel no salió, la pantalla de venta lo avisa igual |
+| La transacción de la venta | **No se tocó** |
+
+**Garantías que se conservan, cada una con su prueba:**
+
+- **El PDF se genera siempre, y se espera.** «Venta registrada» aparece con el
+  PDF ya en el disco (medido en la app real: 74 537 bytes al confirmar).
+- **Un fallo de impresión no toca `auditoria_log`.** Va a la bitácora técnica,
+  igual que antes (`impresion-sin-esperar.test.ts`, y la app real con la
+  impresora simulada «desconectada»).
+- **La persona ve el resultado.** En el cobro, el renglón pasa a «Se imprimió.»
+  o al mensaje del problema. La **prueba de impresión** de «Impresora de
+  recibos» no pasa por este camino (`servicio-de-impresora.ts:171` llama a su
+  propio enviador) y sigue esperando a propósito: ahí la persona pidió ver el
+  resultado.
+
+#### Verificado en la aplicación real (macOS), a 1024×768
+
+`npm run verify:pantallas:cobro-sin-esperar-impresora`: la impresora simulada
+tarda **6000 ms**, un número ELEGIDO para imitar la tienda, no medido. 7 de 7:
+
+```
+clic en «Confirmar cobro» → «Venta registrada» visible: 384 ms
+renglón del papel al confirmar: data-estado=enviando texto="Recibo No. 1. Enviando el recibo a la impresora…"
+al confirmar: ticket en la impresora=no; recibos=[{"numero_recibo":1,…,"impreso":0}]; PDF=74537 bytes
+clic → «Se imprimió.»: 6457 ms; texto="Recibo No. 1. Se imprimió."; bytes del ticket=707; impreso en la base=1
+segunda venta (impresora que reporta Offline): clic → «Venta registrada» 231 ms
+aviso en la pantalla de venta a los 6577 ms del clic: "Recibo No. 2: No se pudo imprimir. El recibo quedó guardado en PDF."
+auditoria_log después: […,{"accion":"venta_registrada","n":2}]
+```
+
+**Falsificado en la app real**, con el `venta.ts` de `HEAD` (que espera la
+impresora), 5 de 7 fallidas. Reproduce el síntoma de la tienda:
+
+```
+clic en «Confirmar cobro» → «Venta registrada» visible: 6382 ms
+renglón del papel al confirmar: data-estado=impreso texto="Recibo No. 1. Se imprimió."
+segunda venta (impresora que reporta Offline): clic → «Venta registrada» 6387 ms
+```
+
+Vitest: 10 pruebas del servicio, 4 del canal real con una impresora que no
+contesta hasta que la prueba lo decide, y 7 de la pantalla. Falsificado:
+
+| Mutación | Qué cae |
+|---|---|
+| El canal vuelve a `await emitir` | las 4 del canal, a los 2,07 s del límite |
+| `producir` espera la impresión | 13 |
+| Sin la fila de impresión | 1: «el segundo no se manda hasta que el primero terminó» |
+| La pantalla toma cualquier aviso sin mirar el recibo | 1 |
+| La pantalla no recuerda el último recibo | 1 |
+
+#### Lo que NO se verificó
+
+- **Windows y la RPT004**, que es donde pasó. Cuánto tarda el `powershell.exe`
+  en el i3 no está medido.
+- **El PDF sigue en el camino que se espera.** Abre una ventana oculta de
+  Chromium. En esta Mac la venta entera tardó 231 a 384 ms. En el i3 no está
+  medido: punto 50 de §6.2.
+- **Cada ticket sigue tardando lo mismo en salir**: solo dejó de bloquear. Los
+  1,5 s fijos y el `Add-Type` por ticket siguen en el script: punto 51.
+- **Si la aplicación se cierra con un ticket en la fila**, ese ticket puede no
+  salir y el recibo queda `impreso = 0`, visible en el historial para
+  reimprimirlo. No se probó.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -10346,6 +10440,7 @@ aplicación que ya se cerró sola: punto 49 de §6.2.
 | **Con el ticket angosto (< 500 px), COBRAR pone el monto abajo del texto, con `min-width: 0`; a 1920 se ve igual que antes.** | Achicar la letra en todos los tamaños; recortar el texto; cambiar el ancho de las columnas | El contenido mínimo de COBRAR era 340 px y el lugar a 1024, 186 (medido). La consulta de contenedor mira el ancho del ticket, no el de la pantalla, y deja intacta la venta en pantallas grandes. §4.62. | 2026-09-18 (número de prompt por confirmar) |
 | **La aceleración gráfica queda por omisión; lo que se agrega es medirla en la tienda: el diagnóstico y la bitácora dicen qué GPU usa Chromium y anotan cada caída de su proceso.** | Apagarla siempre con `app.disableHardwareAcceleration()`; un archivo de configuración para apagarla | Ninguna medición del equipo real dice que haga falta. En Windows, la lista de bloqueo de Chromium no apaga la HD 3000 entera (solo Graphite, entradas 184 y 187). En esta Mac las dos formas dan la misma cadencia y sin GPU se usa más memoria. `--disable-gpu` se puede probar en la tienda desde el acceso directo sin recompilar. §4.62. | 2026-09-18 (número de prompt por confirmar) |
 | **Un arnés termina la aplicación solo con `terminarAplicacion` (`scripts/terminar-aplicacion.cjs`), sobre el proceso guardado justo después de `electron.launch()`; una prueba recorre `scripts/` y lo exige.** | Envolver cada `app.process().kill()` en try/catch; usar `app.close()` | Medido: `app.process()` lanza en cuanto Playwright procesa el cierre de la aplicación, y el arnés de caja la cerraba a propósito antes de su `finally`. Envolver cada llamada deja la forma frágil disponible para el próximo arnés. `app.close()` pasa por la intercepción del cierre y pide PIN (§4.5). Punto 49 de §6.2. | 2026-09-18 (número de prompt por confirmar) |
+| **El cobro responde con el PDF escrito y la impresión EN CURSO; el resultado del papel llega después por `recibos:impresion-terminada`, y los tickets salen uno por vez.** | Seguir esperando la impresora; no esperar tampoco el PDF; mandar la impresión sin fila | En la tienda, «Cobrar» tardaba 5–10 s porque el canal esperaba un `powershell.exe` por ticket con 1,5 s fijos adentro (leído en el código). Medido en la app real con una impresora que tarda 6 s: 384 ms contra 6382 ms del código anterior. El PDF se sigue esperando porque es el respaldo obligatorio. Sin fila, dos ventas seguidas lanzan dos PowerShell a la vez y los tickets pueden salir en otro orden. §4.64. | 2026-09-18 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -10416,6 +10511,8 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 47 | **En el equipo de la tienda, ¿el dedo llega como `touch` o como `mouse`?** | Decide cuál de los dos arreglos del desplazamiento es el que trabaja allá (§4.62). La respuesta está en el diagnóstico técnico del menú, tarjeta «Pantalla y entrada»: tocar cualquier parte y leer «Último toque llegó como», y «Puntos táctiles que anuncia el sistema». Con `touch` desplaza el navegador; con `mouse`, el arrastre nuevo y la barra de 44 px. | Abierto — **hace falta mirarlo en el equipo real** |
 | 48 | **¿La Intel HD 3000 de la tienda es estable con la aceleración de Chromium?** | Todo lo que se sabe de esa tarjeta es inferencia (§4.62). En el equipo real: leer «Aceleración gráfica» en el diagnóstico técnico, y buscar en `log-tecnico.log` las líneas «aceleración gráfica:» y «el proceso de la GPU terminó». Si hay caídas o la pantalla se ve con defectos, probar agregando `--disable-gpu` al destino del acceso directo, sin recompilar, y comparar. | Abierto — **hace falta el equipo real** |
 | 49 | ~~**`npm run verify:pantallas:caja` termina a veces con código 1 DESPUÉS de pasar sus 57 comprobaciones.**~~ | ~~Anotado el 2026-09-18, para revisar con calma **después de la entrega**; no se resuelve ahora. Medido, recontado en los logs crudos: con los cambios de §4.62, 2 de 3 corridas con código 1; **sin ellos, sobre `27fd207`, 1 de 3**, así que no lo introdujo §4.62. En las 6 corridas las 57 comprobaciones dieron OK, y las que fallan terminan con `[verificacion-de-caja-y-teclado] Falló antes de poder comprobar nada: Cannot read properties of undefined (reading '_object')`. Causa probable (inferida, no medida): el último paso cierra la aplicación a propósito con la salida controlada, y el `finally` del arnés llama a `app.process().kill('SIGKILL')`; si Playwright ya procesó ese cierre, `app.process()` lanza y el error escapa como exit 1. **Consecuencia mientras tanto**: un código 1 de este arnés no alcanza para decir que algo se rompió; hay que mirar si hay alguna línea `FALLA` antes del error.~~ **RESUELTO EL 2026-09-18, con la causa MEDIDA y no solo inferida.** En playwright-core 1.63.0, `app.process()` no devuelve un proceso guardado: lo busca en el registro de la conexión (`_dispatcherByGuid.get(guid)._object`), y ese registro se BORRA cuando Playwright procesa el cierre de la aplicación. Medido forzando el orden: antes del evento `close`, `app.process()` respondió; después, lanzó exactamente «Cannot read properties of undefined (reading '_object')». `kill()` sobre el proceso GUARDADO no lanzó en ningún caso. Con la hipótesis tal como estaba escrita no alcanzaba: en 6 corridas instrumentadas, con `exitCode=0` antes de matar, `app.process()` respondió en las 6. Lo que decide es si llegó el `close` de Playwright, no si el proceso terminó. **Arreglo estructural**: `scripts/terminar-aplicacion.cjs` es la única vía para terminar la aplicación; cada arnés guarda el proceso justo después de `electron.launch()`. El mismo `kill` en la limpieza, sin guardar el proceso ni preguntar si seguía vivo, estaba en 5 arneses más —historial de cajas, impresora (dos veces), pantallas, pantallas-1024 y restauración en pantalla—; teclado y el ensayo de restauración ya lo hacían bien y pasaron a la misma vía. `arneses-terminan-la-aplicacion.test.ts` recorre `scripts/` y falla, con archivo y línea, ante un `.kill(` fuera de esa vía o un `.process()` usado en el acto. Después: `verify:pantallas:caja` 3 de 3 con exit 0, y los demás arneses tocados, en verde. | **Resuelto** — 2026-09-18 |
+| 50 | **¿Cuánto tarda el PDF del recibo en el i3?** Es lo único que el cobro sigue esperando. | Abre una ventana oculta de Chromium por recibo (`printToPDF`). En esta Mac la venta entera, PDF incluido, tardó 231–384 ms (§4.64). En el i3 no está medido. Si el cobro sigue lento en la tienda después de §4.64, es lo primero que hay que medir. | Abierto — **hace falta el equipo real** |
+| 51 | **Cada ticket sigue tardando en SALIR lo mismo que antes**: solo dejó de bloquear la venta. | El script de `cola-de-windows.ts` compila el puente a `winspool` con `Add-Type` en cada ticket y espera 1,5 s fijos antes de leer el estado del trabajo. Achicarlo toca el script de impresión y cómo se clasifica un envío (§4.43), así que es una decisión aparte. | Abierto — decisión de Julio |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
@@ -10637,6 +10734,10 @@ npm run verify:pantallas:recibos  # la app real: el filtro por método de pago, 
                          # «Activo», una venta con tarjeta anulada por la interfaz que pasa a «Anulado el
                          # <fecha>» y deja de contar, que el botón «Anular» sigue intacto con el filtro
                          # puesto, y que la CAJERA ve las filas y el voucher pero ningún total (§4.60).
+npm run verify:pantallas:cobro-sin-esperar-impresora  # la app real a 1024×768 con una impresora simulada
+                         # que tarda 6 s: «Venta registrada» aparece antes de que conteste, el PDF ya
+                         # está, el papel se completa solo, y un papel que no salió se avisa aunque la
+                         # cajera ya haya seguido. Nada va a auditoria_log (§4.64).
 npm run verify:nube      # compara lo que la nube declara con supabase/esquema-nube.json (con red)
 npm run verify:nube -- --tomar-foto    # reescribe esa foto, a propósito
 npm run verify:nube -- --destructivo   # la batería contra el proyecto de PRUEBAS; el seguro
