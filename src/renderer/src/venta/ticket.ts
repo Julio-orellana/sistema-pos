@@ -30,15 +30,22 @@ import {
   sumarLista,
 } from '@shared/money';
 import { montoDelDescuento, totalConDescuento, type DescuentoPedido } from '@shared/descuento';
-import type { PrecioEspecialVigente, ProductoParaVender } from '@shared/types/ipc';
+import { precioDeLinea, type OrigenDelPrecio } from '@shared/precio-de-linea';
+import type { PrecioEspecialVigente, PrecioMayoristaIpc, ProductoParaVender } from '@shared/types/ipc';
 
 /**
  * Una línea del ticket.
  *
- * `precioUnitario` es una FOTO del precio al momento de agregar el producto,
- * no una referencia viva: si alguien edita el precio en otra pantalla mientras
- * el cliente espera, el ticket en curso no debe cambiar bajo los pies del
- * cajero. Es el mismo criterio con que `venta_detalle` guarda su snapshot.
+ * Los PRECIOS del producto —lista, especial y mayorista— son una FOTO de lo que
+ * se cargó al abrir la pantalla, no una referencia viva: si alguien edita el
+ * precio en otra pantalla mientras el cliente espera, el ticket en curso no
+ * debe cambiar bajo los pies del cajero. Es el mismo criterio con que
+ * `venta_detalle` guarda su snapshot.
+ *
+ * Lo que SÍ cambia con la cantidad, desde la spec 002, es cuál de esos precios
+ * se cobra: `precioUnitario` y `origenDelPrecio` se recalculan con
+ * `precioDeLinea` cada vez que cambia la cantidad (`conPrecioSegunCantidad`),
+ * con la MISMA función que usa el proceso principal al cobrar.
  */
 export interface LineaDeTicket {
   readonly productoId: string;
@@ -48,14 +55,24 @@ export interface LineaDeTicket {
   /** Cantidad, cadena canónica de tres decimales. */
   readonly cantidad: string;
   /**
-   * Precio unitario congelado, YA CON EL PRECIO ESPECIAL APLICADO. Cadena
-   * canónica de dos decimales. Es por este que se cobra.
+   * El precio unitario que se cobra CON LA CANTIDAD DE AHORA: el menor entre
+   * lista, especial y mayorista si la cantidad llega al umbral. Cadena canónica
+   * de dos decimales. Es por este que se cobra.
    */
   readonly precioUnitario: string;
+  /** De dónde salió `precioUnitario`: es lo que la línea muestra como marca. */
+  readonly origenDelPrecio: OrigenDelPrecio;
   /** Precio de lista, para poder mostrar de cuánto bajó. */
   readonly precioBase: string;
-  /** El precio especial que rebajó la línea, o `null` si se cobra el de lista. */
+  /**
+   * El precio especial VIGENTE, o `null`. Puede estar vigente y no ser el que
+   * se cobra, si el mayorista es más barato: lo dice `origenDelPrecio`.
+   */
   readonly precioEspecial: PrecioEspecialVigente | null;
+  /** El precio con el especial ya aplicado, o `null` si no hay especial vigente. */
+  readonly precioConEspecial: string | null;
+  /** El precio mayorista del producto, o `null` si no tiene. */
+  readonly mayorista: PrecioMayoristaIpc | null;
   /** Inventario conocido al cargar la pantalla. Solo para advertir. */
   readonly inventarioConocido: string;
   readonly fotoUrl: string | null;
@@ -78,6 +95,22 @@ export function decimalesDe(tipoMedida: 'unidad' | 'peso'): number {
 }
 
 /**
+ * La línea con el precio que corresponde a SU cantidad (spec 002).
+ *
+ * TODO cambio de cantidad pasa por acá —agregar un producto nuevo, volver a
+ * tocar su ícono o corregirla con el teclado—, así que ningún camino puede
+ * olvidarse de recalcular. Cruzar el umbral hacia arriba pone el precio
+ * mayorista; bajarlo, lo quita.
+ */
+function conPrecioSegunCantidad(linea: LineaDeTicket): LineaDeTicket {
+  const elegido = precioDeLinea(
+    { lista: linea.precioBase, especial: linea.precioConEspecial, mayorista: linea.mayorista },
+    linea.cantidad,
+  );
+  return { ...linea, precioUnitario: montoACadena(elegido.precio), origenDelPrecio: elegido.origen };
+}
+
+/**
  * Agrega un producto al ticket.
  *
  * Si el producto YA ESTÁ, suma la cantidad predefinida a la línea existente en
@@ -94,20 +127,26 @@ export function agregarAlTicket(
   if (existente === undefined) {
     return [
       ...lineas,
-      {
+      conPrecioSegunCantidad({
         productoId: producto.id,
         nombre: producto.nombre,
         tipoMedida: producto.tipoMedida,
         unidadPeso: producto.unidadPeso,
         cantidad: cantidadACadena(producto.cantidadPredefinidaIcono),
-        // El EFECTIVO, no el de lista: si hay un precio especial vigente, el
-        // cliente paga ese. El de lista se guarda al lado solo para mostrarlo.
+        // Provisorio: `conPrecioSegunCantidad` lo reemplaza enseguida con el
+        // que corresponde a esta cantidad.
         precioUnitario: montoACadena(producto.precioEfectivo),
+        origenDelPrecio: 'lista',
         precioBase: montoACadena(producto.precioBase),
         precioEspecial: producto.precioEspecial,
+        // El precio con el especial es un CANDIDATO solo si hay un especial
+        // vigente; sin él, `precioEfectivo` es el de lista y ya compite como tal.
+        precioConEspecial:
+          producto.precioEspecial === null ? null : montoACadena(producto.precioEfectivo),
+        mayorista: producto.mayorista,
         inventarioConocido: cantidadACadena(producto.inventarioDisponible),
         fotoUrl: producto.fotoUrl,
-      },
+      }),
     ];
   }
 
@@ -116,7 +155,7 @@ export function agregarAlTicket(
   );
   return lineas.map((linea) =>
     linea.productoId === producto.id
-      ? { ...linea, cantidad: cantidadACadena(sumada) }
+      ? conPrecioSegunCantidad({ ...linea, cantidad: cantidadACadena(sumada) })
       : linea,
   );
 }
@@ -135,7 +174,7 @@ export function fijarCantidad(
   const redondeada = redondearCantidad(decimal(cantidad));
   return lineas.map((linea) =>
     linea.productoId === productoId
-      ? { ...linea, cantidad: cantidadACadena(redondeada) }
+      ? conPrecioSegunCantidad({ ...linea, cantidad: cantidadACadena(redondeada) })
       : linea,
   );
 }
@@ -219,9 +258,35 @@ export function totalDelTicketConDescuento(
   return totalConDescuento(subtotalExactoDelTicket(lineas), descuento);
 }
 
-/** ¿Alguna línea se está cobrando con un precio especial vigente? */
+/**
+ * ¿Alguna línea se está cobrando AL precio especial?
+ *
+ * Mira el origen del precio y no si hay un especial vigente: desde la spec 002
+ * una línea puede tener un especial vigente y cobrarse al precio mayorista.
+ */
 export function hayPrecioEspecial(lineas: readonly LineaDeTicket[]): boolean {
-  return lineas.some((linea) => linea.precioEspecial !== null);
+  return lineas.some((linea) => linea.origenDelPrecio === 'especial');
+}
+
+/** ¿Alguna línea se está cobrando al precio mayorista? */
+export function hayPrecioMayorista(lineas: readonly LineaDeTicket[]): boolean {
+  return lineas.some((linea) => linea.origenDelPrecio === 'mayorista');
+}
+
+/**
+ * Cómo se describe el precio mayorista en el ticket: «desde 50 lb», «desde 30
+ * unidades». Dice DESDE CUÁNTO, que es lo que explica por qué la línea bajó de
+ * precio y por qué volvería a subir si se quita cantidad.
+ */
+export function descripcionDePrecioMayorista(linea: LineaDeTicket): string {
+  if (linea.mayorista === null) {
+    return '';
+  }
+  const cantidad = cantidadLegible(linea.mayorista.cantidadMinima);
+  if (linea.tipoMedida === 'peso') {
+    return `desde ${cantidad} ${linea.unidadPeso ?? ''}`.trim();
+  }
+  return `desde ${cantidad} ${Number(cantidad) === 1 ? 'unidad' : 'unidades'}`;
 }
 
 /**

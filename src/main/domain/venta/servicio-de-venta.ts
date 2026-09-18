@@ -42,6 +42,7 @@ import {
   sumar,
   sumarLista,
 } from '@shared/money';
+import { precioDeLinea, type OrigenDelPrecio } from '@shared/precio-de-linea';
 import { ErrorDeNegocio, errorDeConflictoDeInventario } from '@main/database/errores';
 import {
   encolarLote,
@@ -174,6 +175,8 @@ export interface ResultadoDeVenta {
   readonly lineas: number;
   /** Cuántas líneas se cobraron a un precio especial vigente. */
   readonly lineasConPrecioEspecial: number;
+  /** Cuántas líneas se cobraron a precio mayorista (spec 002). */
+  readonly lineasConPrecioMayorista: number;
 }
 
 /** Dependencias del servicio. */
@@ -206,7 +209,14 @@ interface LineaResuelta {
   readonly saldoNuevo: Decimal;
   readonly cantidadVendidaNueva: Decimal;
   readonly ordenLinea: number;
+  /**
+   * El precio especial que FIJÓ el precio de la línea, o `null`. Desde la spec
+   * 002 puede haber un especial vigente que no lo fijó: si el mayorista era
+   * más barato, ganó el mayorista y este campo queda en `null`.
+   */
   readonly especialAplicado: PrecioEspecial | null;
+  /** De dónde salió el precio: lista, especial o mayorista (spec 002). */
+  readonly origen: OrigenDelPrecio;
 }
 
 /** El descuento ya validado contra el tope del rol. */
@@ -430,7 +440,20 @@ export class ServicioDeVenta {
               cantidad: cantidadACadena(linea.cantidad),
               precioBase: montoACadena(linea.producto.precioBase),
               precioUnitario: montoACadena(linea.precioUnitario),
+              // Por qué se cobró ESE precio (spec 002, §7): lista, especial o
+              // mayorista. Un auditor que vea un precio distinto del de lista
+              // no tiene que reconstruirlo.
+              origenDelPrecio: linea.origen,
               precioEspecialId: linea.especialAplicado?.id ?? null,
+              // La configuración mayorista del producto en ese momento, se haya
+              // usado o no: con ella se ve si la cantidad calificaba.
+              mayorista:
+                linea.producto.mayorista === null
+                  ? null
+                  : {
+                      precio: montoACadena(linea.producto.mayorista.precio),
+                      cantidadMinima: cantidadACadena(linea.producto.mayorista.cantidadMinima),
+                    },
               saldoAnterior: cantidadACadena(linea.producto.inventarioDisponible),
               saldoNuevo: cantidadACadena(linea.saldoNuevo),
             })),
@@ -502,8 +525,8 @@ export class ServicioDeVenta {
           descuentoAplicado: montoACadena(descuentoAplicado ?? 0),
           total: montoACadena(total),
           lineas: resueltas.length,
-          lineasConPrecioEspecial: resueltas.filter((linea) => linea.especialAplicado !== null)
-            .length,
+          lineasConPrecioEspecial: resueltas.filter((linea) => linea.origen === 'especial').length,
+          lineasConPrecioMayorista: resueltas.filter((linea) => linea.origen === 'mayorista').length,
         };
       });
 
@@ -758,7 +781,24 @@ export class ServicioDeVenta {
       );
     }
 
+    /*
+      EL PRECIO DE LA LÍNEA (spec 002): el menor entre lista, especial vigente
+      y mayorista si la cantidad llega al umbral. La regla del precio especial
+      no cambia —la sigue calculando `precioEfectivoDe`— y su resultado entra
+      como un candidato más. La elección la hace `precioDeLinea`, la MISMA
+      función que usa la pantalla para mostrar el precio mientras se arma el
+      ticket: dos copias de la regla terminarían cobrando un precio distinto
+      del que el cliente vio.
+    */
     const efectivo = precioEfectivoDe(producto.precioBase, vigentes.get(producto.id) ?? []);
+    const elegido = precioDeLinea(
+      {
+        lista: producto.precioBase,
+        especial: efectivo.especialAplicado === null ? null : efectivo.precio,
+        mayorista: producto.mayorista,
+      },
+      cantidad,
+    );
     const saldoNuevo = redondearCantidad(restar(producto.inventarioDisponible, cantidad));
 
     /*
@@ -779,12 +819,13 @@ export class ServicioDeVenta {
     return {
       producto,
       cantidad,
-      precioUnitario: efectivo.precio,
-      subtotalExacto: multiplicar(cantidad, efectivo.precio),
+      precioUnitario: elegido.precio,
+      subtotalExacto: multiplicar(cantidad, elegido.precio),
       saldoNuevo,
       cantidadVendidaNueva: redondearCantidad(sumar(producto.cantidadVendida, cantidad)),
       ordenLinea: indice,
-      especialAplicado: efectivo.especialAplicado,
+      especialAplicado: elegido.origen === 'especial' ? efectivo.especialAplicado : null,
+      origen: elegido.origen,
     };
   }
 }

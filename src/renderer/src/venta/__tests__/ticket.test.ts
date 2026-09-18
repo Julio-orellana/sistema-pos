@@ -20,8 +20,10 @@ import {
   descripcionDePrecioEspecial,
   descuentoDelTicket,
   excedeInventarioConocido,
+  descripcionDePrecioMayorista,
   fijarCantidad,
   hayPrecioEspecial,
+  hayPrecioMayorista,
   quitarDelTicket,
   subtotalDeLineaParaMostrar,
   subtotalExactoDelTicket,
@@ -43,6 +45,7 @@ const MAIZ: ProductoParaVender = {
   precioBase: '0.67',
   precioEfectivo: '0.67',
   precioEspecial: null,
+  mayorista: null,
   inventarioDisponible: '8.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -60,6 +63,7 @@ const HUEVOS: ProductoParaVender = {
   precioBase: '42.00',
   precioEfectivo: '42.00',
   precioEspecial: null,
+  mayorista: null,
   inventarioDisponible: '24.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -428,5 +432,102 @@ describe('Descuento del ticket: lo que se muestra es lo que se va a cobrar', () 
     const pedido = { tipo: 'porcentaje' as const, valor: decimal('50') };
     // La mitad de 1.005 es 0.5025, y 1.005 − 0.5025 = 0.5025 → 0.50.
     expect(montoACadena(totalDelTicketConDescuento(lineas, pedido))).toBe('0.50');
+  });
+});
+
+// ===========================================================================
+/*
+  SPEC 002 — El precio mayorista en el ticket (CA-12): el precio de la línea se
+  recalcula EN VIVO cada vez que cambia la cantidad, con la misma función que
+  usa el proceso principal al cobrar (`@shared/precio-de-linea`).
+
+  Maíz por libra: lista Q6.00, mayorista Q5.50 desde 50 lb, ícono de 1 lb.
+*/
+const MAIZ_MAYORISTA: ProductoParaVender = {
+  ...MAIZ,
+  id: 'p-maiz-mayorista',
+  cantidadPredefinidaIcono: '1.000',
+  precioBase: '6.00',
+  precioEfectivo: '6.00',
+  mayorista: { precio: '5.50', cantidadMinima: '50.000' },
+  inventarioDisponible: '500.000',
+};
+
+/** Precio, origen y subtotal de la única línea, legibles juntos. */
+function linea(lineas: readonly LineaDeTicket[]): string {
+  const [primera] = lineas;
+  if (primera === undefined) {
+    throw new Error('El ticket está vacío.');
+  }
+  return `${primera.cantidad} × ${primera.precioUnitario} ${primera.origenDelPrecio} = ${subtotalDeLineaParaMostrar(primera)}`;
+}
+
+describe('SPEC 002 — El precio mayorista se recalcula en vivo al cambiar la cantidad (CA-12)', () => {
+  it('al agregar 1 lb se cobra la LISTA', () => {
+    expect(linea(agregarAlTicket([], MAIZ_MAYORISTA))).toBe('1.000 × 6.00 lista = 6.00');
+  });
+
+  it('con el TECLADO, llegar a 50 lb pasa al precio mayorista; 49.999 lo devuelve a la lista', () => {
+    let lineas = agregarAlTicket([], MAIZ_MAYORISTA);
+    lineas = fijarCantidad(lineas, MAIZ_MAYORISTA.id, '50');
+    expect(linea(lineas)).toBe('50.000 × 5.50 mayorista = 275.00');
+    expect(totalDelTicketParaMostrar(lineas)).toBe('275.00');
+
+    lineas = fijarCantidad(lineas, MAIZ_MAYORISTA.id, '49.999');
+    expect(linea(lineas)).toBe('49.999 × 6.00 lista = 299.99');
+    expect(totalDelTicketParaMostrar(lineas)).toBe('299.99');
+
+    lineas = fijarCantidad(lineas, MAIZ_MAYORISTA.id, '80');
+    expect(linea(lineas)).toBe('80.000 × 5.50 mayorista = 440.00');
+  });
+
+  it('VOLVIENDO A TOCAR EL ÍCONO también se cruza el umbral: 49 lb + 1 lb = 50 lb a precio mayorista', () => {
+    let lineas = fijarCantidad(agregarAlTicket([], MAIZ_MAYORISTA), MAIZ_MAYORISTA.id, '49');
+    expect(linea(lineas)).toBe('49.000 × 6.00 lista = 294.00');
+
+    lineas = agregarAlTicket(lineas, MAIZ_MAYORISTA);
+    expect(linea(lineas)).toBe('50.000 × 5.50 mayorista = 275.00');
+  });
+
+  it('con especial y mayorista: gana el menor, y el origen dice cuál', () => {
+    const conEspecialDel5: ProductoParaVender = {
+      ...MAIZ_MAYORISTA,
+      precioEfectivo: '5.70',
+      precioEspecial: {
+        id: 'pe-1',
+        tipo: 'porcentaje',
+        valor: '5.00',
+        vigenteDesde: '2026-09-01T00:00:00.000Z',
+        vigenteHasta: null,
+      },
+    };
+    let lineas = agregarAlTicket([], conEspecialDel5);
+    expect(linea(lineas)).toBe('1.000 × 5.70 especial = 5.70');
+    lineas = fijarCantidad(lineas, conEspecialDel5.id, '50');
+    expect(linea(lineas)).toBe('50.000 × 5.50 mayorista = 275.00');
+    expect(hayPrecioMayorista(lineas)).toBe(true);
+    expect(hayPrecioEspecial(lineas)).toBe(false);
+  });
+
+  it('un producto sin mayorista no cambia de precio con ninguna cantidad', () => {
+    let lineas = agregarAlTicket([], { ...MAIZ_MAYORISTA, mayorista: null });
+    lineas = fijarCantidad(lineas, MAIZ_MAYORISTA.id, '1000');
+    expect(linea(lineas)).toBe('1000.000 × 6.00 lista = 6000.00');
+  });
+
+  it('la descripción dice DESDE CUÁNTO, en la unidad del producto', () => {
+    const [porLibra] = agregarAlTicket([], MAIZ_MAYORISTA);
+    const [porUnidad] = agregarAlTicket([], {
+      ...HUEVOS,
+      mayorista: { precio: '40.00', cantidadMinima: '30.000' },
+    });
+    const [porKilo] = agregarAlTicket([], {
+      ...MAIZ_MAYORISTA,
+      unidadPeso: 'kg',
+      mayorista: { precio: '5.50', cantidadMinima: '25.500' },
+    });
+    expect(porLibra === undefined ? '' : descripcionDePrecioMayorista(porLibra)).toBe('desde 50 lb');
+    expect(porUnidad === undefined ? '' : descripcionDePrecioMayorista(porUnidad)).toBe('desde 30 unidades');
+    expect(porKilo === undefined ? '' : descripcionDePrecioMayorista(porKilo)).toBe('desde 25.5 kg');
   });
 });

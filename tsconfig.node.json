@@ -3,6 +3,12 @@
   "include": [
     "src/main/**/*.ts",
     "src/shared/**/*.ts",
+    // El ticket de la pantalla de venta es lógica PURA (solo importa de
+    // src/shared). Se compila también acá para que la prueba que compara lo que
+    // la pantalla muestra con lo que el cobro guarda (spec 002, CA-13,
+    // precio-mayorista-en-la-venta.test.ts) use ESE módulo tal cual, y no una
+    // copia de su cálculo escrita en la prueba.
+    "src/renderer/src/venta/ticket.ts",
     "electron.vite.config.ts",
     "vitest.config.ts",
     "vitest.nube.config.ts"

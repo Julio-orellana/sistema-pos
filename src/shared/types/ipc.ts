@@ -993,15 +993,19 @@ export interface ProductoParaVender {
   /** Precio de lista. Cadena canónica de dos decimales. */
   readonly precioBase: string;
   /**
-   * El precio que se le cobra HOY, ya con el precio especial vigente aplicado.
+   * El precio de HOY SIN el precio mayorista: el de lista con el precio
+   * especial vigente aplicado, o el de lista si no hay ninguno.
    *
-   * Es igual a `precioBase` cuando no hay ninguno vigente. La pantalla cobra
-   * SIEMPRE por este, nunca por `precioBase`: el de lista queda solo para
-   * poder mostrar tachado de cuánto bajó.
+   * Desde la spec 002 no es necesariamente lo que se cobra: si la cantidad de
+   * la línea llega a `mayorista.cantidadMinima`, el precio mayorista compite, y
+   * se cobra el menor (`src/shared/precio-de-linea.ts`). Hasta ese umbral, es
+   * este.
    */
   readonly precioEfectivo: string;
-  /** El precio especial que se está aplicando, o `null` si se cobra el de lista. */
+  /** El precio especial vigente, o `null` si no hay ninguno. */
   readonly precioEspecial: PrecioEspecialVigente | null;
+  /** El precio mayorista del producto, o `null` si no tiene (spec 002). */
+  readonly mayorista: PrecioMayoristaIpc | null;
   /**
    * Inventario conocido AL MOMENTO de cargar la pantalla.
    *
@@ -1189,6 +1193,8 @@ export interface VentaRegistrada {
   readonly lineas: number;
   /** Cuántas líneas se cobraron con un precio especial vigente. */
   readonly lineasConPrecioEspecial: number;
+  /** Cuántas líneas se cobraron a precio mayorista (spec 002). */
+  readonly lineasConPrecioMayorista: number;
   /**
    * El recibo que se emitió junto con la venta.
    *

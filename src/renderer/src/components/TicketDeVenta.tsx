@@ -4,11 +4,16 @@
  * NO ESCRIBE NADA. Muestra y edita el carrito en memoria; el botón de cobrar
  * abre el diálogo que sí registra la venta, en el proceso principal.
  *
- * CUANDO UNA LÍNEA LLEVA PRECIO ESPECIAL SE VE. Se marca la línea y se muestra
- * el precio de lista tachado al lado del que se está cobrando. Aplicar una
- * rebaja en silencio dejaría al cajero sin poder explicarle al cliente de
- * dónde salió el precio, y sin poder notar que una promoción vencida sigue
- * puesta.
+ * CUANDO UNA LÍNEA NO SE COBRA AL PRECIO DE LISTA, SE VE. Se marca la línea y
+ * se dice por qué —«Precio especial» o, desde la spec 002, «Precio mayorista»—,
+ * con el precio de lista tachado al lado. Aplicar una rebaja en silencio
+ * dejaría al cajero sin poder explicarle al cliente de dónde salió el precio,
+ * y sin poder notar que una promoción vencida sigue puesta.
+ *
+ * La marca sale del ORIGEN del precio (`origenDelPrecio`), no de si hay un
+ * precio especial vigente: con un especial vigente y la cantidad en el umbral,
+ * puede ganar el mayorista, y entonces la marca es la del mayorista. Nunca las
+ * dos a la vez: se nombra la que fijó el precio.
  */
 
 import { formatearQuetzales } from '@shared/money';
@@ -17,6 +22,7 @@ import {
   avisoDeInventario,
   cantidadLegible,
   descripcionDePrecioEspecial,
+  descripcionDePrecioMayorista,
   subtotalDeLineaParaMostrar,
   totalDelTicketParaMostrar,
   unidadDe,
@@ -69,7 +75,8 @@ export function TicketDeVenta({
                   className={[
                     'ticket__linea',
                     lineaEnEdicion === linea.productoId ? 'ticket__linea--activa' : '',
-                    linea.precioEspecial === null ? '' : 'ticket__linea--especial',
+                    linea.origenDelPrecio === 'especial' ? 'ticket__linea--especial' : '',
+                    linea.origenDelPrecio === 'mayorista' ? 'ticket__linea--mayorista' : '',
                   ]
                     .filter((clase) => clase !== '')
                     .join(' ')}
@@ -105,10 +112,26 @@ export function TicketDeVenta({
                     compite por espacio con el subtotal y se parte en cuatro
                     renglones. Se vio manejando la aplicación real.
                   */}
-                  {linea.precioEspecial !== null && (
+                  {linea.origenDelPrecio === 'especial' && linea.precioEspecial !== null && (
                     <p className="ticket__especial" data-prueba="precio-especial">
                       Precio especial · {descripcionDePrecioEspecial(linea.precioEspecial)} ·{' '}
                       antes{' '}
+                      <s className="ticket__precio-viejo" data-prueba="precio-de-lista">
+                        {formatearQuetzales(linea.precioBase)}
+                      </s>
+                    </p>
+                  )}
+
+                  {/*
+                    El precio mayorista (spec 002), en la MISMA fila y con el
+                    mismo tamaño que el especial, pero con su propio nombre y su
+                    propio color: son dos motivos distintos para el mismo precio
+                    más bajo, y el cajero tiene que poder decir cuál es. Aparece
+                    y desaparece sola cuando la cantidad cruza el umbral.
+                  */}
+                  {linea.origenDelPrecio === 'mayorista' && (
+                    <p className="ticket__especial ticket__mayorista" data-prueba="precio-mayorista">
+                      Precio mayorista · {descripcionDePrecioMayorista(linea)} · antes{' '}
                       <s className="ticket__precio-viejo" data-prueba="precio-de-lista">
                         {formatearQuetzales(linea.precioBase)}
                       </s>

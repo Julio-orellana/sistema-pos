@@ -29,7 +29,7 @@ import {
   type RespuestaIpc,
   type TurnoAbierto,
 } from '@shared/types/ipc';
-import { cantidadACadena, montoACadena } from '@shared/money';
+import { montoACadena } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
 import { requiereSesion, type SesionActual } from '@main/domain/usuarios/sesion';
 import type { ServicioDeAutenticacion } from '@main/domain/usuarios/autenticacion';
@@ -43,9 +43,9 @@ import type {
 import type { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
 import type { RepositorioDePreciosEspeciales } from '@main/database/repositories/precios-especiales';
 import type { RepositorioDeUsuarios } from '@main/database/repositories/usuarios';
-import { precioEfectivoDe } from '@main/domain/venta/precios';
 import { urlDeFoto } from '@main/domain/catalogo/almacen-de-fotos';
 import { ejecutarConRespuesta } from './respuesta';
+import { productoParaVender } from './producto-para-vender';
 
 /** Dependencias que necesitan los manejadores de venta. */
 export interface DependenciasDeVenta {
@@ -178,39 +178,14 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
             new Date(ahora()).toISOString(),
           );
 
-          const paraLaCuadricula: ProductoParaVender[] = activos.map((producto) => {
-            const efectivo = precioEfectivoDe(
-              producto.precioBase,
+          const paraLaCuadricula: ProductoParaVender[] = activos.map((producto) =>
+            productoParaVender(
+              producto,
               vigentes.get(producto.id) ?? [],
-            );
-            const especial = efectivo.especialAplicado;
-
-            return {
-              id: producto.id,
-              nombre: producto.nombre,
-              categoriaId: producto.categoriaId,
-              categoriaNombre:
-                nombresDeCategorias.get(producto.categoriaId) ?? '(categoría desconocida)',
-              tipoMedida: producto.tipoMedida,
-              unidadPeso: producto.unidadPeso,
-              cantidadPredefinidaIcono: cantidadACadena(producto.cantidadPredefinidaIcono),
-              precioBase: montoACadena(producto.precioBase),
-              precioEfectivo: montoACadena(efectivo.precio),
-              precioEspecial:
-                especial === null
-                  ? null
-                  : {
-                      id: especial.id,
-                      tipo: especial.tipo,
-                      valor: montoACadena(especial.valor),
-                      vigenteDesde: especial.vigenteDesde,
-                      vigenteHasta: especial.vigenteHasta,
-                    },
-              inventarioDisponible: cantidadACadena(producto.inventarioDisponible),
-              fotoUrl: producto.fotoPath === null ? null : urlDeFoto(producto.fotoPath),
-              contadorVentas: producto.contadorVentas,
-            };
-          });
+              nombresDeCategorias.get(producto.categoriaId) ?? '(categoría desconocida)',
+              producto.fotoPath === null ? null : urlDeFoto(producto.fotoPath),
+            ),
+          );
 
           const listo: EstadoDeVenta = {
             puedeVender: true,
@@ -387,6 +362,7 @@ export function registrarManejadoresDeVenta(dependencias: DependenciasDeVenta): 
             numBoleta: resultado.venta.numBoleta,
             lineas: resultado.lineas,
             lineasConPrecioEspecial: resultado.lineasConPrecioEspecial,
+            lineasConPrecioMayorista: resultado.lineasConPrecioMayorista,
             recibo: {
               id: emision.recibo.id,
               numeroRecibo: emision.recibo.numeroRecibo,

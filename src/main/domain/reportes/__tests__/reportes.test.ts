@@ -731,3 +731,49 @@ describe('EL MARGEN USA LA FOTO DEL COSTO DE CADA VENTA, no el catálogo de hoy'
     expect(reporte.margenTotal).toBe(montoACadena(columna));
   });
 });
+
+// ===========================================================================
+/*
+  SPEC 002, CA-16 — El margen refleja una venta a PRECIO MAYORISTA.
+
+  No hizo falta tocar el reporte: el margen sale de `subtotal_impreso`, que
+  deriva de `precio_unitario_snap`, y ahí la venta congela el precio que eligió.
+  El pedido fue explícito —«confirmalo, no lo asumas»—, así que se comprueba
+  con números.
+*/
+describe('SPEC 002 — EL MARGEN DE UNA VENTA A PRECIO MAYORISTA', () => {
+  const filaDelMaiz = (): ReturnType<ServicioDeReportes['ventasPorProducto']>['productos'][number] | undefined =>
+    reportes.ventasPorProducto({ clase: 'hoy' }).productos.find((f) => f.productoId === idMaiz);
+
+  it('CA-16: 50 lb a Q5.50 con costo Q4.00 dan Q275.00 cobrados y Q75.00 de margen (a precio de lista habría sido Q100.00)', () => {
+    base
+      .prepare(
+        "UPDATE productos SET precio_compra = '4.00', precio_mayorista = '5.50', cantidad_minima_mayorista = '50.000' WHERE id = ?",
+      )
+      .run(idMaiz);
+
+    expect(vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '50' }])).toBe('275.00');
+
+    const linea = base
+      .prepare('SELECT precio_unitario_snap, subtotal_impreso, costo_unitario_snap FROM venta_detalle WHERE producto_id = ?')
+      .get(idMaiz);
+    expect(linea).toEqual({ precio_unitario_snap: '5.50', subtotal_impreso: '275.00', costo_unitario_snap: '4.00' });
+    expect(filaDelMaiz()?.montoGenerado).toBe('275.00');
+    // 275.00 − 4.00 × 50 = 75.00.
+    expect(filaDelMaiz()?.margen).toBe('75.00');
+  });
+
+  it('una venta a precio de lista y otra a precio mayorista del mismo producto suman su margen cada una con su precio', () => {
+    base
+      .prepare(
+        "UPDATE productos SET precio_compra = '4.00', precio_mayorista = '5.50', cantidad_minima_mayorista = '50.000' WHERE id = ?",
+      )
+      .run(idMaiz);
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '10' }]);
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '50' }]);
+
+    // (60.00 − 40.00) + (275.00 − 200.00) = 20.00 + 75.00 = 95.00.
+    expect(filaDelMaiz()?.montoGenerado).toBe('335.00');
+    expect(filaDelMaiz()?.margen).toBe('95.00');
+  });
+});

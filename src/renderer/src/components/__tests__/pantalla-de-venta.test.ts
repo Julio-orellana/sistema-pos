@@ -38,6 +38,7 @@ const MAIZ: ProductoParaVender = {
   precioBase: '4.25',
   precioEfectivo: '4.25',
   precioEspecial: null,
+  mayorista: null,
   inventarioDisponible: '8.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -54,6 +55,7 @@ const HUEVOS: ProductoParaVender = {
   precioBase: '42.00',
   precioEfectivo: '42.00',
   precioEspecial: null,
+  mayorista: null,
   inventarioDisponible: '24.000',
   fotoUrl: null,
   contadorVentas: 0,
@@ -104,6 +106,7 @@ const VENTA_OK: ResultadoDeCobro = {
   numBoleta: null,
   lineas: 1,
   lineasConPrecioEspecial: 0,
+  lineasConPrecioMayorista: 0,
   recibo: {
     id: 'r-1',
     numeroRecibo: 1,
@@ -779,5 +782,94 @@ describe('LA VENTA SE CONFIRMA SIN ESPERAR A LA IMPRESORA (§4.64)', () => {
     await clic(exigir('cobro-siguiente-venta'));
     await avisarImpresion({ reciboId: 'r-1', numeroRecibo: 1, impreso: true, mensaje: 'ok' });
     expect(porPrueba('venta-papel-del-recibo')).toBeNull();
+  });
+});
+
+// ===========================================================================
+/*
+  SPEC 002 — La marca del precio en la línea (V3): «Precio mayorista» o
+  «Precio especial», en la misma fila, según cuál fijó el precio; y el cambio
+  en vivo al cruzar el umbral con el teclado.
+
+  Maíz por libra: lista Q6.00, mayorista Q5.50 desde 50 lb.
+*/
+describe('SPEC 002 — La línea dice si se cobra a precio mayorista o especial', () => {
+  const MAIZ_MAYORISTA: ProductoParaVender = {
+    ...MAIZ,
+    precioBase: '6.00',
+    precioEfectivo: '6.00',
+    mayorista: { precio: '5.50', cantidadMinima: '50.000' },
+    inventarioDisponible: '500.000',
+  };
+
+  async function teclear(cantidad: string): Promise<void> {
+    await clic(exigir('tocar-linea'));
+    for (const caracter of cantidad) {
+      await clic(exigir(`tecla-${caracter === '.' ? 'punto' : caracter}`));
+    }
+    await clic(exigir('tecla-confirmar'));
+  }
+
+  it('con 1 lb no hay marca; al teclear 50 aparece «Precio mayorista · desde 50 lb», y al bajar a 49.999 se va', async () => {
+    instalarApi({ ...PUEDE_VENDER, productos: [MAIZ_MAYORISTA, HUEVOS] });
+    await montar();
+    await tocarProducto('p-maiz');
+
+    expect(porPrueba('precio-mayorista')).toBeNull();
+    expect(porPrueba('precio-especial')).toBeNull();
+
+    await teclear('50');
+    expect(porPrueba('precio-mayorista')?.textContent).toBe('Precio mayorista · desde 50 lb · antes Q6.00');
+    expect(porPrueba('precio-especial')).toBeNull();
+    expect(porPrueba('total-del-ticket')?.textContent).toContain('275.00');
+    expect(exigir('linea-de-ticket').className).toContain('ticket__linea--mayorista');
+
+    await teclear('49.999');
+    expect(porPrueba('precio-mayorista')).toBeNull();
+    expect(porPrueba('total-del-ticket')?.textContent).toContain('299.99');
+    expect(exigir('linea-de-ticket').className).not.toContain('ticket__linea--mayorista');
+  });
+
+  it('con un especial MÁS BARATO que el mayorista, la marca es la del especial aunque la cantidad califique', async () => {
+    const conEspecial: ProductoParaVender = {
+      ...MAIZ_MAYORISTA,
+      precioEfectivo: '5.40',
+      precioEspecial: { id: 'pe-10', tipo: 'porcentaje', valor: '10.00', vigenteDesde: '2026-09-01T00:00:00.000Z', vigenteHasta: null },
+    };
+    instalarApi({ ...PUEDE_VENDER, productos: [conEspecial, HUEVOS] });
+    await montar();
+    await tocarProducto('p-maiz');
+    await teclear('60');
+
+    expect(porPrueba('precio-especial')?.textContent).toBe('Precio especial · 10 % menos · antes Q6.00');
+    expect(porPrueba('precio-mayorista')).toBeNull();
+  });
+
+  it('con un especial MÁS CARO que el mayorista, al llegar al umbral la marca pasa a ser la del mayorista, nunca las dos', async () => {
+    const conEspecial: ProductoParaVender = {
+      ...MAIZ_MAYORISTA,
+      precioEfectivo: '5.70',
+      precioEspecial: { id: 'pe-5', tipo: 'porcentaje', valor: '5.00', vigenteDesde: '2026-09-01T00:00:00.000Z', vigenteHasta: null },
+    };
+    instalarApi({ ...PUEDE_VENDER, productos: [conEspecial, HUEVOS] });
+    await montar();
+    await tocarProducto('p-maiz');
+    expect(porPrueba('precio-especial')).not.toBeNull();
+
+    await teclear('50');
+    expect(porPrueba('precio-mayorista')).not.toBeNull();
+    expect(porPrueba('precio-especial')).toBeNull();
+  });
+
+  it('el cobro manda SOLO producto y cantidad: el precio lo vuelve a decidir el proceso principal', async () => {
+    instalarApi({ ...PUEDE_VENDER, productos: [MAIZ_MAYORISTA, HUEVOS] });
+    await montar();
+    await tocarProducto('p-maiz');
+    await teclear('50');
+    await clic(exigir('cobrar'));
+    await clic(exigir('cobro-continuar'));
+    await clic(exigir('cobro-confirmar'));
+
+    expect(cobrosPedidos[0]?.lineas).toEqual([{ productoId: 'p-maiz', cantidad: '50.000' }]);
   });
 });

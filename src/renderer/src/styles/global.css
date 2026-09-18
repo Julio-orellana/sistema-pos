@@ -1565,6 +1565,21 @@ button:disabled {
   font: 600 14px/1.3 var(--venta-titulo, inherit);
 }
 
+/*
+  El precio mayorista (spec 002): la misma fila y el mismo tamaño que el
+  especial —«visible pero discreta»—, con el ámbar de la insignia de «más
+  vendido» en vez del verde, para que se distinga de un vistazo cuál de los dos
+  motivos bajó el precio. Tampoco es rojo: en esta pantalla, rojo es error.
+*/
+.ticket__linea--mayorista {
+  border-left: 4px solid var(--venta-ambar, oklch(0.74 0.14 72));
+}
+
+.ticket__mayorista {
+  background: var(--venta-aviso-fondo, oklch(0.94 0.045 82));
+  color: var(--venta-ambar-texto, oklch(0.28 0.04 70));
+}
+
 /* --- Confirmación de la venta recién registrada -------------------------- */
 
 .aviso-exito {
