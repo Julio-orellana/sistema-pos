@@ -68,6 +68,14 @@ const FALTA_EL_PRECIO = 'Falta el precio mayorista.';
 const CANTIDAD_NO_POSITIVA = 'La cantidad mínima para el precio mayorista tiene que ser mayor que cero.';
 const noMenorQueLaLista = (precio, lista) =>
   `El precio mayorista (${precio}) tiene que ser menor que el precio de lista (${lista}). Bajá el precio mayorista o quitalo.`;
+const listaPorDebajoDelMayorista = (precio) =>
+  `No podés bajar el precio de lista por debajo del precio mayorista de ${precio}: ajustá el mayorista primero, o quitalo.`;
+const PRECIO_NO_POSITIVO = 'El precio mayorista tiene que ser mayor que cero.';
+const AVISO_DE_UNIDAD_CAMBIADA =
+  'Al cambiar cómo se vende este producto se quita su precio mayorista (Q5.50 desde 50.000 lb). ' +
+  'Guardá el producto y después cargalo de nuevo en la unidad nueva.';
+/** Lo que NUNCA puede leer quien usa la pantalla: el idioma de SQLite. */
+const JERGA_DE_LA_BASE = /productos_mayorista|CHECK constraint|SQLITE_|constraint failed/i;
 const MARCA_DEL_MAYORISTA = 'Precio mayorista · desde 50 lb · antes Q6.00';
 
 const comprobaciones = [];
@@ -512,6 +520,9 @@ async function main() {
     // ==========================================================================
     // LA DECISIÓN 1 (CA-24): bajar la lista hasta el mayorista, en las tres capas
     // ==========================================================================
+    //   Desde el 2026-09-18 el aviso dice que lo que se movió fue la LISTA (pedido
+    //   de Julio). Antes decía «El precio mayorista (Q5.50) tiene que ser menor
+    //   que el precio de lista (Q5.00). Bajá el precio mayorista o quitalo.»
     await escribirConElTeclado('producto-precio', '5.50');
     const listaIgual = await estadoDelFormulario();
     await escribirConElTeclado('producto-precio', '5.00');
@@ -521,13 +532,53 @@ async function main() {
     anotar(`lista 5.00: ${describirFormulario(listaMenor)}`);
     await capturar('4-lista-por-debajo-del-mayorista');
     comprobar(
-      'CA-24 · FORMULARIO: bajar la lista a Q5.50 o a Q5.00 se avisa con el texto del servicio y no se puede guardar',
-      `${JSON.stringify(noMenorQueLaLista('Q5.50', 'Q5.50'))} / ${JSON.stringify(noMenorQueLaLista('Q5.50', 'Q5.00'))}; deshabilitado`,
+      'CA-24 · FORMULARIO: bajar la lista a Q5.50 o a Q5.00 dice que no se puede bajar la lista por debajo del mayorista, y no deja guardar',
+      `${JSON.stringify(listaPorDebajoDelMayorista('Q5.50'))} dos veces; deshabilitado`,
       `${JSON.stringify(listaIgual.impedimento)} (${listaIgual.guardar}) / ${JSON.stringify(listaMenor.impedimento)} (${listaMenor.guardar})`,
-      listaIgual.impedimento === noMenorQueLaLista('Q5.50', 'Q5.50') &&
+      listaIgual.impedimento === listaPorDebajoDelMayorista('Q5.50') &&
         listaIgual.guardar === 'deshabilitado' &&
-        listaMenor.impedimento === noMenorQueLaLista('Q5.50', 'Q5.00') &&
+        listaMenor.impedimento === listaPorDebajoDelMayorista('Q5.50') &&
         listaMenor.guardar === 'deshabilitado',
+    );
+    // Tocar «Guardar» igual: está deshabilitado y no manda nada. Lo que queda en
+    // la pantalla, entero, no puede tener ni una palabra de SQLite.
+    const edicionesAntes = leerBase(
+      "SELECT count(*) AS n FROM auditoria_log WHERE accion = 'producto_editado' AND entidad_id = ?",
+      maizId,
+    )[0]?.n;
+    await prueba('producto-guardar').click({ force: true });
+    await espera(600);
+    const pantallaEntera = sinEspaciosDeMas(await ventana.locator('body').innerText());
+    const edicionesDespues = leerBase(
+      "SELECT count(*) AS n FROM auditoria_log WHERE accion = 'producto_editado' AND entidad_id = ?",
+      maizId,
+    )[0]?.n;
+    const listaGuardada = leerBase('SELECT precio_base FROM productos WHERE id = ?', maizId)[0]?.precio_base;
+    anotar(`texto visible de la pantalla con la lista en 5.00, después de tocar «Guardar»: ${JSON.stringify(pantallaEntera)}`);
+    anotar(`asientos producto_editado del maíz antes/después del toque: ${String(edicionesAntes)}/${String(edicionesDespues)}; lista guardada ${String(listaGuardada)}`);
+    comprobar(
+      'CA-24 · LO QUE VE JIMMY: tocar «Guardar» no guarda nada, y en toda la pantalla no aparece el nombre de la restricción ni el idioma de SQLite',
+      'sin jerga de la base; el aviso de la lista a la vista; 0 ediciones nuevas; lista 6.00',
+      `jerga: ${JSON.stringify(pantallaEntera.match(JERGA_DE_LA_BASE)?.[0] ?? null)}; aviso a la vista: ${String(pantallaEntera.includes(listaPorDebajoDelMayorista('Q5.50')))}; ediciones nuevas: ${String(Number(edicionesDespues) - Number(edicionesAntes))}; lista ${String(listaGuardada)}`,
+      !JERGA_DE_LA_BASE.test(pantallaEntera) &&
+        pantallaEntera.includes(listaPorDebajoDelMayorista('Q5.50')) &&
+        edicionesDespues === edicionesAntes &&
+        listaGuardada === '6.00',
+    );
+
+    // Q0.00 como precio mayorista (punto 55): el formulario lo frena antes de
+    // llegar al servicio y a la base.
+    await escribirConElTeclado('producto-precio', '6.00');
+    await escribirConElTeclado('producto-precio-mayorista', '0.00');
+    const mayoristaCero = await estadoDelFormulario();
+    await cerrarElTeclado();
+    anotar(`mayorista 0.00 con lista 6.00: ${describirFormulario(mayoristaCero)}`);
+    await capturar('4b-mayorista-en-cero');
+    comprobar(
+      'PUNTO 55 · FORMULARIO: un precio mayorista de Q0.00 se avisa y no deja guardar',
+      `${JSON.stringify(PRECIO_NO_POSITIVO)}; deshabilitado`,
+      `${JSON.stringify(mayoristaCero.impedimento)}; ${mayoristaCero.guardar}`,
+      mayoristaCero.impedimento === PRECIO_NO_POSITIVO && mayoristaCero.guardar === 'deshabilitado',
     );
     await prueba('formulario-de-producto').getByRole('button', { name: 'Cancelar' }).click();
     await prueba('lista-de-productos').waitFor({ timeout: ESPERA_CORTA });
@@ -556,9 +607,36 @@ async function main() {
     anotar(`la fila después de los dos intentos: ${JSON.stringify(listaDespues)}`);
     comprobar(
       'CA-24 · SERVICIO (por el canal): se rechaza con el mensaje que dice qué hacer',
-      `ok=false, ${JSON.stringify(noMenorQueLaLista('Q5.50', 'Q5.00'))}`,
+      `ok=false, ${JSON.stringify(listaPorDebajoDelMayorista('Q5.50'))}`,
       JSON.stringify(porElCanal),
-      porElCanal.ok === false && porElCanal.mensaje === noMenorQueLaLista('Q5.50', 'Q5.00'),
+      porElCanal.ok === false && porElCanal.mensaje === listaPorDebajoDelMayorista('Q5.50'),
+    );
+    const cerosPorElCanal = await ventana.evaluate(async ({ id, categoriaId }) => {
+      const respuesta = await window.pos.catalogo.editarProducto({
+        id,
+        nombre: 'Maíz blanco',
+        categoriaId,
+        tipoMedida: 'peso',
+        unidadPeso: 'lb',
+        cantidadPredefinidaIcono: '25',
+        precioBase: '6.00',
+        precioCompra: null,
+        precioMayorista: '0.00',
+        cantidadMinimaMayorista: '50',
+        fotoPath: null,
+      });
+      return respuesta.ok ? { ok: true } : { ok: false, codigo: respuesta.error.codigo, mensaje: respuesta.error.mensaje };
+    }, { id: maizId, categoriaId: categoriaDelMaiz });
+    const ceroEnLaBase = intentarEnLaBase("UPDATE productos SET precio_mayorista = '0.00' WHERE id = ?", maizId);
+    anotar(`window.pos.catalogo.editarProducto(mayorista 0.00) → ${JSON.stringify(cerosPorElCanal)}`);
+    anotar(`UPDATE productos SET precio_mayorista = '0.00' (conexión aparte) → ${ceroEnLaBase}`);
+    comprobar(
+      'PUNTO 55 · SERVICIO Y BASE: Q0.00 se rechaza por el canal con su mensaje, y la base lo rechaza por productos_precio_mayorista_canonico',
+      `ok=false, ${JSON.stringify(PRECIO_NO_POSITIVO)}; productos_precio_mayorista_canonico`,
+      `${JSON.stringify(cerosPorElCanal)}; ${ceroEnLaBase}`,
+      cerosPorElCanal.ok === false &&
+        cerosPorElCanal.mensaje === PRECIO_NO_POSITIVO &&
+        ceroEnLaBase.includes('productos_precio_mayorista_canonico'),
     );
     comprobar(
       'CA-24 · BASE (una consulta a mano): la restricción productos_mayorista_menor_que_lista la rechaza, y la lista sigue en Q6.00',
@@ -749,6 +827,73 @@ async function main() {
       { detalle: '50 lb · Q6.00 c/u', subtotal: 'Q300.00', marca: null, total: 'Q300.00' },
     );
     await capturar('10-sin-mayorista-50-lb-lista');
+
+    // ==========================================================================
+    // PUNTO 56: cambiar la unidad de un producto CON mayorista lo quita, en la
+    // misma edición, y el asiento dice por qué
+    // ==========================================================================
+    await volver();
+    await prueba('ir-a-productos').click();
+    await prueba('lista-de-productos').waitFor({ timeout: ESPERA_CORTA });
+    await editar('Maíz blanco');
+    await prueba('producto-aplica-mayorista').click();
+    await escribirConElTeclado('producto-precio-mayorista', '5.50');
+    await escribirConElTeclado('producto-cantidad-minima-mayorista', '50');
+    await cerrarElTeclado();
+    await prueba('producto-guardar').click();
+    await prueba('lista-de-productos').waitFor({ timeout: ESPERA_CORTA });
+    const conMayoristaOtraVez = leerBase(
+      'SELECT unidad_peso, precio_mayorista, cantidad_minima_mayorista FROM productos WHERE id = ?',
+      maizId,
+    )[0];
+    anotar(`el maíz con su mayorista otra vez: ${JSON.stringify(conMayoristaOtraVez)}`);
+
+    await editar('Maíz blanco');
+    await fijarVentana();
+    await prueba('producto-unidad-peso').selectOption('kg');
+    const aviso = (await prueba('producto-aviso-mayorista-quitado').count()) === 1
+      ? await texto('producto-aviso-mayorista-quitado')
+      : null;
+    const quedaLaCasilla = await prueba('producto-aplica-mayorista').count();
+    anotar(`al pasar el maíz a kilogramos: aviso ${JSON.stringify(aviso)}; casilla en pantalla: ${String(quedaLaCasilla)}; campos: ${String(await camposDelMayorista())}`);
+    await capturar('11-cambio-de-unidad-quita-el-mayorista');
+    comprobar(
+      'PUNTO 56 · FORMULARIO: al pasar a kilogramos, la casilla y los campos se reemplazan por el aviso con lo que se va a quitar',
+      JSON.stringify(AVISO_DE_UNIDAD_CAMBIADA),
+      `${JSON.stringify(aviso)}; casilla ${String(quedaLaCasilla)}; campos ${String(await camposDelMayorista())}`,
+      aviso === AVISO_DE_UNIDAD_CAMBIADA && quedaLaCasilla === 0 && (await camposDelMayorista()) === 0,
+    );
+    await prueba('producto-guardar').click();
+    await prueba('lista-de-productos').waitFor({ timeout: ESPERA_CORTA });
+    const despuesDeCambiar = leerBase(
+      'SELECT unidad_peso, precio_mayorista, cantidad_minima_mayorista FROM productos WHERE id = ?',
+      maizId,
+    )[0];
+    const [asientoDelCambio] = leerBase(
+      "SELECT valor_anterior, valor_nuevo FROM auditoria_log WHERE accion = 'producto_editado' AND entidad_id = ? ORDER BY fecha DESC, rowid DESC LIMIT 1",
+      maizId,
+    );
+    const [loteDelCambio] = leerBase(
+      "SELECT payload FROM sync_cola WHERE entidad_tipo = 'productos' AND entidad_id = ? ORDER BY rowid DESC LIMIT 1",
+      maizId,
+    );
+    anotar(`la fila después de guardar en kg: ${JSON.stringify(despuesDeCambiar)}`);
+    anotar(`asiento producto_editado: antes ${String(asientoDelCambio?.valor_anterior)} | después ${String(asientoDelCambio?.valor_nuevo)}`);
+    anotar(`payload encolado: ${String(loteDelCambio?.payload)}`);
+    const nuevoDelAsiento = JSON.parse(asientoDelCambio?.valor_nuevo ?? '{}');
+    const anteriorDelAsiento = JSON.parse(asientoDelCambio?.valor_anterior ?? '{}');
+    comprobar(
+      'PUNTO 56 · BASE Y ASIENTO: la unidad quedó en kg, las dos columnas en NULL, y el asiento dice «cambio_de_unidad» con los valores de antes',
+      'kg, null, null; mayoristaQuitadoPor=cambio_de_unidad; antes 5.50 / 50.000 lb',
+      `${String(despuesDeCambiar?.unidad_peso)}, ${String(despuesDeCambiar?.precio_mayorista)}, ${String(despuesDeCambiar?.cantidad_minima_mayorista)}; mayoristaQuitadoPor=${String(nuevoDelAsiento.mayoristaQuitadoPor)}; antes ${String(anteriorDelAsiento.precioMayorista)} / ${String(anteriorDelAsiento.cantidadMinimaMayorista)} ${String(anteriorDelAsiento.unidadPeso)}`,
+      despuesDeCambiar?.unidad_peso === 'kg' &&
+        despuesDeCambiar?.precio_mayorista === null &&
+        despuesDeCambiar?.cantidad_minima_mayorista === null &&
+        nuevoDelAsiento.mayoristaQuitadoPor === 'cambio_de_unidad' &&
+        anteriorDelAsiento.precioMayorista === '5.50' &&
+        anteriorDelAsiento.cantidadMinimaMayorista === '50.000' &&
+        anteriorDelAsiento.unidadPeso === 'lb',
+    );
   } catch (error) {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);
     await ventana.screenshot({ path: join(capturas, 'error.png') }).catch(() => undefined);
