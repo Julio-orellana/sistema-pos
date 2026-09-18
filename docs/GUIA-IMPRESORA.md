@@ -64,6 +64,29 @@ impresora no aparece sola.
 6. Si salió bien, tocá **Usar esta impresora**. El estado tiene que decir
    «Impresora configurada: [nombre]».
 
+## Qué sale en cada venta: dos copias
+
+Cada vez que se cobra, y cada vez que se reimprime un recibo desde el
+historial, salen **dos papeles**, uno detrás del otro y cada uno cortado:
+
+1. **Primero la copia del cliente.** Arriba, debajo de «Proforma, no válido
+   como factura fiscal», dice **COPIA DEL CLIENTE**. Es la que se le entrega.
+   No dice quién autorizó un descuento ni el número de boleta de la tarjeta:
+   son datos de control interno.
+2. **Después la copia de la tienda.** Dice **COPIA DE LA TIENDA** y, debajo,
+   «Control interno. No se entrega al cliente.». Se guarda. Esta sí dice quién
+   autorizó el descuento y el número de boleta, para cuadrar contra la terminal
+   del banco.
+
+Consecuencias prácticas:
+
+- **El rollo se gasta el doble** que con un solo papel. Conviene tener rollos
+  de repuesto a mano.
+- Si al cobrar la impresora imprime **una sola** copia, o corta en un lugar
+  raro entre las dos, **anotá el modelo y avisale a Julio**, con una foto del
+  papel si podés. Las dos copias viajan juntas en un solo envío, y cómo corta
+  la impresora de la tienda entre una y otra todavía no se probó.
+
 ## Si la pantalla muestra un error
 
 | Lo que dice | Qué revisar |

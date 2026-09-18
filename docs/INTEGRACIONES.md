@@ -33,6 +33,13 @@ interface ReceiptPrinterProvider {
 `ComprobanteImprimible` exige siempre `rutaPdf`: **sin PDF no se imprime**,
 porque el PDF es el respaldo obligatorio de la operación.
 
+`ComprobanteImprimible.copiasEnTexto` trae el texto de **cada copia física**,
+en el orden en que salen. Todas viajan en **un solo trabajo** de impresión,
+cada una con su propio corte de papel. Desde el 2026-09-18
+(`spec/features/001-recibo-copia-tienda-cliente`) el recibo manda dos: la del
+cliente y la de la tienda. Reemplaza a `contenidoTexto` y `copias: number`, que
+solo sabían pedir N copias del mismo texto.
+
 ### Implementación por defecto: `NullPrinterProvider`
 
 No imprime nada y responde:
