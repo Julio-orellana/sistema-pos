@@ -44,16 +44,22 @@ function sembrarLinea(base: Database, idLinea: string, nombre: string): void {
   const repos = crearRepositorios(base);
   const usuario = repos.usuarios.crear({ nombre: `Jimmy ${nombre}`, rol: 'administrativo', pinHash: 'hash-de-prueba' });
   const categoria = repos.categorias.crear({ nombre: `Granos ${nombre}` });
-  const producto = repos.productos.crear({
-    nombre,
-    categoriaId: categoria.id,
-    tipoMedida: 'unidad',
-    cantidadPredefinidaIcono: '1',
-    precioBase: '6.00',
+  /*
+    El producto también va por SQL desde la 039 (spec 002): el repositorio de
+    HOY escribe `precio_mayorista` y `cantidad_minima_mayorista`, que en una
+    base sin la 032 —y por lo tanto sin la 039— no existen. Hasta el
+    2026-09-18 se creaba con `repos.productos.crear`, con los mismos datos.
+  */
+  const producto = { id: `${idLinea.slice(0, 8)}-0000-4000-8000-000000000001` };
+  base
+    .prepare(
+      `INSERT INTO productos (id, nombre, categoria_id, tipo_medida, unidad_peso,
+         cantidad_predefinida_icono, precio_base, inventario_disponible, precio_compra,
+         activo, creado_en, actualizado_en)
+       VALUES (?, ?, ?, 'unidad', NULL, '1.000', '6.00', '10.000', ?, 1, ?, ?)`,
+    )
     // HOY tiene costo: la migración igual NO debe copiarlo a la venta vieja.
-    precioCompra: '4.00',
-    inventarioDisponible: '10',
-  });
+    .run(producto.id, nombre, categoria.id, '4.00', INSTANTE, INSTANTE);
   // Una sola caja abierta en todo el sistema (§4.9): la segunda venta usa la misma.
   const caja =
     repos.cajaSesiones.obtenerAbierta() ??

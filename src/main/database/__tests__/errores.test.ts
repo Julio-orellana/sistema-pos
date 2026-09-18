@@ -177,6 +177,52 @@ describe('Otras reglas que la base hace cumplir, traducidas', () => {
     }
   });
 
+  it('PRECIO MAYORISTA (039): uno que no es menor que la lista llega con su regla, no como un CHECK genérico', () => {
+    const { productoId } = sembrarCatalogo();
+    const producto = repos.productos.obtenerPorId(productoId);
+    if (producto === null) {
+      throw new Error('falta el producto sembrado');
+    }
+    const cambios = {
+      nombre: producto.nombre,
+      categoriaId: producto.categoriaId,
+      fotoPath: null,
+      tipoMedida: producto.tipoMedida,
+      unidadPeso: producto.unidadPeso,
+      cantidadPredefinidaIcono: producto.cantidadPredefinidaIcono,
+      precioBase: producto.precioBase,
+      precioCompra: null,
+    };
+
+    // El maíz vale Q2.23: un mayorista de Q2.23 NO es menor.
+    try {
+      repos.productos.actualizar(productoId, { ...cambios, mayorista: { precio: '2.23', cantidadMinima: '50' } });
+      expect.unreachable('Se esperaba el rechazo de la regla productos_mayorista_menor_que_lista.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ErrorDeNegocio);
+      expect((error as ErrorDeNegocio).codigo).toBe('DATO_INVALIDO');
+      expect((error as ErrorDeNegocio).mensajeParaElUsuario).toBe(
+        'El precio mayorista tiene que ser menor que el precio de lista. Bajá el precio mayorista o quitalo.',
+      );
+      expect((error as ErrorDeNegocio).causaTecnica).toContain('productos_mayorista_menor_que_lista');
+    }
+  });
+
+  it('PRECIO MAYORISTA (039): el precio sin su cantidad llega con su regla', () => {
+    const { productoId } = sembrarCatalogo();
+
+    try {
+      base.prepare("UPDATE productos SET precio_mayorista = '1.00' WHERE id = ?").run(productoId);
+      expect.unreachable('Se esperaba el rechazo de la regla productos_mayorista_completo.');
+    } catch (error) {
+      const traducido = traducirErrorDeBaseDeDatos(error) as ErrorDeNegocio;
+      expect(traducido).toBeInstanceOf(ErrorDeNegocio);
+      expect(traducido.mensajeParaElUsuario).toBe(
+        'El precio mayorista y su cantidad mínima van juntos: se ponen los dos o ninguno.',
+      );
+    }
+  });
+
   it('un nombre de usuario repetido se explica como registro duplicado', () => {
     repos.usuarios.crear({ nombre: 'Jimmy', rol: 'administrativo', pinHash: 'h' });
 

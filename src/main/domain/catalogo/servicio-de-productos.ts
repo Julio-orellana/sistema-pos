@@ -7,6 +7,9 @@
  *   · un producto por peso EXIGE unidad; uno por unidad NO puede tenerla,
  *   · la cantidad predefinida del ícono es estrictamente mayor que cero,
  *   · el precio base no puede ser negativo,
+ *   · el precio mayorista (spec 002) va con su cantidad mínima, es menor que el
+ *     precio de lista y su cantidad es mayor que cero —las reglas viven en
+ *     `@shared/precio-mayorista`, que comparte con el formulario—,
  *   · un producto nunca se borra, solo se desactiva,
  *   · mover el inventario es una operación PROPIA, no un campo más de editar.
  *
@@ -37,6 +40,7 @@ import {
   redondearMonto,
   sumar,
 } from '@shared/money';
+import { revisarPrecioMayorista, type PrecioMayoristaRevisado } from '@shared/precio-mayorista';
 import { ErrorDeNegocio } from '@main/database/errores';
 import {
   type ArchivoParaSubir,
@@ -44,6 +48,7 @@ import {
   encolarFoto,
 } from '@main/database/bandeja-de-salida';
 import type {
+  PrecioMayoristaDeProducto,
   Producto,
   TipoMedida,
   UnidadPeso,
@@ -96,6 +101,17 @@ export interface DatosDeProducto {
    * guiones y las pruebas que no hablan de costos no tengan que inventar uno.
    */
   readonly precioCompra?: string | null;
+  /**
+   * El precio mayorista y desde qué cantidad aplica (spec 002). Los dos `null`
+   * (o vacíos) es «sin precio mayorista».
+   *
+   * OPCIONALES en la firma por la misma razón que el costo: si FALTAN LOS DOS,
+   * al editar se conserva el que el producto ya tenía y al crear queda sin
+   * mayorista. La pantalla los manda siempre. Si falta uno solo, se lee como
+   * vacío y la regla de que van juntos lo rechaza con su mensaje.
+   */
+  readonly precioMayorista?: string | null;
+  readonly cantidadMinimaMayorista?: string | null;
   readonly fotoPath: string | null;
 }
 
@@ -132,6 +148,8 @@ interface DatosVerificados {
   readonly precioBase: Decimal;
   /** `undefined`: no vino (se conserva al editar). `null`: sin costo. */
   readonly precioCompra: Decimal | null | undefined;
+  /** `undefined`: no vino (se conserva al editar). `null`: sin mayorista. */
+  readonly mayorista: PrecioMayoristaRevisado | null | undefined;
   readonly fotoPath: string | null;
 }
 
@@ -313,6 +331,19 @@ export class ServicioDeProductos {
       }
     }
 
+    // El precio mayorista, con las MISMAS reglas y los MISMOS textos que el
+    // formulario (`@shared/precio-mayorista`). Si no vino ninguno de los dos
+    // datos queda en `undefined`: al editar se conserva el que había, y
+    // `editar` lo vuelve a revisar contra el precio de lista nuevo.
+    const mayorista =
+      datos.precioMayorista === undefined && datos.cantidadMinimaMayorista === undefined
+        ? undefined
+        : this.exigirPrecioMayoristaValido(
+            precio,
+            datos.precioMayorista ?? null,
+            datos.cantidadMinimaMayorista ?? null,
+          );
+
     return {
       nombre,
       categoriaId: datos.categoriaId,
@@ -321,8 +352,30 @@ export class ServicioDeProductos {
       cantidadPredefinidaIcono: cantidadIcono,
       precioBase: precio,
       precioCompra,
+      mayorista,
       fotoPath: datos.fotoPath,
     };
+  }
+
+  /**
+   * Revisa el precio mayorista contra el precio de lista, o falla con el
+   * mensaje de la regla que no cumple. Devuelve los valores redondeados como se
+   * van a guardar, o `null` si el producto queda sin precio mayorista.
+   */
+  private exigirPrecioMayoristaValido(
+    precioBase: Decimal,
+    precioMayorista: string | null,
+    cantidadMinima: string | null,
+  ): PrecioMayoristaRevisado | null {
+    const revision = revisarPrecioMayorista({
+      precioBase: montoACadena(precioBase),
+      precioMayorista,
+      cantidadMinima,
+    });
+    if (!revision.ok) {
+      throw new ErrorDeNegocio('DATO_INVALIDO', revision.mensaje, revision.causaTecnica);
+    }
+    return revision.mayorista;
   }
 
   /**
@@ -431,6 +484,7 @@ export class ServicioDeProductos {
         cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
         precioBase: verificados.precioBase,
         precioCompra: verificados.precioCompra ?? null,
+        mayorista: verificados.mayorista ?? null,
         inventarioDisponible: inventarioInicial,
         activo: true,
       });
@@ -447,6 +501,7 @@ export class ServicioDeProductos {
           unidadPeso: creado.unidadPeso,
           precioBase: montoACadena(creado.precioBase),
           precioCompra: creado.precioCompra === null ? null : montoACadena(creado.precioCompra),
+          ...camposDelMayoristaParaElAsiento(creado.mayorista),
           inventarioInicial: cantidadACadena(creado.inventarioDisponible),
         },
         fecha: new Date(this.ahora()).toISOString(),
@@ -494,6 +549,24 @@ export class ServicioDeProductos {
     const precioCompra =
       verificados.precioCompra === undefined ? anterior.precioCompra : verificados.precioCompra;
 
+    /*
+      El precio mayorista, con la misma idea: sin los dos datos en el pedido se
+      conserva el que tenía. PERO SE VUELVE A REVISAR CONTRA EL PRECIO DE LISTA
+      NUEVO: bajar la lista por debajo del mayorista que ya había se rechaza
+      (decisión 1 de la spec 002, §4.3), y tiene que rechazarse con el mensaje
+      de la regla, no con el error de la base.
+    */
+    const mayorista =
+      verificados.mayorista !== undefined
+        ? verificados.mayorista
+        : anterior.mayorista === null
+          ? null
+          : this.exigirPrecioMayoristaValido(
+              verificados.precioBase,
+              montoACadena(anterior.mayorista.precio),
+              cantidadACadena(anterior.mayorista.cantidadMinima),
+            );
+
     return conBandejaDeSalida(this.base, () => {
       this.productos.actualizar(id, {
         nombre: verificados.nombre,
@@ -504,6 +577,7 @@ export class ServicioDeProductos {
         cantidadPredefinidaIcono: verificados.cantidadPredefinidaIcono,
         precioBase: verificados.precioBase,
         precioCompra,
+        mayorista,
       });
 
       const asiento = this.auditoria.registrar({
@@ -518,6 +592,7 @@ export class ServicioDeProductos {
           unidadPeso: anterior.unidadPeso,
           precioBase: montoACadena(anterior.precioBase),
           precioCompra: anterior.precioCompra === null ? null : montoACadena(anterior.precioCompra),
+          ...camposDelMayoristaParaElAsiento(anterior.mayorista),
           fotoPath: anterior.fotoPath,
         },
         valorNuevo: {
@@ -527,6 +602,7 @@ export class ServicioDeProductos {
           unidadPeso: verificados.unidadPeso,
           precioBase: montoACadena(verificados.precioBase),
           precioCompra: precioCompra === null ? null : montoACadena(precioCompra),
+          ...camposDelMayoristaParaElAsiento(mayorista),
           fotoPath: verificados.fotoPath,
         },
         fecha: new Date(this.ahora()).toISOString(),
@@ -687,4 +763,21 @@ export class ServicioDeProductos {
   public obtener(id: string): Producto {
     return this.exigirProducto(id);
   }
+}
+
+/**
+ * Los dos datos del precio mayorista, como van en los asientos del producto.
+ * `null` en los dos es «sin precio mayorista»: se anota igual, porque en una
+ * edición que lo QUITA el `null` es justamente el dato.
+ */
+function camposDelMayoristaParaElAsiento(mayorista: PrecioMayoristaDeProducto | PrecioMayoristaRevisado | null): {
+  precioMayorista: string | null;
+  cantidadMinimaMayorista: string | null;
+} {
+  return mayorista === null
+    ? { precioMayorista: null, cantidadMinimaMayorista: null }
+    : {
+        precioMayorista: montoACadena(mayorista.precio),
+        cantidadMinimaMayorista: cantidadACadena(mayorista.cantidadMinima),
+      };
 }

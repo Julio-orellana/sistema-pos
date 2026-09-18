@@ -5,6 +5,8 @@ import type Decimal from 'decimal.js';
 import type {
   CambiosDeProducto,
   NuevoProducto,
+  PrecioMayoristaDeProducto,
+  PrecioMayoristaParaGuardar,
   Producto,
   TipoMedida,
   UnidadPeso,
@@ -32,9 +34,50 @@ interface FilaProducto {
   readonly contador_ventas: number;
   readonly cantidad_vendida: string;
   readonly precio_compra: string | null;
+  readonly precio_mayorista: string | null;
+  readonly cantidad_minima_mayorista: string | null;
   readonly activo: number;
   readonly creado_en: string;
   readonly actualizado_en: string;
+}
+
+/**
+ * Arma el precio mayorista desde sus dos columnas.
+ *
+ * Las dos llenas o las dos vacías: lo exige `productos_mayorista_completo`
+ * (migración 039). Si aun así llegara una sola, se LANZA en vez de inventar la
+ * otra o de descartar la que vino: un precio mayorista a medias no tiene un
+ * significado que se pueda adivinar, y cobrar con él sería peor que fallar.
+ */
+function mayoristaDe(fila: FilaProducto): PrecioMayoristaDeProducto | null {
+  if (fila.precio_mayorista === null && fila.cantidad_minima_mayorista === null) {
+    return null;
+  }
+  if (fila.precio_mayorista === null || fila.cantidad_minima_mayorista === null) {
+    throw new Error(
+      `El producto ${fila.id} tiene el precio mayorista a medias ` +
+        `(precio ${String(fila.precio_mayorista)}, cantidad mínima ${String(fila.cantidad_minima_mayorista)}). ` +
+        'La base no debería permitirlo: revisá la restricción productos_mayorista_completo.',
+    );
+  }
+  return {
+    precio: desdeColumnaDecimal(fila.precio_mayorista, 'productos.precio_mayorista'),
+    cantidadMinima: desdeColumnaDecimal(fila.cantidad_minima_mayorista, 'productos.cantidad_minima_mayorista'),
+  };
+}
+
+/** Las dos columnas del precio mayorista, en su forma canónica, o las dos en NULL. */
+function columnasDelMayorista(mayorista: PrecioMayoristaParaGuardar | null | undefined): {
+  precio_mayorista: string | null;
+  cantidad_minima_mayorista: string | null;
+} {
+  if (mayorista === undefined || mayorista === null) {
+    return { precio_mayorista: null, cantidad_minima_mayorista: null };
+  }
+  return {
+    precio_mayorista: aColumnaMonto(mayorista.precio),
+    cantidad_minima_mayorista: aColumnaCantidad(mayorista.cantidadMinima),
+  };
 }
 
 function aEntidad(fila: FilaProducto): Producto {
@@ -60,6 +103,7 @@ function aEntidad(fila: FilaProducto): Producto {
       fila.precio_compra === null
         ? null
         : desdeColumnaDecimal(fila.precio_compra, 'productos.precio_compra'),
+    mayorista: mayoristaDe(fila),
     activo: desdeColumnaBooleana(fila.activo, 'productos.activo'),
     creadoEn: fila.creado_en,
     actualizadoEn: fila.actualizado_en,
@@ -77,11 +121,13 @@ export class RepositorioDeProductos extends RepositorioBase {
           `INSERT INTO productos (
              id, nombre, categoria_id, foto_path, tipo_medida, unidad_peso,
              cantidad_predefinida_icono, precio_base, inventario_disponible,
-             contador_ventas, precio_compra, activo, creado_en, actualizado_en
+             contador_ventas, precio_compra, precio_mayorista, cantidad_minima_mayorista,
+             activo, creado_en, actualizado_en
            ) VALUES (
              @id, @nombre, @categoria_id, @foto_path, @tipo_medida, @unidad_peso,
              @cantidad_predefinida_icono, @precio_base, @inventario_disponible,
-             0, @precio_compra, @activo, @creado_en, @actualizado_en
+             0, @precio_compra, @precio_mayorista, @cantidad_minima_mayorista,
+             @activo, @creado_en, @actualizado_en
            )`,
         )
         .run({
@@ -98,6 +144,7 @@ export class RepositorioDeProductos extends RepositorioBase {
             datos.precioCompra === undefined || datos.precioCompra === null
               ? null
               : aColumnaMonto(datos.precioCompra),
+          ...columnasDelMayorista(datos.mayorista),
           activo: aColumnaBooleana(datos.activo ?? true),
           creado_en: momento,
           actualizado_en: momento,
@@ -202,6 +249,8 @@ export class RepositorioDeProductos extends RepositorioBase {
                   cantidad_predefinida_icono = @cantidad_predefinida_icono,
                   precio_base = @precio_base,
                   precio_compra = @precio_compra,
+                  precio_mayorista = @precio_mayorista,
+                  cantidad_minima_mayorista = @cantidad_minima_mayorista,
                   actualizado_en = @actualizado_en
             WHERE id = @id`,
         )
@@ -215,6 +264,7 @@ export class RepositorioDeProductos extends RepositorioBase {
           cantidad_predefinida_icono: aColumnaCantidad(cambios.cantidadPredefinidaIcono),
           precio_base: aColumnaMonto(cambios.precioBase),
           precio_compra: cambios.precioCompra === null ? null : aColumnaMonto(cambios.precioCompra),
+          ...columnasDelMayorista(cambios.mayorista),
           actualizado_en: ahora(),
         });
     });

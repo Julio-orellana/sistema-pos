@@ -168,9 +168,33 @@ export interface Producto {
    * cero: con cero el reporte diría que el producto no deja ganancia (§4.39).
    */
   readonly precioCompra: Decimal | null;
+  /**
+   * El precio mayorista y desde qué cantidad aplica (spec 002), o `null` si el
+   * producto no tiene. UN SOLO OBJETO con los dos datos, no dos campos sueltos:
+   * un precio sin su cantidad mínima no se puede construir, igual que una
+   * autorización de descuento sin su vía (§4.13).
+   */
+  readonly mayorista: PrecioMayoristaDeProducto | null;
   readonly activo: boolean;
   readonly creadoEn: string;
   readonly actualizadoEn: string;
+}
+
+/**
+ * El precio mayorista de un producto: se cobra cuando la cantidad de la línea
+ * llega a `cantidadMinima`, si es el menor de los precios que aplican
+ * (`src/shared/precio-de-linea.ts`). La cantidad está en la unidad del
+ * producto: libras, kilogramos o unidades.
+ */
+export interface PrecioMayoristaDeProducto {
+  readonly precio: Decimal;
+  readonly cantidadMinima: Decimal;
+}
+
+/** Lo mismo, como llega a escribirse: Decimal o cadena, que el repositorio canoniza. */
+export interface PrecioMayoristaParaGuardar {
+  readonly precio: Decimal | string;
+  readonly cantidadMinima: Decimal | string;
 }
 
 /** Datos para crear un producto. */
@@ -185,6 +209,8 @@ export interface NuevoProducto {
   readonly inventarioDisponible: Decimal | string;
   /** Sin costo cargado si falta. */
   readonly precioCompra?: Decimal | string | null;
+  /** Sin precio mayorista si falta. */
+  readonly mayorista?: PrecioMayoristaParaGuardar | null;
   readonly activo?: boolean;
 }
 
@@ -208,6 +234,8 @@ export interface CambiosDeProducto {
   readonly precioBase: Decimal | string;
   /** `null` borra el costo; es un valor explícito, no «dejarlo como estaba». */
   readonly precioCompra: Decimal | string | null;
+  /** `null` quita el precio mayorista; también es un valor explícito. */
+  readonly mayorista: PrecioMayoristaParaGuardar | null;
 }
 
 // ---------------------------------------------------------------------------

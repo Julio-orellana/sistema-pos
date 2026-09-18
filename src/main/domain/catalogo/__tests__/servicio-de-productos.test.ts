@@ -633,3 +633,128 @@ describe('EL PRECIO DE COMPRA: vacío es «sin costo», nunca cero', () => {
     expect(JSON.parse(fila.payload)).toEqual(expect.objectContaining({ precio_compra: '4.50' }));
   });
 });
+
+// ===========================================================================
+describe('EL PRECIO MAYORISTA (spec 002): las reglas R1 a R4 se revisan ANTES de tocar la base', () => {
+  /** El maíz a Q6.00 la libra, con mayorista Q5.50 desde 50 lb. */
+  const conMayorista = (cambios: Partial<DatosDeProductoNuevo> = {}): DatosDeProductoNuevo =>
+    maiz({ precioBase: '6.00', precioMayorista: '5.50', cantidadMinimaMayorista: '50', ...cambios });
+
+  it('crea un producto con precio mayorista, redondeado como se guarda', () => {
+    const creado = productos.crear(idAdmin, conMayorista({ precioMayorista: '5.5' }));
+    expect(creado.mayorista?.precio.toFixed(2)).toBe('5.50');
+    expect(creado.mayorista?.cantidadMinima.toFixed(3)).toBe('50.000');
+    expect(
+      base.prepare('SELECT precio_mayorista, cantidad_minima_mayorista FROM productos WHERE id = ?').get(creado.id),
+    ).toEqual({ precio_mayorista: '5.50', cantidad_minima_mayorista: '50.000' });
+  });
+
+  it('sin los dos datos, o con los dos vacíos, el producto queda SIN precio mayorista', () => {
+    expect(productos.crear(idAdmin, maiz()).mayorista).toBeNull();
+    expect(
+      productos.crear(idAdmin, maiz({ nombre: 'Maíz amarillo', precioMayorista: '', cantidadMinimaMayorista: null }))
+        .mayorista,
+    ).toBeNull();
+  });
+
+  it('CA-21 — cada regla rechaza con SU mensaje y sin escribir nada', () => {
+    const casos: readonly [Partial<DatosDeProductoNuevo>, string][] = [
+      [{ cantidadMinimaMayorista: null }, 'Falta la cantidad mínima para el precio mayorista.'],
+      [{ precioMayorista: null }, 'Falta el precio mayorista.'],
+      [{ precioMayorista: 'barato' }, 'El precio mayorista tiene que ser un número.'],
+      [{ precioMayorista: '-1' }, 'El precio mayorista no puede ser negativo.'],
+      [
+        { precioMayorista: '6.00' },
+        'El precio mayorista (Q6.00) tiene que ser menor que el precio de lista (Q6.00). Bajá el precio mayorista o quitalo.',
+      ],
+      [{ cantidadMinimaMayorista: '0' }, 'La cantidad mínima para el precio mayorista tiene que ser mayor que cero.'],
+      [{ cantidadMinimaMayorista: 'mucho' }, 'La cantidad mínima para el precio mayorista tiene que ser un número.'],
+    ];
+    for (const [cambios, mensaje] of casos) {
+      let recibido: unknown = null;
+      try {
+        productos.crear(idAdmin, conMayorista(cambios));
+      } catch (error) {
+        recibido = error;
+      }
+      expect(recibido, JSON.stringify(cambios)).toBeInstanceOf(ErrorDeNegocio);
+      expect((recibido as ErrorDeNegocio).codigo).toBe('DATO_INVALIDO');
+      expect((recibido as ErrorDeNegocio).mensajeParaElUsuario).toBe(mensaje);
+    }
+    expect(escriturasEnLaBase).toBe(0);
+    expect(repos.productos.listarTodos()).toHaveLength(0);
+  });
+
+  it('editar SIN mandar el mayorista lo CONSERVA', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { inventarioInicial: _i, precioMayorista: _p, cantidadMinimaMayorista: _c, ...sinMayorista } =
+      conMayorista();
+    const editado = productos.editar(idAdmin, creado.id, { ...sinMayorista, nombre: 'Maíz blanco fino' });
+    expect(editado.mayorista?.precio.toFixed(2)).toBe('5.50');
+    expect(editado.mayorista?.cantidadMinima.toFixed(3)).toBe('50.000');
+  });
+
+  it('editar mandando los dos en null lo QUITA, a propósito (la casilla desmarcada)', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { inventarioInicial: _i, ...datos } = conMayorista();
+    const editado = productos.editar(idAdmin, creado.id, {
+      ...datos,
+      precioMayorista: null,
+      cantidadMinimaMayorista: null,
+    });
+    expect(editado.mayorista).toBeNull();
+  });
+
+  it('CA-24 — BAJAR LA LISTA por debajo del mayorista se rechaza con la regla, aunque el pedido no hable del mayorista', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { inventarioInicial: _i, precioMayorista: _p, cantidadMinimaMayorista: _c, ...soloLaLista } =
+      conMayorista();
+    escriturasEnLaBase = 0;
+
+    expect(() => productos.editar(idAdmin, creado.id, { ...soloLaLista, precioBase: '5.00' })).toThrow(
+      'El precio mayorista (Q5.50) tiene que ser menor que el precio de lista (Q5.00). Bajá el precio mayorista o quitalo.',
+    );
+    expect(escriturasEnLaBase).toBe(0);
+    expect(repos.productos.obtenerPorId(creado.id)?.precioBase.toFixed(2)).toBe('6.00');
+  });
+
+  it('CA-24 — bajar la lista Y el mayorista en la misma edición sí se puede', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { inventarioInicial: _i, ...datos } = conMayorista();
+    const editado = productos.editar(idAdmin, creado.id, { ...datos, precioBase: '5.00', precioMayorista: '4.60' });
+    expect(editado.precioBase.toFixed(2)).toBe('5.00');
+    expect(editado.mayorista?.precio.toFixed(2)).toBe('4.60');
+  });
+
+  it('los asientos del producto llevan el precio mayorista, antes y después', () => {
+    const creado = productos.crear(idAdmin, conMayorista());
+    const { inventarioInicial: _i, ...datos } = conMayorista();
+    productos.editar(idAdmin, creado.id, { ...datos, precioMayorista: '5.25', cantidadMinimaMayorista: '100' });
+
+    const alta = base.prepare("SELECT valor_nuevo FROM auditoria_log WHERE accion = 'producto_creado'").get() as {
+      valor_nuevo: string;
+    };
+    expect(JSON.parse(alta.valor_nuevo)).toEqual(
+      expect.objectContaining({ precioMayorista: '5.50', cantidadMinimaMayorista: '50.000' }),
+    );
+    const edicion = base
+      .prepare("SELECT valor_anterior, valor_nuevo FROM auditoria_log WHERE accion = 'producto_editado'")
+      .get() as { valor_anterior: string; valor_nuevo: string };
+    expect(JSON.parse(edicion.valor_anterior)).toEqual(
+      expect.objectContaining({ precioMayorista: '5.50', cantidadMinimaMayorista: '50.000' }),
+    );
+    expect(JSON.parse(edicion.valor_nuevo)).toEqual(
+      expect.objectContaining({ precioMayorista: '5.25', cantidadMinimaMayorista: '100.000' }),
+    );
+  });
+
+  it('viaja a la nube dentro del payload de productos, con la forma canónica', () => {
+    const creado = productos.crear(idAdmin, conMayorista({ precioMayorista: '5.5', cantidadMinimaMayorista: '50' }));
+    const fila = base
+      .prepare("SELECT payload FROM sync_cola WHERE entidad_tipo = 'productos' AND entidad_id = ?")
+      .get(creado.id) as { payload: string };
+    expect(JSON.parse(fila.payload)).toEqual(
+      expect.objectContaining({ precio_mayorista: '5.50', cantidad_minima_mayorista: '50.000' }),
+    );
+  });
+});
