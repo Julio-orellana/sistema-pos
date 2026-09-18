@@ -2,7 +2,7 @@
 
 Software base: Vixo POS
 Implementación: POS Jimmy Cano
-Versión: 1.1.0
+Versión: 1.2.0
 
 Este programa se le entrega al/a la LICENCIATARIO/A bajo los siguientes
 términos:

@@ -59,8 +59,13 @@ const paqueteDelRepositorio = JSON.parse(readFileSync(join(RAIZ, 'package.json')
  * aprobó Julio el 2026-09-15, con la única corrección que pidió después
  * («a el/la» → «al/a la»). Huella anterior a esa corrección:
  * 8c6bf039d701e96bc141c4b01beab29c798753d6d736d2b306b00043add1daff.
+ *
+ * Desde el release 1.2.0 (2026-09-17, autorizado por Julio) la línea
+ * «Versión:» dice 1.2.0: es el ÚNICO carácter que cambió del texto aprobado.
+ * Huella de la 1.1.0:
+ * bd9897f4c73cd8ad39e0ce69effb8cc8a5e108b3d01ad16438322b6637bbbaa7.
  */
-const HUELLA_DE_LA_LICENCIA = 'bd9897f4c73cd8ad39e0ce69effb8cc8a5e108b3d01ad16438322b6637bbbaa7';
+const HUELLA_DE_LA_LICENCIA = '4935c4bce470e92f4a8fd577ff959c372d757b7cddef293bd3792ef067f30a45';
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 

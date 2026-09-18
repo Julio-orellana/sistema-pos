@@ -9826,6 +9826,26 @@ pide los dos dígitos explícitamente.
   pidió: los totales son de los 200 recibos más recientes que pasen el filtro,
   no de un día ni de un mes. Conviene saberlo antes de leerlos como «lo de hoy».
 
+### 4.61 Release 1.2.0: la versión de entrega a Jimmy (2026-09-17)
+
+**1.2.0 — sin cambios de código respecto a la 1.1.0 confirmada en `b20c7fd`;
+renumerada para marcar la versión de entrega final a Jimmy.** Los instaladores
+1.1.0 recompilados ese mismo día desde `b20c7fd` son el mismo software.
+
+**La licencia y su huella cambiaron, y solo por el número de versión.** La
+línea `Versión:` de `build/licencia.txt` pasó de `1.1.0` a `1.2.0`: un solo
+byte distinto (el 117, de `1` a `2`), mismo largo (1901 bytes), BOM y 39 CRLF
+intactos. El resto del texto legal aprobado no se tocó. Hacía falta porque
+`instalador-marca-y-licencia.test.ts` exige que la licencia diga la versión
+del `package.json` (§4.48), así que la huella aprobada pasó de
+`bd9897f4…bbaa7` a `4935c4bc…f30a45`, con la autorización explícita de Julio.
+
+Antes de compilar se leyó el estado de `pos-jimmy-cano` en solo lectura: las
+28 migraciones del repositorio están registradas, la huella de columnas
+(`5c2d44ae…`, 137 columnas) y las 17 funciones del esquema son iguales a las de
+`pos-pruebas-descartable`, y el real tiene 0 filas de negocio. No se aplicó
+nada contra ninguna nube.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -10152,6 +10172,7 @@ pide los dos dígitos explícitamente.
 | **CORREGIDO SOBRE LA MARCHA: los totales del historial NO miran `ventas.estado`; lo que decide es la ausencia de fila en `anulaciones_de_venta`.** | Filtrar por `estado = 'completada'`, que es lo que el pedido decía literalmente | **Las dos mitades de esa instrucción se contradicen en este proyecto**, y la contradicción no es de matiz: `ventas.estado` dice `'completada'` TAMBIÉN en las anuladas (§4.45), así que filtrar por ahí no excluiría ninguna; y «el mismo criterio que ya rige en el resto de los reportes» es `VENTA_SIN_ANULACION`, que es justo el otro. **Lo delató una prueba que ya existía**: `anulacion-estructural.test.ts` recorre todo el código de producción y falla si alguna consulta vuelve a decidir por `ventas.estado` (§1.3 del diseño, con su control). La primera versión lo miraba «como red defensiva» y puso esa prueba en rojo. Se quitó, y con él la dependencia del repositorio de ventas que se había agregado solo para eso. Hay una prueba que fija la regla al revés: una venta marcada `'anulada'` a mano SIGUE contando. §4.60 | 2026-09-17 (número de prompt por confirmar) |
 | **A REVISAR — los TOTALES del historial solo viajan al rol administrativo; las filas y el voucher, a cualquiera con sesión.** | Mostrarle los totales a cualquiera con sesión, que es lo que el historial ya hacía con las filas; exigir rol administrativo para toda la pantalla, como §3.5 preveía | Una línea de totales **es un reporte**: dice cuánto entró a la tienda, que §4.15 reserva para el dueño —«información de dueño, no de mostrador»— y que §4.40 esconde del paso de conteo para que quien cuenta el cajón no copie el número en vez de contar. Exigir el rol para toda la pantalla sería peor: el historial existe para que **el cajero** reimprima con el cliente enfrente, y el voucher ya sale impreso en el papel de ese cliente. **La contrapartida, dicha en voz alta:** un cajero puede sumar a mano las filas que ya ve; la diferencia es entre un número que hay que reconstruir y uno que el sistema entrega exacto y de un vistazo. Lo decide el proceso principal y no la pantalla, por la razón medida en §4.40: el canal se llama desde la consola. **Es una decisión que el pedido no tomó, y se señala para que Julio la confirme o la cambie**: es quitar una condición. §4.60 | 2026-09-17 (número de prompt por confirmar) |
 | **El nombre LEGIBLE de cada tabla vive UNA sola vez, en `src/shared/nombres-de-tabla.ts`, y una prueba sobre el árbol sintáctico falla si un archivo del renderer o del proceso principal declara su propio mapa. Otra exige que el mapa cubra EXACTAMENTE las trece tablas.** | Corregir los dos mapas a mano cada vez, como el 2026-09-17; derivar `TablaSincronizable` o `ORDEN_DE_RESTAURACION` de este mapa; dejarlo solo en el compilador | El mapa estaba escrito a mano en las DOS pantallas que nombran tablas —sincronización y restauración—, en distinto orden y sin nada que las atara, y **agregar una tabla y olvidarse de una copia no hacía fallar nada**. Se desincronizaron con la primera tabla nueva: `anulaciones_de_venta` (§4.45) entró en un solo mapa y la pantalla de sincronización mostró el nombre TÉCNICO de una anulación pendiente a quien tenía que decidir si reintentaba o saltaba un lote detenido. Arreglarlos a mano (§4.53) dejó el defecto vivo para la próxima tabla. **No se invierten las dependencias de los tipos de dominio**: `TablaSincronizable` es una lista cerrada que obliga a preguntarse si algo es dato de negocio, y el orden de `ORDEN_DE_RESTAURACION` es el grafo de llaves foráneas; derivarlos de un mapa de etiquetas ataría dos cosas que se deciden por razones distintas. La cobertura se comprueba al revés —el mapa contra esas listas—, con **tres fuentes independientes**: la igualdad con `ORDEN_DE_RESTAURACION` en runtime, la presencia de `TIPO_DE_ENTRADA_DE_FOTO`, y una asignación de tipo que hace fallar `typecheck` si una tabla entra en `TablaSincronizable` y no en el mapa. **Dejarlo solo en el compilador no alcanzaba**: los dos mapas eran `Record<string, string>`, así que TypeScript nunca vio que faltara una clave. La auditoría recorrió `src/renderer` y `src/shared` y no encontró ningún otro mapa; `resumenDeFila` de la restauración describe la FILA y no la tabla, y su `switch` exhaustivo ya lo protege el compilador. §4.57. | 2026-09-17 (número de prompt por confirmar) |
+| **La 1.2.0 es una renumeración sin cambios de código respecto de `b20c7fd`; la línea «Versión:» de la licencia pasa a 1.2.0 y su huella aprobada cambia con ella.** | Publicar como 1.1.0 recompilada; subir `package.json` sin tocar la licencia | Decisión de Julio: marcar la versión de entrega final. La prueba de §4.48 ata la licencia a la versión del paquete, así que sin cambiar la licencia el instalador 1.2.0 mostraría «Versión: 1.1.0» o `verify` fallaría. Solo cambió un carácter del texto legal, autorizado explícitamente. §4.61. | 2026-09-17 (número de prompt por confirmar) |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
