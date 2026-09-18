@@ -34,6 +34,67 @@ body {
   overscroll-behavior: none;
 }
 
+/* --- Barra de desplazamiento de la ventana, para el dedo ------------------ */
+/* La pantalla de la tienda mide 1024×768, y a ese tamaño 12 de los 30
+   estados de la aplicación son más altos que la ventana (§4.62). La barra que dibuja el sistema es delgada
+   —17 px en Windows— y en macOS ni siquiera ocupa lugar: se superpone y se
+   esconde. Esta es de 44 px, lo que un dedo acierta, y SIEMPRE visible
+   mientras haya algo que desplazar. Cuando la pantalla cabe entera, no
+   aparece: es la barra de la ventana (`html`), que el navegador solo dibuja
+   si hay desbordamiento.
+
+   Arrastrar el pulgar funciona igual con toque y con mouse (medido, §4.62),
+   que es lo que importa si la pantalla táctil de la tienda se presenta ante
+   Windows como un mouse. Las flechas de arriba y de abajo desplazan de a un
+   paso con un toque simple.
+
+   Solo la barra de la VENTANA: las listas internas de la venta (cuadrícula,
+   ticket, categorías) conservan la suya, porque 44 px de más dentro del ticket
+   de 360 px lo dejarían sin lugar para las líneas. Esas se desplazan con el
+   dedo y con el arrastre de `desplazamiento-por-arrastre.ts`. */
+html::-webkit-scrollbar {
+  width: 44px;
+  background: #0b1220;
+}
+
+html::-webkit-scrollbar-track {
+  background: #0b1220;
+  border-left: 1px solid var(--borde);
+}
+
+html::-webkit-scrollbar-thumb {
+  min-height: 96px;
+  background: #64748b;
+  border: 6px solid #0b1220;
+  border-radius: 14px;
+}
+
+html::-webkit-scrollbar-thumb:active {
+  background: #94a3b8;
+}
+
+html::-webkit-scrollbar-button:single-button:vertical {
+  display: block;
+  height: 44px;
+  background-color: #1e293b;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 18px 18px;
+  border-left: 1px solid var(--borde);
+}
+
+html::-webkit-scrollbar-button:single-button:vertical:decrement {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M9 4 L16 13 L2 13 Z' fill='%23e2e8f0'/%3E%3C/svg%3E");
+}
+
+html::-webkit-scrollbar-button:single-button:vertical:increment {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M9 14 L16 5 L2 5 Z' fill='%23e2e8f0'/%3E%3C/svg%3E");
+}
+
+html::-webkit-scrollbar-button:single-button:vertical:active {
+  background-color: #334155;
+}
+
 .pantalla {
   max-width: 900px;
   margin: 0 auto;
