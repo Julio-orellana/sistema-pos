@@ -15,8 +15,10 @@
   datos y del primer arranque real con Jimmy.
 - **El proyecto de nube real (`pos-jimmy-cano`)** tiene aplicado el esquema
   completo —las mismas migraciones que el descartable— y cero filas de negocio.
-- **Nada se verificó todavía en Windows ni en el hardware de la tienda.** Todo
-  lo medido es de macOS. Es la prioridad de verificación del proyecto (§3.1).
+- **La verificación en el hardware real de la tienda está en curso**, no
+  terminada: ya se confirmaron y corrigieron ahí varios problemas (ver §3.1
+  para lo que sigue pendiente). El resto de lo medido en este documento sigue
+  siendo de macOS salvo que se diga lo contrario.
 
 ## 2. Construido
 
