@@ -223,6 +223,44 @@ describe('Otras reglas que la base hace cumplir, traducidas', () => {
     }
   });
 
+  it('PRECIO MAYORISTA (039): un precio mayorista negativo llega con su regla, no con el mensaje genérico', () => {
+    const { productoId } = sembrarCatalogo();
+
+    try {
+      base
+        .prepare("UPDATE productos SET precio_mayorista = '-1.00', cantidad_minima_mayorista = '50.000' WHERE id = ?")
+        .run(productoId);
+      expect.unreachable('Se esperaba el rechazo de la regla productos_precio_mayorista_canonico.');
+    } catch (error) {
+      const traducido = traducirErrorDeBaseDeDatos(error) as ErrorDeNegocio;
+      expect(traducido).toBeInstanceOf(ErrorDeNegocio);
+      expect(traducido.codigo).toBe('DATO_INVALIDO');
+      expect(traducido.mensajeParaElUsuario).toBe(
+        'El precio mayorista tiene que ser un monto con dos decimales, y no puede ser negativo.',
+      );
+      expect(traducido.causaTecnica).toContain('productos_precio_mayorista_canonico');
+    }
+  });
+
+  it('PRECIO MAYORISTA (039): una cantidad mínima de cero llega con su regla, no con el mensaje genérico', () => {
+    const { productoId } = sembrarCatalogo();
+
+    try {
+      base
+        .prepare("UPDATE productos SET precio_mayorista = '1.00', cantidad_minima_mayorista = '0.000' WHERE id = ?")
+        .run(productoId);
+      expect.unreachable('Se esperaba el rechazo de la regla productos_cantidad_minima_mayorista_canonica.');
+    } catch (error) {
+      const traducido = traducirErrorDeBaseDeDatos(error) as ErrorDeNegocio;
+      expect(traducido).toBeInstanceOf(ErrorDeNegocio);
+      expect(traducido.codigo).toBe('DATO_INVALIDO');
+      expect(traducido.mensajeParaElUsuario).toBe(
+        'La cantidad mínima para el precio mayorista tiene que ser mayor que cero, con tres decimales.',
+      );
+      expect(traducido.causaTecnica).toContain('productos_cantidad_minima_mayorista_canonica');
+    }
+  });
+
   it('un nombre de usuario repetido se explica como registro duplicado', () => {
     repos.usuarios.crear({ nombre: 'Jimmy', rol: 'administrativo', pinHash: 'h' });
 

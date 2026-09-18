@@ -122,10 +122,15 @@ const REGLAS: readonly ReglaDeTraduccion[] = [
     coincide: (_error, restriccion) => restriccion === 'productos_inventario_no_negativo',
   },
   /*
-    Las dos reglas de tabla del precio mayorista (migración 039, spec 002). El
-    servicio de productos las revisa ANTES con `revisarPrecioMayorista`, que da
-    el mensaje exacto; estas son la última red, por si algo llegara a la base
-    sin pasar por él. Van antes del DATO_INVALIDO genérico, que las taparía.
+    Las CUATRO reglas del precio mayorista (migración 039, spec 002), cada una
+    por su nombre. El servicio de productos las revisa ANTES con
+    `revisarPrecioMayorista`, que da el mensaje exacto; estas son la última
+    red, por si algo llegara a la base sin pasar por él. Van antes del
+    DATO_INVALIDO genérico, que las taparía.
+
+    Las dos de COLUMNA juntan dos condiciones en un solo CHECK —la forma
+    canónica y el signo— y la base no dice cuál falló, así que el mensaje nombra
+    las dos.
   */
   {
     codigo: 'DATO_INVALIDO',
@@ -136,6 +141,16 @@ const REGLAS: readonly ReglaDeTraduccion[] = [
     codigo: 'DATO_INVALIDO',
     mensaje: 'El precio mayorista tiene que ser menor que el precio de lista. Bajá el precio mayorista o quitalo.',
     coincide: (_error, restriccion) => restriccion === 'productos_mayorista_menor_que_lista',
+  },
+  {
+    codigo: 'DATO_INVALIDO',
+    mensaje: 'El precio mayorista tiene que ser un monto con dos decimales, y no puede ser negativo.',
+    coincide: (_error, restriccion) => restriccion === 'productos_precio_mayorista_canonico',
+  },
+  {
+    codigo: 'DATO_INVALIDO',
+    mensaje: 'La cantidad mínima para el precio mayorista tiene que ser mayor que cero, con tres decimales.',
+    coincide: (_error, restriccion) => restriccion === 'productos_cantidad_minima_mayorista_canonica',
   },
   {
     codigo: 'CAJA_YA_ABIERTA',
