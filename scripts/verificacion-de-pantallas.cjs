@@ -42,6 +42,7 @@ const { join } = require('node:path');
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 const { codigoTotp, esperarAlSiguientePaso } = require('./totp-de-arnes.cjs');
 
 /** Raíz del proyecto: este guion vive en scripts/. */
@@ -88,6 +89,9 @@ async function main() {
     args: [PROYECTO, `--user-data-dir=${datos}`],
     cwd: PROYECTO,
   });
+  // El proceso se guarda AHORA, con la aplicación viva: después de que se
+  // cierre, `app.process()` lanza (§6.2, punto 49; ver terminar-aplicacion.cjs).
+  const procesoDeLaAplicacion = app.process();
 
   // La ventana arranca a pantalla completa. Se la baja a un tamaño fijo para
   // que la verificación no dependa del monitor de quien la corre, y para no
@@ -928,7 +932,7 @@ async function main() {
   } finally {
     // NO se usa app.close(): llama a app.quit(), que el kiosko intercepta para
     // pedir el PIN de salida controlada, y la aplicación no cerraría nunca.
-    app.process().kill('SIGKILL');
+    terminarAplicacion(procesoDeLaAplicacion);
     rmSync(datos, { recursive: true, force: true });
   }
 

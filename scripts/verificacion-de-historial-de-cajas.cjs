@@ -29,6 +29,7 @@ const { join } = require('node:path');
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 const { codigoTotp, esperarAlSiguientePaso } = require('./totp-de-arnes.cjs');
 
 const PROYECTO = join(__dirname, '..');
@@ -66,6 +67,9 @@ async function main() {
   const rutaDeLaBase = join(datos, 'pos-agricola.db');
 
   const app = await electron.launch({ executablePath: rutaDeElectron, args: [PROYECTO, `--user-data-dir=${datos}`], cwd: PROYECTO });
+  // El proceso se guarda AHORA, con la aplicación viva: después de que se
+  // cierre, `app.process()` lanza (§6.2, punto 49; ver terminar-aplicacion.cjs).
+  const procesoDeLaAplicacion = app.process();
   await app.evaluate(async ({ BrowserWindow }) => {
     const [ventana] = BrowserWindow.getAllWindows();
     if (ventana) {
@@ -346,7 +350,7 @@ async function main() {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);
     await ventana.screenshot({ path: join(capturas, 'error.png') }).catch(() => undefined);
   } finally {
-    app.process().kill('SIGKILL');
+    terminarAplicacion(procesoDeLaAplicacion);
   }
 
   const fallidas = comprobaciones.filter((c) => !c.paso);

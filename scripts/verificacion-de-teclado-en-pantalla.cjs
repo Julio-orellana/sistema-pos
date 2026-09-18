@@ -40,6 +40,7 @@ const { join } = require('node:path');
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 
 const PROYECTO = join(__dirname, '..');
 const PIN = '2468';
@@ -698,9 +699,7 @@ async function main() {
   } finally {
     // NO `app.close()`: esa vía pasa por la intercepción del cierre, pide el
     // PIN y deja colgado al guion. Se mide así la primera vez, sin quererlo.
-    if (codigoDeSalida === null) {
-      proceso.kill('SIGKILL');
-    }
+    terminarAplicacion(proceso);
   }
 
   const fallidas = comprobaciones.filter((c) => !c.paso);

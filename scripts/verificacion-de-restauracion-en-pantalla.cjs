@@ -59,6 +59,7 @@ const { join } = require('node:path');
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 
 const { exigirProyectoDePrueba, ProyectoNoAdmitido } = require('./proyectos-de-prueba.cjs');
 
@@ -226,6 +227,9 @@ async function lanzarAplicacion(datos, entorno) {
       POS_SYNC_PROVIDER: 'supabase',
     },
   });
+  // El proceso se guarda AHORA, con la aplicación viva: después de que se
+  // cierre, `app.process()` lanza (§6.2, punto 49; ver terminar-aplicacion.cjs).
+  const procesoDeLaAplicacion = app.process();
   await app.evaluate(async ({ BrowserWindow }) => {
     const [ventana] = BrowserWindow.getAllWindows();
     if (ventana) {
@@ -246,7 +250,7 @@ async function lanzarAplicacion(datos, entorno) {
     await ventana.getByRole('button', { name: 'Volver' }).click();
     await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
   };
-  return { app, ventana, prueba, teclearPin, volverAlMenu };
+  return { app, procesoDeLaAplicacion, ventana, prueba, teclearPin, volverAlMenu };
 }
 
 /** Las líneas de sincronización y restauración de la bitácora técnica de una app, tal cual. */
@@ -259,11 +263,9 @@ function volcarBitacora(datos, etiqueta) {
   return texto;
 }
 
-/** NO se usa app.close(): llama a app.quit(), que el kiosko intercepta para pedir el PIN. */
-function matar(app) {
-  const proceso = app.process();
-  proceso.kill('SIGKILL');
-  return proceso.pid;
+/** El pid del proceso terminado. Ver terminar-aplicacion.cjs (§6.2, punto 49). */
+function matar(procesoDeLaAplicacion) {
+  return terminarAplicacion(procesoDeLaAplicacion).pid;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +337,7 @@ async function esperarTransferenciaAMitad(datos) {
 
 async function faseA(datosA, entorno) {
   anotar('=== FASE A: la terminal de ORIGEN, por la ventana ===');
-  const { app, ventana, prueba, teclearPin, volverAlMenu } = await lanzarAplicacion(datosA, entorno);
+  const { app, procesoDeLaAplicacion, ventana, prueba, teclearPin, volverAlMenu } = await lanzarAplicacion(datosA, entorno);
   try {
     await prueba('pantalla-de-configuracion-inicial').waitFor({ timeout: ESPERA_LARGA });
     await prueba('campo-nombre').fill(NOMBRE_DEL_ADMINISTRADOR);
@@ -447,7 +449,7 @@ async function faseA(datosA, entorno) {
     );
     return origen;
   } finally {
-    const pid = matar(app);
+    const pid = matar(procesoDeLaAplicacion);
     anotar(`A: proceso ${String(pid)} terminado con SIGKILL`);
   }
 }
@@ -493,7 +495,7 @@ async function faseB(datosB, entorno, origen) {
     anotar('B: la restauración arrancó; sondeando el puesto de control para matar el proceso a mitad…');
     instantanea = await esperarTransferenciaAMitad(datosB);
   } finally {
-    const pid = matar(primera.app);
+    const pid = matar(primera.procesoDeLaAplicacion);
     anotar(`B: SIGKILL al proceso principal ${String(pid)} de Electron`);
   }
 
@@ -704,7 +706,7 @@ async function faseB(datosB, entorno, origen) {
     await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
     comprobar('B: el PIN NUEVO asignado en la restauración SÍ entra', 'pantalla de sesión', 'pantalla de sesión', true);
   } finally {
-    const pid = matar(segunda.app);
+    const pid = matar(segunda.procesoDeLaAplicacion);
     anotar(`B: proceso ${String(pid)} terminado con SIGKILL`);
     volcarBitacora(datosB, 'B');
   }

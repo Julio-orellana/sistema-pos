@@ -44,6 +44,7 @@ const { join } = require('node:path');
 
 const { _electron: electron } = require('playwright-core');
 const rutaDeElectron = require('electron');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 
 const PROYECTO = join(__dirname, '..');
 const PIN_JIMMY = '2468';
@@ -140,6 +141,9 @@ async function main() {
     args: [PROYECTO, `--user-data-dir=${datos}`],
     cwd: PROYECTO,
   });
+  // El proceso se guarda AHORA, con la aplicación viva: después de que se
+  // cierre, `app.process()` lanza (§6.2, punto 49; ver terminar-aplicacion.cjs).
+  const procesoDeLaAplicacion = app.process();
   const ventana = await app.firstWindow();
   await ventana.waitForLoadState('domcontentloaded');
   const cdp = await ventana.context().newCDPSession(ventana);
@@ -593,7 +597,7 @@ async function main() {
     }
     console.log(`capturas de esta corrida: ${capturas}`);
     // La salida controlada pide PIN (§4.5): se termina el proceso de la prueba.
-    app.process().kill('SIGKILL');
+    terminarAplicacion(procesoDeLaAplicacion);
     process.exit(fallidas.length === 0 ? 0 : 1);
   }
 }

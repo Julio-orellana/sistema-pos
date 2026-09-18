@@ -29,6 +29,7 @@ const { join } = require('node:path');
 
 const { _electron: electron } = require('playwright-core');
 const rutaDeElectron = require('electron');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 
 const PROYECTO = join(__dirname, '..');
 const PIN = '2468';
@@ -59,6 +60,9 @@ async function lanzar(datos, simuladas) {
     cwd: PROYECTO,
     env: { ...process.env, POS_IMPRESORAS_SIMULADAS: simuladas },
   });
+  // El proceso se guarda AHORA, con la aplicación viva: después de que se
+  // cierre, `app.process()` lanza (§6.2, punto 49; ver terminar-aplicacion.cjs).
+  const procesoDeLaAplicacion = app.process();
   await app.evaluate(async ({ BrowserWindow }) => {
     const [ventana] = BrowserWindow.getAllWindows();
     if (ventana) {
@@ -76,7 +80,7 @@ async function lanzar(datos, simuladas) {
     await new Promise((resolver) => { setTimeout(resolver, 100); });
   }
   await new Promise((resolver) => { setTimeout(resolver, 800); });
-  return { app, ventana };
+  return { app, ventana, procesoDeLaAplicacion };
 }
 
 async function main() {
@@ -89,7 +93,7 @@ async function main() {
   const archivoDelTicket = join(simuladas, `${RECIBE}.bin`);
   const leerImpresoraJson = () => (existsSync(archivoDeImpresora) ? readFileSync(archivoDeImpresora, 'utf8') : '(no existe)');
 
-  let { app, ventana } = await lanzar(datos, simuladas);
+  let { app, ventana, procesoDeLaAplicacion } = await lanzar(datos, simuladas);
   const prueba = (nombre) => ventana.locator(`[data-prueba="${nombre}"]`);
   const texto = async (nombre) => ((await prueba(nombre).first().textContent()) ?? '').trim();
   const capturar = async (nombre) => {
@@ -245,9 +249,9 @@ async function main() {
     await capturar('5-guardada');
 
     // ---- 6. Reinicio --------------------------------------------------------
-    app.process().kill('SIGKILL');
+    terminarAplicacion(procesoDeLaAplicacion);
     await new Promise((resolver) => { setTimeout(resolver, 1000); });
-    ({ app, ventana } = await lanzar(datos, simuladas));
+    ({ app, ventana, procesoDeLaAplicacion } = await lanzar(datos, simuladas));
     await prueba('pantalla-de-ingreso').waitFor({ timeout: ESPERA_LARGA });
     await prueba('usuario-para-ingreso').filter({ hasText: 'Jimmy de verificación' }).click();
     await teclearPin(PIN);
@@ -327,7 +331,7 @@ async function main() {
     comprobar('el recorrido llegó hasta el final', 'sin errores', error.message, false);
     await ventana.screenshot({ path: join(capturas, 'error.png') }).catch(() => undefined);
   } finally {
-    app.process().kill('SIGKILL');
+    terminarAplicacion(procesoDeLaAplicacion);
   }
 
   const fallidas = comprobaciones.filter((c) => !c.paso);

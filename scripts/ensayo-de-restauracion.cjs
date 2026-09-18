@@ -72,6 +72,7 @@ const { join, resolve } = require('node:path');
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
 const rutaDeElectron = require('electron');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 
 const { exigirProyectoDePrueba, ProyectoNoAdmitido } = require('./proyectos-de-prueba.cjs');
 
@@ -222,6 +223,9 @@ async function lanzarAplicacion(datos, entorno) {
       POS_SYNC_PROVIDER: 'supabase',
     },
   });
+  // El proceso se guarda AHORA, con la aplicación viva: después de que se
+  // cierre, `app.process()` lanza (§6.2, punto 49; ver terminar-aplicacion.cjs).
+  const procesoDeLaAplicacion = app.process();
   await app.evaluate(async ({ BrowserWindow }) => {
     const [ventana] = BrowserWindow.getAllWindows();
     if (ventana) {
@@ -239,19 +243,16 @@ async function lanzarAplicacion(datos, entorno) {
   const ventana = await app.firstWindow();
   await ventana.waitForLoadState('domcontentloaded');
   const prueba = (nombre) => ventana.locator(`[data-prueba="${nombre}"]`);
-  return { app, ventana, prueba, estaCerrada: () => cerrada };
+  return { app, procesoDeLaAplicacion, ventana, prueba, estaCerrada: () => cerrada };
 }
 
-/** NO se usa app.close(): llama a app.quit(), que el kiosko intercepta para pedir el PIN. */
-function matar(app) {
-  try {
-    const proceso = app.process();
-    proceso.kill('SIGKILL');
-    return proceso.pid;
-  } catch {
-    // Ya estaba muerto: la persona cerró la ventana.
-    return null;
-  }
+/**
+ * El pid del proceso terminado, o `null` si ya había terminado porque la
+ * persona cerró la ventana. Ver terminar-aplicacion.cjs (§6.2, punto 49).
+ */
+function matar(procesoDeLaAplicacion) {
+  const { pid, yaHabiaTerminado } = terminarAplicacion(procesoDeLaAplicacion);
+  return yaHabiaTerminado ? null : pid;
 }
 
 /** Las líneas de sincronización y restauración de la bitácora técnica, tal cual. */
@@ -359,7 +360,7 @@ function leerBaseRestaurada(datos) {
 // ---------------------------------------------------------------------------
 
 async function ensayar(datos, entorno, automatico) {
-  const { app, ventana, prueba, estaCerrada } = await lanzarAplicacion(datos, entorno);
+  const { app, procesoDeLaAplicacion, ventana, prueba, estaCerrada } = await lanzarAplicacion(datos, entorno);
   verificarCierre = estaCerrada;
   const observarAvance = observadorDeAvance(prueba);
   try {
@@ -580,7 +581,7 @@ async function ensayar(datos, entorno, automatico) {
     // La sesión se revoca en la nube en cuanto se deja: dale un momento a la petición.
     await dormir(2_000);
   } finally {
-    const pid = matar(app);
+    const pid = matar(procesoDeLaAplicacion);
     anotar(
       pid === null
         ? 'el proceso de Electron ya no estaba: la ventana se había cerrado'

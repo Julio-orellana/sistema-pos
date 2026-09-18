@@ -245,11 +245,13 @@ async function lanzar(datos, entornoDeNube) {
     cwd: PROYECTO,
     env: { ...process.env, ...entornoDeNube },
   });
+  // El proceso se guarda AHORA, con la aplicación viva (§6.2, punto 49).
+  const procesoDeLaAplicacion = app.process();
   let salida = '';
-  app.process().stdout?.on('data', (trozo) => {
+  procesoDeLaAplicacion.stdout?.on('data', (trozo) => {
     salida += trozo.toString();
   });
-  app.process().stderr?.on('data', (trozo) => {
+  procesoDeLaAplicacion.stderr?.on('data', (trozo) => {
     salida += trozo.toString();
   });
   return { app, salida: () => salida };
