@@ -71,6 +71,12 @@ describe('Las impresoras simuladas no pueden llegar al instalador', () => {
   it('index.ts solo mira POS_IMPRESORAS_SIMULADAS con la aplicación SIN empaquetar', () => {
     const indice = readFileSync(join(__dirname, '..', '..', 'index.ts'), 'utf8');
     expect(indice).toContain("app.isPackaged ? '' : (process.env.POS_IMPRESORAS_SIMULADAS ?? '')");
-    expect((indice.match(/process\.env\.POS_IMPRESORAS_SIMULADAS/g) ?? []).length).toBe(1);
+    expect((indice.match(/process\.env\.POS_IMPRESORAS_SIMULADAS\b/g) ?? []).length).toBe(1);
+  });
+
+  it('la DEMORA de la impresora simulada tampoco se lee en el instalador (§4.64)', () => {
+    const indice = readFileSync(join(__dirname, '..', '..', 'index.ts'), 'utf8');
+    expect(indice).toContain("app.isPackaged ? 0 : Number(process.env.POS_IMPRESORAS_SIMULADAS_DEMORA_MS ?? '0')");
+    expect((indice.match(/process\.env\.POS_IMPRESORAS_SIMULADAS_DEMORA_MS/g) ?? []).length).toBe(1);
   });
 });

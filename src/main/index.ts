@@ -597,8 +597,13 @@ app.whenReady().then(
     const carpetaDePdf = join(app.getPath('userData'), SUBCARPETA_DE_RECIBOS);
     mkdirSync(carpetaDePdf, { recursive: true });
     const carpetaDeImpresorasSimuladas = app.isPackaged ? '' : (process.env.POS_IMPRESORAS_SIMULADAS ?? '');
+    // La demora solo tiene sentido con las simuladas, y por lo tanto tampoco
+    // existe en el instalador: imita lo que tarda PowerShell en la tienda.
+    const demoraDeLaImpresoraSimulada = app.isPackaged ? 0 : Number(process.env.POS_IMPRESORAS_SIMULADAS_DEMORA_MS ?? '0') || 0;
     const enviadorDeImpresion: EnviadorRaw =
-      carpetaDeImpresorasSimuladas === '' ? new EnviadorPorPowerShell() : new EnviadorSimulado(carpetaDeImpresorasSimuladas);
+      carpetaDeImpresorasSimuladas === ''
+        ? new EnviadorPorPowerShell()
+        : new EnviadorSimulado(carpetaDeImpresorasSimuladas, demoraDeLaImpresoraSimulada);
     const impresora = new ImpresoraSegunElArchivo(app.getPath('userData'), enviadorDeImpresion, logTecnico);
     // La ventana todavía no existe acá; la lista se le pide cuando alguien abre
     // la pantalla, y para entonces ya está.
