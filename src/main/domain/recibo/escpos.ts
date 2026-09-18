@@ -138,3 +138,29 @@ export function reciboComoEscPos(texto: string): Uint8Array {
   const cuerpo = aCp850(`${texto}\n`);
   return unir([INICIALIZAR, PAGINA_CP850, cuerpo, AVANZAR, CORTAR]);
 }
+
+/**
+ * Varias copias en UN SOLO flujo de bytes, una detrás de la otra (spec 001).
+ *
+ * CADA COPIA ES UN RECIBO ESC/POS ENTERO —inicializar, página de códigos,
+ * texto, avance y corte—, exactamente lo que `reciboComoEscPos` devuelve para
+ * ella. Así se puede afirmar byte a byte que cada copia es lo que antes salía
+ * como único papel, y cada una queda con su propio corte.
+ *
+ * VAN EN UN SOLO TRABAJO, y no en uno por copia, por el costo de la cola de
+ * Windows: cada envío arranca PowerShell, compila el `Add-Type` y espera 1,5 s
+ * para leer el trabajo (`cola-de-windows.ts`), y la venta espera la impresión
+ * antes de contestarle a la pantalla. Una térmica no contesta nada (§4.43), así
+ * que dos trabajos no dirían más que uno.
+ *
+ * > **NO MEDIDO EN LA IMPRESORA DE LA TIENDA.** El `ESC @` de la segunda copia
+ * > llega mientras la impresora termina el corte de la primera. Según la
+ * > especificación de Epson, `ESC @` borra el buffer de impresión pero NO el de
+ * > recepción, y los comandos se procesan en orden, así que la primera copia ya
+ * > salió entera. Es documentación, no medición: se confirma con la RPT004 en
+ * > la mano. Si hiciera algo raro, la salida es no repetir `INICIALIZAR` y
+ * > `PAGINA_CP850` desde la segunda copia en adelante.
+ */
+export function copiasComoEscPos(textos: readonly string[]): Uint8Array {
+  return unir(textos.map((texto) => reciboComoEscPos(texto)));
+}

@@ -716,7 +716,19 @@ describe('LOS TOTALES SON INFORMACIÓN DE DUEÑO: sin rol administrativo no viaj
     expect(comoJimmy.totales).not.toBeNull();
   });
 
-  it('el voucher SÍ llega al rol venta: ya está impreso en el papel del cliente', async () => {
+  /*
+    ESTA PRUEBA CAMBIÓ DE NOMBRE EL 2026-09-18 (spec 001), Y NO SE BORRÓ. El
+    comportamiento que exige es el mismo; lo que cambió es el porqué.
+
+    Se llamaba «el voucher SÍ llega al rol venta: ya está impreso en el papel
+    del cliente». Con un solo papel era cierto, y era la razón de no esconderlo
+    detrás de un rol. Desde la spec 001 la copia del cliente YA NO lleva el
+    número de boleta: sale solo en la copia de la tienda. El voucher sigue
+    llegando a cualquiera con sesión porque el historial lo ve personal de la
+    tienda, lo tecleó quien cobró y está impreso en la copia de la tienda. Que
+    el cliente no lo vea lo resuelve su copia, no esta pantalla.
+  */
+  it('el voucher SÍ llega al rol venta: lo tecleó quien cobró y está en la copia de la tienda', async () => {
     const conTarjeta = await venderConRecibo('tarjeta');
 
     const comoAna = await historialCompleto('tarjeta');

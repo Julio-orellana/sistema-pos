@@ -1656,10 +1656,15 @@ export interface ReciboEnHistorialIpc {
    * El voucher de la terminal del banco (`ventas.num_boleta`), o `null` en una
    * venta en efectivo.
    *
-   * Es el mismo número que ya sale IMPRESO en el papel del cliente
-   * (`plantilla-de-recibo.ts`), así que mostrarlo acá no revela nada que el
-   * cliente no tenga en la mano: por eso viaja con el resto de la fila y no
-   * detrás de un rol, igual que el total.
+   * Viaja con el resto de la fila y no detrás de un rol, igual que el total:
+   * el historial lo ve personal de la tienda, el número lo tecleó quien cobró,
+   * y sale impreso en la COPIA DE LA TIENDA (`plantilla-de-recibo.ts`).
+   *
+   * CORREGIDO EL 2026-09-18 (spec 001). Este comentario decía que era «el mismo
+   * número que ya sale IMPRESO en el papel del cliente», y que por eso
+   * mostrarlo acá «no revela nada que el cliente no tenga en la mano». Desde
+   * que salen dos copias, la del cliente ya no lo lleva. La decisión de que
+   * llegue a cualquiera con sesión se sostiene por la razón de arriba.
    */
   readonly numBoleta: string | null;
   /** `true` si alguna vez salió por la impresora térmica. */
@@ -1864,7 +1869,12 @@ export type CambioDeLimiteIpc = z.infer<typeof esquemaLimiteDeDescuento>;
 /** Lo que se muestra después de reimprimir o al ver un recibo. */
 export interface ReciboVistoIpc {
   readonly numeroRecibo: number;
-  /** El recibo tal como sale en el papel, en texto plano. */
+  /**
+   * El recibo COMPLETO en texto plano: la versión de pantalla, la misma
+   * información que el PDF. Es la copia de la tienda sin su encabezado de
+   * copia. Hasta el 2026-09-18 decía «tal como sale en el papel», que con un
+   * solo papel era cierto; desde la spec 001 salen dos copias distintas.
+   */
   readonly texto: string;
   /** Ruta del PDF en el disco. */
   readonly rutaPdf: string;

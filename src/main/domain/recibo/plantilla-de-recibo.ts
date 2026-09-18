@@ -3,8 +3,9 @@
  *
  * SON DOS SALIDAS DEL MISMO MODELO, no dos recibos distintos: `reciboComoHtml`
  * es lo que se convierte en PDF, y `reciboComoTexto` es lo que va a la
- * impresora térmica. Las dos leen exactamente el mismo `ModeloDeRecibo`, así
- * que el papel y el PDF no pueden decir cifras distintas.
+ * impresora térmica y a la pantalla del historial. Las dos leen exactamente el
+ * mismo `ModeloDeRecibo`, así que el papel y el PDF no pueden decir cifras
+ * distintas.
  *
  * LAS DOS SON FUNCIONES PURAS: entra un modelo, sale una cadena. No tocan la
  * base, no leen la hora ni el sistema de archivos, y por eso se pueden probar
@@ -13,6 +14,16 @@
  * ANCHO DE 80 mm. Es el formato que se acordó, y el más común en impresoras
  * térmicas económicas. En texto plano se traduce a 48 columnas, que es lo que
  * entra en 80 mm con la fuente A estándar (576 puntos, 12 por carácter).
+ *
+ * ---------------------------------------------------------------------------
+ * DOS COPIAS IMPRESAS: LA DEL CLIENTE Y LA DE LA TIENDA (spec 001, 2026-09-18)
+ * ---------------------------------------------------------------------------
+ * Cada recibo sale DOS veces por la térmica. La copia del cliente no lleva dos
+ * datos de control interno —quién autorizó un descuento y el número de boleta—,
+ * y la de la tienda lleva todo. Las dos, y la versión de pantalla, salen de LA
+ * MISMA función `reciboComoTexto`; lo que cambia es su parámetro `destino`, y
+ * qué lleva cada destino lo decide UNA sola tabla, `QUE_LLEVA_CADA_DESTINO`.
+ * No hay una segunda plantilla. Ver spec/features/001-recibo-copia-tienda-cliente.
  */
 
 import type { LineaDeRecibo, ModeloDeRecibo } from './modelo-de-recibo';
@@ -37,6 +48,85 @@ const FORMAS_DE_PAGO_LEGIBLES = {
   efectivo: 'Efectivo',
   tarjeta: 'Tarjeta',
 } as const;
+
+// ===========================================================================
+// Las copias impresas y los destinos del texto (spec 001)
+// ===========================================================================
+
+/** Las dos copias que salen por la térmica en cada emisión y en cada reimpresión. */
+export type CopiaImpresa = 'cliente' | 'tienda';
+
+/**
+ * Para qué se dibuja el texto: una de las dos copias impresas, o la PANTALLA
+ * del historial («Ver» y «Reimprimir»).
+ *
+ * La pantalla muestra la versión COMPLETA y sin encabezado de copia: es la
+ * misma información que el PDF, que tampoco es una copia impresa. La copia de
+ * la tienda es esa misma versión más su encabezado; la del cliente, además, sin
+ * los dos datos reservados.
+ */
+export type DestinoDelTexto = CopiaImpresa | 'pantalla';
+
+/**
+ * EN QUÉ ORDEN salen las copias: primero la del cliente, que es la que alguien
+ * está esperando en el mostrador; después la de la tienda, que se guarda. Con
+ * el corte parcial, la primera queda colgando por fuera y es la que se arranca
+ * primero para entregarla.
+ *
+ * Es la ÚNICA lista que dice cuántas copias salen. Si algún día otro negocio
+ * quiere una sola, o la de la tienda solo en ciertas ventas, esta lista pasa a
+ * leerse de la configuración (plan de la spec 001, §8) y nada más cambia.
+ */
+export const COPIAS_QUE_SE_IMPRIMEN: readonly CopiaImpresa[] = ['cliente', 'tienda'];
+
+/**
+ * Los renglones que distinguen cada copia, debajo de la leyenda de proforma.
+ *
+ * SOLO ASCII, a propósito: la térmica imprime en CP850, donde la raya (—) no
+ * existe, y sin tildes el encabezado sale igual en cualquier página de códigos.
+ * Es el criterio de `MARCA_DE_VENTA_ANULADA`. Sin asteriscos: esos marcan un
+ * ESTADO del recibo (reimpresión, anulada), y esto es la identificación del
+ * documento, en el mismo estilo que «RECIBO DE VENTA».
+ */
+export const ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE: readonly string[] = ['COPIA DEL CLIENTE'];
+
+/**
+ * El segundo renglón le dice a quien tiene el papel en la mano qué hacer con
+ * él. «Control interno» es el término de auditoría para lo que esta copia es.
+ */
+export const ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA: readonly string[] = [
+  'COPIA DE LA TIENDA',
+  'Control interno. No se entrega al cliente.',
+];
+
+/** Qué lleva el texto de un destino, además de lo que llevan todos. */
+export interface LoQueLlevaElTexto {
+  /** Los renglones del encabezado de la copia. Vacío en la pantalla. */
+  readonly encabezado: readonly string[];
+  /** El renglón «Autorizado por: …» de un descuento que pasó el tope del rol. */
+  readonly autorizacionDelDescuento: boolean;
+  /** El renglón «Boleta …»: el voucher de la terminal del banco. */
+  readonly boleta: boolean;
+}
+
+/**
+ * QUÉ LLEVA CADA DESTINO. Es EL ÚNICO LUGAR que decide qué ve el cliente.
+ *
+ * La copia del cliente oculta una LISTA CERRADA de dos datos de control
+ * interno: quién autorizó un descuento y el número de boleta. Todo lo demás
+ * —incluido cualquier dato que se agregue al papel en el futuro, como el nombre
+ * del cliente— sale en las tres versiones, porque la plantilla no tiene ningún
+ * otro `if` sobre el destino. Hay una prueba que compara las copias renglón
+ * por renglón y exige que la diferencia sea exactamente esta.
+ *
+ * `Record<DestinoDelTexto, …>`: si algún día hay otro destino, el compilador
+ * no deja agregarlo sin decidir qué lleva.
+ */
+export const QUE_LLEVA_CADA_DESTINO: Readonly<Record<DestinoDelTexto, LoQueLlevaElTexto>> = {
+  pantalla: { encabezado: [], autorizacionDelDescuento: true, boleta: true },
+  tienda: { encabezado: ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA, autorizacionDelDescuento: true, boleta: true },
+  cliente: { encabezado: ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE, autorizacionDelDescuento: false, boleta: false },
+};
 
 // ===========================================================================
 // Texto plano, para la impresora térmica
@@ -99,13 +189,25 @@ function lineaDeProductoEnTexto(linea: LineaDeRecibo, ancho: number): string[] {
 }
 
 /**
- * El recibo en texto plano, listo para una impresora térmica.
+ * El recibo en texto plano: una de las dos copias de la térmica, o la versión
+ * de pantalla.
  *
  * Devuelve las líneas ya ajustadas al ancho. No lleva comandos de la impresora:
  * eso es trabajo de `escpos.ts`, que envuelve este texto. Separarlo permite
  * leer el recibo tal como va a salir sin decodificar bytes de control.
+ *
+ * EL DESTINO ES OBLIGATORIO, sin valor por omisión, a propósito. Con uno, un
+ * camino nuevo que imprimiera llamando a `reciboComoTexto(modelo)` mandaría la
+ * versión completa a la térmica sin que nada fallara, y el cliente se llevaría
+ * los datos de control interno. Obligatorio, cada llamada tiene que decir para
+ * qué es el texto. Lo que va a la térmica se arma con `textosDeLasCopias`.
  */
-export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): string {
+export function reciboComoTexto(
+  modelo: ModeloDeRecibo,
+  destino: DestinoDelTexto,
+  ancho = COLUMNAS_80MM,
+): string {
+  const lleva = QUE_LLEVA_CADA_DESTINO[destino];
   const separador = '-'.repeat(ancho);
   const lineas: string[] = [];
 
@@ -122,6 +224,15 @@ export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): 
   lineas.push(centrado(TITULO_DEL_RECIBO, ancho));
   for (const parte of enVariasLineas(LEYENDA_NO_FISCAL, ancho)) {
     lineas.push(centrado(parte, ancho));
+  }
+  /*
+    EL ENCABEZADO DE LA COPIA, debajo de la leyenda y ANTES de las marcas de
+    reimpresión y de anulada. La cabecera del negocio y el título quedan
+    iguales en las dos copias, y lo que cambia empieza en el renglón que dice
+    qué copia es. En la pantalla no hay encabezado: no es una copia impresa.
+  */
+  for (const renglon of lleva.encabezado) {
+    lineas.push(centrado(renglon, ancho));
   }
   if (modelo.reimpresion) {
     lineas.push(centrado('** REIMPRESIÓN **', ancho));
@@ -171,7 +282,8 @@ export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): 
 
     La forma correcta con estos datos es: las líneas suman el TOTAL, y el
     descuento se informa como lo que es, un dato de la venta, no un paso de la
-    resta. El monto rebajado sigue a la vista, y también quién lo autorizó.
+    resta. El monto rebajado sigue a la vista en las dos copias, y quién lo
+    autorizó, en la de la tienda (spec 001).
 
     LA ACLARACIÓN SE CONSERVA, aunque desde que el precio unitario impreso es
     el EFECTIVO cada renglón ya multiplica solo. Se conserva por dos cosas que
@@ -185,10 +297,19 @@ export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): 
     lineas.push(
       aDosColumnas(`Descuento ${modelo.descuento.descripcion}`, `-${modelo.descuento.rebaja}`, ancho),
     );
-    if (modelo.descuento.autorizadoPor !== null) {
-      // Quién autorizó va EN EL PAPEL, no solo en la auditoría: es la única
-      // copia que se lleva el cliente, y un descuento sin responsable visible
-      // es justo lo que el flujo de PIN existe para evitar.
+    if (lleva.autorizacionDelDescuento && modelo.descuento.autorizadoPor !== null) {
+      /*
+        Quién autorizó va EN LA COPIA DE LA TIENDA, no solo en la auditoría: un
+        descuento sin responsable visible es justo lo que el flujo de PIN existe
+        para evitar, y esa copia es la que se queda para control interno.
+
+        CAMBIÓ EL 2026-09-18 (spec 001). Hasta entonces este renglón salía en
+        el ÚNICO papel que había, y el comentario decía: «Quién autorizó va EN
+        EL PAPEL, no solo en la auditoría: es la única copia que se lleva el
+        cliente». Desde que salen dos copias, la razón de control se conserva
+        entera en la de la tienda, y la del cliente no lo lleva: es un dato de
+        control interno que no le corresponde ver (pedido de Julio).
+      */
       for (const parte of enVariasLineas(
         `Autorizado por: ${modelo.descuento.autorizadoPor}`,
         ancho,
@@ -202,7 +323,9 @@ export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): 
 
   // ---- Forma de pago -------------------------------------------------------
   lineas.push(aDosColumnas('Forma de pago', FORMAS_DE_PAGO_LEGIBLES[modelo.formaPago], ancho));
-  if (modelo.numBoleta !== null) {
+  // La forma de pago sale en las dos copias; el número del voucher, solo en la
+  // de la tienda, que es la que se concilia contra la terminal del banco.
+  if (lleva.boleta && modelo.numBoleta !== null) {
     lineas.push(aDosColumnas('Boleta', modelo.numBoleta, ancho));
   }
   lineas.push('');
@@ -211,6 +334,17 @@ export function reciboComoTexto(modelo: ModeloDeRecibo, ancho = COLUMNAS_80MM): 
   lineas.push(centrado(AGRADECIMIENTO, ancho));
 
   return lineas.join('\n');
+}
+
+/**
+ * Lo que va a la térmica: el texto de cada copia, EN EL ORDEN en que sale.
+ *
+ * Es la ÚNICA forma de armar lo que se imprime, y hay una prueba estructural
+ * que lo exige: así ningún camino puede mandar la versión de pantalla al papel
+ * que se lleva el cliente.
+ */
+export function textosDeLasCopias(modelo: ModeloDeRecibo): readonly string[] {
+  return COPIAS_QUE_SE_IMPRIMEN.map((copia) => reciboComoTexto(modelo, copia));
 }
 
 // ===========================================================================
@@ -237,6 +371,12 @@ function escapar(texto: string): string {
  * Se usa una tipografía MONOESPACIADA para que el PDF se parezca a lo que sale
  * por la térmica. No es capricho: si el papel y el PDF se vieran distintos,
  * cotejar uno contra otro en una auditoría dejaría de ser inmediato.
+ *
+ * EL PDF ES LA VERSIÓN COMPLETA, y no cambió con las dos copias impresas
+ * (spec 001): lleva quién autorizó el descuento y la boleta, igual que la copia
+ * de la tienda, y no lleva ningún encabezado de copia, porque no es una copia
+ * impresa. Lo ve solo personal con sesión, en el historial. Por eso esta
+ * función no recibe destino.
  */
 export function reciboComoHtml(modelo: ModeloDeRecibo): string {
   const filas = modelo.lineas

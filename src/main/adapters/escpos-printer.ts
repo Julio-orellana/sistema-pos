@@ -44,7 +44,7 @@ import type {
   ReceiptPrinterProvider,
   ResultadoImpresion,
 } from '@shared/adapters';
-import { reciboComoEscPos } from '@main/domain/recibo/escpos';
+import { copiasComoEscPos } from '@main/domain/recibo/escpos';
 import type { LogTecnico } from '@main/log-tecnico';
 
 /** Cómo está configurada la impresora de esta terminal. */
@@ -71,28 +71,27 @@ export class EscPosPrinterProvider implements ReceiptPrinterProvider {
   }
 
   public imprimirComprobante(comprobante: ComprobanteImprimible): Promise<ResultadoImpresion> {
-    const texto = comprobante.contenidoTexto ?? '';
+    const copias = comprobante.copiasEnTexto;
 
-    if (texto.trim() === '') {
+    if (copias.length === 0 || copias.some((texto) => texto.trim() === '')) {
       return Promise.resolve(
         this.fallo(comprobante, 'El comprobante llegó sin texto para imprimir.'),
       );
     }
 
     try {
-      const bytes = reciboComoEscPos(texto);
-      const copias = Math.max(1, comprobante.copias);
-      for (let copia = 0; copia < copias; copia += 1) {
-        // `writeFileSync` sobre un dispositivo escribe el flujo completo de una
-        // vez, que es justo lo que una térmica espera: no hay «archivo» que
-        // truncar del otro lado, hay un puerto que recibe bytes.
-        writeFileSync(this.dispositivo, bytes);
-      }
+      // Todas las copias en una sola escritura, cada una con su corte: es lo
+      // mismo que manda la cola de Windows (ver `copiasComoEscPos`).
+      const bytes = copiasComoEscPos(copias);
+      // `writeFileSync` sobre un dispositivo escribe el flujo completo de una
+      // vez, que es justo lo que una térmica espera: no hay «archivo» que
+      // truncar del otro lado, hay un puerto que recibe bytes.
+      writeFileSync(this.dispositivo, bytes);
 
       this.log.registrar(
         'impresion',
         `Comprobante ${comprobante.idComprobante} enviado a ${this.dispositivo} ` +
-          `(${String(bytes.length)} bytes, ${String(copias)} copia(s)).`,
+          `(${String(bytes.length)} bytes, ${String(copias.length)} copia(s) en una sola escritura).`,
       );
 
       return Promise.resolve({

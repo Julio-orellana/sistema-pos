@@ -22,7 +22,7 @@ const COMPROBANTE_DE_EJEMPLO: ComprobanteImprimible = {
   idComprobante: 'RCB-000001',
   tipo: 'recibo',
   rutaPdf: '/tmp/RCB-000001.pdf',
-  copias: 1,
+  copiasEnTexto: ['COPIA DEL CLIENTE', 'COPIA DE LA TIENDA'],
 };
 
 describe('Impresión: la venta nunca depende de que haya impresora', () => {

@@ -22,6 +22,8 @@ import { LogTecnicoSilencioso, type LogTecnico, type OrigenTecnico } from '@main
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import { ServicioDeRecibos } from '@main/domain/recibo/servicio-de-recibos';
+import { copiasComoEscPos } from '@main/domain/recibo/escpos';
+import { textosDeLasCopias } from '@main/domain/recibo/plantilla-de-recibo';
 import {
   ARCHIVO_DE_IMPRESORA,
   ImpresoraSegunElArchivo,
@@ -424,8 +426,15 @@ describe('Quitar la impresora vuelve a «solo PDF» y los recibos se siguen emit
       const conImpresora = await recibos.emitir(vender());
       expect(conImpresora.pdfGenerado).toBe(true);
       expect(conImpresora.impreso).toBe(true);
+      // LAS DOS COPIAS VAN EN UN SOLO ENVÍO (spec 001): un PowerShell por
+      // recibo, como cuando había un solo papel.
       expect(enviador.envios).toBe(1);
-      expect(readFileSync(join(carpeta, `${IMPRESORA_SIMULADA_QUE_RECIBE}.bin`)).toString('latin1')).toContain('TOTAL');
+      const recibido = readFileSync(join(carpeta, `${IMPRESORA_SIMULADA_QUE_RECIBE}.bin`));
+      expect([...recibido]).toEqual([...copiasComoEscPos(textosDeLasCopias(conImpresora.modelo))]);
+      const comoTexto = recibido.toString('latin1');
+      expect(comoTexto.indexOf('COPIA DEL CLIENTE')).toBeGreaterThan(-1);
+      expect(comoTexto.indexOf('COPIA DEL CLIENTE')).toBeLessThan(comoTexto.indexOf('COPIA DE LA TIENDA'));
+      expect(comoTexto.split('\x1dVB\x00')).toHaveLength(3);
 
       s.quitar();
       const sinImpresora = await recibos.emitir(vender());
@@ -446,8 +455,7 @@ describe('Quitar la impresora vuelve a «solo PDF» y los recibos se siguen emit
       idComprobante: 'r1',
       tipo: 'recibo',
       rutaPdf: join(carpeta, 'r1.pdf'),
-      contenidoTexto: 'hola',
-      copias: 1,
+      copiasEnTexto: ['hola'],
     });
     expect(resultado.ok).toBe(false);
     expect(resultado.mensaje).toContain('PDF');
@@ -463,10 +471,65 @@ describe('Quitar la impresora vuelve a «solo PDF» y los recibos se siguen emit
       idComprobante: 'r2',
       tipo: 'recibo',
       rutaPdf: join(carpeta, 'r2.pdf'),
-      contenidoTexto: 'hola',
-      copias: 1,
+      copiasEnTexto: ['hola'],
     });
     expect(resultado.ok).toBe(true);
     expect([...readFileSync(destino).subarray(0, 2)]).toEqual([0x1b, 0x40]);
+  });
+});
+
+// ===========================================================================
+describe('Las dos copias del recibo llegan a la impresora en UN solo trabajo (spec 001)', () => {
+  it('el formato viejo también escribe las DOS copias en una sola escritura, cada una con su corte', async () => {
+    const destino = join(carpeta, 'dispositivo-viejo.bin');
+    writeFileSync(join(carpeta, ARCHIVO_DE_IMPRESORA), JSON.stringify({ dispositivo: destino }));
+    writeFileSync(destino, '');
+    const impresora = new ImpresoraSegunElArchivo(carpeta, new EnviadorSimulado(carpeta), log);
+    const resultado = await impresora.imprimirComprobante({
+      idComprobante: 'r3',
+      tipo: 'recibo',
+      rutaPdf: join(carpeta, 'r3.pdf'),
+      copiasEnTexto: ['COPIA DEL CLIENTE', 'COPIA DE LA TIENDA'],
+    });
+    expect(resultado.ok).toBe(true);
+    expect([...readFileSync(destino)]).toEqual([
+      ...copiasComoEscPos(['COPIA DEL CLIENTE', 'COPIA DE LA TIENDA']),
+    ]);
+  });
+
+  it('por la cola de Windows, las DOS copias viajan en UN solo trabajo', async () => {
+    writeFileSync(join(carpeta, ARCHIVO_DE_IMPRESORA), JSON.stringify({ impresora: IMPRESORA_SIMULADA_QUE_RECIBE }));
+    const enviador = new EnviadorQueCuenta(new EnviadorSimulado(carpeta));
+    const impresora = new ImpresoraSegunElArchivo(carpeta, enviador, log);
+    const resultado = await impresora.imprimirComprobante({
+      idComprobante: 'r4',
+      tipo: 'recibo',
+      rutaPdf: join(carpeta, 'r4.pdf'),
+      copiasEnTexto: ['COPIA DEL CLIENTE', 'COPIA DE LA TIENDA'],
+    });
+    expect(resultado.ok).toBe(true);
+    expect(enviador.envios).toBe(1);
+    expect([...readFileSync(join(carpeta, `${IMPRESORA_SIMULADA_QUE_RECIBE}.bin`))]).toEqual([
+      ...copiasComoEscPos(['COPIA DEL CLIENTE', 'COPIA DE LA TIENDA']),
+    ]);
+    expect(log.lineas.join('\n')).toContain('2 copia(s) en un solo trabajo');
+  });
+
+  it('un comprobante SIN copias, o con una copia vacía, no se manda: falla con el mensaje de siempre', async () => {
+    writeFileSync(join(carpeta, ARCHIVO_DE_IMPRESORA), JSON.stringify({ impresora: IMPRESORA_SIMULADA_QUE_RECIBE }));
+    const enviador = new EnviadorQueCuenta(new EnviadorSimulado(carpeta));
+    const impresora = new ImpresoraSegunElArchivo(carpeta, enviador, log);
+    for (const copiasEnTexto of [[], ['COPIA DEL CLIENTE', '   ']]) {
+      const resultado = await impresora.imprimirComprobante({
+        idComprobante: 'r5',
+        tipo: 'recibo',
+        rutaPdf: join(carpeta, 'r5.pdf'),
+        copiasEnTexto,
+      });
+      expect(resultado.ok).toBe(false);
+      expect(resultado.mensaje).toBe('No se pudo imprimir. El recibo quedó guardado en PDF.');
+    }
+    expect(enviador.envios).toBe(0);
+    expect(log.lineas.join('\n')).toContain('El comprobante llegó sin texto para imprimir.');
   });
 });

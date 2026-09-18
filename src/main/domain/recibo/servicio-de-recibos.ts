@@ -42,11 +42,35 @@ import {
   type DependenciasDelModelo,
   type ModeloDeRecibo,
 } from './modelo-de-recibo';
-import { reciboComoHtml, reciboComoTexto } from './plantilla-de-recibo';
+import {
+  COPIAS_QUE_SE_IMPRIMEN,
+  reciboComoHtml,
+  textosDeLasCopias,
+  type CopiaImpresa,
+} from './plantilla-de-recibo';
 import { resolverRutaDePdf, rutaRelativaDePdf } from './ruta-de-pdf';
 
 /** Convierte el HTML del recibo en un PDF guardado en `destino` (ruta absoluta). */
 export type GeneradorDePdf = (html: string, destino: string) => Promise<void>;
+
+/** Cómo se nombra cada copia en el mensaje al cajero. */
+const COPIA_LEGIBLE: Readonly<Record<CopiaImpresa, string>> = {
+  cliente: 'copia del cliente',
+  tienda: 'copia de la tienda',
+};
+
+/**
+ * «Recibo enviado a la impresora: copia del cliente y copia de la tienda.»
+ *
+ * Se arma desde `COPIAS_QUE_SE_IMPRIMEN` y no se escribe fijo: si algún día la
+ * lista cambia (plan de la spec 001, §8), el mensaje sigue diciendo la verdad.
+ */
+function mensajeDeCopiasEnviadas(): string {
+  const nombres = COPIAS_QUE_SE_IMPRIMEN.map((copia) => COPIA_LEGIBLE[copia]);
+  const ultima = nombres.at(-1) ?? '';
+  const enumeradas = nombres.length > 1 ? `${nombres.slice(0, -1).join(', ')} y ${ultima}` : ultima;
+  return `Recibo enviado a la impresora: ${enumeradas}.`;
+}
 
 /** Qué pasó al emitir o reimprimir un recibo. */
 export interface ResultadoDeRecibo {
@@ -312,16 +336,27 @@ export class ServicioDeRecibos {
       idComprobante: recibo.id,
       tipo: 'recibo',
       rutaPdf,
-      contenidoTexto: reciboComoTexto(modelo),
-      copias: 1,
+      /*
+        LAS DOS COPIAS, en su orden: la del cliente y la de la tienda (spec 001).
+        Salen de `textosDeLasCopias`, que es la única forma de armar lo que va a
+        la térmica: la versión de pantalla, con los datos de control interno y
+        sin encabezado, no puede llegar al papel del cliente por este camino.
+      */
+      copiasEnTexto: textosDeLasCopias(modelo),
     };
 
     try {
       const resultado = await this.dependencias.impresora.imprimirComprobante(comprobante);
 
       if (resultado.ok && !resultado.omitidaPorDiseno) {
+        /*
+          `impreso` quiere decir que el trabajo CON LAS DOS COPIAS fue aceptado:
+          van juntas, así que no hay una aceptada y la otra no. El mensaje dice
+          «enviado» y no «impreso» porque una térmica no contesta (§4.43), y
+          nombra las copias para que el cajero sepa que salieron dos.
+        */
         this.recibos.marcarImpreso(recibo.id);
-        return { impreso: true, mensaje: resultado.mensaje };
+        return { impreso: true, mensaje: mensajeDeCopiasEnviadas() };
       }
 
       // `omitidaPorDiseno` es el caso normal sin impresora configurada: no es

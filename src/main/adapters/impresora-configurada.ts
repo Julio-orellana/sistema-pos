@@ -45,7 +45,7 @@ import {
   type UltimaPruebaDeImpresoraIpc,
 } from '@shared/types/ipc';
 import type { LogTecnico } from '@main/log-tecnico';
-import { reciboComoEscPos } from '@main/domain/recibo/escpos';
+import { copiasComoEscPos } from '@main/domain/recibo/escpos';
 import { EscPosPrinterProvider } from './escpos-printer';
 import { clasificarEnvio, type EnviadorRaw } from './cola-de-windows';
 
@@ -192,22 +192,24 @@ export class ImpresoraPorColaDeWindows implements ReceiptPrinterProvider {
   ) {}
 
   public async imprimirComprobante(comprobante: ComprobanteImprimible): Promise<ResultadoImpresion> {
-    const texto = comprobante.contenidoTexto ?? '';
-    if (texto.trim() === '') {
+    const copias = comprobante.copiasEnTexto;
+    if (copias.length === 0 || copias.some((texto) => texto.trim() === '')) {
       return this.fallo(comprobante, 'El comprobante llegó sin texto para imprimir.');
     }
     try {
-      const bytes = reciboComoEscPos(texto);
-      const copias = Math.max(1, comprobante.copias);
-      for (let copia = 0; copia < copias; copia += 1) {
-        const envio = clasificarEnvio(await this.enviador.enviar(this.nombreDeImpresora, bytes), bytes.length);
-        if (envio.clase !== 'enviado') {
-          return this.fallo(comprobante, `${envio.titulo}. ${envio.detalle ?? ''}`);
-        }
+      /*
+        TODAS LAS COPIAS EN UN SOLO TRABAJO: un PowerShell por comprobante, como
+        cuando había un solo papel, y no uno por copia. Ver `copiasComoEscPos`.
+      */
+      const bytes = copiasComoEscPos(copias);
+      const envio = clasificarEnvio(await this.enviador.enviar(this.nombreDeImpresora, bytes), bytes.length);
+      if (envio.clase !== 'enviado') {
+        return this.fallo(comprobante, `${envio.titulo}. ${envio.detalle ?? ''}`);
       }
       this.log.registrar(
         'impresion',
-        `Comprobante ${comprobante.idComprobante} enviado a la impresora ${this.nombreDeImpresora} (${String(bytes.length)} bytes).`,
+        `Comprobante ${comprobante.idComprobante} enviado a la impresora ${this.nombreDeImpresora} ` +
+          `(${String(bytes.length)} bytes, ${String(copias.length)} copia(s) en un solo trabajo).`,
       );
       return { ok: true, adaptador: this.nombre, omitidaPorDiseno: false, mensaje: 'Recibo enviado a la impresora.' };
     } catch (error) {

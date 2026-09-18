@@ -8,8 +8,14 @@
  * medio armar para atender ese pedido.
  *
  * LA PIDE CUALQUIERA CON SESIÓN, no solo un administrador: un cajero tiene que
- * poder resolverlo con el cliente enfrente. El recibo no muestra nada que ese
- * cliente no haya visto ya al comprar.
+ * poder resolverlo con el cliente enfrente.
+ *
+ * CORREGIDO EL 2026-09-18 (spec 001). Este párrafo terminaba diciendo «El
+ * recibo no muestra nada que ese cliente no haya visto ya al comprar». Desde
+ * que salen dos copias, la pantalla muestra la versión COMPLETA —quién autorizó
+ * un descuento y la boleta—, que el cliente ya no ve en su copia. Alcanza con
+ * tener sesión porque la ve personal de la tienda, y esos datos los conoce
+ * quien cobró. Reimprimir saca las dos copias.
  *
  * REIMPRIMIR REGENERA desde las filas de la venta, nunca desde el PDF que está
  * en el disco. Es lo que permite que un recibo emitido antes de cargar los
@@ -356,10 +362,16 @@ export function PantallaDeRecibos({
       </div>
 
       {/*
-        El recibo se muestra TAL CUAL sale en el papel, en texto plano y con
-        tipografía monoespaciada. No es una versión bonita de los mismos datos:
-        es el mismo texto que se le manda a la impresora, así que lo que se ve
-        en pantalla y lo que sale del rollo no pueden diferir.
+        El recibo se muestra en texto plano y con tipografía monoespaciada. No
+        es una versión bonita de los mismos datos: es la misma función que
+        dibuja el papel, así que lo que se ve y lo que sale del rollo no pueden
+        diferir en ninguna cifra.
+
+        CORREGIDO EL 2026-09-18 (spec 001): este comentario decía «es el mismo
+        texto que se le manda a la impresora». Desde que salen dos copias, lo
+        que se ve es la versión COMPLETA, que es la copia de la tienda sin su
+        encabezado; la del cliente, además, no lleva quién autorizó el
+        descuento ni la boleta.
       */}
       {anulando !== null && (
         <ModalDeAnulacion

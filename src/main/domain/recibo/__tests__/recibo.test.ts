@@ -1,10 +1,17 @@
 /**
  * El recibo: que diga EXACTAMENTE lo que se cobró.
  *
- * Es el único papel que se lleva el cliente, así que la pregunta que estas
- * pruebas responden es una sola, repetida de varias formas: ¿los montos del
- * recibo son los mismos que quedaron guardados al vender? No «los mismos que
- * daría recalcular», sino los mismos que están en la base, línea por línea.
+ * Es el papel que se lleva el cliente, así que la pregunta que estas pruebas
+ * responden es una sola, repetida de varias formas: ¿los montos del recibo son
+ * los mismos que quedaron guardados al vender? No «los mismos que daría
+ * recalcular», sino los mismos que están en la base, línea por línea.
+ *
+ * DESDE EL 2026-09-18 SALEN DOS COPIAS (spec 001): la del cliente y la de la
+ * tienda. Hasta ese día esta cabecera decía «Es el único papel que se lleva el
+ * cliente». Por eso las pruebas que hablan del «papel» miran LAS DOS copias, y
+ * las que miran un dato de control interno dicen en cuál de las dos tiene que
+ * estar. Qué lleva cada copia se prueba renglón por renglón en
+ * `copias-del-recibo.test.ts`.
  *
  * Las ventas se registran con el servicio de venta REAL, no insertando filas a
  * mano: si se armaran a mano, la prueba podría pasar con datos que la
@@ -24,14 +31,26 @@ import {
   restar,
   sumarLista,
 } from '@shared/money';
-import { NullPrinterProvider } from '@shared/adapters';
+import {
+  NullPrinterProvider,
+  type ComprobanteImprimible,
+  type EstadoImpresora,
+  type ReceiptPrinterProvider,
+  type ResultadoImpresion,
+} from '@shared/adapters';
 import { crearRepositorios, type Repositorios } from '@main/database/repositories';
 import { crearBaseMigrada } from '@main/database/__tests__/ayuda-base-de-datos';
 import { LogTecnicoSilencioso } from '@main/log-tecnico';
 import { ServicioDeCaja } from '@main/domain/caja/servicio-de-caja';
 import { ServicioDeVenta } from '@main/domain/venta/servicio-de-venta';
 import { MARCADORES } from '../modelo-de-recibo';
-import { reciboComoTexto } from '../plantilla-de-recibo';
+import {
+  ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA,
+  ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE,
+  reciboComoHtml,
+  reciboComoTexto,
+  textosDeLasCopias,
+} from '../plantilla-de-recibo';
 import { ServicioDeRecibos } from '../servicio-de-recibos';
 
 let base: Database;
@@ -174,6 +193,28 @@ function ventaConDosCapas(): string {
   }).venta.id;
 }
 
+/** El voucher de las ventas con tarjeta de estas pruebas. */
+const VOUCHER = '004512';
+
+/**
+ * Una venta con un descuento que PASA el tope del rol y que autorizó Jimmy en
+ * persona: la única forma de que el recibo lleve «Autorizado por».
+ */
+function ventaConDescuentoAutorizado(formaPago: 'efectivo' | 'tarjeta' = 'efectivo'): string {
+  repos.limitesDescuento.fijar({
+    rol: 'venta',
+    descuentoMaxPorcentaje: '10',
+    descuentoMaxMontoFijo: '20',
+    editadoPor: idJimmy,
+  });
+  return venta.registrar(idCajera, 'venta', {
+    lineas: [{ productoId: idMaiz, cantidad: '10' }],
+    descuento: { tipo: 'porcentaje', valor: '30', autorizacion: { autorizadoPor: idJimmy, via: 'presencial' } },
+    formaPago,
+    numBoleta: formaPago === 'tarjeta' ? VOUCHER : null,
+  }).venta.id;
+}
+
 // ===========================================================================
 describe('El recibo dice exactamente lo que quedó guardado', () => {
   it('cada línea del recibo repite el subtotal_impreso de venta_detalle', async () => {
@@ -230,22 +271,25 @@ describe('El recibo dice exactamente lo que quedó guardado', () => {
     );
   });
 
-  it('esos mismos montos salen en el HTML del PDF y en el texto de la térmica', async () => {
+  it('esos mismos montos salen en el HTML del PDF y en las DOS copias de la térmica', async () => {
     const ventaId = ventaConDosCapas();
     const { modelo } = await recibos.emitir(ventaId);
 
     const html = pdfEscritos[0]?.html ?? '';
-    const texto = reciboComoTexto(modelo);
 
+    for (const texto of textosDeLasCopias(modelo)) {
+      for (const linea of modelo.lineas) {
+        expect(texto).toContain(linea.subtotal);
+      }
+      expect(texto).toContain(modelo.total);
+    }
     for (const linea of modelo.lineas) {
       expect(html).toContain(linea.subtotal);
-      expect(texto).toContain(linea.subtotal);
     }
     expect(html).toContain(modelo.total);
-    expect(texto).toContain(modelo.total);
   });
 
-  it('EL PAPEL CUADRA: los importes de las líneas suman el TOTAL impreso', async () => {
+  it('EL PAPEL CUADRA: los importes de las líneas suman el TOTAL impreso, en las dos copias', async () => {
     /*
       Es la prueba que atrapó un defecto real. `subtotal_impreso` es la parte
       que le toca a cada línea DEL TOTAL YA DESCONTADO, así que las líneas NO
@@ -255,80 +299,127 @@ describe('El recibo dice exactamente lo que quedó guardado', () => {
     */
     const ventaId = ventaConDosCapas();
     const { modelo } = await recibos.emitir(ventaId);
-    const texto = reciboComoTexto(modelo);
 
     const suma = sumarLista(modelo.lineas.map((linea) => linea.subtotal));
     expect(montoACadena(suma)).toBe(modelo.total);
 
-    // Y el papel NO promete una resta que no cierra: no hay renglón «Subtotal».
-    expect(texto).not.toContain('Subtotal');
-    // Dice, en cambio, que los importes ya vienen descontados.
-    expect(texto).toContain('ya incluyen el descuento');
+    for (const texto of textosDeLasCopias(modelo)) {
+      // Y el papel NO promete una resta que no cierra: no hay renglón «Subtotal».
+      expect(texto).not.toContain('Subtotal');
+      // Dice, en cambio, que los importes ya vienen descontados.
+      expect(texto).toContain('ya incluyen el descuento');
+    }
   });
 
-  it('el precio unitario efectivo sale EN EL PAPEL y EN EL HTML DEL PDF', async () => {
+  it('el precio unitario efectivo sale EN LAS DOS COPIAS y EN EL HTML DEL PDF', async () => {
     const ventaId = ventaConDosCapas();
     const { modelo } = await recibos.emitir(ventaId);
 
     const html = pdfEscritos[0]?.html ?? '';
-    const texto = reciboComoTexto(modelo);
 
     for (const linea of modelo.lineas) {
       // El renglón entero, no el número suelto: así la prueba falla si el
       // precio efectivo se calcula bien pero se imprime el de lista.
-      expect(texto).toContain(`${linea.cantidad} ${linea.unidad} x ${linea.precioUnitario}`);
+      for (const texto of textosDeLasCopias(modelo)) {
+        expect(texto).toContain(`${linea.cantidad} ${linea.unidad} x ${linea.precioUnitario}`);
+      }
       expect(html).toContain(`${linea.cantidad} ${linea.unidad} &times; ${linea.precioUnitario}`);
     }
   });
 
-  it('SIN descuento el papel no trae ninguna aclaración de más', async () => {
+  it('SIN descuento ninguna de las dos copias trae una aclaración de más', async () => {
     const { modelo } = await recibos.emitir(ventaSimple());
-    const texto = reciboComoTexto(modelo);
 
-    expect(texto).not.toContain('ya incluyen el descuento');
-    expect(texto).not.toContain('Descuento');
+    for (const texto of textosDeLasCopias(modelo)) {
+      expect(texto).not.toContain('ya incluyen el descuento');
+      expect(texto).not.toContain('Descuento');
+    }
   });
 
-  it('el recibo NO lleva la leyenda de factura fiscal: dice que es proforma', async () => {
+  it('las dos copias NO llevan la leyenda de factura fiscal: dicen que son proforma', async () => {
     const { modelo } = await recibos.emitir(ventaSimple());
-    const texto = reciboComoTexto(modelo);
 
-    expect(texto).toContain('RECIBO DE VENTA');
-    expect(texto).toContain('no válido como factura fiscal');
+    for (const texto of textosDeLasCopias(modelo)) {
+      expect(texto).toContain('RECIBO DE VENTA');
+      expect(texto).toContain('no válido como factura fiscal');
+    }
   });
 
-  it('quién autorizó el descuento sale EN EL PAPEL, no solo en la auditoría', async () => {
-    repos.limitesDescuento.fijar({
-      rol: 'venta',
-      descuentoMaxPorcentaje: '10',
-      descuentoMaxMontoFijo: '20',
-      editadoPor: idJimmy,
-    });
-    const ventaId = venta.registrar(idCajera, 'venta', {
-      lineas: [{ productoId: idMaiz, cantidad: '10' }],
-      descuento: { tipo: 'porcentaje', valor: '30', autorizacion: { autorizadoPor: idJimmy, via: 'presencial' } },
-      formaPago: 'efectivo',
-      numBoleta: null,
-    }).venta.id;
+  /*
+    =========================================================================
+    ESTA PRUEBA CAMBIÓ EL 2026-09-18 (spec 001), Y NO SE BORRÓ.
+    =========================================================================
+    Hasta ese día se llamaba «quién autorizó el descuento sale EN EL PAPEL, no
+    solo en la auditoría» y exigía que `reciboComoTexto(modelo)` —el ÚNICO
+    papel que salía, el que se llevaba el cliente— dijera «Autorizado por:
+    Jimmy». La razón era de control: un descuento sin responsable visible es
+    justo lo que el flujo de PIN existe para evitar, y ese papel era la única
+    copia impresa (CLAUDE.md §4.14).
 
-    const { modelo } = await recibos.emitir(ventaId);
+    Desde la spec 001 cada venta imprime DOS copias. La razón de control se
+    conserva ENTERA, pero en la copia de la TIENDA, que es la que se queda para
+    control interno, y en la versión completa que ven la pantalla del historial
+    y el PDF. La del cliente ya no lo lleva: Julio pidió que no muestre datos de
+    control interno que no le corresponde ver. Que NO esté en la del cliente lo
+    exige la prueba siguiente, que es nueva.
+  */
+  it('quién autorizó el descuento sale en la COPIA DE LA TIENDA, no solo en la auditoría', async () => {
+    const { modelo } = await recibos.emitir(ventaConDescuentoAutorizado());
+
+    // El dato no cambió: el modelo lo sigue leyendo de la venta, en vivo.
     expect(modelo.descuento?.autorizadoPor).toBe('Jimmy');
-    expect(reciboComoTexto(modelo)).toContain('Autorizado por: Jimmy');
+    expect(reciboComoTexto(modelo, 'tienda')).toContain('Autorizado por: Jimmy');
+    // Y la versión completa también lo lleva: la pantalla del historial y el PDF.
+    expect(reciboComoTexto(modelo, 'pantalla')).toContain('Autorizado por: Jimmy');
+    expect(pdfEscritos[0]?.html).toContain('Autorizado por: Jimmy');
   });
 
-  it('con tarjeta sale el número de boleta; en efectivo no aparece', async () => {
+  it('la COPIA DEL CLIENTE no dice quién autorizó el descuento, pero SÍ dice que hubo descuento y de cuánto', async () => {
+    const { modelo } = await recibos.emitir(ventaConDescuentoAutorizado());
+    const cliente = reciboComoTexto(modelo, 'cliente');
+
+    expect(cliente).not.toContain('Autorizado por');
+    // Ni el nombre, en ningún renglón: el cajero es Ana y no hay anulación.
+    expect(cliente).not.toContain('Jimmy');
+    // El descuento no se esconde: sin él, el precio unitario impreso no se entiende.
+    expect(cliente).toContain(`Descuento ${modelo.descuento?.descripcion ?? '(sin descuento)'}`);
+    expect(cliente).toContain(`-${modelo.descuento?.rebaja ?? '(sin rebaja)'}`);
+    expect(cliente).toContain('ya incluyen el descuento');
+  });
+
+  /*
+    ESTA PRUEBA TAMBIÉN CAMBIÓ EL 2026-09-18 (spec 001), Y NO SE BORRÓ.
+    Se llamaba «con tarjeta sale el número de boleta; en efectivo no aparece» y
+    miraba el único papel. Desde la spec 001 el número del voucher sale en la
+    copia de la TIENDA —la que se concilia contra la terminal del banco— y en la
+    versión completa, y no en la del cliente. En efectivo no aparece en ninguna,
+    como antes.
+  */
+  it('con tarjeta, el número de boleta sale en la COPIA DE LA TIENDA; en efectivo no aparece en ninguna', async () => {
     const conTarjeta = venta.registrar(idCajera, 'venta', {
       lineas: [{ productoId: idMaiz, cantidad: '1' }],
       descuento: null,
       formaPago: 'tarjeta',
-      numBoleta: '004512',
+      numBoleta: VOUCHER,
     }).venta.id;
 
     const tarjeta = await recibos.emitir(conTarjeta);
-    expect(reciboComoTexto(tarjeta.modelo)).toContain('004512');
+    expect(reciboComoTexto(tarjeta.modelo, 'tienda')).toMatch(new RegExp(`^Boleta +${VOUCHER}$`, 'm'));
+    expect(reciboComoTexto(tarjeta.modelo, 'pantalla')).toContain(VOUCHER);
 
     const efectivo = await recibos.emitir(ventaSimple());
-    expect(reciboComoTexto(efectivo.modelo)).not.toContain('Boleta');
+    for (const texto of textosDeLasCopias(efectivo.modelo)) {
+      expect(texto).not.toContain('Boleta');
+    }
+  });
+
+  it('la COPIA DEL CLIENTE no lleva el número de boleta, pero SÍ dice que se pagó con tarjeta', async () => {
+    const { modelo } = await recibos.emitir(ventaConDescuentoAutorizado('tarjeta'));
+    const cliente = reciboComoTexto(modelo, 'cliente');
+
+    expect(cliente).not.toContain('Boleta');
+    expect(cliente).not.toContain(VOUCHER);
+    expect(cliente).toMatch(/^Forma de pago +Tarjeta$/m);
   });
 });
 
@@ -420,7 +511,9 @@ describe('El precio unitario impreso: el renglón multiplica', () => {
 
     const suma = sumarLista(modelo.lineas.map((linea) => linea.subtotal));
     expect(montoACadena(suma)).toBe(modelo.total);
-    expect(reciboComoTexto(modelo)).toContain(modelo.total);
+    for (const texto of textosDeLasCopias(modelo)) {
+      expect(texto).toContain(modelo.total);
+    }
   });
 
   it('CON MUCHA CANTIDAD el desvío sigue acotado a medio centavo por unidad', async () => {
@@ -472,23 +565,24 @@ describe('Sin los datos del negocio cargados, el recibo lo dice', () => {
     expect(modelo.negocio.nit).toBe(MARCADORES.nit);
   });
 
-  it('los marcadores se VEN en el papel y en el PDF', async () => {
+  it('los marcadores se VEN en las dos copias y en el PDF', async () => {
     const { modelo } = await recibos.emitir(ventaSimple());
 
-    for (const salida of [reciboComoTexto(modelo), pdfEscritos[0]?.html ?? '']) {
+    for (const salida of [...textosDeLasCopias(modelo), pdfEscritos[0]?.html ?? '']) {
       expect(salida).toContain('[Nombre del negocio]');
       expect(salida).toContain('[NIT]');
     }
   });
 
-  it('NO inventa nada que pueda pasar por un dato real', async () => {
+  it('NO inventa nada que pueda pasar por un dato real, en ninguna de sus versiones', async () => {
     const { modelo } = await recibos.emitir(ventaSimple());
-    const texto = reciboComoTexto(modelo);
 
     // Ni el nombre del cliente, ni un NIT de ejemplo, ni «Consumidor final»:
     // cualquiera de esos se leería como un dato cargado de verdad.
-    for (const inventado of ['Jimmy Cano', 'Agro', 'C/F', 'Consumidor', '0000']) {
-      expect(texto).not.toContain(inventado);
+    for (const texto of [...textosDeLasCopias(modelo), reciboComoTexto(modelo, 'pantalla')]) {
+      for (const inventado of ['Jimmy Cano', 'Agro', 'C/F', 'Consumidor', '0000']) {
+        expect(texto).not.toContain(inventado);
+      }
     }
   });
 
@@ -501,12 +595,13 @@ describe('Sin los datos del negocio cargados, el recibo lo dice', () => {
     });
 
     const { modelo } = await recibos.emitir(ventaSimple());
-    const texto = reciboComoTexto(modelo);
 
     expect(modelo.negocio.sinConfigurar).toBe(false);
-    expect(texto).toContain('Agroservicio El Quetzal');
-    expect(texto).toContain('1234567-8');
-    expect(texto).not.toContain('[Nombre del negocio]');
+    for (const texto of textosDeLasCopias(modelo)) {
+      expect(texto).toContain('Agroservicio El Quetzal');
+      expect(texto).toContain('1234567-8');
+      expect(texto).not.toContain('[Nombre del negocio]');
+    }
   });
 
   it('un campo cargado y tres vacíos: solo los vacíos llevan marcador', async () => {
@@ -662,13 +757,18 @@ describe('Reimprimir reproduce los mismos datos que el original', () => {
     expect(repos.recibos.siguienteNumero()).toBe(original.recibo.numeroRecibo + 1);
   });
 
-  it('se marca como REIMPRESIÓN en el papel, para no confundirla con el original', async () => {
+  it('se marca como REIMPRESIÓN en las dos copias, para no confundirla con el original', async () => {
     const original = await recibos.emitir(ventaSimple());
     const copia = await recibos.reimprimir(original.recibo.id);
 
     expect(original.modelo.reimpresion).toBe(false);
     expect(copia.modelo.reimpresion).toBe(true);
-    expect(reciboComoTexto(copia.modelo)).toContain('REIMPRESIÓN');
+    for (const texto of textosDeLasCopias(copia.modelo)) {
+      expect(texto).toContain('REIMPRESIÓN');
+    }
+    for (const texto of textosDeLasCopias(original.modelo)) {
+      expect(texto).not.toContain('REIMPRESIÓN');
+    }
   });
 
   it('REGENERA desde la base: si se cargan los datos del negocio, salen los nuevos', async () => {
@@ -738,5 +838,198 @@ describe('La ruta del PDF: relativa en la fila, absoluta en el disco', () => {
     const reimpreso = await recibos.reimprimir(emitido.recibo.id);
     expect(reimpreso.rutaPdf).toBe(emitido.rutaPdf);
     expect(pdfEscritos.map((p) => p.ruta)).toEqual([emitido.rutaPdf, emitido.rutaPdf]);
+  });
+});
+
+// ===========================================================================
+// Las dos copias por la térmica (spec 001, 2026-09-18)
+// ===========================================================================
+
+/**
+ * Una impresora que ANOTA lo que le mandan, para comprobar qué llega a la
+ * térmica: cuántos trabajos, cuántas copias y en qué orden.
+ */
+class ImpresoraQueAnota implements ReceiptPrinterProvider {
+  public readonly nombre = 'ImpresoraQueAnota';
+  public readonly recibidos: ComprobanteImprimible[] = [];
+
+  public imprimirComprobante(comprobante: ComprobanteImprimible): Promise<ResultadoImpresion> {
+    this.recibidos.push(comprobante);
+    return Promise.resolve({
+      ok: true,
+      adaptador: this.nombre,
+      omitidaPorDiseno: false,
+      mensaje: 'Recibo enviado a la impresora.',
+    });
+  }
+
+  public consultarEstado(): Promise<EstadoImpresora> {
+    return Promise.resolve({ disponible: true, adaptador: this.nombre, descripcion: 'de prueba' });
+  }
+}
+
+describe('Las dos copias por la térmica: la del cliente y la de la tienda (spec 001)', () => {
+  let impresora: ImpresoraQueAnota;
+  let conImpresora: ServicioDeRecibos;
+
+  beforeEach(() => {
+    impresora = new ImpresoraQueAnota();
+    conImpresora = new ServicioDeRecibos({
+      base,
+      ventas: repos.ventas,
+      ventaDetalle: repos.ventaDetalle,
+      recibos: repos.recibos,
+      usuarios: repos.usuarios,
+      configuracion: repos.configuracionNegocio,
+      anulaciones: repos.anulacionesDeVenta,
+      impresora,
+      log: new LogTecnicoSilencioso(),
+      carpetaDeDatos: '/datos',
+      generarPdf: (html: string, ruta: string): Promise<void> => {
+        pdfEscritos.push({ ruta, html });
+        return Promise.resolve();
+      },
+    });
+  });
+
+  /** El texto de cada copia que recibió la impresora en el trabajo `n`. */
+  function copiasDelTrabajo(n: number): readonly string[] {
+    return impresora.recibidos[n]?.copiasEnTexto ?? [];
+  }
+
+  it('AL COBRAR, la térmica recibe UN trabajo con DOS copias: primero la del cliente, después la de la tienda', async () => {
+    const { modelo } = await conImpresora.emitir(ventaConDescuentoAutorizado('tarjeta'));
+
+    expect(impresora.recibidos).toHaveLength(1);
+    expect(copiasDelTrabajo(0)).toEqual(textosDeLasCopias(modelo));
+    expect(copiasDelTrabajo(0)).toEqual([
+      reciboComoTexto(modelo, 'cliente'),
+      reciboComoTexto(modelo, 'tienda'),
+    ]);
+    const [cliente = '', tienda = ''] = copiasDelTrabajo(0);
+    expect(cliente).toContain(ENCABEZADO_DE_LA_COPIA_DEL_CLIENTE[0]);
+    expect(cliente).not.toContain('COPIA DE LA TIENDA');
+    for (const renglon of ENCABEZADO_DE_LA_COPIA_DE_LA_TIENDA) {
+      expect(tienda).toContain(renglon);
+    }
+    expect(tienda).not.toContain('COPIA DEL CLIENTE');
+  });
+
+  it('lo que salió por la térmica: la del cliente SIN autorizante ni boleta, la de la tienda CON los dos', async () => {
+    await conImpresora.emitir(ventaConDescuentoAutorizado('tarjeta'));
+    const [cliente = '', tienda = ''] = copiasDelTrabajo(0);
+
+    expect(cliente).not.toContain('Autorizado por');
+    expect(cliente).not.toContain(VOUCHER);
+    expect(tienda).toContain('Autorizado por: Jimmy');
+    expect(tienda).toMatch(new RegExp(`^Boleta +${VOUCHER}$`, 'm'));
+  });
+
+  it('NUNCA manda a la térmica la versión de pantalla', async () => {
+    const { modelo } = await conImpresora.emitir(ventaConDescuentoAutorizado('tarjeta'));
+
+    expect(copiasDelTrabajo(0)).not.toContain(reciboComoTexto(modelo, 'pantalla'));
+  });
+
+  it('REIMPRIMIR saca las dos copias, las dos marcadas «REIMPRESIÓN»', async () => {
+    const original = await conImpresora.emitir(ventaConDescuentoAutorizado('tarjeta'));
+    const reimpreso = await conImpresora.reimprimir(original.recibo.id);
+
+    expect(impresora.recibidos).toHaveLength(2);
+    expect(copiasDelTrabajo(1)).toEqual(textosDeLasCopias(reimpreso.modelo));
+    expect(copiasDelTrabajo(1)).toHaveLength(2);
+    for (const texto of copiasDelTrabajo(1)) {
+      expect(texto).toContain('** REIMPRESIÓN **');
+    }
+    // Y la del cliente sigue sin los datos reservados también al reimprimir.
+    expect(copiasDelTrabajo(1)[0]).not.toContain('Autorizado por');
+    expect(copiasDelTrabajo(1)[0]).not.toContain(VOUCHER);
+  });
+
+  it('volver a EMITIR una venta que ya tiene recibo saca las dos copias, como reimpresión', async () => {
+    const ventaId = ventaConDescuentoAutorizado();
+    const primero = await conImpresora.emitir(ventaId);
+    const segundo = await conImpresora.emitir(ventaId);
+
+    expect(segundo.recibo.id).toBe(primero.recibo.id);
+    expect(copiasDelTrabajo(1)).toHaveLength(2);
+    for (const texto of copiasDelTrabajo(1)) {
+      expect(texto).toContain('** REIMPRESIÓN **');
+    }
+  });
+
+  it('regenerar el PDF de una venta (lo que hace la anulación) NO saca ninguna copia', async () => {
+    const ventaId = ventaConDescuentoAutorizado();
+    await conImpresora.emitir(ventaId);
+    impresora.recibidos.length = 0;
+    pdfEscritos = [];
+
+    expect(await conImpresora.regenerarPdfDeLaVenta(ventaId)).not.toBeNull();
+
+    expect(impresora.recibidos).toEqual([]);
+    expect(pdfEscritos).toHaveLength(1);
+  });
+
+  it('EL PDF NO CAMBIA: es la versión completa, con el autorizante y la boleta, y sin encabezado de copia', async () => {
+    const { modelo } = await conImpresora.emitir(ventaConDescuentoAutorizado('tarjeta'));
+    const html = pdfEscritos[0]?.html ?? '';
+
+    expect(html).toBe(reciboComoHtml(modelo));
+    expect(html).toContain('Autorizado por: Jimmy');
+    expect(html).toContain(VOUCHER);
+    expect(html).not.toContain('COPIA DEL CLIENTE');
+    expect(html).not.toContain('COPIA DE LA TIENDA');
+  });
+
+  it('el recibo queda IMPRESO y el mensaje al cajero nombra las dos copias', async () => {
+    const resultado = await conImpresora.emitir(ventaConDescuentoAutorizado());
+
+    expect(resultado.impreso).toBe(true);
+    expect(repos.recibos.obtenerPorId(resultado.recibo.id)?.impreso).toBe(true);
+    expect(resultado.mensajeDeImpresion).toBe(
+      'Recibo enviado a la impresora: copia del cliente y copia de la tienda.',
+    );
+  });
+
+  it('SIN impresora no se manda nada y el mensaje al cajero es el de siempre', async () => {
+    const resultado = await recibos.emitir(ventaConDescuentoAutorizado());
+
+    expect(resultado.impreso).toBe(false);
+    expect(resultado.mensajeDeImpresion).toBe('No hay impresora configurada. El recibo quedó en PDF.');
+  });
+
+  it('si la impresora FALLA, la venta sigue, el PDF queda y el recibo NO se marca impreso', async () => {
+    const falla: ReceiptPrinterProvider = {
+      nombre: 'ImpresoraQueFalla',
+      imprimirComprobante: (): Promise<ResultadoImpresion> =>
+        Promise.resolve({
+          ok: false,
+          adaptador: 'ImpresoraQueFalla',
+          omitidaPorDiseno: false,
+          mensaje: 'No se pudo imprimir. El recibo quedó guardado en PDF.',
+        }),
+      consultarEstado: (): Promise<EstadoImpresora> =>
+        Promise.resolve({ disponible: false, adaptador: 'ImpresoraQueFalla', descripcion: 'rota' }),
+    };
+    const servicio = new ServicioDeRecibos({
+      base,
+      ventas: repos.ventas,
+      ventaDetalle: repos.ventaDetalle,
+      recibos: repos.recibos,
+      usuarios: repos.usuarios,
+      configuracion: repos.configuracionNegocio,
+      anulaciones: repos.anulacionesDeVenta,
+      impresora: falla,
+      log: new LogTecnicoSilencioso(),
+      carpetaDeDatos: '/datos',
+      generarPdf: (): Promise<void> => Promise.resolve(),
+    });
+    const ventaId = ventaConDescuentoAutorizado();
+    const resultado = await servicio.emitir(ventaId);
+
+    expect(resultado.pdfGenerado).toBe(true);
+    expect(resultado.impreso).toBe(false);
+    expect(resultado.mensajeDeImpresion).toBe('No se pudo imprimir. El recibo quedó guardado en PDF.');
+    expect(repos.ventas.obtenerPorId(ventaId)?.estado).toBe('completada');
   });
 });

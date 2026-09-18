@@ -31,10 +31,18 @@ export interface ComprobanteImprimible {
   readonly tipo: TipoComprobante;
   /** Ruta absoluta del PDF ya generado. Es obligatoria: sin PDF no se imprime. */
   readonly rutaPdf: string;
-  /** Representación en texto plano para impresoras de matriz o térmicas. */
-  readonly contenidoTexto?: string;
-  /** Cuántas copias físicas se piden. */
-  readonly copias: number;
+  /**
+   * El texto plano de CADA COPIA física, en el orden en que tienen que salir.
+   *
+   * Cada elemento es una copia entera, con su propio corte de papel, y TODAS
+   * viajan en UN SOLO trabajo de impresión. Dos elementos distintos son dos
+   * copias distintas: el recibo manda la del cliente y la de la tienda
+   * (spec 001).
+   *
+   * Reemplaza desde el 2026-09-18 a `contenidoTexto?: string` + `copias:
+   * number`, que solo sabían pedir N copias del MISMO texto.
+   */
+  readonly copiasEnTexto: readonly string[];
 }
 
 /** Resultado de un intento de impresión física. */

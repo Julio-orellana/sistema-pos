@@ -7,8 +7,15 @@
  *     nombre cambia un documento que se le entrega al cliente.
  *   · **El historial y la reimpresión exigen solo sesión.** Reimprimir un
  *     recibo es algo que hace el cajero con un cliente enfrente que perdió su
- *     papel; pedir un administrador para eso paralizaría el mostrador, y el
- *     recibo no revela nada que el cliente no haya visto ya al comprarlo.
+ *     papel; pedir un administrador para eso paralizaría el mostrador.
+ *
+ *     CORREGIDO EL 2026-09-18 (spec 001). Esta viñeta terminaba diciendo «y el
+ *     recibo no revela nada que el cliente no haya visto ya al comprarlo». Con
+ *     un solo papel era cierto. Desde que salen dos copias, la pantalla y el
+ *     PDF muestran la versión COMPLETA —quién autorizó un descuento y la
+ *     boleta—, que el cliente ya no ve en su copia. La razón por la que basta
+ *     con tener sesión es otra: la ve personal de la tienda, y esos dos datos
+ *     los conoce quien cobró —pidió la autorización y tecleó la boleta—.
  *
  * QUÉ NO CRUZA HACIA LA VENTANA: la ruta del PDF sí viaja —la pantalla la
  * muestra para que alguien pueda ir a buscarlo— pero el PDF en sí no. Abrirlo
@@ -244,9 +251,20 @@ export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibo
 
           return {
             numeroRecibo: modelo.numeroRecibo,
-            // El MISMO texto que iría a la impresora: lo que se ve en pantalla
-            // es exactamente lo que saldría en el papel.
-            texto: reciboComoTexto(modelo),
+            /*
+              La versión de PANTALLA: la completa, con quién autorizó el
+              descuento y la boleta, y sin encabezado de copia. Es la misma
+              información que el PDF.
+
+              CAMBIÓ EL 2026-09-18 (spec 001), aunque el texto que se ve es
+              idéntico byte a byte al de antes. Este comentario decía «El MISMO
+              texto que iría a la impresora: lo que se ve en pantalla es
+              exactamente lo que saldría en el papel», y con un solo papel era
+              cierto. Ahora salen dos copias: la de la tienda es esta misma
+              versión más su encabezado, y la del cliente, además, sin los dos
+              datos reservados (`QUE_LLEVA_CADA_DESTINO`).
+            */
+            texto: reciboComoTexto(modelo, 'pantalla'),
             rutaPdf: recibo === null ? '' : recibos.rutaAbsolutaDelPdf(recibo),
             pdfGenerado: true,
             impreso: recibo?.impreso ?? false,
@@ -266,7 +284,9 @@ export function registrarManejadoresDeRecibos(dependencias: DependenciasDeRecibo
 
           return {
             numeroRecibo: resultado.modelo.numeroRecibo,
-            texto: reciboComoTexto(resultado.modelo),
+            // La versión de pantalla, como en «Ver». Por la térmica salieron
+            // las dos copias; ver `ServicioDeRecibos.intentarImprimir`.
+            texto: reciboComoTexto(resultado.modelo, 'pantalla'),
             rutaPdf: resultado.rutaPdf,
             pdfGenerado: resultado.pdfGenerado,
             impreso: resultado.impreso,

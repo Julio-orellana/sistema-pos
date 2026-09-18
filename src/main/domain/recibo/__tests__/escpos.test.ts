@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { aCp850, reciboComoEscPos } from '../escpos';
+import { aCp850, copiasComoEscPos, reciboComoEscPos } from '../escpos';
 
 /** Los bytes como lista, para poder compararlos cómodo. */
 function bytesDe(texto: string): number[] {
@@ -90,5 +90,52 @@ describe('El español sale bien: CP850, no UTF-8', () => {
     // Un byte por debajo de 0x20 en medio del texto sería un comando accidental.
     const cuerpo = [...aCp850('Maíz blanco  0.5 lb x 6.69          3.35')];
     expect(cuerpo.every((byte) => byte >= 0x20)).toBe(true);
+  });
+});
+
+// ===========================================================================
+describe('Varias copias en un solo flujo (spec 001): cada una es un recibo entero', () => {
+  /** Dónde empieza cada `ESC @` y dónde termina cada corte, para contarlos. */
+  function posicionesDe(bytes: readonly number[], secuencia: readonly number[]): number[] {
+    const posiciones: number[] = [];
+    for (let i = 0; i + secuencia.length <= bytes.length; i += 1) {
+      if (secuencia.every((byte, j) => bytes[i + j] === byte)) {
+        posiciones.push(i);
+      }
+    }
+    return posiciones;
+  }
+
+  it('dos copias son EXACTAMENTE la primera seguida de la segunda, byte por byte', () => {
+    const cliente = 'COPIA DEL CLIENTE\nTOTAL 46.83';
+    const tienda = 'COPIA DE LA TIENDA\nAutorizado por: Jimmy\nTOTAL 46.83';
+
+    expect([...copiasComoEscPos([cliente, tienda])]).toEqual([
+      ...reciboComoEscPos(cliente),
+      ...reciboComoEscPos(tienda),
+    ]);
+  });
+
+  it('cada copia empieza inicializando la impresora y termina con SU corte: dos de cada uno', () => {
+    const bytes = [...copiasComoEscPos(['uno', 'dos'])];
+    const inicios = posicionesDe(bytes, [0x1b, 0x40]);
+    const cortes = posicionesDe(bytes, [0x1d, 0x56, 0x42, 0x00]);
+
+    expect(inicios).toHaveLength(2);
+    expect(cortes).toHaveLength(2);
+    // En orden: inicio, corte, inicio, corte. El segundo inicio va justo después del primer corte.
+    expect(inicios[0]).toBe(0);
+    expect(inicios[1]).toBe((cortes[0] ?? -1) + 4);
+    expect(cortes[1]).toBe(bytes.length - 4);
+  });
+
+  it('una sola copia es lo mismo que el recibo de siempre', () => {
+    expect([...copiasComoEscPos(['hola'])]).toEqual([...reciboComoEscPos('hola')]);
+  });
+
+  it('respeta el orden en que llegan las copias', () => {
+    const [primera, segunda] = ['PRIMERA', 'SEGUNDA'];
+    const bytes = Buffer.from(copiasComoEscPos([primera, segunda])).toString('latin1');
+    expect(bytes.indexOf(primera)).toBeLessThan(bytes.indexOf(segunda));
   });
 });
