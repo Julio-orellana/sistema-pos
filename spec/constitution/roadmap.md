@@ -4,10 +4,13 @@
 > está construido y qué queda por hacer. **No es un changelog**: el detalle de
 > cada funcionalidad construida sigue en `CLAUDE.md` §4 y en `docs/`, hasta que
 > se retome y se migre a su propio `spec/features/NNN-<slug>/`.
-> Estado al 2026-09-18, versión 1.3.0.
+> Estado al 2026-09-18, versión 1.3.1.
 
 ## 1. Dónde está hoy
 
+- **Versión 1.3.1** (2026-09-18): la 1.3.0 con el título de la ventana
+  corregido a «POS Jimmy Cano», que en el Administrador de tareas de la tienda
+  decía «POS Agrícola» (CLAUDE.md §4.68).
 - **Versión 1.3.0** (2026-09-18), con el precio mayorista por cantidad mínima
   (CLAUDE.md §4.67), publicada en GitHub en dos instaladores: prueba y
   producción. La 1.2.0 fue la versión de entrega a Jimmy. **El build de producción (1.2.0) está instalado
@@ -18,8 +21,9 @@
   completo —las mismas migraciones que el descartable— y cero filas de negocio.
   **La `0039` del precio mayorista está aplicada en `pos-pruebas-descartable`
   (30 migraciones) y NO en `pos-jimmy-cano` (29)**, leído del catálogo el
-  2026-09-18. El instalador de producción 1.3.0 no sincroniza contra el real
-  hasta que se aplique allá, con un pedido aparte (CLAUDE.md §4.66, §4.67).
+  2026-09-18 (el real, otra vez a las 21:59 UTC). Los instaladores de
+  producción 1.3.0 y 1.3.1 no sincronizan contra el real hasta que se aplique
+  allá, con un pedido aparte (CLAUDE.md §4.66, §4.67, §4.68).
 - **Publicado en la 1.3.0:** el precio mayorista por cantidad mínima
   (spec 002). El 1.2.0 instalado en la tienda no lo tiene.
 - **La verificación en el hardware real de la tienda está en curso**, no

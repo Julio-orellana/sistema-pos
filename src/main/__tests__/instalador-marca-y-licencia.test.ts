@@ -69,8 +69,13 @@ const paqueteDelRepositorio = JSON.parse(readFileSync(join(RAIZ, 'package.json')
  * «Versión:» dice 1.3.0, con el mismo procedimiento: un solo carácter.
  * Huella de la 1.2.0:
  * 4935c4bce470e92f4a8fd577ff959c372d757b7cddef293bd3792ef067f30a45.
+ *
+ * Desde el release 1.3.1 (2026-09-18, pedido por Julio) la línea «Versión:»
+ * dice 1.3.1, con el mismo procedimiento: un solo carácter (el byte 119, de
+ * «0» a «1»), mismo largo, BOM y 39 CRLF intactos. Huella de la 1.3.0:
+ * 6bff38ea313697ff866b298e431cd467eefd00c489aa3c2ba64f339ead33145e.
  */
-const HUELLA_DE_LA_LICENCIA = '6bff38ea313697ff866b298e431cd467eefd00c489aa3c2ba64f339ead33145e';
+const HUELLA_DE_LA_LICENCIA = '9a491cd0d9fcca87fc299b4e1c926b6967ef074dd7a4f0c60911ef3c3d450c93';
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 

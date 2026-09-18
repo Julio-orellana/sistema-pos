@@ -10935,6 +10935,76 @@ contra una nube sin la 0039 detiene su cola en el primer lote de productos
 el momento de instalar esta versión en la tienda (punto 57 de §6.2). No se
 aplicó nada contra ninguna nube en este release.
 
+### 4.68 Release 1.3.1: el título de la ventana (2026-09-18)
+
+**1.3.1 — corrige el título de la ventana, que mostraba «POS Agrícola» en vez de
+«POS Jimmy Cano» en el Administrador de tareas y al pasar el mouse por la barra
+de tareas.**
+
+**Lo que se vio en la computadora de la tienda** (Julio, 2026-09-18). El
+Administrador de tareas agrupa la aplicación bajo **«Vixo POS»**, que es la
+marca a propósito (§4.49). Adentro del grupo hay dos elementos: **«POS Jimmy
+Cano»**, que ya estaba bien, y **«POS Agrícola»**, que es la ventana visible.
+
+**De dónde salía «POS Agrícola».** Del `<title>` de `src/renderer/index.html`.
+La ventana principal no fija `title` ni escucha `page-title-updated` (leído en
+`main-window.ts`). Medido con Electron 44.2.0 en macOS: la ventana nace con el
+nombre de la aplicación y pasa al `<title>` del HTML antes de `ready-to-show`.
+
+**Lo que NO se tocó, por decisión de Julio.** No se tocaron `app.setName()`,
+`app.setAppUserModelId()`, `package.json`, `productName` ni los accesos
+directos. El diagnóstico previo encontró tres cosas:
+
+| Qué se encontró | Evidencia |
+|---|---|
+| La carpeta de datos **depende del nombre** y no hay ninguna ruta fija: Electron la arma como la carpeta de datos del sistema más el nombre de la aplicación | `shell/common/electron_paths.cc` de la v44.2.0. En `src/` no hay ningún `app.setPath('userData', …)` |
+| **En el instalador, el nombre ya es «POS Jimmy Cano».** Electron prefiere `productName` sobre `name`, y el `package.json` del asar trae `productName` | Leído en el código de arranque que viaja dentro de `POS Jimmy Cano.exe` |
+| **`setName('POS Jimmy Cano')` no cambiaba nada en el instalador y en desarrollo movía la carpeta de datos** de `…/pos-agricola` a `…/POS Jimmy Cano` | Medido con una sonda: `setName` antes de pedir la carpeta la mueve; después, no |
+
+**La comprobación, sobre el paquete construido.** `verify:paquete` lee el
+`<title>` de `dist/renderer/index.html` **dentro del asar**. Como corre en el
+`afterPack`, un título distinto de «POS Jimmy Cano» detiene el empaquetado igual
+que un `.env`. Se falsificó de tres formas:
+
+| Falsificación | Resultado |
+|---|---|
+| El guion corrido contra el asar YA CONSTRUIDO de la 1.3.0, que tiene el título viejo | Código 1: `FALLA título de la ventana … tiene «POS Agrícola», y tiene que decir exactamente «POS Jimmy Cano»` |
+| `revisarTitulo` que no marca nada | Caen 6 de 32 pruebas |
+| El `index.html` de vuelta a «POS Agrícola» | Cae 1: «el index.html del código fuente ya dice «POS Jimmy Cano»» |
+
+Una de las pruebas nuevas arma un asar de verdad con `@electron/asar` y lee el
+título desde ahí.
+
+**Dónde queda el nombre de trabajo en el paquete, y por qué no se ve.** Se buscó
+`pos[-_ ]?agr[ií]cola` sin distinguir mayúsculas, en UTF-8, Latin-1 y UTF-16LE.
+La búsqueda corrió sobre el asar, `win-unpacked`, el instalador y su encabezado,
+en un paquete con la corrección armado antes de subir la versión. No encontró
+ninguna aparición visible. Las internas son estas:
+
+- `name` en el `package.json` del asar. Electron usa `productName`.
+- `pos-agricola.db`: el archivo de la base dentro de `%APPDATA%\POS Jimmy
+  Cano\`. Renombrarlo sería mover la base.
+- La base temporal de la verificación de arranque.
+- Dos comentarios dentro del SQL de las migraciones 001 y 030. No se pueden
+  tocar por el checksum.
+- Un comentario en el CSS.
+- `pos-agricola-updater`, en `app-update.yml` y en el encabezado del instalador.
+  Es la caché de `electron-updater`, que la aplicación no usa.
+- `gt.posagricola.desktop`, que es el `appId` (§4.37).
+
+**Una salvedad que quedó a la vista y no se tocó.** Los accesos directos llevan
+el AppUserModelID `gt.posagricola.desktop` (plantilla NSIS de electron-builder).
+El proceso no declara ninguno. La documentación de Microsoft pide que coincidan.
+Julio decidió dejarlo así en esta versión.
+
+**La licencia cambió solo en su línea `Versión:`** (1.3.0 → 1.3.1): el byte 119,
+de `0` a `1`, mismo largo (1901 bytes), BOM y 39 CRLF intactos. La huella
+aprobada pasa de `6bff38ea…33145e` a `9a491cd0…450c93`.
+
+**No verificado en Windows:** que el Administrador de tareas, Alt+Tab y la barra
+de tareas muestren «POS Jimmy Cano». Lo medido es el `<title>` dentro del
+paquete y cómo lo toma Electron en macOS.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -11288,6 +11358,7 @@ aplicó nada contra ninguna nube en este release.
 | **Al editar, si el mayorista cumplía con la lista GUARDADA y no con la nueva, R3 dice «No podés bajar el precio de lista por debajo del precio mayorista de Q…: ajustá el mayorista primero, o quitalo.»** (`precioBaseAnterior` en `revisarPrecioMayorista`). | Un solo mensaje para las dos causas | Pedido de Julio. Medido antes: Jimmy nunca vio el nombre crudo de la restricción, pero el mensaje hablaba de un mayorista que nadie había tocado. La base no sabe cuál de las dos cambió, así que `errores.ts` conserva el general. §4.66. | Spec 002 — 2026-09-18 |
 | **La 0039 se aplica en `pos-pruebas-descartable` el 2026-09-18 y NO en `pos-jimmy-cano`.** | Aplicar las dos juntas | Aprobación de Julio para el descartable solamente; el real, con un pedido aparte el día que se instale la versión con la 039 (punto 57). El encabezado del archivo se ajustó antes de aplicar, para que el registro sea el archivo final (md5 `9cf8d81d…`). §4.66. | Spec 002 — 2026-09-18 |
 | **El release que sigue a la 1.2.0 es la 1.3.0, publicado como no-borrador en el repositorio PRIVADO; la licencia cambia solo en su línea «Versión:».** | Numerarlo 1.4.0, como decía el pedido; hacer público el repositorio | No había ninguna 1.3.0 y un hueco no significaría nada; el repositorio es privado y hacerlo público expondría todo el historial, no solo dos instaladores. Las dos cosas las decidió Julio. §4.67. | 2026-09-18 |
+| **El título de la ventana es «POS Jimmy Cano», y `verify:paquete` lo lee del asar y detiene el empaquetado si no. NO se agregan `app.setName()` ni `app.setAppUserModelId()`, y no se tocan los accesos directos.** | `app.setName('POS Jimmy Cano')`, que era la causa supuesta; alinear el AppUserModelID del proceso con el de los accesos directos; fijar `title` en la ventana | En la tienda, el Administrador de tareas mostraba «POS Agrícola», y salía del `<title>`. En el instalador, Electron ya usa `productName`: leído en el `.exe`, así que `setName` no cambiaba nada. En desarrollo, en cambio, movía la carpeta de datos (medido). El alcance lo fijó Julio: solo el título. §4.68. | 2026-09-18 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
