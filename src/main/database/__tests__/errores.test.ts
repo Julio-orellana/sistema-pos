@@ -236,9 +236,26 @@ describe('Otras reglas que la base hace cumplir, traducidas', () => {
       expect(traducido).toBeInstanceOf(ErrorDeNegocio);
       expect(traducido.codigo).toBe('DATO_INVALIDO');
       expect(traducido.mensajeParaElUsuario).toBe(
-        'El precio mayorista tiene que ser un monto con dos decimales, y no puede ser negativo.',
+        'El precio mayorista tiene que ser un monto con dos decimales, y mayor que cero.',
       );
       expect(traducido.causaTecnica).toContain('productos_precio_mayorista_canonico');
+    }
+  });
+
+  it('PRECIO MAYORISTA (039): un precio mayorista de CERO llega con su regla, no con el mensaje genérico', () => {
+    const { productoId } = sembrarCatalogo();
+
+    try {
+      base
+        .prepare("UPDATE productos SET precio_mayorista = '0.00', cantidad_minima_mayorista = '50.000' WHERE id = ?")
+        .run(productoId);
+      expect.unreachable('Se esperaba el rechazo de la regla productos_precio_mayorista_canonico.');
+    } catch (error) {
+      const traducido = traducirErrorDeBaseDeDatos(error) as ErrorDeNegocio;
+      expect(traducido.codigo).toBe('DATO_INVALIDO');
+      expect(traducido.mensajeParaElUsuario).toBe(
+        'El precio mayorista tiene que ser un monto con dos decimales, y mayor que cero.',
+      );
     }
   });
 

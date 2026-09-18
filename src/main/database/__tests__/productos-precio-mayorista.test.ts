@@ -5,7 +5,7 @@
  *
  *   · CA-17: las cuatro reglas en la base, cada una con su NOMBRE.
  *       R1 productos_mayorista_completo               los dos o ninguno
- *       R2 productos_precio_mayorista_canonico        monto canónico y no negativo
+ *       R2 productos_precio_mayorista_canonico        monto canónico y > 0
  *       R3 productos_mayorista_menor_que_lista        estrictamente menor que la lista
  *       R4 productos_cantidad_minima_mayorista_canonica  cantidad canónica y > 0
  *   · CA-24: bajar la lista por debajo del mayorista se rechaza (decisión 1).
@@ -170,16 +170,19 @@ describe('CA-17 — R1: el precio y la cantidad mínima van juntos', () => {
   });
 });
 
-describe('CA-17 — R2: el precio mayorista es un monto canónico y no negativo', () => {
-  it('ACEPTA dos decimales exactos, incluido 0.00', () => {
+describe('CA-17 — R2: el precio mayorista es un monto canónico y MAYOR QUE CERO', () => {
+  // ESTA PRUEBA CAMBIÓ EL 2026-09-18: aceptaba 0.00. Julio decidió que un
+  // precio mayorista de cero no se permite (punto 55 de CLAUDE.md §6.2).
+  it('ACEPTA dos decimales exactos, desde el centavo más chico', () => {
     const base = baseCompleta();
-    expect(fijarMayorista(base, '0.00', '50.000')).toBe('acepta');
+    expect(fijarMayorista(base, '0.01', '50.000')).toBe('acepta');
+    expect(fijarMayorista(base, '0.10', '50.000')).toBe('acepta');
     expect(fijarMayorista(base, '5.99', '50.000')).toBe('acepta');
   });
 
-  it('RECHAZA un negativo, la forma no canónica y el número de punto flotante', () => {
+  it('RECHAZA el cero, un negativo, la forma no canónica y el número de punto flotante', () => {
     const base = baseCompleta();
-    for (const malo of ['-1.00', '5.5', '5', '5.500', 5.5, '']) {
+    for (const malo of ['0.00', '00.00', '-0.00', '-1.00', '5.5', '5', '5.500', 5.5, '']) {
       expect(fijarMayorista(base, malo, '50.000'), `debería rechazar ${JSON.stringify(malo)}`).toBe(
         'CHECK constraint failed: productos_precio_mayorista_canonico',
       );
@@ -290,7 +293,12 @@ describe('CA-19 — El espejo 0039 en la nube', () => {
   it('la nube agrega las dos columnas con los tipos de sus hermanas: NUMERIC(14, 2) y NUMERIC(14, 3)', () => {
     expect(NUBE).toContain('ADD COLUMN IF NOT EXISTS precio_mayorista NUMERIC(14, 2)');
     expect(NUBE).toContain('ADD COLUMN IF NOT EXISTS cantidad_minima_mayorista NUMERIC(14, 3)');
-    expect(NUBE).toContain('CHECK (precio_mayorista IS NULL OR precio_mayorista >= 0)');
+    // Desde el 2026-09-18 el precio es ESTRICTAMENTE mayor que cero, como en la
+    // 039 local (punto 55). Antes decía `>= 0`, con la restricción `_no_negativo`.
+    expect(NUBE).toContain(
+      'CONSTRAINT productos_precio_mayorista_positivo CHECK (precio_mayorista IS NULL OR precio_mayorista > 0)',
+    );
+    expect(NUBE).not.toMatch(/precio_mayorista >= 0/);
     expect(NUBE).toContain('CHECK (cantidad_minima_mayorista IS NULL OR cantidad_minima_mayorista > 0)');
   });
 

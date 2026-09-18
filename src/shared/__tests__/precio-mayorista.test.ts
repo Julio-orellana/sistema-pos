@@ -2,7 +2,7 @@
  * Las reglas de la configuración del precio mayorista (spec 002, §4.2), que
  * comparten el formulario y el servicio de productos.
  *
- *   R1  Van juntos. R2  Precio válido y no negativo.
+ *   R1  Van juntos. R2  Precio válido y mayor que cero.
  *   R3  Precio ESTRICTAMENTE menor que la lista. R4  Cantidad mayor que cero.
  */
 
@@ -52,7 +52,7 @@ describe('R1 — El precio y la cantidad mínima van juntos', () => {
   });
 });
 
-describe('R2 — El precio mayorista es un monto válido y no negativo', () => {
+describe('R2 — El precio mayorista es un monto válido y MAYOR QUE CERO', () => {
   it('rechaza lo que no es un número', () => {
     expect(revisar({ precioBase: '6.00', precioMayorista: 'cinco', cantidadMinima: '50' })).toBe(
       'El precio mayorista tiene que ser un número.',
@@ -61,12 +61,31 @@ describe('R2 — El precio mayorista es un monto válido y no negativo', () => {
 
   it('rechaza un precio negativo', () => {
     expect(revisar({ precioBase: '6.00', precioMayorista: '-1.00', cantidadMinima: '50' })).toBe(
-      'El precio mayorista no puede ser negativo.',
+      'El precio mayorista tiene que ser mayor que cero.',
     );
   });
 
-  it('acepta Q0.00, igual que un precio de lista de cero (spec §4.2, pregunta 3)', () => {
-    expect(revisar({ precioBase: '6.00', precioMayorista: '0', cantidadMinima: '50' })).toBe('ok 0.00 desde 50.000');
+  // ESTA PRUEBA CAMBIÓ EL 2026-09-18. Decía «acepta Q0.00, igual que un precio
+  // de lista de cero (spec §4.2, pregunta 3)». Julio contestó esa pregunta: un
+  // precio mayorista de cero NO se permite (punto 55 de CLAUDE.md §6.2).
+  it('RECHAZA Q0.00 (decisión de Julio, pregunta 3 de la spec)', () => {
+    expect(revisar({ precioBase: '6.00', precioMayorista: '0', cantidadMinima: '50' })).toBe(
+      'El precio mayorista tiene que ser mayor que cero.',
+    );
+    expect(revisar({ precioBase: '6.00', precioMayorista: '0.00', cantidadMinima: '50' })).toBe(
+      'El precio mayorista tiene que ser mayor que cero.',
+    );
+  });
+
+  it('rechaza lo que al redondearse a dos decimales queda en cero (0.004)', () => {
+    expect(revisar({ precioBase: '6.00', precioMayorista: '0.004', cantidadMinima: '50' })).toBe(
+      'El precio mayorista tiene que ser mayor que cero.',
+    );
+  });
+
+  it('acepta el centavo más chico (0.01) y lo que al redondearse llega a él (0.005)', () => {
+    expect(revisar({ precioBase: '6.00', precioMayorista: '0.01', cantidadMinima: '50' })).toBe('ok 0.01 desde 50.000');
+    expect(revisar({ precioBase: '6.00', precioMayorista: '0.005', cantidadMinima: '50' })).toBe('ok 0.01 desde 50.000');
   });
 });
 
@@ -159,5 +178,25 @@ describe('Cada rechazo trae su causa técnica, para la bitácora', () => {
     if (!revision.ok) {
       expect(revision.causaTecnica).toBe('precio_mayorista 6.50 no es menor que precio_base 6.00.');
     }
+  });
+});
+
+describe('R3 al EDITAR: si lo que se movió fue la LISTA, el rechazo lo dice así', () => {
+  it('el mayorista cumplía con la lista guardada y no con la nueva: mensaje de la lista', () => {
+    expect(
+      revisar({ precioBase: '5.00', precioBaseAnterior: '6.00', precioMayorista: '5.50', cantidadMinima: '50' }),
+    ).toBe('No podés bajar el precio de lista por debajo del precio mayorista de Q5.50: ajustá el mayorista primero, o quitalo.');
+  });
+
+  it('el mayorista YA estaba por encima de la lista guardada: mensaje general (lo que cambió es el mayorista)', () => {
+    expect(
+      revisar({ precioBase: '6.00', precioBaseAnterior: '6.00', precioMayorista: '6.50', cantidadMinima: '50' }),
+    ).toMatch(/^El precio mayorista \(Q6\.50\) tiene que ser menor que el precio de lista \(Q6\.00\)/);
+  });
+
+  it('sin lista anterior (al crear), el mensaje general', () => {
+    expect(revisar({ precioBase: '5.00', precioMayorista: '5.50', cantidadMinima: '50' })).toMatch(
+      /^El precio mayorista \(Q5\.50\)/,
+    );
   });
 });

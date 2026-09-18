@@ -144,7 +144,7 @@ const REGLAS: readonly ReglaDeTraduccion[] = [
   },
   {
     codigo: 'DATO_INVALIDO',
-    mensaje: 'El precio mayorista tiene que ser un monto con dos decimales, y no puede ser negativo.',
+    mensaje: 'El precio mayorista tiene que ser un monto con dos decimales, y mayor que cero.',
     coincide: (_error, restriccion) => restriccion === 'productos_precio_mayorista_canonico',
   },
   {

@@ -17,6 +17,9 @@
 -- juntos) y `productos_mayorista_menor_que_lista` (el precio mayorista es
 -- ESTRICTAMENTE menor que el de lista). Las dos de columna se llaman distinto
 -- que en la local, como en la 031/0031: acá no hay forma canónica que exigir.
+-- Las dos exigen ESTRICTAMENTE más que cero: la cantidad mínima desde el
+-- principio, y el precio desde el 2026-09-18, por decisión de Julio (antes de
+-- aplicar este archivo en ninguna nube; se llamaba `_no_negativo` y admitía 0).
 --
 -- `productos_mayorista_menor_que_lista` SE EVALÚA EN CADA ESCRITURA DE LA FILA,
 -- también cuando cambia el precio de lista. Es la decisión 1 de la spec (§4.3):
@@ -45,8 +48,8 @@
 
 ALTER TABLE public.productos
   ADD COLUMN IF NOT EXISTS precio_mayorista NUMERIC(14, 2)
-    CONSTRAINT productos_precio_mayorista_no_negativo
-    CHECK (precio_mayorista IS NULL OR precio_mayorista >= 0);
+    CONSTRAINT productos_precio_mayorista_positivo
+    CHECK (precio_mayorista IS NULL OR precio_mayorista > 0);
 
 ALTER TABLE public.productos
   ADD COLUMN IF NOT EXISTS cantidad_minima_mayorista NUMERIC(14, 3)

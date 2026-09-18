@@ -23,7 +23,7 @@
 -- traduzca a un mensaje de negocio:
 --
 --   R1  productos_mayorista_completo           los dos o ninguno
---   R2  productos_precio_mayorista_canonico    monto canónico y no negativo
+--   R2  productos_precio_mayorista_canonico    monto canónico y MAYOR QUE CERO
 --   R3  productos_mayorista_menor_que_lista    ESTRICTAMENTE menor que la lista
 --   R4  productos_cantidad_minima_mayorista_canonica
 --                                              cantidad canónica y mayor que cero
@@ -66,6 +66,11 @@
 -- que la fila tiene. Mismo criterio que la 031.
 -- ===========================================================================
 
+-- R2 lo hace ESTRICTAMENTE mayor que cero con la misma condición que usa la
+-- cantidad mínima, justo abajo: «tiene al menos un dígito distinto de cero».
+-- Hasta el 2026-09-18 admitía 0.00, como el precio de lista; Julio decidió que
+-- un mayorista de cero no se permite (punto 55 de CLAUDE.md §6.2). Esta
+-- migración no estaba aplicada en ninguna base que importe cuando se cambió.
 ALTER TABLE productos
   ADD COLUMN precio_mayorista TEXT
     CONSTRAINT productos_precio_mayorista_canonico
@@ -74,7 +79,8 @@ ALTER TABLE productos
                AND precio_mayorista GLOB '[0-9]*.[0-9][0-9]'
                AND NOT precio_mayorista GLOB '*.*.*'
                AND NOT precio_mayorista GLOB '?*-*'
-               AND NOT precio_mayorista GLOB '-*'));
+               AND NOT precio_mayorista GLOB '-*'
+               AND precio_mayorista GLOB '*[1-9]*'));
 
 -- La última condición de esta columna la hace ESTRICTAMENTE mayor que cero,
 -- como la cantidad del ícono (001): «tiene al menos un dígito distinto de
