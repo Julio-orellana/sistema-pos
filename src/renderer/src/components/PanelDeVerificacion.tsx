@@ -21,6 +21,46 @@ function Dato({ etiqueta, valor }: { readonly etiqueta: string; readonly valor: 
   );
 }
 
+/**
+ * «Pantalla y entrada» (§4.62): lo que el navegador sabe de la pantalla del
+ * equipo y de cómo le llega el dedo. Existe por el hallazgo de la tienda: no
+ * se podía bajar con el dedo, y la causa depende de si Windows entrega cada
+ * toque como TÁCTIL o como MOUSE. Tocar cualquier parte de la pantalla
+ * actualiza «Último toque», así que en el equipo real se lee con un dedo.
+ */
+function TarjetaDePantallaYEntrada(): React.JSX.Element {
+  const [ultimoPuntero, setUltimoPuntero] = useState<string>('todavía ninguno');
+  const [medidas, setMedidas] = useState(() => ({ ancho: window.innerWidth, alto: window.innerHeight }));
+
+  useEffect(() => {
+    const alTocar = (evento: PointerEvent): void => {
+      setUltimoPuntero(evento.pointerType === '' ? 'desconocido' : evento.pointerType);
+    };
+    const alCambiarDeTamano = (): void => {
+      setMedidas({ ancho: window.innerWidth, alto: window.innerHeight });
+    };
+    window.addEventListener('pointerdown', alTocar, { capture: true, passive: true });
+    window.addEventListener('resize', alCambiarDeTamano);
+    return (): void => {
+      window.removeEventListener('pointerdown', alTocar, { capture: true });
+      window.removeEventListener('resize', alCambiarDeTamano);
+    };
+  }, []);
+
+  return (
+    <section className="tarjeta" data-prueba="tarjeta-pantalla-y-entrada">
+      <h2>Pantalla y entrada</h2>
+      <Dato etiqueta="Ventana" valor={`${String(medidas.ancho)} × ${String(medidas.alto)} px`} />
+      <Dato etiqueta="Densidad de píxeles" valor={String(window.devicePixelRatio)} />
+      <Dato
+        etiqueta="Puntos táctiles que anuncia el sistema"
+        valor={navigator.maxTouchPoints === 0 ? '0 (el sistema no la ve como pantalla táctil)' : String(navigator.maxTouchPoints)}
+      />
+      <Dato etiqueta="Último toque llegó como" valor={ultimoPuntero} />
+    </section>
+  );
+}
+
 export function PanelDeVerificacion(): React.JSX.Element {
   const [aplicacion, setAplicacion] = useState<DiagnosticoAplicacion | null>(null);
   const [baseDeDatos, setBaseDeDatos] = useState<DiagnosticoBaseDeDatos | null>(null);
@@ -55,6 +95,8 @@ export function PanelDeVerificacion(): React.JSX.Element {
   return (
     <>
       {error !== null && <p className="alerta">Error: {error}</p>}
+
+      <TarjetaDePantallaYEntrada />
 
       <section className="tarjeta">
         <h2>Aritmética decimal</h2>
@@ -99,6 +141,7 @@ export function PanelDeVerificacion(): React.JSX.Element {
               etiqueta="Supabase"
               valor={aplicacion.sincronizacionSimulada ? 'Simulado (no consume cuota)' : 'Conectado'}
             />
+            <Dato etiqueta="Aceleración gráfica" valor={aplicacion.aceleracionGrafica} />
           </>
         )}
       </section>

@@ -42,6 +42,11 @@ import {
 } from '@shared/adapters';
 import { ejecutarDiagnostico } from '@main/database/connection';
 import type { ControladorDeSalidaControlada } from '@main/windows/controlled-exit';
+import {
+  describirAceleracionGrafica,
+  type EstadoDeFuncionesGraficas,
+  type InformacionGraficaBasica,
+} from '@main/windows/aceleracion-grafica';
 import type { ServicioDeImpresora } from '@main/impresora/servicio-de-impresora';
 import { registrarManejadoresDeImpresora } from './impresora';
 import type { ServicioDeHistorialDeCajas } from '@main/domain/caja/historial-de-cajas';
@@ -150,6 +155,20 @@ export interface DependenciasDeIpc {
 /** Milisegundos que tiene un segundo. */
 const MILISEGUNDOS_POR_SEGUNDO = 1000;
 
+/**
+ * `app.getGPUInfo('basic')`, o `null` si Chromium no la da. MEDIDO (§4.62):
+ * con `--disable-gpu` la promesa se RECHAZA con «GPU access not allowed», y
+ * el diagnóstico no puede caerse entero por eso: es justamente el modo que se
+ * quiere poder diagnosticar.
+ */
+async function leerInformacionGrafica(): Promise<InformacionGraficaBasica | null> {
+  try {
+    return (await app.getGPUInfo('basic')) as InformacionGraficaBasica;
+  } catch {
+    return null;
+  }
+}
+
 /** Registra todos los manejadores IPC de la aplicación. */
 export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
   // Los del catálogo viven en su propio archivo, como manda la convención de
@@ -243,6 +262,10 @@ export function registrarManejadoresIpc(dependencias: DependenciasDeIpc): void {
           impresora: dependencias.impresora.estado().descripcion,
           adaptadorSincronizacion: sincronizador.nombre,
           sincronizacionSimulada: estadoSincronizacion.simulado,
+          aceleracionGrafica: describirAceleracionGrafica(
+            app.getGPUFeatureStatus() as unknown as EstadoDeFuncionesGraficas,
+            await leerInformacionGrafica(),
+          ),
         };
         return diagnostico;
       }),

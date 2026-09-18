@@ -100,7 +100,14 @@ vi.mock('electron', () => {
       showOpenDialog: (): Promise<{ canceled: boolean; filePaths: string[] }> =>
         Promise.resolve({ canceled: false, filePaths: [electron.rutaDeLaFotoElegida] }),
     },
-    app: { getName: (): string => 'pos-agricola', getVersion: (): string => '0.0.0', isPackaged: false, getPath: (): string => tmpdir() },
+    app: {
+      getName: (): string => 'pos-agricola',
+      getVersion: (): string => '0.0.0',
+      isPackaged: false,
+      getPath: (): string => tmpdir(),
+      getGPUFeatureStatus: (): Record<string, string> => ({ gpu_compositing: 'enabled', rasterization: 'enabled' }),
+      getGPUInfo: (): Promise<unknown> => Promise.resolve({ gpuDevice: [{ vendorId: 0x8086, deviceId: 0x0116, active: true }] }),
+    },
     nativeImage: { createFromBuffer: (): unknown => ({ isEmpty: (): boolean => true }) },
     safeStorage: { isEncryptionAvailable: (): boolean => false },
     net: { isOnline: (): boolean => false },

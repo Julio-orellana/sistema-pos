@@ -379,6 +379,11 @@ export interface DiagnosticoAplicacion {
   readonly adaptadorSincronizacion: string;
   /** `true` si la sincronización no está tocando la red (plan gratuito protegido). */
   readonly sincronizacionSimulada: boolean;
+  /**
+   * Qué tarjeta gráfica vio Chromium y qué aceleró, dicho para leerlo:
+   * «GPU 0x8086:0x0116 · composición: enabled · rasterizado: …» (§4.62).
+   */
+  readonly aceleracionGrafica: string;
 }
 
 // ---------------------------------------------------------------------------

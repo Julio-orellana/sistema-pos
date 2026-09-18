@@ -76,6 +76,11 @@ import {
   mostrarCuandoEsteLista,
 } from '@main/windows/mostrar-ventana';
 import {
+  describirAceleracionGrafica,
+  type EstadoDeFuncionesGraficas,
+  type InformacionGraficaBasica,
+} from '@main/windows/aceleracion-grafica';
+import {
   crearSyncProvider,
   leerConfiguracionAdaptadoresDelEntorno,
 } from '@shared/adapters';
@@ -942,6 +947,38 @@ app.whenReady().then(
       console.info(`[arranque] ${mensaje}`);
     };
 
+    /*
+      ACELERACIÓN GRÁFICA, en la bitácora técnica (§4.62). El equipo de la
+      tienda tiene una Intel HD Graphics 3000 de 2011, y lo que se sabe de cómo
+      la trata Chromium es inferencia: esto lo deja escrito desde el equipo
+      real. Se anota una vez, ya con la ventana a la vista, y cada vez que el
+      proceso de la GPU se cae, que es la inestabilidad que se teme de esa
+      tarjeta. No usa la red.
+    */
+    const anotarAceleracionGrafica = (): void => {
+      void app
+        .getGPUInfo('basic')
+        .then((informacion) => {
+          anotarArranque(
+            `aceleración gráfica: ${describirAceleracionGrafica(
+              app.getGPUFeatureStatus() as unknown as EstadoDeFuncionesGraficas,
+              informacion as InformacionGraficaBasica,
+            )}`,
+          );
+        })
+        .catch((error: unknown) => {
+          anotarArranque(`aceleración gráfica: no se pudo leer (${String(error)})`);
+        });
+    };
+    app.on('child-process-gone', (_evento, detalle) => {
+      if (detalle.type === 'GPU') {
+        anotarArranque(
+          `el proceso de la GPU terminó: ${detalle.reason} (código ${String(detalle.exitCode)}); ` +
+            'Chromium lo vuelve a levantar o sigue sin aceleración',
+        );
+      }
+    });
+
     const ventana = crearVentanaPrincipal(RUTA_PRELOAD);
     ventanaQueListaImpresoras = ventana;
     controladorDeSalida.conectarVentana(ventana);
@@ -1218,6 +1255,7 @@ app.whenReady().then(
     }).then((comoSeMostro) => {
       if (comoSeMostro !== 'destruida-antes-de-mostrarse') {
         arrancarLoQueUsaLaRed();
+        anotarAceleracionGrafica();
       }
     });
 
