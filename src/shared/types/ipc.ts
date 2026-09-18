@@ -814,6 +814,15 @@ const camposDeProducto = {
    * dice siempre qué quiere, y `null` (o vacío) es «sin costo cargado».
    */
   precioCompra: z.string().max(LARGO_MAXIMO_NUMERO).nullable(),
+  /**
+   * El precio mayorista y desde qué cantidad aplica (spec 002). OBLIGATORIOS en
+   * el payload y nulables, como el costo: los dos en `null` es «sin precio
+   * mayorista». Van SUELTOS y no como un objeto a propósito: si llegara uno
+   * solo, el servicio responde con el mensaje de la regla («Falta el precio
+   * mayorista.») y no con un rechazo genérico del esquema.
+   */
+  precioMayorista: z.string().max(LARGO_MAXIMO_NUMERO).nullable(),
+  cantidadMinimaMayorista: z.string().max(LARGO_MAXIMO_NUMERO).nullable(),
   fotoPath: z.string().max(LARGO_MAXIMO_RUTA_FOTO).nullable(),
 };
 
@@ -856,6 +865,17 @@ export interface CategoriaIpc {
   readonly productosAsociados: number;
 }
 
+/**
+ * El precio mayorista de un producto (spec 002): el precio y desde qué cantidad
+ * aplica, los dos como cadena canónica (dos y tres decimales). Van juntos en un
+ * objeto: uno sin el otro no significa nada.
+ */
+export interface PrecioMayoristaIpc {
+  readonly precio: string;
+  /** En la unidad del producto: lb, kg o unidades. */
+  readonly cantidadMinima: string;
+}
+
 /** Un producto tal como lo muestra la pantalla de administración. */
 export interface ProductoIpc {
   readonly id: string;
@@ -875,6 +895,8 @@ export interface ProductoIpc {
    * venta (`ProductoParaVender`) no lo lleva.
    */
   readonly precioCompra: string | null;
+  /** El precio mayorista, o `null` si el producto no tiene. */
+  readonly mayorista: PrecioMayoristaIpc | null;
   /** Inventario, como cadena canónica de tres decimales. */
   readonly inventarioDisponible: string;
   /** Ruta relativa guardada en la base, o `null`. */

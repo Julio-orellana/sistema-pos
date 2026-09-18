@@ -51,6 +51,7 @@ const MAIZ: ProductoIpc = {
   precioBase: '4.25',
   inventarioDisponible: '250.000',
   precioCompra: null,
+  mayorista: null,
   fotoPath: null,
   fotoUrl: null,
   activo: true,
@@ -59,17 +60,21 @@ const MAIZ: ProductoIpc = {
 
 /** Llamadas que el formulario le hizo al proceso principal. */
 let llamadas: string[];
+/** Lo que se mandó en cada canal, la última vez. */
+let payloads: Record<string, unknown>;
 let contenedor: HTMLDivElement;
 let raiz: Root;
 
-/** Doble de `window.pos` que registra qué canales se invocaron. */
+/** Doble de `window.pos` que registra qué canales se invocaron y con qué. */
 function instalarDobleDeApi(): void {
   llamadas = [];
-  const registrar = <T,>(canal: string, datos: T) => async (): Promise<{
+  payloads = {};
+  const registrar = <T,>(canal: string, datos: T) => async (payload?: unknown): Promise<{
     ok: true;
     datos: T;
   }> => {
     llamadas.push(canal);
+    payloads[canal] = payload;
     return Promise.resolve({ ok: true as const, datos });
   };
 
@@ -416,5 +421,143 @@ describe('La pantalla de productos', () => {
     await clic(exigir('confirmar-desactivar'));
 
     expect(llamadas).toContain('fijarActivoProducto');
+  });
+});
+
+// ===========================================================================
+/*
+  SPEC 002 — El precio mayorista en el formulario (F1 a F8, CA-20, CA-24).
+  Las reglas se revisan mientras se escribe, con los MISMOS textos que el
+  servicio: salen de `@shared/precio-mayorista`.
+*/
+describe('SPEC 002 — La casilla «¿Aplica precio mayorista?»', () => {
+  const nuevo = (): React.ReactElement =>
+    createElement(FormularioDeProducto, {
+      producto: null,
+      categorias: [GRANOS],
+      alGuardar: () => undefined,
+      alCancelar: () => undefined,
+    });
+
+  const casilla = (): HTMLInputElement => exigir('producto-aplica-mayorista') as HTMLInputElement;
+
+  /** Un producto nuevo por peso, con nombre y precio Q6.00, listo para guardar. */
+  async function productoListo(): Promise<void> {
+    await montar(nuevo());
+    await escribir(exigirCampo('producto-nombre'), 'Maíz amarillo');
+    await clic(exigir('producto-tipo-peso'));
+    await escribir(exigirCampo('producto-precio'), '6.00');
+  }
+
+  it('F1-F2: al crear, la casilla está DESMARCADA y los dos campos NO EXISTEN', async () => {
+    await montar(nuevo());
+    expect(casilla().checked).toBe(false);
+    expect(porPrueba('producto-precio-mayorista')).toBeNull();
+    expect(porPrueba('producto-cantidad-minima-mayorista')).toBeNull();
+  });
+
+  it('F3 y F8: al marcarla aparecen los dos campos VACÍOS, con la unidad del producto en la etiqueta', async () => {
+    await productoListo();
+    await clic(casilla());
+
+    expect(exigirCampo('producto-precio-mayorista').value).toBe('');
+    expect(exigirCampo('producto-cantidad-minima-mayorista').value).toBe('');
+    expect(contenedor.textContent).toContain('Precio mayorista en quetzales (por lb)');
+    expect(contenedor.textContent).toContain('Cantidad mínima para el precio mayorista (en lb)');
+
+    await clic(exigir('producto-tipo-unidad'));
+    expect(contenedor.textContent).toContain('Precio mayorista en quetzales (por unidad)');
+    expect(contenedor.textContent).toContain('Cantidad mínima para el precio mayorista (en unidades)');
+  });
+
+  it('F4: al DESMARCARLA los valores se BORRAN; al volver a marcarla, los campos aparecen vacíos', async () => {
+    await productoListo();
+    await clic(casilla());
+    await escribir(exigirCampo('producto-precio-mayorista'), '5.50');
+    await escribir(exigirCampo('producto-cantidad-minima-mayorista'), '50');
+
+    await clic(casilla());
+    expect(porPrueba('producto-precio-mayorista')).toBeNull();
+
+    await clic(casilla());
+    expect(exigirCampo('producto-precio-mayorista').value).toBe('');
+    expect(exigirCampo('producto-cantidad-minima-mayorista').value).toBe('');
+  });
+
+  it('F4: guardar con la casilla desmarcada manda los dos en null, aunque se hayan escrito antes', async () => {
+    await productoListo();
+    await clic(casilla());
+    await escribir(exigirCampo('producto-precio-mayorista'), '5.50');
+    await escribir(exigirCampo('producto-cantidad-minima-mayorista'), '50');
+    await clic(casilla());
+    await clic(exigir('producto-guardar'));
+
+    expect(payloads.crearProducto).toEqual(
+      expect.objectContaining({ precioMayorista: null, cantidadMinimaMayorista: null }),
+    );
+  });
+
+  it('con la casilla marcada y datos válidos, guarda y manda los dos valores', async () => {
+    await productoListo();
+    await clic(casilla());
+    await escribir(exigirCampo('producto-precio-mayorista'), '5.50');
+    await escribir(exigirCampo('producto-cantidad-minima-mayorista'), '50');
+
+    expect(porPrueba('producto-impedimento')).toBeNull();
+    await clic(exigir('producto-guardar'));
+    expect(payloads.crearProducto).toEqual(
+      expect.objectContaining({ precioBase: '6.00', precioMayorista: '5.50', cantidadMinimaMayorista: '50' }),
+    );
+  });
+
+  it('F6: cada regla se avisa MIENTRAS SE ESCRIBE, con el texto del servicio, y el botón queda deshabilitado', async () => {
+    await productoListo();
+    await clic(casilla());
+
+    const casos: readonly [string, string, string][] = [
+      ['', '', 'Falta el precio mayorista.'],
+      ['5.50', '', 'Falta la cantidad mínima para el precio mayorista.'],
+      ['6.00', '50', 'El precio mayorista (Q6.00) tiene que ser menor que el precio de lista (Q6.00). Bajá el precio mayorista o quitalo.'],
+      ['5.50', '0', 'La cantidad mínima para el precio mayorista tiene que ser mayor que cero.'],
+    ];
+    for (const [precio, cantidad, aviso] of casos) {
+      await escribir(exigirCampo('producto-precio-mayorista'), precio);
+      await escribir(exigirCampo('producto-cantidad-minima-mayorista'), cantidad);
+      expect(exigir('producto-impedimento').textContent, `${precio} / ${cantidad}`).toBe(aviso);
+      expect(exigirBoton('producto-guardar').disabled).toBe(true);
+    }
+    await clic(exigir('producto-guardar'));
+    expect(llamadas).not.toContain('crearProducto');
+  });
+
+  it('F5: al editar un producto que YA tiene precio mayorista, la casilla aparece marcada con sus valores', async () => {
+    await montar(
+      createElement(FormularioDeProducto, {
+        producto: { ...MAIZ, mayorista: { precio: '3.90', cantidadMinima: '100.000' } },
+        categorias: [GRANOS],
+        alGuardar: () => undefined,
+        alCancelar: () => undefined,
+      }),
+    );
+    expect(casilla().checked).toBe(true);
+    expect(exigirCampo('producto-precio-mayorista').value).toBe('3.90');
+    expect(exigirCampo('producto-cantidad-minima-mayorista').value).toBe('100.000');
+  });
+
+  it('CA-24: al editar, BAJAR LA LISTA por debajo del mayorista se avisa y no deja guardar', async () => {
+    await montar(
+      createElement(FormularioDeProducto, {
+        producto: { ...MAIZ, mayorista: { precio: '3.90', cantidadMinima: '100.000' } },
+        categorias: [GRANOS],
+        alGuardar: () => undefined,
+        alCancelar: () => undefined,
+      }),
+    );
+    await escribir(exigirCampo('producto-precio'), '3.50');
+
+    expect(exigir('producto-impedimento').textContent).toBe(
+      'El precio mayorista (Q3.90) tiene que ser menor que el precio de lista (Q3.50). Bajá el precio mayorista o quitalo.',
+    );
+    expect(exigirBoton('producto-guardar').disabled).toBe(true);
   });
 });

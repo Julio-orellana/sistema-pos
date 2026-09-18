@@ -94,6 +94,13 @@ function aProductoIpc(producto: Producto, nombreDeCategoria: string): ProductoIp
     cantidadPredefinidaIcono: cantidadACadena(producto.cantidadPredefinidaIcono),
     precioBase: montoACadena(producto.precioBase),
     precioCompra: producto.precioCompra === null ? null : montoACadena(producto.precioCompra),
+    mayorista:
+      producto.mayorista === null
+        ? null
+        : {
+            precio: montoACadena(producto.mayorista.precio),
+            cantidadMinima: cantidadACadena(producto.mayorista.cantidadMinima),
+          },
     inventarioDisponible: cantidadACadena(producto.inventarioDisponible),
     fotoPath: producto.fotoPath,
     fotoUrl: producto.fotoPath === null ? null : urlDeFoto(producto.fotoPath),

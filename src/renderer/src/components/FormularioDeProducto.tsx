@@ -11,10 +11,18 @@
  * mercadería, tiene su propia acción y su propio asiento de auditoría. Al
  * CREAR sí se pide el saldo inicial, porque en ese momento no hay nada que
  * ajustar todavía.
+ *
+ * EL PRECIO MAYORISTA (spec 002) va detrás de una casilla, desmarcada por
+ * omisión. Marcarla muestra sus dos campos; desmarcarla los VACÍA, en el mismo
+ * cambio de estado, así que guardar con la casilla desmarcada quita el precio
+ * mayorista. Sus reglas se revisan mientras se escribe con
+ * `revisarPrecioMayorista`, la MISMA función y los MISMOS textos que usa el
+ * servicio: el formulario no puede dejar pasar algo que el servicio rechaza.
  */
 
 import { useCallback, useMemo, useState } from 'react';
 
+import { revisarPrecioMayorista } from '@shared/precio-mayorista';
 import type {
   CategoriaIpc,
   ProductoIpc,
@@ -34,6 +42,10 @@ interface Borrador {
   readonly precioBase: string;
   /** Vacío es «sin costo cargado», que no es cero. */
   readonly precioCompra: string;
+  /** La casilla «¿Aplica precio mayorista?». Desmarcada, los dos campos no existen. */
+  readonly aplicaMayorista: boolean;
+  readonly precioMayorista: string;
+  readonly cantidadMinimaMayorista: string;
   readonly inventarioInicial: string;
   readonly fotoPath: string | null;
   readonly fotoUrl: string | null;
@@ -62,6 +74,11 @@ function borradorInicial(
       cantidadPredefinidaIcono: producto.cantidadPredefinidaIcono,
       precioBase: producto.precioBase,
       precioCompra: producto.precioCompra ?? '',
+      // Un producto que YA tiene precio mayorista abre con la casilla marcada
+      // y sus valores; uno que no tiene, desmarcada.
+      aplicaMayorista: producto.mayorista !== null,
+      precioMayorista: producto.mayorista?.precio ?? '',
+      cantidadMinimaMayorista: producto.mayorista?.cantidadMinima ?? '',
       inventarioInicial: producto.inventarioDisponible,
       fotoPath: producto.fotoPath,
       fotoUrl: producto.fotoUrl,
@@ -75,6 +92,9 @@ function borradorInicial(
     cantidadPredefinidaIcono: '1',
     precioBase: '0.00',
     precioCompra: '',
+    aplicaMayorista: false,
+    precioMayorista: '',
+    cantidadMinimaMayorista: '',
     inventarioInicial: '0',
     fotoPath: null,
     fotoUrl: null,
@@ -105,6 +125,19 @@ function motivoParaNoGuardar(borrador: Borrador, esNuevo: boolean): string | nul
   }
   if (borrador.precioBase.trim().length === 0) {
     return 'Falta el precio.';
+  }
+  if (borrador.aplicaMayorista) {
+    // Con la casilla marcada los dos datos son obligatorios (`exigido`), y el
+    // texto de cada rechazo es el del servicio: sale de la misma función.
+    const revision = revisarPrecioMayorista({
+      precioBase: borrador.precioBase,
+      precioMayorista: borrador.precioMayorista,
+      cantidadMinima: borrador.cantidadMinimaMayorista,
+      exigido: true,
+    });
+    if (!revision.ok) {
+      return revision.mensaje;
+    }
   }
   if (esNuevo && borrador.inventarioInicial.trim().length === 0) {
     return 'Falta el inventario inicial. Puede ser 0 si la mercadería todavía no llegó.';
@@ -140,6 +173,22 @@ export function FormularioDeProducto({
       ...anterior,
       tipoMedida,
       unidadPeso: tipoMedida === 'peso' ? (anterior.unidadPeso ?? 'lb') : null,
+    }));
+  }, []);
+
+  /**
+   * Marcar o desmarcar la casilla del precio mayorista VACÍA los dos campos.
+   *
+   * Desmarcarla con valores escritos y guardarlos igual sería guardar algo que
+   * la pantalla dice que no aplica; y volver a marcarla muestra los campos
+   * vacíos, para que nadie reactive sin querer un precio viejo.
+   */
+  const cambiarMayorista = useCallback((aplicaMayorista: boolean): void => {
+    setBorrador((anterior) => ({
+      ...anterior,
+      aplicaMayorista,
+      precioMayorista: '',
+      cantidadMinimaMayorista: '',
     }));
   }, []);
 
@@ -179,6 +228,10 @@ export function FormularioDeProducto({
       precioBase: borrador.precioBase.trim(),
       // Vacío viaja como `null`: el proceso principal lo guarda sin costo.
       precioCompra: borrador.precioCompra.trim() === '' ? null : borrador.precioCompra.trim(),
+      // Con la casilla desmarcada viajan los dos en `null`: quita el precio
+      // mayorista, si lo había. Es un valor explícito, no «dejarlo como estaba».
+      precioMayorista: borrador.aplicaMayorista ? borrador.precioMayorista.trim() : null,
+      cantidadMinimaMayorista: borrador.aplicaMayorista ? borrador.cantidadMinimaMayorista.trim() : null,
       fotoPath: borrador.fotoPath,
     };
 
@@ -337,6 +390,62 @@ export function FormularioDeProducto({
           producto se muestra como «sin dato», no como cero.
         </span>
       </label>
+
+      <div className="campo" data-prueba="producto-seccion-mayorista">
+        <label className="opcion">
+          <input
+            type="checkbox"
+            checked={borrador.aplicaMayorista}
+            data-prueba="producto-aplica-mayorista"
+            onChange={(evento) => {
+              cambiarMayorista(evento.target.checked);
+            }}
+          />
+          ¿Aplica precio mayorista?
+        </label>
+      </div>
+
+      {/* Los dos campos solo EXISTEN con la casilla marcada: no están ocultos
+          con estilos, no están. */}
+      {borrador.aplicaMayorista && (
+        <>
+          <label className="campo">
+            <span className="campo__etiqueta">
+              Precio mayorista en quetzales (por{' '}
+              {borrador.tipoMedida === 'peso' ? (borrador.unidadPeso ?? 'lb') : 'unidad'})
+            </span>
+            <CampoDeTexto
+              etiqueta="Precio mayorista"
+              disposicion="decimal"
+              valor={borrador.precioMayorista}
+              data-prueba="producto-precio-mayorista"
+              alCambiar={(precioMayorista) => {
+                setBorrador((anterior) => ({ ...anterior, precioMayorista }));
+              }}
+            />
+          </label>
+
+          <label className="campo">
+            <span className="campo__etiqueta">
+              Cantidad mínima para el precio mayorista (en{' '}
+              {borrador.tipoMedida === 'peso' ? (borrador.unidadPeso ?? 'lb') : 'unidades'})
+            </span>
+            <CampoDeTexto
+              etiqueta="Cantidad mínima para el precio mayorista"
+              disposicion={borrador.tipoMedida === 'peso' ? 'decimal' : 'entero'}
+              valor={borrador.cantidadMinimaMayorista}
+              data-prueba="producto-cantidad-minima-mayorista"
+              alCambiar={(cantidadMinimaMayorista) => {
+                setBorrador((anterior) => ({ ...anterior, cantidadMinimaMayorista }));
+              }}
+            />
+            <span className="nota">
+              Desde esa cantidad, la línea entera se cobra a este precio si es el más bajo de los
+              que aplican. Tiene que ser menor que el precio de lista.
+            </span>
+          </label>
+        </>
+      )}
 
       {esNuevo ? (
         <label className="campo">

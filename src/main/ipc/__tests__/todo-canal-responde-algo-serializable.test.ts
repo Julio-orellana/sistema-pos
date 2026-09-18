@@ -439,6 +439,10 @@ describe('1. En una tienda con datos, cada canal devuelve algo que el puente pue
       cantidadPredefinidaIcono: '1',
       precioBase: '4.75',
       precioCompra: '3.10',
+      // Desde la spec 002 el payload los exige; con valores, para que el
+      // objeto `mayorista` también cruce el puente en la respuesta.
+      precioMayorista: '4.50',
+      cantidadMinimaMayorista: '50',
       fotoPath: foto.fotoPath,
     };
     const producto = datosDe(
