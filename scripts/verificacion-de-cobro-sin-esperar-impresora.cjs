@@ -152,7 +152,7 @@ async function main() {
       if (!categoria.ok) throw new Error(categoria.error.mensaje);
       const producto = await window.pos.catalogo.crearProducto({
         nombre: 'Frijol negro', categoriaId: categoria.datos.id, tipoMedida: 'unidad', unidadPeso: null,
-        cantidadPredefinidaIcono: '1', precioBase: '9.00', precioCompra: null, fotoPath: null, inventarioInicial: '50',
+        cantidadPredefinidaIcono: '1', precioBase: '9.00', precioCompra: null, precioMayorista: null, cantidadMinimaMayorista: null, fotoPath: null, inventarioInicial: '50',
       });
       if (!producto.ok) throw new Error(producto.error.mensaje);
       const caja = await window.pos.caja.abrir({ modo: 'simple', monto: '100.00' });

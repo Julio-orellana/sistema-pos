@@ -182,6 +182,9 @@ async function main() {
             cantidadPredefinidaIcono: '1',
             precioBase: '4.25',
             precioCompra: null,
+            // Spec 002: sin precio mayorista. Obligatorias en el contrato desde el 2026-09-18.
+            precioMayorista: null,
+            cantidadMinimaMayorista: null,
             fotoPath: null,
             inventarioInicial: '100',
           }),

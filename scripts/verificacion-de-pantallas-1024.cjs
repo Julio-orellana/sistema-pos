@@ -274,7 +274,7 @@ async function main() {
       for (const [i, nombre] of nombres.entries()) {
         productos.push(exigir(await window.pos.catalogo.crearProducto({
           nombre, categoriaId: categoria.id, tipoMedida: i % 2 ? 'unidad' : 'peso', unidadPeso: i % 2 ? null : 'lb',
-          cantidadPredefinidaIcono: '1', precioBase: '1234.50', precioCompra: '3.00', fotoPath: null, inventarioInicial: '100',
+          cantidadPredefinidaIcono: '1', precioBase: '1234.50', precioCompra: '3.00', precioMayorista: null, cantidadMinimaMayorista: null, fotoPath: null, inventarioInicial: '100',
         })));
       }
       exigir(await window.pos.caja.abrir({ modo: 'simple', monto: '500' }));
@@ -608,7 +608,7 @@ async function main() {
       const abarrotes = exigir(await window.pos.catalogo.crearCategoria('Abarrotes'));
       return exigir(await window.pos.catalogo.crearProducto({
         nombre: 'Jabón', categoriaId: abarrotes.id, tipoMedida: 'unidad', unidadPeso: null,
-        cantidadPredefinidaIcono: '1', precioBase: '5.00', precioCompra: null, fotoPath: null, inventarioInicial: '50',
+        cantidadPredefinidaIcono: '1', precioBase: '5.00', precioCompra: null, precioMayorista: null, cantidadMinimaMayorista: null, fotoPath: null, inventarioInicial: '50',
       })).id;
     });
     const barraSinVentas = await nombresDeLaBarra();
