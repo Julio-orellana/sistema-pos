@@ -51,6 +51,7 @@ import {
   sumarLista,
 } from '@shared/money';
 import { ErrorDeNegocio } from '@main/database/errores';
+import type { RepositorioDeAnulacionesDeVenta } from '@main/database/repositories/anulaciones-de-venta';
 import type { Producto } from '@main/database/repositories/entidades';
 import type { RepositorioDeCategorias } from '@main/database/repositories/categorias';
 import type { RepositorioDeProductos } from '@main/database/repositories/productos';
@@ -86,6 +87,13 @@ export interface ResumenDeVentas {
   readonly totalDeDescuentos: string;
   /** Cuántas ventas llevaron descuento discrecional. */
   readonly ventasConDescuento: number;
+  /**
+   * Cuántas anulaciones se autorizaron a distancia, con el código de la app,
+   * con fecha dentro del período (spec 003, CA-18). Cuenta por la fecha de la
+   * ANULACIÓN. No depende de que haya ventas: la pantalla lo muestra aunque el
+   * período no tenga ninguna venta completada.
+   */
+  readonly anulacionesRemotas: number;
 }
 
 /** Una fila del reporte de ventas por producto. */
@@ -162,6 +170,8 @@ export interface DependenciasDeReportes {
   readonly ventaDetalle: RepositorioDeVentaDetalle;
   readonly productos: RepositorioDeProductos;
   readonly categorias: RepositorioDeCategorias;
+  /** Para el contador de anulaciones a distancia del resumen (spec 003). */
+  readonly anulaciones: RepositorioDeAnulacionesDeVenta;
   readonly ahora?: () => number;
 }
 
@@ -170,6 +180,7 @@ export class ServicioDeReportes {
   private readonly ventaDetalle: RepositorioDeVentaDetalle;
   private readonly productos: RepositorioDeProductos;
   private readonly categorias: RepositorioDeCategorias;
+  private readonly anulaciones: RepositorioDeAnulacionesDeVenta;
   private readonly ahora: () => number;
 
   public constructor(dependencias: DependenciasDeReportes) {
@@ -177,6 +188,7 @@ export class ServicioDeReportes {
     this.ventaDetalle = dependencias.ventaDetalle;
     this.productos = dependencias.productos;
     this.categorias = dependencias.categorias;
+    this.anulaciones = dependencias.anulaciones;
     this.ahora = dependencias.ahora ?? ((): number => Date.now());
   }
 
@@ -225,6 +237,8 @@ export class ServicioDeReportes {
       ventasEnTarjeta: totales.ventasEnTarjeta,
       totalDeDescuentos: montoACadena(sumarLista(descuentos)),
       ventasConDescuento: descuentos.length,
+      // Con el MISMO período que las ventas: días de Guatemala, fin de día incluido.
+      anulacionesRemotas: this.anulaciones.contarRemotasEnRango(periodo.desdeIso, periodo.hastaIso),
     };
   }
 

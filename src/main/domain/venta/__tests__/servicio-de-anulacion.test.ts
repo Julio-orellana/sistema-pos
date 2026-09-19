@@ -252,6 +252,7 @@ beforeEach(() => {
     ventaDetalle: repos.ventaDetalle,
     productos: repos.productos,
     categorias: repos.categorias,
+    anulaciones: repos.anulacionesDeVenta,
     ahora: (): number => reloj,
   });
   autenticacion = new ServicioDeAutenticacion({
@@ -1082,6 +1083,16 @@ describe('Autorización: superficie propia, PIN en persona o código de la app a
     const resultado = await pedir(nueva, codigo);
     expect(resultado.anulada).toBe(true);
     expect(resultado.anulacion?.autorizadaVia).toBe('remoto');
+  });
+
+  it('CA-18 — la única venta del día anulada a distancia: el resumen dice 0 ventas y 1 anulación a distancia', async () => {
+    const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
+    await pedir(ventaId, codigoRemotoDeJimmy());
+
+    const resumen = reportes.resumenDeVentas({ clase: 'hoy' });
+
+    expect(resumen.cantidadDeVentas).toBe(0);
+    expect(resumen.anulacionesRemotas).toBe(1);
   });
 
   it('el PIN de un usuario de VENTA no autoriza, aunque sea el de quien pide', async () => {

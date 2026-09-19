@@ -81,6 +81,7 @@ beforeEach(() => {
     ventaDetalle: repos.ventaDetalle,
     productos: repos.productos,
     categorias: repos.categorias,
+    anulaciones: repos.anulacionesDeVenta,
     ahora: (): number => reloj,
   });
 
@@ -775,5 +776,88 @@ describe('SPEC 002 — EL MARGEN DE UNA VENTA A PRECIO MAYORISTA', () => {
     // (60.00 − 40.00) + (275.00 − 200.00) = 20.00 + 75.00 = 95.00.
     expect(filaDelMaiz()?.montoGenerado).toBe('335.00');
     expect(filaDelMaiz()?.margen).toBe('95.00');
+  });
+});
+
+// ===========================================================================
+describe('SPEC 003 (CA-18) — CUÁNTAS ANULACIONES SE AUTORIZARON A DISTANCIA en el período', () => {
+  /*
+    Desde la spec 003 una anulación se puede autorizar con el código de la app,
+    por teléfono. Este contador es lo único que queda para revisar después ese
+    fraude, que la autorización a distancia ya no impide. Las filas de anulación
+    se insertan por el repositorio: acá se prueba el CONTEO, y el flujo real de
+    punta a punta está en `servicio-de-anulacion.test.ts`.
+  */
+
+  /** Registra una venta al instante indicado y devuelve su id. */
+  function venderUna(instante: number): string {
+    const anterior = reloj;
+    reloj = instante;
+    const resultado = venta.registrar(idCajera, 'venta', {
+      lineas: [{ productoId: idMaiz, cantidad: '1' }],
+      descuento: null,
+      formaPago: 'efectivo',
+      numBoleta: null,
+    });
+    reloj = anterior;
+    return resultado.venta.id;
+  }
+
+  function anular(ventaId: string, via: 'presencial' | 'remoto', instante: number): void {
+    repos.anulacionesDeVenta.crear({
+      ventaId,
+      solicitadaPor: idCajera,
+      autorizadaPor: idJimmy,
+      autorizadaVia: via,
+      motivo: 'prueba del contador de la spec 003',
+      fecha: new Date(instante).toISOString(),
+    });
+  }
+
+  it('sin ninguna anulación, el contador es 0 y no un hueco', () => {
+    vender(HOY_TARDE, [{ productoId: idMaiz, cantidad: '2' }]);
+    expect(reportes.resumenDeVentas({ clase: 'hoy' }).anulacionesRemotas).toBe(0);
+  });
+
+  it('cuenta SOLO las autorizadas a distancia: una remota y una en persona dan 1', () => {
+    anular(venderUna(HOY_TARDE), 'remoto', HOY_TARDE);
+    anular(venderUna(HOY_TARDE), 'presencial', HOY_TARDE);
+
+    expect(reportes.resumenDeVentas({ clase: 'hoy' }).anulacionesRemotas).toBe(1);
+  });
+
+  it('una anulación remota de AYER no cuenta hoy, y sí cuenta al pedir ayer', () => {
+    anular(venderUna(AYER), 'remoto', AYER);
+    anular(venderUna(HOY_TARDE), 'remoto', HOY_TARDE);
+    anular(venderUna(HOY_TARDE), 'remoto', HOY_TARDE);
+
+    expect(reportes.resumenDeVentas({ clase: 'hoy' }).anulacionesRemotas).toBe(2);
+    expect(reportes.resumenDeVentas({ clase: 'ayer' }).anulacionesRemotas).toBe(1);
+  });
+
+  it('EL DÍA ES EL DE GUATEMALA: las 23:30 del 11 cuentan en el 11, y las 00:30 del 12 no', () => {
+    // 23:30 de Guatemala del 11 son las 05:30 UTC del 12: sin convertir la
+    // zona, esta anulación se contaría al día siguiente.
+    const lasOnceYMedia = Date.parse('2026-09-12T05:30:00.000Z');
+    // 00:30 de Guatemala del 12 son las 06:30 UTC del 12: ya es otro día.
+    const lasDoceYMedia = Date.parse('2026-09-12T06:30:00.000Z');
+    anular(venderUna(HOY_TARDE), 'remoto', lasOnceYMedia);
+    anular(venderUna(HOY_TARDE), 'remoto', lasDoceYMedia);
+
+    expect(reportes.resumenDeVentas({ clase: 'hoy' }).anulacionesRemotas).toBe(1);
+    reloj = lasDoceYMedia;
+    expect(reportes.resumenDeVentas({ clase: 'hoy' }).anulacionesRemotas).toBe(1);
+    expect(reportes.resumenDeVentas({ clase: 'ayer' }).anulacionesRemotas).toBe(1);
+  });
+
+  it('cuenta por la fecha de la ANULACIÓN, no por la de la venta', () => {
+    // Una venta de ayer, anulada hoy: el turno pudo cruzar la medianoche con la
+    // caja abierta. La venta no entra en ningún total (está anulada), y la
+    // anulación cuenta el día en que se autorizó.
+    anular(venderUna(AYER), 'remoto', HOY_TARDE);
+
+    expect(reportes.resumenDeVentas({ clase: 'hoy' }).anulacionesRemotas).toBe(1);
+    expect(reportes.resumenDeVentas({ clase: 'ayer' }).anulacionesRemotas).toBe(0);
+    expect(reportes.resumenDeVentas({ clase: 'ayer' }).cantidadDeVentas).toBe(0);
   });
 });

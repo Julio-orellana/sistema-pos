@@ -309,6 +309,7 @@ function dependenciasSobre(
       ventaDetalle: repos.ventaDetalle,
       productos: repos.productos,
       categorias: repos.categorias,
+      anulaciones: repos.anulacionesDeVenta,
     }),
     limitesDeDescuento: new ServicioDeLimitesDeDescuento({
       base,

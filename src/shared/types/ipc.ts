@@ -1834,6 +1834,11 @@ export interface ResumenDeVentasIpc {
   /** Cuánto se dejó de cobrar. Es referencia, NO parte del total vendido. */
   readonly totalDeDescuentos: string;
   readonly ventasConDescuento: number;
+  /**
+   * Cuántas anulaciones se autorizaron a distancia, con el código de la app,
+   * con fecha en el período (spec 003). Se muestra aunque no haya ventas.
+   */
+  readonly anulacionesRemotas: number;
 }
 
 /** Una fila del reporte de ventas por producto. */

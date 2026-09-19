@@ -566,6 +566,7 @@ app.whenReady().then(
       ventaDetalle: repositorios.ventaDetalle,
       productos: repositorios.productos,
       categorias: repositorios.categorias,
+      anulaciones: repositorios.anulacionesDeVenta,
     });
 
     // Los topes de descuento, ya configurables desde la aplicación y no solo

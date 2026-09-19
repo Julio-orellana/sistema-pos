@@ -275,6 +275,20 @@ function Resumen({ datos }: { readonly datos: ResumenDeVentasIpc }): React.JSX.E
           </p>
         </>
       )}
+
+      {/*
+        FUERA de la condición de arriba, a propósito (spec 003, CA-18): si la
+        única venta del período se anuló a distancia, no hay ventas completadas,
+        y ese es justo el caso que este renglón tiene que mostrar. Es lo que
+        queda para revisar el fraude que la autorización a distancia ya no
+        impide.
+      */}
+      <div className="dato reporte__referencia">
+        <span className="dato__etiqueta">Anulaciones autorizadas a distancia</span>
+        <span className="dato__valor" data-prueba="resumen-anulaciones-remotas">
+          {datos.anulacionesRemotas}
+        </span>
+      </div>
     </section>
   );
 }

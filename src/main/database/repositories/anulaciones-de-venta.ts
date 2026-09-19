@@ -80,4 +80,22 @@ export class RepositorioDeAnulacionesDeVenta extends RepositorioBase {
       .get(ventaId) as FilaAnulacionDeVenta | undefined;
     return fila === undefined ? null : aEntidad(fila);
   }
+
+  /**
+   * Cuántas anulaciones se autorizaron A DISTANCIA con fecha dentro del rango
+   * (spec 003, CA-18). Es lo único que queda para revisar después el fraude
+   * que la autorización a distancia ya no impide.
+   *
+   * Cuenta por la fecha de la ANULACIÓN, no por la de la venta. Contar en SQL
+   * está bien: es un entero, y §4.15 solo prohíbe agregar columnas decimales.
+   */
+  public contarRemotasEnRango(desdeIso: string, hastaIso: string): number {
+    const fila = this.base
+      .prepare(
+        `SELECT count(*) AS n FROM anulaciones_de_venta
+          WHERE autorizada_via = 'remoto' AND fecha >= ? AND fecha <= ?`,
+      )
+      .get(desdeIso, hastaIso) as { readonly n: number };
+    return fila.n;
+  }
 }
