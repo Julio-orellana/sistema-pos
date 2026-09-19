@@ -20,7 +20,20 @@
  *   7. Con la de tarjeta, un voucher equivocado se rechaza **sin llegar al
  *      teclado del PIN** y sin tocar el candado ni la base.
  *   8. Con el voucher correcto sí se anula.
- *   9. Cerrada la caja, ningún recibo ofrece «Anular» y el canal se niega.
+ *   9. A DISTANCIA (spec 003): Jimmy se inscribió al principio con la app de
+ *      autenticación. Se anula otra venta tecleando el CÓDIGO de seis dígitos,
+ *      calculado por el arnés con su propio TOTP (`totp-de-arnes.cjs`): un
+ *      código equivocado cuenta como intento y no anula; el correcto anula y la
+ *      confirmación dice «A distancia»; y el MISMO código, usado otra vez en una
+ *      quinta venta, se rechaza.
+ *  10. Cerrada la caja, ningún recibo ofrece «Anular» y el canal se niega.
+ *  11. La base, leída con otra conexión.
+ *  12. El resumen de ventas, en la pantalla de Reportes, cuenta UNA anulación
+ *      autorizada a distancia (las dos presenciales no cuentan).
+ *
+ * TODO A 1024×768 EXACTOS, la pantalla de la tienda, fijados por CDP antes de
+ * cada medición y de cada captura. En los pasos del teclado y de la
+ * confirmación se comprueba además que cada control entra ENTERO en la ventana.
  *
  * Al final lee la base con otra conexión y guarda capturas.
  *
@@ -33,6 +46,8 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
 const { textoDelPdf } = require('./texto-de-pdf.cjs');
+const { codigoTotp } = require('./totp-de-arnes.cjs');
+const { terminarAplicacion } = require('./terminar-aplicacion.cjs');
 
 const { _electron: electron } = require('playwright-core');
 const DatabaseConstructor = require('better-sqlite3');
@@ -45,8 +60,12 @@ const PIN_MALO = '0000';
 const VOUCHER = 'B-7741';
 const VOUCHER_EQUIVOCADO = 'B-9999';
 const MOTIVO = 'el cliente devolvió el producto';
+const MOTIVO_A_DISTANCIA = 'Jimmy autorizó por teléfono: el cliente devolvió el saco';
 const ESPERA_LARGA = 25000;
 const ESPERA_CORTA = 10000;
+/** La pantalla de la tienda (§4.62). */
+const ANCHO = 1024;
+const ALTO = 768;
 
 const comprobaciones = [];
 
@@ -74,21 +93,73 @@ async function main() {
     args: [PROYECTO, `--user-data-dir=${datos}`],
     cwd: PROYECTO,
   });
-  await app.evaluate(async ({ BrowserWindow }) => {
-    const [ventana] = BrowserWindow.getAllWindows();
-    if (ventana) {
-      ventana.setFullScreen(false);
-      ventana.setSize(1100, 900);
-    }
-  });
+  // El proceso se guarda AHORA, con la aplicación viva: después de que se
+  // cierre, `app.process()` lanza (§6.2, punto 49; ver terminar-aplicacion.cjs).
+  const procesoDeLaAplicacion = app.process();
   const ventana = await app.firstWindow();
   await ventana.waitForLoadState('domcontentloaded');
+  const cdp = await ventana.context().newCDPSession(ventana);
+
+  const espera = (ms) =>
+    new Promise((r) => {
+      setTimeout(r, ms);
+    });
+  /**
+   * La ventana a 1024×768 EXACTOS. Se vuelve a fijar antes de cada medición:
+   * una emulación puesta antes de que la ventana entre en pantalla completa se
+   * pierde (medido, §4.62). Si no mide lo pedido, el arnés no mide nada.
+   */
+  const fijarVentana = async () => {
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: ANCHO,
+      height: ALTO,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await espera(300);
+    const real = await ventana.evaluate(() => [innerWidth, innerHeight]);
+    if (real[0] !== ANCHO || real[1] !== ALTO) {
+      throw new Error(`la ventana mide ${real.join('×')} y se pidió ${String(ANCHO)}×${String(ALTO)}: no se mide`);
+    }
+    return real;
+  };
 
   const prueba = (nombre) => ventana.locator(`[data-prueba="${nombre}"]`);
+  /**
+   * ¿El control entra ENTERO en la ventana de 1024×768? Primero se lo lleva a
+   * la vista, como haría el dedo desplazando; después se mide su caja. Un
+   * control recortado a la derecha —el defecto de COBRAR, §4.62— no se arregla
+   * desplazando, y esto lo atrapa.
+   */
+  const fueraDeLaVentana = async (localizador) => {
+    await localizador.scrollIntoViewIfNeeded();
+    const caja = await localizador.boundingBox();
+    if (caja === null) {
+      return 'no se ve';
+    }
+    const dentro =
+      caja.x >= 0 && caja.y >= 0 && caja.x + caja.width <= ANCHO + 0.5 && caja.y + caja.height <= ALTO + 0.5;
+    return dentro
+      ? null
+      : `x ${Math.round(caja.x)}–${Math.round(caja.x + caja.width)}, y ${Math.round(caja.y)}–${Math.round(caja.y + caja.height)}`;
+  };
+  /** Revisa todos los controles con ese `data-prueba` (o prefijo) dentro del diálogo. */
+  const controlesFuera = async (selector) => {
+    const todos = ventana.locator(`[data-prueba="modal-de-anulacion"] ${selector}`);
+    const cuantos = await todos.count();
+    const fuera = [];
+    for (let i = 0; i < cuantos; i++) {
+      const uno = todos.nth(i);
+      const motivo = await fueraDeLaVentana(uno);
+      if (motivo !== null) {
+        fuera.push(`${String(await uno.getAttribute('data-prueba'))}: ${motivo}`);
+      }
+    }
+    return { cuantos, fuera };
+  };
   const capturar = async (nombre) => {
-    await new Promise((r) => {
-      setTimeout(r, 600);
-    });
+    await fijarVentana();
+    await espera(300);
     const ruta = join(capturas, `${nombre}.png`);
     await ventana.screenshot({ path: ruta, fullPage: true });
     anotar(`captura: ${ruta}`);
@@ -161,6 +232,33 @@ async function main() {
     await teclearPin(PIN_JIMMY);
     await teclearPin(PIN_JIMMY);
     await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
+    const medida = await fijarVentana();
+    anotar(`ventana fijada por CDP: ${medida.join('×')}`);
+
+    /*
+      JIMMY SE INSCRIBE CON LA APP DE AUTENTICACIÓN, por la pantalla, como lo
+      haría en la tienda. El arnés hace de teléfono: lee el secreto en texto y
+      calcula el código con su propio TOTP, escrito aparte del de la aplicación.
+    */
+    await prueba('ir-a-autorizacion-remota').click();
+    await prueba('qr-de-inscripcion').waitFor({ timeout: ESPERA_CORTA });
+    const secreto = ((await prueba('secreto-de-inscripcion').textContent()) ?? '').replace(/\s/g, '');
+    const pasoDeLaInscripcion = Math.floor(Date.now() / 30000);
+    await teclearPin(codigoTotp(secreto, Date.now()));
+    await prueba('autorizacion-remota-guardada').waitFor({ timeout: ESPERA_CORTA });
+    const [jimmy] = leerBase(
+      'SELECT id, typeof(totp_secreto_cifrado) AS tipo FROM usuarios WHERE nombre = ?',
+      'Jimmy',
+    );
+    anotar(`Jimmy inscripto: id ${String(jimmy?.id)}, secreto guardado como ${String(jimmy?.tipo)} (el secreto no se imprime)`);
+    comprobar(
+      'JIMMY QUEDÓ INSCRIPTO con la app: la pantalla lo confirma y el secreto está cifrado en la base',
+      'confirmación visible y totp_secreto_cifrado = blob',
+      `tipo=${String(jimmy?.tipo)}`,
+      jimmy?.tipo === 'blob',
+    );
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
 
     const armado = await pos(
       async (p) => {
@@ -230,9 +328,32 @@ async function main() {
           }),
           'cobrar la que sigue en pie',
         );
+        // Spec 003: una venta que se anula A DISTANCIA, con el código de la app,
+        // y otra en la que se intenta reusar ese mismo código. Esa quinta NO se
+        // anula: queda en pie, como la tercera.
+        const paraDistancia = exigir(
+          await window.pos.venta.cobrar({
+            lineas: [{ productoId: maiz.id, cantidad: '1' }],
+            descuento: null,
+            formaPago: 'efectivo',
+            numBoleta: null,
+          }),
+          'cobrar la que se anula a distancia',
+        );
+        const paraReuso = exigir(
+          await window.pos.venta.cobrar({
+            lineas: [{ productoId: maiz.id, cantidad: '1' }],
+            descuento: null,
+            formaPago: 'efectivo',
+            numBoleta: null,
+          }),
+          'cobrar la del código reusado',
+        );
         // El número de recibo viaja DENTRO de la venta, en `recibo`: el cajero
         // tiene que verlo en el mismo aviso del cobro.
         return {
+          paraDistancia: { ventaId: paraDistancia.ventaId, recibo: paraDistancia.recibo.numeroRecibo },
+          paraReuso: { ventaId: paraReuso.ventaId, recibo: paraReuso.recibo.numeroRecibo },
           maiz: maiz.id,
           enEfectivo: { ventaId: enEfectivo.ventaId, recibo: enEfectivo.recibo.numeroRecibo },
           conTarjeta: { ventaId: conTarjeta.ventaId, recibo: conTarjeta.recibo.numeroRecibo },
@@ -253,10 +374,10 @@ async function main() {
     // 2. Las dos ventas de la caja abierta ofrecen «Anular».
     // =======================================================================
     comprobar(
-      'las TRES ventas de la caja abierta ofrecen «Anular»',
-      '3 botones',
+      'las CINCO ventas de la caja abierta ofrecen «Anular»',
+      '5 botones',
       `${String(await prueba('recibo-anular').count())} botones`,
-      (await prueba('recibo-anular').count()) === 3,
+      (await prueba('recibo-anular').count()) === 5,
     );
     comprobar(
       'ninguna fila está marcada como anulada todavía',
@@ -397,9 +518,11 @@ async function main() {
     );
     comprobar(
       'LA CONFIRMACIÓN muestra el inventario repuesto, con el saldo de antes y el de ahora',
-      '96.000 → 98.000 lb',
+      // 100 lb menos las cinco ventas (2 + 1 + 1 + 1 + 1) = 94; anular la
+      // primera devuelve sus 2 lb.
+      '94.000 → 96.000 lb',
       repuestos,
-      repuestos.includes('96.000') && repuestos.includes('98.000'),
+      repuestos.includes('94.000') && repuestos.includes('96.000'),
     );
     await capturar('3-confirmacion');
 
@@ -578,21 +701,213 @@ async function main() {
     await prueba('modal-de-anulacion').waitFor({ state: 'detached', timeout: ESPERA_CORTA });
 
     // =======================================================================
-    // 9. Con la caja cerrada, ya no se ofrece anular, y el canal se niega.
+    // 9. A DISTANCIA (spec 003): el código de la app de Jimmy.
+    // =======================================================================
+    await filaDelRecibo(armado.paraDistancia.recibo).locator('[data-prueba="recibo-anular"]').click();
+    await prueba('modal-de-anulacion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('anulacion-motivo').fill(MOTIVO_A_DISTANCIA);
+    await prueba('anulacion-continuar').click();
+    await prueba('anulacion-autorizar').click();
+    await prueba('anulacion-como-autorizar').waitFor({ timeout: ESPERA_CORTA });
+    await fijarVentana();
+
+    const comoAutorizar = ((await prueba('anulacion-como-autorizar').textContent()) ?? '').trim();
+    anotar(`texto del paso del PIN: ${JSON.stringify(comoAutorizar)}`);
+    comprobar(
+      'EL PASO DEL PIN nombra las DOS formas: el PIN en persona y el código de la app',
+      '«PIN en persona» y «código de seis dígitos de su aplicación»',
+      comoAutorizar,
+      comoAutorizar.includes('PIN en persona') &&
+        comoAutorizar.includes('código de seis dígitos de su aplicación'),
+    );
+    const tecladoFuera = await controlesFuera('[data-prueba^="tecla-"]');
+    const accionesFuera = await controlesFuera(
+      '[data-prueba="anulacion-volver"], [data-prueba="anulacion-cancelar"], [data-prueba="anulacion-como-autorizar"]',
+    );
+    comprobar(
+      'A 1024×768, TODAS las teclas y los botones del paso del PIN entran enteros en la ventana',
+      'ninguno fuera',
+      `${String(tecladoFuera.cuantos)} teclas y ${String(accionesFuera.cuantos)} controles; fuera: ${JSON.stringify([...tecladoFuera.fuera, ...accionesFuera.fuera])}`,
+      tecladoFuera.cuantos >= 11 && tecladoFuera.fuera.length === 0 && accionesFuera.fuera.length === 0,
+    );
+    await capturar('8-paso-del-pin-a-distancia');
+
+    // La inscripción CONSUMIÓ el código de su paso de 30 s: si todavía estamos
+    // en ese paso, se espera al siguiente, como esperaría Jimmy con el teléfono.
+    if (Math.floor(Date.now() / 30000) <= pasoDeLaInscripcion) {
+      const esperaMs = 30000 - (Date.now() % 30000) + 500;
+      anotar(`esperando ${String(esperaMs)} ms al siguiente paso de 30 s: el código de la inscripción ya se usó`);
+      await espera(esperaMs);
+    }
+    // Un código de seis dígitos que NO es el de ahora ni el de los pasos vecinos.
+    const codigosValidos = [-1, 0, 1].map((d) => codigoTotp(secreto, Date.now() + d * 30000));
+    let codigoEquivocado = '123456';
+    while (codigosValidos.includes(codigoEquivocado)) {
+      codigoEquivocado = String((Number(codigoEquivocado) + 111111) % 1000000).padStart(6, '0');
+    }
+    const candado = () =>
+      leerBase("SELECT intentos_fallidos AS n FROM bloqueos_de_autorizacion WHERE superficie = 'anulacion_de_venta'")[0]
+        ?.n ?? 0;
+    const rechazosAntes = leerBase(
+      "SELECT count(*) AS n FROM auditoria_log WHERE accion = 'anulacion_de_venta_rechazada'",
+    )[0].n;
+    const candadoAntes = candado();
+
+    // 9.a — Un código EQUIVOCADO de seis dígitos. Se teclea dígito por dígito
+    // mirando que cada tecla SIGA habilitada: un teclado que solo admite cuatro
+    // se apaga en el quinto, y eso tiene que fallar con su nombre, no por un
+    // clic que espera treinta segundos.
+    const teclasApagadas = [];
+    for (const [posicion, digito] of [...codigoEquivocado].entries()) {
+      if (!(await prueba(`tecla-${digito}`).isEnabled())) {
+        teclasApagadas.push(`dígito ${String(posicion + 1)} («${digito}»)`);
+        break;
+      }
+      await prueba(`tecla-${digito}`).click();
+    }
+    const confirmarHabilitado = teclasApagadas.length === 0 && (await prueba('tecla-confirmar').isEnabled());
+    comprobar(
+      'EL TECLADO DEJA TECLEAR LOS SEIS DÍGITOS del código de la app y confirmarlos',
+      'las seis teclas habilitadas y ✓ habilitado',
+      teclasApagadas.length === 0 ? `✓ habilitado: ${String(confirmarHabilitado)}` : `se apagó en el ${teclasApagadas.join(', ')}`,
+      confirmarHabilitado,
+    );
+    if (!confirmarHabilitado) {
+      throw new Error('el teclado de la anulación no admite el código de seis dígitos: no se puede seguir el camino a distancia');
+    }
+    await prueba('tecla-confirmar').click();
+    await prueba('anulacion-mensaje').waitFor({ timeout: ESPERA_CORTA });
+    const mensajeDelCodigoMalo = ((await prueba('anulacion-mensaje').textContent()) ?? '').trim();
+    const ultimoRechazo = leerBase(
+      "SELECT valor_nuevo FROM auditoria_log WHERE accion = 'anulacion_de_venta_rechazada' ORDER BY rowid DESC LIMIT 1",
+    )[0]?.valor_nuevo;
+    anotar(`código equivocado: mensaje=${JSON.stringify(mensajeDelCodigoMalo)} · asiento=${String(ultimoRechazo)} · candado ${String(candadoAntes)} → ${String(candado())}`);
+    comprobar(
+      'UN CÓDIGO EQUIVOCADO de seis dígitos lo dice, se queda en el teclado y NO anula',
+      'PIN incorrecto. · paso=pin · 0 anulaciones de esa venta',
+      `${mensajeDelCodigoMalo} · paso=${String(await prueba('modal-de-anulacion').getAttribute('data-paso'))} · ${String(leerBase('SELECT count(*) AS n FROM anulaciones_de_venta WHERE venta_id = ?', armado.paraDistancia.ventaId)[0].n)} anulaciones`,
+      mensajeDelCodigoMalo === 'PIN incorrecto.' &&
+        (await prueba('modal-de-anulacion').getAttribute('data-paso')) === 'pin' &&
+        leerBase('SELECT count(*) AS n FROM anulaciones_de_venta WHERE venta_id = ?', armado.paraDistancia.ventaId)[0].n === 0,
+    );
+    comprobar(
+      'y CUENTA como intento: deja su asiento con PIN_INCORRECTO, sin el código, y el candado sube uno',
+      `rechazos ${String(rechazosAntes)} → ${String(rechazosAntes + 1)}; candado ${String(candadoAntes)} → ${String(candadoAntes + 1)}; el asiento no lleva «${codigoEquivocado}»`,
+      `rechazos → ${String(leerBase("SELECT count(*) AS n FROM auditoria_log WHERE accion = 'anulacion_de_venta_rechazada'")[0].n)}; candado → ${String(candado())}; asiento: ${String(ultimoRechazo)}`,
+      leerBase("SELECT count(*) AS n FROM auditoria_log WHERE accion = 'anulacion_de_venta_rechazada'")[0].n === rechazosAntes + 1 &&
+        candado() === candadoAntes + 1 &&
+        String(ultimoRechazo).includes('PIN_INCORRECTO') &&
+        !String(ultimoRechazo).includes(codigoEquivocado),
+    );
+
+    // 9.b — El código CORRECTO de la app.
+    const codigoBueno = codigoTotp(secreto, Date.now());
+    await teclearPin(codigoBueno);
+    await prueba('anulacion-confirmacion').waitFor({ timeout: ESPERA_CORTA });
+    await fijarVentana();
+    const via = ((await prueba('anulacion-via').textContent()) ?? '').trim();
+    const confirmacionFuera = await controlesFuera(
+      '[data-prueba="anulacion-via"], [data-prueba="anulacion-hecha-total"], [data-prueba="anulacion-listo"]',
+    );
+    comprobar(
+      'EL CÓDIGO CORRECTO ANULA y la confirmación dice «A distancia»',
+      'A distancia',
+      via,
+      via === 'A distancia',
+    );
+    comprobar(
+      'A 1024×768 la confirmación entra entera: la vía, el total y «Listo»',
+      'ninguno fuera',
+      `${String(confirmacionFuera.cuantos)} controles; fuera: ${JSON.stringify(confirmacionFuera.fuera)}`,
+      confirmacionFuera.cuantos === 3 && confirmacionFuera.fuera.length === 0,
+    );
+    comprobar(
+      'el código no queda escrito en la pantalla',
+      `sin «${codigoBueno}» en el diálogo`,
+      ((await prueba('modal-de-anulacion').textContent()) ?? '').includes(codigoBueno) ? 'lo muestra (mal)' : 'no lo muestra',
+      !((await prueba('modal-de-anulacion').textContent()) ?? '').includes(codigoBueno),
+    );
+    await capturar('9-confirmacion-a-distancia');
+
+    const filaRemota = leerBase(
+      'SELECT autorizada_via, autorizada_por, solicitada_por, motivo FROM anulaciones_de_venta WHERE venta_id = ?',
+      armado.paraDistancia.ventaId,
+    );
+    const asientoRemoto = leerBase(
+      "SELECT usuario_id, valor_nuevo FROM auditoria_log WHERE accion = 'venta_anulada' AND entidad_id = ?",
+      armado.paraDistancia.ventaId,
+    );
+    anotar(`fila de la anulación a distancia: ${JSON.stringify(filaRemota)}`);
+    anotar(`asiento venta_anulada: ${JSON.stringify(asientoRemoto)}`);
+    comprobar(
+      'LA FILA dice autorizada_via = remoto y autorizada_por = Jimmy',
+      `remoto · ${String(jimmy?.id)}`,
+      `${String(filaRemota[0]?.autorizada_via)} · ${String(filaRemota[0]?.autorizada_por)}`,
+      filaRemota.length === 1 &&
+        filaRemota[0].autorizada_via === 'remoto' &&
+        filaRemota[0].autorizada_por === jimmy?.id,
+    );
+    comprobar(
+      'EL ASIENTO venta_anulada dice autorizadaVia «remoto» y no lleva el código',
+      '"autorizadaVia":"remoto", sin el código',
+      String(asientoRemoto[0]?.valor_nuevo),
+      asientoRemoto.length === 1 &&
+        String(asientoRemoto[0].valor_nuevo).includes('"autorizadaVia":"remoto"') &&
+        !String(asientoRemoto[0].valor_nuevo).includes(codigoBueno),
+    );
+    comprobar(
+      'el acierto libera el candado de la superficie',
+      '0 intentos',
+      `${String(candado())} intentos`,
+      candado() === 0,
+    );
+    await prueba('anulacion-listo').click();
+    await prueba('modal-de-anulacion').waitFor({ state: 'detached', timeout: ESPERA_CORTA });
+
+    // 9.c — El MISMO código, otra vez, en la quinta venta: sirve una sola vez.
+    const antesDelReuso = fotoDeLaBase();
+    await filaDelRecibo(armado.paraReuso.recibo).locator('[data-prueba="recibo-anular"]').click();
+    await prueba('modal-de-anulacion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('anulacion-motivo').fill(MOTIVO_A_DISTANCIA);
+    await prueba('anulacion-continuar').click();
+    await prueba('anulacion-autorizar').click();
+    await teclearPin(codigoBueno);
+    await prueba('anulacion-mensaje').waitFor({ timeout: ESPERA_CORTA });
+    const mensajeDelReuso = ((await prueba('anulacion-mensaje').textContent()) ?? '').trim();
+    const rechazoDelReuso = leerBase(
+      "SELECT valor_nuevo FROM auditoria_log WHERE accion = 'anulacion_de_venta_rechazada' ORDER BY rowid DESC LIMIT 1",
+    )[0]?.valor_nuevo;
+    anotar(`código reusado: mensaje=${JSON.stringify(mensajeDelReuso)} · asiento=${String(rechazoDelReuso)}`);
+    comprobar(
+      'EL MISMO CÓDIGO NO SIRVE DOS VECES: lo dice, no anula la quinta venta y deja su asiento CODIGO_YA_USADO',
+      '«…ya se usó…», 0 anulaciones de esa venta, asiento CODIGO_YA_USADO, candado 1',
+      `${mensajeDelReuso} · ${String(leerBase('SELECT count(*) AS n FROM anulaciones_de_venta WHERE venta_id = ?', armado.paraReuso.ventaId)[0].n)} anulaciones · candado ${String(candado())}`,
+      mensajeDelReuso.includes('ya se usó') &&
+        leerBase('SELECT count(*) AS n FROM anulaciones_de_venta WHERE venta_id = ?', armado.paraReuso.ventaId)[0].n === 0 &&
+        String(rechazoDelReuso).includes('CODIGO_YA_USADO') &&
+        candado() === 1,
+    );
+    anotar(`base antes del reuso: ${antesDelReuso} · después: ${fotoDeLaBase()}`);
+    await capturar('10-codigo-reusado');
+    await prueba('anulacion-cancelar').first().click();
+    await prueba('modal-de-anulacion').waitFor({ state: 'detached', timeout: ESPERA_CORTA });
+
+    // =======================================================================
+    // 10. Con la caja cerrada, ya no se ofrece anular, y el canal se niega.
     // =======================================================================
     const cierre = await pos(async () => {
       const exigir = (respuesta, paso) => {
         if (!respuesta.ok) throw new Error(`${paso}: ${respuesta.error.mensaje}`);
         return respuesta.datos;
       };
-      // Quedan los 500 del fondo más la venta en efectivo que NO se anuló
-      // (Q4.25): las dos anuladas salieron del esperado. Se cuenta exacto para
-      // que no haga falta autorizar nada.
-      return exigir(await window.pos.caja.cerrar({ modo: 'simple', monto: '504.25' }), 'cerrar caja');
+      // Quedan los 500 del fondo más las DOS ventas en efectivo que NO se
+      // anularon (Q4.25 cada una): las tres anuladas salieron del esperado. Se
+      // cuenta exacto para que no haga falta autorizar nada.
+      return exigir(await window.pos.caja.cerrar({ modo: 'simple', monto: '508.50' }), 'cerrar caja');
     });
     anotar(`cierre de la caja: ${JSON.stringify(cierre)}`);
     comprobar(
-      'la caja cierra CUADRADA con 504.25: las dos anulaciones salieron del esperado y la otra venta no',
+      'la caja cierra CUADRADA con 508.50: las tres anulaciones salieron del esperado y las otras dos ventas no',
       'cerrada=true',
       `cerrada=${String(cierre.cerrada)} codigo=${String(cierre.codigo)}`,
       cierre.cerrada === true,
@@ -641,7 +956,7 @@ async function main() {
     );
 
     // =======================================================================
-    // 10. La base, leída con otra conexión.
+    // 11. La base, leída con otra conexión.
     // =======================================================================
     const anulaciones = leerBase(
       'SELECT venta_id, autorizada_via, motivo FROM anulaciones_de_venta ORDER BY fecha',
@@ -653,39 +968,81 @@ async function main() {
     anotar(`ventas: ${JSON.stringify(ventas)}`);
 
     comprobar(
-      'quedaron las DOS anulaciones, las dos presenciales',
-      '2 filas, autorizada_via=presencial',
+      'quedaron TRES anulaciones: dos en persona y una a distancia, en ese orden',
+      '["presencial","presencial","remoto"]',
       JSON.stringify(anulaciones.map((fila) => fila.autorizada_via)),
-      anulaciones.length === 2 && anulaciones.every((fila) => fila.autorizada_via === 'presencial'),
+      JSON.stringify(anulaciones.map((fila) => fila.autorizada_via)) === '["presencial","presencial","remoto"]',
     );
     comprobar(
-      'el inventario y los contadores quedaron con SOLO la venta que sigue en pie',
-      '99.000 lb, 1 venta, 1.000 vendidas',
+      'el inventario y los contadores quedaron con SOLO las dos ventas que siguen en pie',
+      '98.000 lb, 2 ventas, 2.000 vendidas',
       JSON.stringify(inventario),
-      inventario[0]?.inventario_disponible === '99.000' &&
-        inventario[0]?.contador_ventas === 1 &&
-        inventario[0]?.cantidad_vendida === '1.000',
+      inventario[0]?.inventario_disponible === '98.000' &&
+        inventario[0]?.contador_ventas === 2 &&
+        inventario[0]?.cantidad_vendida === '2.000',
     );
     comprobar(
-      'las filas de `ventas` NO se tocaron: las TRES siguen diciendo «completada» (§1.1)',
-      'las tres completada',
+      'las filas de `ventas` NO se tocaron: las CINCO siguen diciendo «completada» (§1.1)',
+      'las cinco completada',
       JSON.stringify(ventas),
-      ventas.length === 3 && ventas.every((fila) => fila.estado === 'completada'),
+      ventas.length === 5 && ventas.every((fila) => fila.estado === 'completada'),
     );
+
+    // =======================================================================
+    // 12. El resumen de ventas cuenta la anulación a distancia (CA-18).
+    // =======================================================================
+    // Los reportes son de administrador: se vuelve a la sesión de Jimmy por el
+    // canal, y se entra a Reportes por la pantalla.
+    const idJimmy = jimmy?.id ?? '';
+    await pos(
+      async (p) => {
+        const cerrada = await window.pos.sesion.cerrar();
+        if (!cerrada.ok) throw new Error(cerrada.error.mensaje);
+        const ingreso = await window.pos.sesion.iniciar(p.id, p.pin);
+        if (!ingreso.ok || !ingreso.datos.autenticado) throw new Error('Jimmy no entró');
+      },
+      { id: idJimmy, pin: PIN_JIMMY },
+    );
+    await ventana.getByRole('button', { name: 'Volver' }).click();
+    await prueba('pantalla-de-sesion').waitFor({ timeout: ESPERA_CORTA });
+    await prueba('ir-a-reportes').click();
+    await prueba('reporte-resumen').waitFor({ timeout: ESPERA_CORTA });
+    await fijarVentana();
+    const contador = ((await prueba('resumen-anulaciones-remotas').textContent()) ?? '').trim();
+    const cantidadDeVentas = ((await prueba('resumen-cantidad').textContent()) ?? '').trim();
+    const totalDelResumen = ((await prueba('resumen-total').textContent()) ?? '').trim();
+    const contadorFuera = await fueraDeLaVentana(prueba('resumen-anulaciones-remotas'));
+    anotar(`resumen de hoy en pantalla: ventas=${cantidadDeVentas} total=${totalDelResumen} anulaciones a distancia=${contador}`);
+    comprobar(
+      'EL RESUMEN DE VENTAS cuenta UNA anulación autorizada a distancia; las dos en persona no cuentan',
+      '1',
+      contador,
+      contador === '1',
+    );
+    comprobar(
+      'y el resto del resumen excluye las tres anuladas: 2 ventas por Q8.50',
+      '2 · Q8.50',
+      `${cantidadDeVentas} · ${totalDelResumen}`,
+      cantidadDeVentas === '2' && totalDelResumen === 'Q8.50',
+    );
+    comprobar(
+      'a 1024×768 el renglón del contador entra entero en la ventana',
+      'dentro',
+      contadorFuera ?? 'dentro',
+      contadorFuera === null,
+    );
+    await capturar('12-resumen-con-el-contador');
   } catch (error) {
     // SE IMPRIME ACÁ Y NO AL FINAL, a propósito: la aplicación intercepta el
     // cierre para pedir el PIN (§4.5), así que `app.close()` puede demorar o
     // no volver, y el motivo del fallo se perdería. Primero se dice qué pasó.
     console.error(`ERROR EN EL ARNÉS: ${error instanceof Error ? error.message : String(error)}`);
-    await capturar('error');
+    await capturar('error').catch(() => undefined);
     comprobar('el arnés llegó al final sin errores', 'sin excepciones', String(error), false);
   } finally {
-    await Promise.race([
-      app.close().catch(() => undefined),
-      new Promise((resolver) => {
-        setTimeout(resolver, 15000);
-      }),
-    ]);
+    // No se usa `app.close()`: el kiosko intercepta el cierre para pedir el
+    // PIN (§4.5). Se termina el proceso guardado al lanzar (§6.2, punto 49).
+    terminarAplicacion(procesoDeLaAplicacion);
   }
 
   const fallidas = comprobaciones.filter((comprobacion) => !comprobacion.paso);
