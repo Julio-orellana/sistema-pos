@@ -38,6 +38,12 @@ declare global {
 }
 
 const PIN_CORRECTO = '2468';
+/**
+ * El código de seis dígitos que muestra la app de Jimmy (spec 003). Es el del
+ * vector de RFC 6238; acá da igual: el proceso principal de mentira lo compara
+ * como texto.
+ */
+const CODIGO_DE_LA_APP = '287082';
 const VOUCHER = '004512';
 const MOTIVO = 'el cliente devolvió el producto';
 
@@ -224,6 +230,19 @@ function instalarApi(): void {
               vistaPrevia: VISTA_PREVIA,
               segundosParaReintentar: null,
               anulacion: null,
+            },
+          });
+        }
+        if (pedido.pin === CODIGO_DE_LA_APP) {
+          return Promise.resolve({
+            ok: true,
+            datos: {
+              anulada: true,
+              codigo: 'ANULACION_CORRECTA',
+              mensaje: 'Venta anulada. Hay que devolverle Q8.50 al cliente.',
+              vistaPrevia: VISTA_PREVIA,
+              segundosParaReintentar: null,
+              anulacion: { ...ANULACION_HECHA, autorizadaVia: 'remoto' },
             },
           });
         }
@@ -752,5 +771,76 @@ describe('EL BOTÓN «ANULAR» CONVIVE CON EL FILTRO', () => {
     expect(pedidos.every((pedido) => pedido.ventaId === VENTA_CON_TARJETA)).toBe(true);
     // Al releer la lista, el filtro elegido se conserva: no vuelve a «todas».
     expect(filtrosPedidos.at(-1)).toBe('tarjeta');
+  });
+});
+
+// ===========================================================================
+describe('SPEC 003 — EL CÓDIGO DE LA APP AUTORIZA LA ANULACIÓN A DISTANCIA', () => {
+  /*
+    Hasta el 2026-09-19 el teclado de la anulación solo confirmaba cuatro
+    dígitos y el texto decía que el código remoto no servía para anular. Cambió
+    a pedido del cliente (spec 003): acepta los dos largos, como el cobro y el
+    cierre de caja, y la vía la decide el proceso principal por el largo.
+  */
+
+  /** Lleva el diálogo de la venta en efectivo hasta el teclado. */
+  async function hastaElTeclado(): Promise<void> {
+    await montar();
+    await abrirAnulacion(VENTA_EN_EFECTIVO);
+    await escribir('anulacion-motivo', MOTIVO);
+    await tocar(porPrueba('anulacion-continuar'));
+    await tocar(porPrueba('anulacion-autorizar'));
+  }
+
+  it('el paso del PIN nombra las DOS formas: el PIN en persona y el código de la app', async () => {
+    await hastaElTeclado();
+
+    const texto = porPrueba('anulacion-como-autorizar')?.textContent ?? '';
+    expect(texto).toContain('PIN en persona');
+    expect(texto).toContain('código de seis dígitos de su aplicación');
+    // Y ya no dice que el código remoto no sirve.
+    expect(porPrueba('modal-de-anulacion')?.textContent).not.toContain('no sirve para anular');
+  });
+
+  it('SEIS DÍGITOS se pueden confirmar, viajan tal cual y la confirmación dice «A distancia»', async () => {
+    await hastaElTeclado();
+    await teclearPin(CODIGO_DE_LA_APP);
+
+    expect(pedidos.filter((pedido) => pedido.pin !== null).map((pedido) => pedido.pin)).toEqual([
+      CODIGO_DE_LA_APP,
+    ]);
+    expect(porPrueba('modal-de-anulacion')?.dataset.paso).toBe('confirmacion');
+    expect(porPrueba('anulacion-via')?.textContent.trim()).toBe('A distancia');
+    // El código no queda escrito en la pantalla.
+    expect(porPrueba('modal-de-anulacion')?.textContent).not.toContain(CODIGO_DE_LA_APP);
+  });
+
+  it('CUATRO dígitos siguen confirmando, y la confirmación dice «En persona»', async () => {
+    await hastaElTeclado();
+    await teclearPin(PIN_CORRECTO);
+
+    expect(pedidos.filter((pedido) => pedido.pin !== null).map((pedido) => pedido.pin)).toEqual([
+      PIN_CORRECTO,
+    ]);
+    expect(porPrueba('anulacion-via')?.textContent.trim()).toBe('En persona');
+  });
+
+  it('CINCO dígitos NO se pueden confirmar: el botón queda apagado y no viaja nada', async () => {
+    await hastaElTeclado();
+    for (const digito of '28708') {
+      await tocar(porPrueba(`tecla-${digito}`));
+    }
+
+    expect((porPrueba('tecla-confirmar') as HTMLButtonElement).disabled).toBe(true);
+    expect(pedidos.every((pedido) => pedido.pin === null)).toBe(true);
+  });
+
+  it('el teclado no deja teclear un SÉPTIMO dígito', async () => {
+    await hastaElTeclado();
+    for (const digito of CODIGO_DE_LA_APP) {
+      await tocar(porPrueba(`tecla-${digito}`));
+    }
+
+    expect((porPrueba('tecla-1') as HTMLButtonElement).disabled).toBe(true);
   });
 });

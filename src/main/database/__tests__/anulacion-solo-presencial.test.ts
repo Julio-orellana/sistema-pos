@@ -14,6 +14,18 @@
  *     se NIEGA —revirtiéndose entera— sobre una que tenga una 'remoto'.
  *   · El espejo de la nube tiene el mismo nombre y la misma expresión, y no
  *     quita el CHECK de la columna.
+ *
+ * DESDE EL 2026-09-19 LA 040 DESHACE LA 038, a pedido del cliente (spec 003,
+ * CLAUDE.md §4.70): la anulación se puede autorizar a distancia y la base
+ * vuelve a aceptar 'remoto'. Este archivo NO se borra, porque la 038 es historia
+ * aplicada en toda base que exista:
+ *
+ *   · Las pruebas de lo que la 038 HACE migran hasta la 038 y no con todas las
+ *     migraciones. Siguen siendo ciertas para esa migración: una base en la 038
+ *     rechaza 'remoto'. Lo que pasa después de la 040 lo prueba
+ *     `anulacion-autorizacion-remota.test.ts`.
+ *   · La prueba de acoplamiento se queda como está y ahora exige que las dos
+ *     digan que SÍ. Su razón de ser no cambió: la base y la tabla cambian juntas.
  */
 
 import type { Database } from 'better-sqlite3';
@@ -68,6 +80,20 @@ function baseMigrada(): Database {
   return prueba.base;
 }
 
+/**
+ * Una base con las migraciones HASTA LA 038, sin la 040 que la deshace. Es donde
+ * se prueba lo que la 038 hace.
+ */
+function baseHastaLa038(): Database {
+  const nueva = crearBaseVacia();
+  limpiar = nueva.limpiar;
+  aplicarMigraciones(
+    nueva.base,
+    MIGRACIONES.filter((m) => m.orden <= 38),
+  );
+  return nueva.base;
+}
+
 /** Una base como la de una terminal instalada hoy: con la 037 y sin la 038. */
 function baseSinLa038(): Database {
   const nueva = crearBaseVacia();
@@ -91,14 +117,21 @@ function esquemaDeLaTabla(base: Database): string {
 }
 
 describe('LA MIGRACIÓN 038: la base solo acepta una anulación autorizada en persona', () => {
+  /*
+    HASTA EL 2026-09-19 estas cinco pruebas usaban `baseMigrada()`, es decir TODAS
+    las migraciones, y exigían que la base de HOY rechazara 'remoto'. Desde la 040
+    (spec 003) la base de hoy lo acepta, a pedido del cliente. Se conservan
+    migrando hasta la 038, que es lo que miden: qué hace esa migración, que sigue
+    aplicada en toda base que exista.
+  */
   it("ACEPTA la vía 'presencial'", () => {
-    const base = baseMigrada();
+    const base = baseHastaLa038();
     insertarAnulacion(base, 'presencial', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     expect(base.prepare('SELECT autorizada_via FROM anulaciones_de_venta').all()).toEqual([{ autorizada_via: 'presencial' }]);
   });
 
   it("RECHAZA la vía 'remoto', y el error nombra la restricción nueva", () => {
-    const base = baseMigrada();
+    const base = baseHastaLa038();
     expect(() => {
       insertarAnulacion(base, 'remoto', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
     }).toThrow(`CHECK constraint failed: ${RESTRICCION}`);
@@ -106,21 +139,21 @@ describe('LA MIGRACIÓN 038: la base solo acepta una anulación autorizada en pe
   });
 
   it('una vía que no es ninguna de las dos se sigue rechazando', () => {
-    const base = baseMigrada();
+    const base = baseHastaLa038();
     expect(() => {
       insertarAnulacion(base, 'telefono', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
     }).toThrow(/CHECK constraint failed/);
   });
 
   it('no puede dar NULL: una vía nula la rechaza el NOT NULL de la columna', () => {
-    const base = baseMigrada();
+    const base = baseHastaLa038();
     expect(() => {
       insertarAnulacion(base, null, 'dddddddd-dddd-4ddd-8ddd-dddddddddddd');
     }).toThrow(/NOT NULL constraint failed/);
   });
 
   it('el CHECK amplio de la columna SIGUE: los dos conviven en el esquema guardado', () => {
-    const esquema = esquemaDeLaTabla(baseMigrada());
+    const esquema = esquemaDeLaTabla(baseHastaLa038());
     expect(esquema).toContain("CHECK (autorizada_via IN ('presencial', 'remoto'))");
     expect(esquema).toContain(`CONSTRAINT ${RESTRICCION} CHECK (autorizada_via = 'presencial')`);
   });
@@ -148,8 +181,8 @@ describe('LA BASE Y ACEPTA_PIN_REMOTO DICEN LO MISMO sobre la anulación', () =>
     expect(
       laBaseLoAcepta,
       'ACEPTA_PIN_REMOTO.anulacion_de_venta y la restricción ' +
-        `${RESTRICCION} tienen que cambiar JUNTOS: ampliar la superficie exige una migración ` +
-        'que quite la restricción en la base local y en la nube (038/0038), y estrecharla, al revés.',
+        `${RESTRICCION} tienen que cambiar JUNTOS. La 038/0038 la pusieron y la 040/0040 la ` +
+        'quitan (spec 003): con la tabla en true, la base tiene que aceptar remoto, y al revés.',
     ).toBe(ACEPTA_PIN_REMOTO.anulacion_de_venta);
   });
 });

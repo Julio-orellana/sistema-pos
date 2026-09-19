@@ -78,7 +78,7 @@ import type {
  * | `salida_controlada` | **Sí**, desde el 2026-09-15 | Segunda decisión explícita. Ver abajo. |
  * | `cierre_de_caja_ajena` | **No** | Alcance mínimo. Además, quien cierra una caja ajena está parado frente a ella. |
  * | `saltar_lote_de_sincronizacion` | **No** | El hueco que deja es permanente: quien autoriza tiene que ver el error. |
- * | `anulacion_de_venta` | **No** | Por teléfono lo que se autoriza es un relato (docs/ANULACION-DE-VENTA.md §4.2). |
+ * | `anulacion_de_venta` | **Sí**, desde el 2026-09-19 | **Tercera decisión explícita, a pedido del cliente, y la primera que deshace una defensa de seguridad.** Hasta ese día: ~~No. Por teléfono lo que se autoriza es un relato (docs/ANULACION-DE-VENTA.md §4.2).~~ Ver abajo. |
  *
  * ## `descuento_excedente`: por qué cambió, y por qué eso no afloja la regla
  *
@@ -110,6 +110,36 @@ import type {
  * Contra eso juega que el monto que se autoriza queda registrado con su vía, su
  * autorizante y su asiento de auditoría, y que la alternativa real no era
  * «autorizarlo mirando» sino «no poder venderlo».
+ *
+ * ## `anulacion_de_venta`: la tercera ampliación, y la primera que deshace una defensa de seguridad
+ *
+ * Hasta el 2026-09-19 NO aceptaba el remoto, por una razón que **sigue siendo
+ * cierta** y se deja escrita entera: anular una venta afirma un hecho físico
+ * (que el cliente devolvió la mercadería y que el dinero salió del cajón) que un
+ * administrador a distancia no puede verificar. Por teléfono lo que se autoriza
+ * es un relato. Es además el fraude más común en un punto de venta: se cobra en
+ * efectivo, se anula y el dinero queda en el bolsillo de quien anuló. Y mueve
+ * más que un descuento: borra del corte el total entero de una venta ya cobrada
+ * y sube el inventario (docs/ANULACION-DE-VENTA.md §4.2).
+ *
+ * Esa razón se sostenía en TRES capas, y las tres cambian juntas: esta tabla, la
+ * migración 038 local y su espejo 0038 en la nube, que ponían en la base el CHECK
+ * `anulaciones_de_venta_solo_presencial`. La 040 y la 0040 lo quitan, y una
+ * prueba exige que la base y esta tabla sigan diciendo lo mismo
+ * (`anulacion-solo-presencial.test.ts`).
+ *
+ * **Jimmy pidió poder autorizar anulaciones a distancia, con el riesgo
+ * explicado, y Julio lo aprobó el 2026-09-19** (spec 003, CLAUDE.md §4.70). A
+ * diferencia del descuento y la salida, esto no amplía una superficie que nunca
+ * tuvo más que esta tabla: desarma una defensa puesta a propósito en tres capas.
+ * Lo que queda contra el fraude es lo que se REGISTRA: quién pidió, quién
+ * autorizó, por qué vía (en la fila y en el asiento `venta_anulada`), el
+ * motivo, cada intento fallido y un contador de anulaciones a distancia en el
+ * resumen de ventas. Con TOTP, el código dictado sirve una sola vez. Nada de eso
+ * lo IMPIDE: deja rastro para encontrarlo después.
+ *
+ * `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo:
+ * la ampliación no se hereda.
  */
 export const ACEPTA_PIN_REMOTO: Readonly<Record<SuperficieDeAutorizacion, boolean>> = {
   // Ampliada por decisión explícita de Julio el 2026-09-15 (ver arriba).
@@ -127,14 +157,22 @@ export const ACEPTA_PIN_REMOTO: Readonly<Record<SuperficieDeAutorizacion, boolea
   */
   saltar_lote_de_sincronizacion: false,
   /*
-    NO acepta el remoto (docs/ANULACION-DE-VENTA.md §4.2, decisión 2). Quien
-    autoriza tiene que ver que hay un cliente, que la mercadería volvió y que el
-    dinero salió del cajón: por teléfono lo que se autoriza es un relato. Y
-    mueve más que un descuento: borra del corte el total entero de una venta ya
-    cobrada y sube el inventario. Ampliarlo exigiría una decisión explícita,
-    como el descuento y la salida.
+    SÍ acepta el remoto desde el 2026-09-19, a pedido explícito del cliente e
+    informado del riesgo (spec 003, CLAUDE.md §4.70). Ver la cabecera.
+
+    HASTA ESE DÍA decía esto, y la razón sigue siendo cierta: «NO acepta el
+    remoto (docs/ANULACION-DE-VENTA.md §4.2, decisión 2). Quien autoriza tiene
+    que ver que hay un cliente, que la mercadería volvió y que el dinero salió
+    del cajón: por teléfono lo que se autoriza es un relato. Y mueve más que un
+    descuento: borra del corte el total entero de una venta ya cobrada y sube el
+    inventario. Ampliarlo exigiría una decisión explícita, como el descuento y la
+    salida.»
+
+    CAMBIA JUNTO CON LA BASE: la 040 (local) y la 0040 (nube) quitan la
+    restricción que la 038 y la 0038 pusieron. Con esto en `true` y sin la 040, la
+    anulación remota se revertiría entera al escribir su fila.
   */
-  anulacion_de_venta: false,
+  anulacion_de_venta: true,
 };
 
 /** Intentos fallidos permitidos antes del bloqueo. */

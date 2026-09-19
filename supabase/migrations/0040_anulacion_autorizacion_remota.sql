@@ -1,0 +1,50 @@
+-- ===========================================================================
+-- 0040_anulacion_autorizacion_remota.sql — Espejo de la 040 local: la anulación se puede autorizar a distancia.
+-- ===========================================================================
+--
+-- Quita la restricción `anulaciones_de_venta_solo_presencial` que agregó la 0038.
+-- Desde acá, la tabla de la nube acepta una anulación con
+-- `autorizada_via = 'remoto'`, la que produce una terminal cuya superficie
+-- `anulacion_de_venta` acepta el código de la app (`ACEPTA_PIN_REMOTO`).
+--
+-- REVIERTE UNA DECISIÓN DE SEGURIDAD DELIBERADA, a pedido explícito del cliente
+-- e informado del riesgo, aprobada por Julio el 2026-09-19 (spec 003, CLAUDE.md
+-- §4.70). La razón original sigue siendo cierta y está escrita en la cabecera de
+-- la 040 local: a distancia no se puede verificar que la mercadería volvió ni
+-- que el dinero salió del cajón.
+--
+-- EXIGE LA 0038: va sin `IF EXISTS`, así que falla si la restricción no está en
+-- vez de pasar callada. El `COMMENT ON CONSTRAINT` de la 0038 se va con ella.
+--
+-- ---------------------------------------------------------------------------
+-- POR QUÉ SE PUEDE APLICAR SIN ACTUALIZAR LA TIENDA ESE MISMO DÍA
+-- ---------------------------------------------------------------------------
+-- La sincronización se detiene cuando cambia la FORMA de lo que se sube (las
+-- columnas que revisa `exigir_claves_conocidas`) o la versión de contrato.
+-- Quitar un CHECK no cambia ninguna de las dos:
+--   · `contrato_de_sincronizacion()` (0035) declara tablas desde `pg_attribute`
+--     y funciones desde `pg_proc`; no lee restricciones. El contrato, su versión
+--     (1) y `esquema-nube.json` quedan iguales.
+--   · `sincronizar_anulacion_de_venta` (0035) no mira la vía. No se toca.
+--   · Es una relajación pura: toda fila que la nube aceptaba la sigue aceptando.
+--     Una terminal con una versión anterior solo produce 'presencial', así que
+--     para ella no cambia nada.
+-- Es lo contrario de la 0039, que agregó columnas y tenía que ir junto con la
+-- versión que las sube.
+--
+-- ---------------------------------------------------------------------------
+-- LA ÚNICA REGLA DE ORDEN
+-- ---------------------------------------------------------------------------
+-- Esta migración va en la nube ANTES de instalar en una tienda la versión que
+-- trae la 040 local. Al revés, la primera anulación autorizada a distancia se
+-- rechaza con 23514 y detiene la cola de esa tienda hasta aplicar esta
+-- migración y tocar «Reintentar ahora». No se pierde nada, pero la tienda deja
+-- de subir mientras tanto.
+--
+-- Se aplica con un pedido aparte de Julio, proyecto por proyecto. Toma un
+-- bloqueo exclusivo sobre `anulaciones_de_venta` mientras dura: es un cambio de
+-- catálogo que no reescribe la tabla ni recorre filas.
+-- ===========================================================================
+
+ALTER TABLE public.anulaciones_de_venta
+  DROP CONSTRAINT anulaciones_de_venta_solo_presencial;

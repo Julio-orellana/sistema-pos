@@ -12,10 +12,16 @@
  *      producto y la cantidad que vuelven al inventario, y los productos que
  *      hoy están desactivados. Es el patrón del descuento excedente: primero se
  *      muestra qué se autoriza, después se pide el PIN.
- *   3. PIN — de un administrador, siempre, también si quien pide ya es
- *      administrador. La superficie `anulacion_de_venta` **no acepta el código
- *      remoto**: el fraude que este control frena —cobrar, anular y quedarse
- *      con el dinero— es justo el que un teléfono no puede verificar (§4.2).
+ *   3. AUTORIZACIÓN — de un administrador, siempre, también si quien pide ya
+ *      es administrador: su PIN de cuatro dígitos en persona, o el código de
+ *      seis dígitos de su app dictado por teléfono. Qué fue lo decide el largo
+ *      en el proceso principal, y la vía queda en la fila y en el asiento.
+ *      **Acepta el código a distancia desde el 2026-09-19, a pedido del cliente
+ *      (spec 003, CLAUDE.md §4.70).** Hasta ese día este punto decía, y la
+ *      razón sigue siendo cierta: «La superficie `anulacion_de_venta` no acepta
+ *      el código remoto: el fraude que este control frena —cobrar, anular y
+ *      quedarse con el dinero— es justo el que un teléfono no puede verificar
+ *      (§4.2).»
  *   4. CONFIRMACIÓN — con los montos ya ajustados: cuánto dejó de contar la
  *      caja y cómo quedó el saldo de cada producto.
  *
@@ -43,6 +49,7 @@ import type {
   VistaPreviaDeAnulacionIpc,
 } from '@shared/types/ipc';
 import { formatearQuetzales } from '@shared/money';
+import { LARGOS_DE_AUTORIZACION } from '@shared/pin';
 import { CampoDeTexto } from './TecladoEnPantalla';
 import { TecladoNumerico } from './TecladoNumerico';
 import { llamarAlProcesoPrincipal } from './llamar-al-proceso-principal';
@@ -279,7 +286,7 @@ export function ModalDeAnulacion({
                   setPaso('pin');
                 }}
               >
-                Anular con PIN de administrador
+                Pedir la autorización de un administrador
               </button>
               <button
                 type="button"
@@ -295,9 +302,16 @@ export function ModalDeAnulacion({
 
         {paso === 'pin' && (
           <>
-            <p className="subtitulo">
-              Un administrador debe autorizar con su PIN, en persona. El código de autorización
-              remota no sirve para anular una venta.
+            {/*
+              Hasta el 2026-09-19 este texto decía «Un administrador debe
+              autorizar con su PIN, en persona. El código de autorización remota
+              no sirve para anular una venta.», y el teclado solo confirmaba
+              cuatro dígitos. Cambió a pedido del cliente (spec 003): la
+              redacción es la misma del cobro y del cierre de caja.
+            */}
+            <p className="subtitulo" data-prueba="anulacion-como-autorizar">
+              Un administrador debe autorizar la anulación con su PIN en persona, o dictando por
+              teléfono el código de seis dígitos de su aplicación.
             </p>
 
             <TecladoNumerico
@@ -307,6 +321,7 @@ export function ModalDeAnulacion({
                 pedir(pin);
               }}
               deshabilitado={trabajando}
+              largos={LARGOS_DE_AUTORIZACION}
             />
 
             <div className="modal__acciones">
@@ -344,7 +359,9 @@ export function ModalDeAnulacion({
                 {formatearQuetzales(anulacion.efectivoQueDejaDeContar)}
               </dd>
               <dt>Autorizó</dt>
-              <dd>{anulacion.autorizadaVia === 'presencial' ? 'En persona' : 'A distancia'}</dd>
+              <dd data-prueba="anulacion-via">
+                {anulacion.autorizadaVia === 'presencial' ? 'En persona' : 'A distancia'}
+              </dd>
               <dt>Motivo</dt>
               <dd>{anulacion.motivo}</dd>
             </dl>

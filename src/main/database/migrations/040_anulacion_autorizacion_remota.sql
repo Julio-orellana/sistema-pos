@@ -1,0 +1,47 @@
+-- ===========================================================================
+-- 040_anulacion_autorizacion_remota.sql — La base vuelve a aceptar una anulación autorizada a distancia
+-- ===========================================================================
+--
+-- Quita la restricción `anulaciones_de_venta_solo_presencial` que agregó la 038.
+-- Desde esta migración, una anulación puede guardar `autorizada_via = 'remoto'`:
+-- la superficie `anulacion_de_venta` acepta el código de seis dígitos de la app
+-- de autenticación (`ACEPTA_PIN_REMOTO` en `autenticacion.ts`).
+--
+-- REVIERTE UNA DECISIÓN DE SEGURIDAD DELIBERADA, A PEDIDO EXPLÍCITO DEL CLIENTE.
+-- Jimmy pidió poder autorizar anulaciones a distancia, Julio le explicó qué
+-- protección se pierde y lo pidió igual. Lo aprobó Julio el 2026-09-19
+-- (spec/features/003-anulacion-autorizacion-remota, CLAUDE.md §4.70).
+--
+-- LA RAZÓN ORIGINAL, QUE SIGUE SIENDO CIERTA, se deja escrita: anular una venta
+-- afirma un hecho físico —que el cliente devolvió la mercadería y que el dinero
+-- salió del cajón— que un administrador a distancia no puede verificar. Por
+-- teléfono lo que se autoriza es un relato, y cobrar, anular y quedarse con el
+-- dinero es el fraude más común en un punto de venta
+-- (docs/ANULACION-DE-VENTA.md §4.2). Lo que queda contra eso es lo que se
+-- registra: la vía queda en la fila y en el asiento `venta_anulada`.
+--
+-- LA 038 NO SE EDITA: está aplicada y el migrador guarda su checksum. Su
+-- cabecera queda como historia, y ya anticipaba esta vuelta atrás: «Volver a
+-- ampliar sería una migración con `DROP CONSTRAINT
+-- anulaciones_de_venta_solo_presencial`, medido en SQLite 3.53.4». Se volvió a
+-- medir el 2026-09-19, con el better-sqlite3 13.0.3 del proyecto: funciona dentro
+-- de una transacción, quita solo la restricción con nombre y deja el CHECK de la
+-- columna.
+--
+-- QUÉ QUEDA: el CHECK de la columna, de la 033, sigue aceptando solo
+-- 'presencial' o 'remoto', y `autorizada_via` sigue siendo NOT NULL.
+--
+-- NO TOCA NINGUNA FILA: quitar un CHECK no revisa ni cambia datos. Las
+-- anulaciones que ya existían dicen 'presencial' y lo siguen diciendo.
+--
+-- VA SIN `IF EXISTS`, A PROPÓSITO: si la restricción no estuviera, esta migración
+-- falla con «no such constraint» en vez de pasar callada. No debería faltar
+-- nunca: el migrador aplica en orden y la 038 va antes.
+--
+-- ESPEJO: `0040_anulacion_autorizacion_remota` en la nube, con la misma
+-- sentencia. La 0040 tiene que estar aplicada en la nube ANTES de instalar en
+-- una tienda la versión que trae esta migración (CLAUDE.md §4.70).
+-- ===========================================================================
+
+ALTER TABLE anulaciones_de_venta
+  DROP CONSTRAINT anulaciones_de_venta_solo_presencial;

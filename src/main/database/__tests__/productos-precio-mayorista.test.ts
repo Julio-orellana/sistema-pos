@@ -105,7 +105,17 @@ describe('CA-18 — La 039 sobre una base que ya tiene datos', () => {
     const base = baseSinLa039();
     sembrarProducto(base, ID_MAIZ, 'Maíz blanco', '6.00');
 
-    const resultado = aplicarMigraciones(base, MIGRACIONES);
+    /*
+      Se migra HASTA LA 039 y no con todas. Hasta el 2026-09-19 esta línea pasaba
+      `MIGRACIONES` entero, y era lo mismo porque la 039 era la última. Desde la
+      040 (spec 003) aplicaría también esa, y la prueba mediría otra cosa: lo que
+      importa acá es qué hace la 039 con estas filas. Es el mismo ajuste que la
+      spec 002 le hizo a la prueba de la 038 (su T5).
+    */
+    const resultado = aplicarMigraciones(
+      base,
+      MIGRACIONES.filter((m) => m.orden <= 39),
+    );
 
     expect(resultado.aplicadasAhora).toEqual(['039_productos_precio_mayorista']);
     expect(base.prepare('SELECT precio_base, precio_mayorista, cantidad_minima_mayorista FROM productos').get()).toEqual({

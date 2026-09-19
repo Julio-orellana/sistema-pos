@@ -49,6 +49,7 @@ import sqlTotpDeAutorizacionRemota from './migrations/036_totp_de_autorizacion_r
 import sqlQuitarPinRemotoHash from './migrations/037_quitar_pin_remoto_hash.sql?raw';
 import sqlAnulacionSoloPresencial from './migrations/038_anulacion_solo_presencial.sql?raw';
 import sqlProductosPrecioMayorista from './migrations/039_productos_precio_mayorista.sql?raw';
+import sqlAnulacionAutorizacionRemota from './migrations/040_anulacion_autorizacion_remota.sql?raw';
 
 /** Una migración del esquema. */
 export interface Migracion {
@@ -176,6 +177,15 @@ export const MIGRACIONES: readonly Migracion[] = [
     orden: 39,
     nombre: '039_productos_precio_mayorista',
     sql: sqlProductosPrecioMayorista,
+  },
+  // Espejo: `0040_anulacion_autorizacion_remota`, la misma sentencia. Deshace la
+  // 038 a pedido del cliente (spec 003). La 0040 va en la nube ANTES de instalar
+  // esta versión en una tienda: al revés, la primera anulación a distancia
+  // detendría la cola (CLAUDE.md §4.70).
+  {
+    orden: 40,
+    nombre: '040_anulacion_autorizacion_remota',
+    sql: sqlAnulacionAutorizacionRemota,
   },
 ];
 

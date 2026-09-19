@@ -26,7 +26,7 @@ import { LogTecnicoSilencioso, type LogTecnico, type OrigenTecnico } from '@main
 import { hayTransaccionDeNegocioEnCurso } from '@main/database/transaccion-en-curso';
 import { ServicioDeReportes } from '@main/domain/reportes/servicio-de-reportes';
 import { FlujoDeAnulacionDeVenta } from '@main/ipc/anulacion-de-venta';
-import type { PedidoDeAnulacionIpc, ResultadoDeAnulacionIpc } from '@shared/types/ipc';
+import { esquemaPedidoDeAnulacion, type PedidoDeAnulacionIpc, type ResultadoDeAnulacionIpc } from '@shared/types/ipc';
 import type {
   ComprobanteImprimible,
   EstadoImpresora,
@@ -955,21 +955,133 @@ describe('EL ASIENTO DEL CONFLICTO TIENE UNA SOLA FORMA: la venta y la anulació
 });
 
 // ===========================================================================
-describe('Autorización: superficie propia, sin PIN remoto, cada rechazo con su asiento', () => {
-  it('el CÓDIGO REMOTO (6 dígitos) se rechaza en esta superficie y no anula nada', async () => {
-    // Desde la migración 036 el remoto es un código TOTP de seis dígitos, así
-    // que en una superficie que no lo acepta ni siquiera es un PIN posible:
-    // FORMATO_INVALIDO, sin consumir intento (antes era un PIN de cuatro
-    // dígitos que no coincidía, PIN_INCORRECTO).
+/*
+  HASTA EL 2026-09-19 este bloque se llamaba «Autorización: superficie propia,
+  sin PIN remoto, cada rechazo con su asiento», y su primera prueba era «el
+  CÓDIGO REMOTO (6 dígitos) se rechaza en esta superficie y no anula nada».
+  Exigía FORMATO_INVALIDO, cero intentos y ninguna anulación, porque la anulación
+  de una venta no se autorizaba a distancia (docs/ANULACION-DE-VENTA.md §4.2): el
+  fraude de cobrar, anular y quedarse con el dinero es el que un teléfono no
+  puede verificar. Esa razón sigue siendo cierta.
+
+  CAMBIÓ A PEDIDO DEL CLIENTE (spec 003, CLAUDE.md §4.70): Jimmy pidió autorizar
+  a distancia con el riesgo explicado, y Julio lo aprobó. Ahora las pruebas
+  exigen lo contrario: el código de la app autoriza, y la vía queda escrita como
+  'remoto' en la fila y en el asiento, que es lo único que queda para revisar
+  después.
+*/
+describe('Autorización: superficie propia, PIN en persona o código de la app a distancia, cada rechazo con su asiento', () => {
+  /** Un código de seis dígitos que NO es el de la app en ningún paso aceptado (−1, 0, +1). */
+  function codigoEquivocadoDeJimmy(): string {
+    const ahora = Date.now();
+    const validos = new Set([-1, 0, 1].map((desvio) => codigoDeLaApp(SECRETO_DE_PRUEBA, ahora, desvio)));
+    for (let n = 0; ; n += 1) {
+      const candidato = String(n).padStart(6, '0');
+      if (!validos.has(candidato)) {
+        return candidato;
+      }
+    }
+  }
+
+  it('CA-1 — el CÓDIGO de la app (6 dígitos) AUTORIZA a distancia: la fila, el asiento y lo que vuelve a la ventana dicen «remoto»', async () => {
     const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
 
     const resultado = await pedir(ventaId, codigoRemotoDeJimmy());
 
-    expect(resultado.anulada).toBe(false);
-    expect(resultado.codigo).toBe('FORMATO_INVALIDO');
+    expect(resultado.anulada).toBe(true);
+    expect(resultado.anulacion?.autorizadaVia).toBe('remoto');
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toEqual(
+      expect.objectContaining({ ventaId, solicitadaPor: idAna, autorizadaPor: idJimmy, autorizadaVia: 'remoto' }),
+    );
+    const asiento = campos(asientos('venta_anulada')[0]?.valor_nuevo);
+    expect(asiento.autorizadaVia).toBe('remoto');
+    expect(asiento.autorizadaPor).toBe(idJimmy);
+    expect(inventarioDe(idMaiz)).toBe('100.000');
     expect(repos.bloqueosDeAutorizacion.obtener('anulacion_de_venta').intentosFallidos).toBe(0);
+  });
+
+  it('CA-2 — con TARJETA también, después del voucher correcto', async () => {
+    const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }], 'tarjeta');
+
+    const resultado = await pedir(ventaId, codigoRemotoDeJimmy(), { voucher: '004512' });
+
+    expect(resultado.anulada).toBe(true);
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)?.autorizadaVia).toBe('remoto');
+    expect(campos(asientos('venta_anulada')[0]?.valor_nuevo).autorizadaVia).toBe('remoto');
+  });
+
+  it('CA-4 — el pedido NO tiene ningún campo de vía: la vía sale de lo que se tecleó', () => {
+    expect(Object.keys(esquemaPedidoDeAnulacion.shape).sort()).toEqual(['motivo', 'pin', 'ventaId', 'voucher']);
+  });
+
+  it('CA-6 — un código de la app EQUIVOCADO cuenta como intento, deja su asiento con el código y no anula nada', async () => {
+    const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
+    const equivocado = codigoEquivocadoDeJimmy();
+
+    const resultado = await pedir(ventaId, equivocado);
+
+    expect(resultado.anulada).toBe(false);
+    expect(resultado.codigo).toBe('PIN_INCORRECTO');
+    expect(repos.bloqueosDeAutorizacion.obtener('anulacion_de_venta').intentosFallidos).toBe(1);
+    const [rechazo] = asientos('anulacion_de_venta_rechazada');
+    expect(JSON.parse(rechazo?.valor_nuevo ?? '{}')).toEqual({ ventaId, codigo: 'PIN_INCORRECTO' });
+    expect(rechazo?.valor_nuevo).not.toContain(equivocado);
     expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toBeNull();
     expect(inventarioDe(idMaiz)).toBe('98.000');
+  });
+
+  it('CA-6 — tres códigos equivocados bloquean la superficie 30 s, y bloqueada ni el código correcto anula', async () => {
+    const ventaId = vender([{ productoId: idMaiz, cantidad: '2' }]);
+    const equivocado = codigoEquivocadoDeJimmy();
+    await pedir(ventaId, equivocado);
+    await pedir(ventaId, equivocado);
+
+    const tercero = await pedir(ventaId, equivocado);
+
+    expect(tercero.codigo).toBe('AUTORIZACION_BLOQUEADA');
+    expect(tercero.segundosParaReintentar).toBe(30);
+    expect(asientos('anulacion_de_venta_rechazada').map((a) => campos(a.valor_nuevo).codigo)).toEqual([
+      'PIN_INCORRECTO',
+      'PIN_INCORRECTO',
+      'AUTORIZACION_BLOQUEADA',
+    ]);
+    expect((await pedir(ventaId, codigoRemotoDeJimmy())).anulada).toBe(false);
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(ventaId)).toBeNull();
+  });
+
+  it('CA-7 — un código ya usado NO autoriza otra anulación: sirve una sola vez', async () => {
+    const primera = vender([{ productoId: idMaiz, cantidad: '2' }]);
+    const segunda = vender([{ productoId: idFrijol, cantidad: '1' }]);
+    const codigo = codigoRemotoDeJimmy();
+
+    expect((await pedir(primera, codigo)).anulada).toBe(true);
+    const repetido = await pedir(segunda, codigo);
+
+    // `CODIGO_YA_USADO` es el código propio de la autenticación para esto, y
+    // CUENTA como intento: es un código bien formado que no autoriza (§4.47).
+    expect(repetido.anulada).toBe(false);
+    expect(repetido.codigo).toBe('CODIGO_YA_USADO');
+    expect(repos.bloqueosDeAutorizacion.obtener('anulacion_de_venta').intentosFallidos).toBe(1);
+    expect(asientos('anulacion_de_venta_rechazada').map((a) => campos(a.valor_nuevo).codigo)).toEqual(['CODIGO_YA_USADO']);
+    expect(repos.anulacionesDeVenta.obtenerPorVenta(segunda)).toBeNull();
+  });
+
+  it('CA-8 — con la caja de la venta CERRADA, un código correcto no consume nada: ni un intento ni el paso del código, que después sirve para otra venta', async () => {
+    const vieja = vender([{ productoId: idMaiz, cantidad: '2' }]);
+    caja.intentarCerrar(idCaja, { modo: 'simple', monto: '508.50' }, { usuarioQueCierra: idAna });
+    const codigo = codigoRemotoDeJimmy();
+
+    expect((await errorAlPedir(() => pedir(vieja, codigo))).codigo).toBe('CAJA_DE_LA_VENTA_CERRADA');
+    expect(repos.bloqueosDeAutorizacion.obtener('anulacion_de_venta').intentosFallidos).toBe(0);
+    expect(asientos('anulacion_de_venta_rechazada')).toEqual([]);
+
+    // El MISMO código, en otra caja abierta: si el primer pedido lo hubiera
+    // consumido, acá no autorizaría (CA-7).
+    caja.abrir(idAna, { modo: 'simple', monto: '500' });
+    const nueva = vender([{ productoId: idFrijol, cantidad: '1' }]);
+    const resultado = await pedir(nueva, codigo);
+    expect(resultado.anulada).toBe(true);
+    expect(resultado.anulacion?.autorizadaVia).toBe('remoto');
   });
 
   it('el PIN de un usuario de VENTA no autoriza, aunque sea el de quien pide', async () => {

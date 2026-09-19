@@ -886,7 +886,8 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     // remoto, por el mismo alcance mínimo que `cierre_de_caja_ajena`.
     //
     // Creció a seis con `anulacion_de_venta` (docs/ANULACION-DE-VENTA.md §4):
-    // tampoco acepta el remoto.
+    // tampoco acepta el remoto. (Desde el 2026-09-19 SÍ lo acepta, a pedido del
+    // cliente: spec 003. La lista de superficies no cambió.)
     expect(Object.keys(ACEPTA_PIN_REMOTO).sort()).toEqual([
       'anulacion_de_venta',
       'cierre_con_diferencia',
@@ -897,18 +898,26 @@ describe('QUÉ SUPERFICIE ACEPTA EL PIN REMOTO: una sola tabla decide', () => {
     ]);
   });
 
-  it('las TRES que lo aceptan: el cierre descuadrado, el descuento excedente y, desde el 2026-09-15, la salida controlada', () => {
+  /*
+    HASTA EL 2026-09-19 estas dos pruebas eran «las TRES que lo aceptan» y «las
+    TRES que NO lo aceptan», y la segunda exigía
+    `ACEPTA_PIN_REMOTO.anulacion_de_venta === false`, con este comentario:
+    «docs/ANULACION-DE-VENTA.md §4.2: el fraude que este PIN frena es el que un
+    teléfono no puede verificar». Esa razón sigue siendo cierta. Cambió porque
+    el cliente pidió autorizar anulaciones a distancia, con el riesgo explicado,
+    y Julio lo aprobó (spec 003, CLAUDE.md §4.70). Es la tercera ampliación, y
+    las dos que quedan en «no» siguen sin heredarla.
+  */
+  it('las CUATRO que lo aceptan: el cierre descuadrado, el descuento excedente, la salida controlada (2026-09-15) y la anulación de venta (2026-09-19)', () => {
     expect(ACEPTA_PIN_REMOTO.cierre_con_diferencia).toBe(true);
     expect(ACEPTA_PIN_REMOTO.descuento_excedente).toBe(true);
     expect(ACEPTA_PIN_REMOTO.salida_controlada).toBe(true);
+    expect(ACEPTA_PIN_REMOTO.anulacion_de_venta).toBe(true);
   });
 
-  it('las TRES que NO lo aceptan siguen sin aceptarlo: la ampliación no se hereda', () => {
+  it('las DOS que NO lo aceptan siguen sin aceptarlo: la ampliación no se hereda', () => {
     expect(ACEPTA_PIN_REMOTO.cierre_de_caja_ajena).toBe(false);
     expect(ACEPTA_PIN_REMOTO.saltar_lote_de_sincronizacion).toBe(false);
-    // docs/ANULACION-DE-VENTA.md §4.2: el fraude que este PIN frena es el que un
-    // teléfono no puede verificar.
-    expect(ACEPTA_PIN_REMOTO.anulacion_de_venta).toBe(false);
   });
 
   it('y el comportamiento real coincide con la tabla, superficie por superficie', () => {
