@@ -11409,6 +11409,24 @@ cobro sin esperar la impresora 7/7, historial de recibos 24/24, pantallas 1024
   distancia: la base local de esa versión tiene el CHECK de la 038 y rechazaría
   esas filas. Punto 61 de §6.2.
 
+### 4.71 Versión 1.3.2 (2026-09-19)
+
+**1.3.2 — la anulación de venta acepta autorización remota con código TOTP, a
+pedido explícito de Jimmy** (spec 003, §4.70). Trae también el contador de
+anulaciones autorizadas a distancia en el resumen de ventas.
+
+**Por ahora existe SOLO el instalador de PRUEBA**, incrustando
+`pos-pruebas-descartable`, para que Julio ensaye en su VM el procedimiento de
+despliegue antes de hacerlo en producción. **No hay build de producción, ni tag,
+ni release en GitHub**: vienen después del ensayo, por si el ensayo revela algo.
+
+**La licencia cambió solo en su línea `Versión:`** (1.3.1 → 1.3.2): el byte 119,
+de `1` a `2`, mismo largo (1901 bytes), BOM y 39 CRLF intactos. La huella
+aprobada pasa de `9a491cd0…450c93` a `0255f145…b23558`.
+
+**Antes de instalar la 1.3.2 en la tienda, la `0040` tiene que estar en
+`pos-jimmy-cano`** (§4.70, punto 60 de §6.2). Hoy está solo en el descartable.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
