@@ -11005,6 +11005,137 @@ aprobada pasa de `6bff38ea…33145e` a `9a491cd0…450c93`.
 de tareas muestren «POS Jimmy Cano». Lo medido es el `<title>` dentro del
 paquete y cómo lo toma Electron en macOS.
 
+### 4.69 La contraseña de la terminal del real, restablecida sin correo, y el dominio `.invalid` (2026-09-18)
+
+**Qué pasó.** La terminal de la tienda no lograba conectar con `pos-jimmy-cano`.
+Los logs de Auth del real muestran tres intentos del 19 a las 00:12:47, 00:15:18
+y 00:20:40 UTC (18:12 a 18:20 en Guatemala). Los tres son `POST
+/auth/v1/token?grant_type=password → 400 invalid_credentials`, vienen de la misma
+IP y del cliente `node`, que es la app. O sea que la app sí apunta al real. La
+cuenta `terminal-1@pos-jimmy-cano.invalid` tenía `last_sign_in_at = null`: no
+había iniciado sesión ni una vez desde que se creó, el 2026-09-14.
+
+**El correo NO era el problema, medido byte a byte** antes de tocar nada:
+
+```
+email en auth.users: terminal-1@pos-jimmy-cano.invalid · 33 caracteres · 33 bytes
+hex en la BD: 7465726d696e616c2d3140706f732d6a696d6d792d63616e6f2e696e76616c6964 = hex calculado aparte en Node
+filas que encuentra GoTrue (LOWER(email)): 1 · correo de la identidad: igual · aud authenticated · is_sso_user false
+deleted_at null · banned_until null · email_confirmed_at 2026-09-14 · factores MFA 0 · sesiones 0
+```
+
+**Inferencia:** se tecleaba otra contraseña. GoTrue no registra qué correo se
+tecleó. La terminal sí: está en la línea «Auth rechazó el ingreso de …» de su
+`log-tecnico.log` (§4.36).
+
+**Por qué el panel no pudo mandar la recuperación.** Hubo dos pedidos desde el
+panel, a las 00:21:48 y 00:21:58 UTC. Los dos dieron `POST /auth/v1/recover →
+400 email_address_invalid «Email address "terminal-1@pos-jimmy-cano.invalid" is
+invalid»`. La cuenta no se tocó: no quedó `recovery_sent_at` ni token de
+recuperación.
+
+**Cómo se restableció. NO fue con la API de administración**, aunque eso fue lo
+que pidió Julio: esta sesión no tiene la service_role. `.env.nube-real` no trae
+ninguna variable con ella, y el conector de Supabase no entrega llaves secretas.
+Se siguió el precedente de §4.21, un `UPDATE` de `auth.users` por el conector:
+
+- Toca solo `encrypted_password` y `updated_at`.
+- Filtra por el id, el correo exacto y `rol = terminal`.
+- El hash bcrypt `$2a$10$`, el formato que guarda GoTrue, se calculó en la Mac
+  con `htpasswd -B -C 10`. `htpasswd` escribe `$2y$`; para una contraseña ASCII
+  es el mismo hash que `$2a$`, y el bcrypt de Go ignora esa letra. **La
+  contraseña en claro no viajó en el SQL.**
+
+`RETURNING` devolvió 1 fila, y el md5 del hash guardado (`93442ec1…159df7`) es
+igual al del hash local. **La contraseña no está en este archivo; la tiene
+Julio.** `POS_NUBE_TERMINAL_CLAVE`, en `.env.nube-real`, quedó con la vieja (20
+caracteres) y no se tocó (punto 29).
+
+**Se probó con un ingreso real**, con la misma solicitud que hace la app
+(`auth-de-nube.ts:158-173`, el `fetch` de Node y la llave publicable del real):
+
+```
+00:53:56.090Z [control: contraseña equivocada] → HTTP 400 {"error_code":"invalid_credentials"}
+00:53:56.720Z [contraseña nueva]               → HTTP 200 {"token_type":"bearer","expires_in":900,"weak_password":null}
+   claims: app_metadata={"provider":"email","providers":["email"],"rol":"terminal"}, is_anonymous=false, exp-iat=900
+00:53:57.064Z POST /auth/v1/logout?scope=local → HTTP 204
+después: sesiones 0 · refresh tokens vivos 0 · usuarios del proyecto 3 · con rol terminal 1
+```
+
+`app_metadata` no cambió en ningún momento, y no se creó ningún usuario.
+
+#### El dominio `.invalid` bloquea el ENVÍO de correo, no el inicio de sesión
+
+Leído en el código de GoTrue `v2.197.0`, que es la versión que corre en el real
+(`/auth/v1/health`, 2026-09-19):
+
+| Qué | Dónde | Qué hace |
+|---|---|---|
+| La regla | `internal/mailer/validateclient/validateclient.go`, lista `invalidHostSuffixes` | Rechaza `.test`, `.example`, `.invalid` y `.localhost`, los de RFC 2606 §2, y además `.local`. No consulta DNS |
+| Cuándo corre | `emailValidatorMailClient.Mail` | Solo en el momento de MANDAR un correo |
+| El error | `internal/api/mail.go:926`, en `sendEmail` | Lo convierte en `email_address_invalid` |
+| Si está activa | `MAILER_EMAIL_VALIDATION_EXTENDED`, que en el código vale `false` por omisión | En el real está activa, y lo prueba el rechazo. La configuración de Supabase no se puede leer desde acá |
+| El inicio de sesión | `ResourceOwnerPasswordGrant` (`token.go`) y `RefreshTokenGrant` (`token_refresh.go`) | No llaman al mailer. Buscan la cuenta por `LOWER(email)`, `aud`, `instance_id` e `is_sso_user` |
+| Crear o cambiar un usuario como administrador | `validateEmail` (`mail.go`), que usa `admin.go` | Solo revisa el formato (`checkmail.ValidateFormat`) y el largo. `admin.go` no manda ningún correo |
+
+**Qué queda bloqueado para estas cuentas** es todo lo que manda correo:
+
+- recuperación de contraseña;
+- enlace mágico;
+- invitación;
+- confirmación de registro;
+- reautenticación;
+- cambio de correo;
+- los avisos de seguridad: contraseña cambiada, correo, teléfono, identidad y
+  factor MFA.
+
+Si falla el aviso de contraseña cambiada, la contraseña cambia igual:
+`user.go:231-234` solo deja una advertencia. Lo que hace la terminal (iniciar
+sesión, renovar el token y escribir por PostgREST y Storage) no manda ningún
+correo. Además está medido: el ingreso con `.invalid` dio 200 en el real (arriba),
+y el ingreso y la renovación funcionaron en el descartable (§4.23, §4.50–4.52).
+
+**No es nuevo.** La regla está en GoTrue desde el #1845 (2024-12-05, «add email
+validation function to lower bounce rates»), y `.invalid` está en la lista desde
+esa primera versión: más de un año y medio antes de que naciera este proyecto. En
+2025 se mudó a `validateclient` (#2148) y se endureció (#2304), sin tocar esa
+entrada. El proyecto no lo había visto nunca porque nunca les había mandado un
+correo a estas cuentas. Lo que no se puede saber desde acá es desde cuándo
+Supabase tiene activada la opción en el hosted.
+
+**Cuentas con el mismo límite**, leídas con `SELECT` el 2026-09-19:
+
+| Proyecto | Cuenta | Rol |
+|---|---|---|
+| `pos-jimmy-cano` | `terminal-1@pos-jimmy-cano.invalid` | `terminal` |
+| `pos-jimmy-cano` | `terminal@pos-jimmy-cano.invalid` | ninguno (la sobrante, punto 30) |
+| `pos-pruebas-descartable` | `terminal-pruebas@pos-pruebas.invalid` | `terminal` |
+| `pos-pruebas-descartable` | `restauracion-pruebas@pos-pruebas.invalid` | `restauracion` |
+| `pos-pruebas-descartable` | `sin-rol-pruebas@pos-pruebas.invalid` | ninguno |
+
+`julioes134@outlook.es`, la cuenta de restauración del real, es un correo de
+verdad: la recuperación sí le funciona.
+
+**Cómo se restablece la contraseña de una de estas cuentas.** Hay dos caminos, y
+ninguno pasa por el correo:
+
+1. La API de administración con la service_role: `PUT /auth/v1/admin/users/{id}`
+   con `{"password": …}`. No manda ningún aviso.
+2. Sin la service_role, el `UPDATE` de arriba, con el hash calculado afuera.
+
+Los dos terminan igual: un ingreso real de prueba, cerrado con
+`logout?scope=local`.
+
+**Recomendación, a decidir por Julio (punto 59 de §6.2): seguir usando `.invalid`
+en las cuentas de servicio nuevas.** Que nadie pueda recibir correo en esa
+dirección no es una falla: es lo que impide quedarse con la cuenta por correo.
+Con un dominio de verdad, quien controle ese buzón podría restablecer la
+contraseña de la terminal, y también quien registre el dominio el día que se
+venza. El costo es lo que pasó hoy: no hay recuperación desde el panel, y hace
+falta un administrador con uno de los dos caminos. Si se prefiere recuperación
+por correo, tiene que ser un buzón real que controle la tienda. `example.com`,
+`.test` y `.local` están bloqueados igual.
+
 ## 5. Registro de decisiones técnicas
 
 > Esta tabla es la **fuente de verdad** del proyecto: más confiable que
@@ -11359,6 +11490,7 @@ paquete y cómo lo toma Electron en macOS.
 | **La 0039 se aplica en `pos-pruebas-descartable` el 2026-09-18 y NO en `pos-jimmy-cano`.** | Aplicar las dos juntas | Aprobación de Julio para el descartable solamente; el real, con un pedido aparte el día que se instale la versión con la 039 (punto 57). El encabezado del archivo se ajustó antes de aplicar, para que el registro sea el archivo final (md5 `9cf8d81d…`). §4.66. | Spec 002 — 2026-09-18 |
 | **El release que sigue a la 1.2.0 es la 1.3.0, publicado como no-borrador en el repositorio PRIVADO; la licencia cambia solo en su línea «Versión:».** | Numerarlo 1.4.0, como decía el pedido; hacer público el repositorio | No había ninguna 1.3.0 y un hueco no significaría nada; el repositorio es privado y hacerlo público expondría todo el historial, no solo dos instaladores. Las dos cosas las decidió Julio. §4.67. | 2026-09-18 |
 | **El título de la ventana es «POS Jimmy Cano», y `verify:paquete` lo lee del asar y detiene el empaquetado si no. NO se agregan `app.setName()` ni `app.setAppUserModelId()`, y no se tocan los accesos directos.** | `app.setName('POS Jimmy Cano')`, que era la causa supuesta; alinear el AppUserModelID del proceso con el de los accesos directos; fijar `title` en la ventana | En la tienda, el Administrador de tareas mostraba «POS Agrícola», y salía del `<title>`. En el instalador, Electron ya usa `productName`: leído en el `.exe`, así que `setName` no cambiaba nada. En desarrollo, en cambio, movía la carpeta de datos (medido). El alcance lo fijó Julio: solo el título. §4.68. | 2026-09-18 |
+| **Si la sesión no tiene la service_role, la contraseña de una cuenta de servicio se restablece con un `UPDATE` de `encrypted_password` por el conector, con el hash bcrypt calculado en la Mac, y se prueba con un ingreso real cerrado con `logout?scope=local`.** | Pedirle a Julio la service_role por el chat; mandar la contraseña en claro dentro del SQL (`extensions.crypt`); crear un usuario nuevo | Julio estaba en la tienda sin poder conectar, y una llave que ignora RLS no tiene por qué pasar por la conversación. Con el hash hecho afuera, la contraseña no viaja en el SQL y no puede terminar en un log de Postgres. Un usuario nuevo sería una segunda terminal activa (§4.55). Precedente: §4.21. §4.69. | 2026-09-18 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -11408,7 +11540,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 26 | ~~**La licencia dice «Versión: 1.1.0» y el package.json dice 1.0.0.**~~ | ~~El instalador de verificación salió como `POS-Jimmy-Cano-Setup-1.0.0.exe` con una licencia de la 1.1.0.~~ | **RESUELTO (2026-09-15, Julio): `package.json` pasó a 1.1.0.** Una prueba exige ahora que la versión de la licencia sea la del `package.json`, así que cada release futuro obliga a actualizar el texto aprobado (§4.48). |
 | 27 | **¿Quién figura como titular en el copyright del instalador?** | Hoy «Julio Orellana (Vixo POS)» (§4.48). Poner solo «Vixo POS» depende de que la marca tenga una persona jurídica detrás o de cómo se inscriba ante el Registro de la Propiedad Intelectual. Es legal, no técnico. | Abierto — decisión de Julio |
 | 28 | ~~**El instalador de producción 1.1.0 no puede sincronizar con `pos-jimmy-cano` hasta aplicar la `0031` y la `0032` en el real.**~~ | Medido con `list_migrations`: el real terminaba en la 0029. La 1.1.0 sube columnas que el real no tenía y la cola se detenía en la primera venta (§4.49). **Aplicadas en el real el 2026-09-15, 20:59 UTC, con la aprobación de Julio; evidencia en §4.4.** Lo que sigue abierto: la anulación no tiene puerta en ninguna nube (§4.45), y la inscripción TOTP de Jimmy (punto 25). | Parcialmente resuelto — las migraciones ya no bloquean; la anulación y el punto 25 sí |
-| 29 | **`.env.nube-real` contiene las contraseñas de terminal y de restauración del real.** ~~Aunque su cabecera dice que no. Y su correo de terminal (`terminal@…`) no coincide con el de §4.38 (`terminal-1@…`).~~ | Está ignorado por git y no entró a ningún instalador (§4.49). **Corregido el 2026-09-15:** la cabecera dice qué guarda cada variable. `auth.users` se consultó con `SELECT`: el real tiene tres cuentas (`julioes134@outlook.es` con `restauracion`, `terminal-1@pos-jimmy-cano.invalid` con `terminal`, `terminal@pos-jimmy-cano.invalid` sin rol). La correcta es `terminal-1@` (confirmado por Julio); §4.38 estaba bien y el archivo guardaba la sobrante. El correo del archivo ya es `terminal-1@` y su clave la escribe Julio. Sigue abierto si esas contraseñas deben vivir en un archivo de la máquina de desarrollo. | Parcialmente resuelto — queda la decisión de Julio sobre el archivo |
+| 29 | **`.env.nube-real` contiene las contraseñas de terminal y de restauración del real.** ~~Aunque su cabecera dice que no. Y su correo de terminal (`terminal@…`) no coincide con el de §4.38 (`terminal-1@…`).~~ | Está ignorado por git y no entró a ningún instalador (§4.49). **Corregido el 2026-09-15:** la cabecera dice qué guarda cada variable. `auth.users` se consultó con `SELECT`: el real tiene tres cuentas (`julioes134@outlook.es` con `restauracion`, `terminal-1@pos-jimmy-cano.invalid` con `terminal`, `terminal@pos-jimmy-cano.invalid` sin rol). La correcta es `terminal-1@` (confirmado por Julio); §4.38 estaba bien y el archivo guardaba la sobrante. El correo del archivo ya es `terminal-1@` y su clave la escribe Julio. Sigue abierto si esas contraseñas deben vivir en un archivo de la máquina de desarrollo. **2026-09-18:** la contraseña de `terminal-1@` se restableció (§4.69). `POS_NUBE_TERMINAL_CLAVE` todavía tiene la anterior, de 20 caracteres, y no se tocó. | Parcialmente resuelto — queda la decisión de Julio sobre el archivo |
 | 30 | **`terminal@pos-jimmy-cano.invalid` es una cuenta de Auth sobrante en `pos-jimmy-cano`: confirmada, sin `app_metadata.rol`, de origen desconocido** (probablemente un intento anterior de crear la de terminal). | No tiene ningún permiso: las funciones de sincronización y las políticas exigen un rol, y la aplicación rechaza conectar la terminal con ella (§4.23). No es sensible por sí sola, pero no puede quedar sin documentar. **No se borró ni se modificó**, por decisión de Julio. | Abierto — decidir si se elimina o se reutiliza |
 | 31 | **¿Por qué la aplicación no mostró ninguna pantalla con la red de la tienda de Jimmy? LA CAUSA REAL NO ESTÁ MEDIDA.** | Lo que se sabe (§4.50): ninguna versión publicada espera una petición de red antes de mostrar la ventana, y todas las peticiones ya tenían límite. La hipótesis de una verificación de conexión sin límite no se sostiene en el código. Lo que sí encaja con el síntoma es una ventana que nunca recibe `ready-to-show` (en Windows queda escondida para siempre; leído, no medido), pero no se sabe qué de esa red lo provocaría. **Para saberlo:** instalar una versión con el origen `[arranque]` y traer `%APPDATA%\POS Jimmy Cano\log-tecnico.log` después de un arranque con la red de la tienda, más la versión que tenía instalada. Si falta «ventana creada», se trabó antes (base de datos, disco). Si está «ventana creada» y falta «interfaz terminó de cargar», es la interfaz. Si dice «SIN que avisara que estaba lista», el respaldo de 10 s la mostró. Si no existe el archivo, no se llegó ni a escribir en la carpeta de datos. | Abierto — **hace falta el log de la tienda** |
 | 32 | **Auth habla por el `fetch` de Node, no por `net.fetch`, aunque el comentario de `index.ts` (~línea 824) dice lo contrario.** | Los dos `ClienteDeAuthHttp` de `index.ts` (líneas 765 y 836) reciben `undefined`, así que usan el `fetch` global (undici), que no toma el proxy de Windows; PostgREST y Storage sí van por `net.fetch`. Si la red de una tienda exige proxy, la sesión con la nube no se renovaría nunca, sin colgarse: 20 s de límite, y undici además corta la conexión a unos 10 s (medido: «fetch failed» a +10.8 s contra una IP que descarta paquetes). Cambiarlo es pasar `net.fetch`, pero cambia la pila de red de un camino medido y hay que probarlo en Windows. | Abierto — decisión técnica de Julio |
@@ -11438,6 +11570,7 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 56 | ~~**Cambiar la unidad de un producto cambia lo que significa su cantidad mínima mayorista**~~ | ~~No se agregó ningún aviso.~~ | **RESUELTO EL 2026-09-18: se limpia solo**, en la misma edición, con `mayoristaQuitadoPor: 'cambio_de_unidad'` en el asiento. §4.66 |
 | 57 | **La 0039 se aplica en el MISMO momento en que se instala la versión que trae la 039.** | Medido en un Postgres 17 local (§4.66): una terminal con la 039 contra una nube sin la 0039 detiene su cola en el primer lote de productos, con `CONTRATO: el payload de public.productos trae columnas que la tabla no tiene`, y al revés también. Hoy ninguna de las dos nubes la tiene (leído el 2026-09-18) y el 1.2.0 de la tienda no trae la 039. Se aplica con la aprobación de Julio, proyecto por proyecto, y después de la decisión del punto 54. **Aplicada en `pos-pruebas-descartable` el 2026-09-18, 19:03 UTC (§4.66).** | Abierto — **falta `pos-jimmy-cano`**, con un pedido aparte, el día que se instale la versión con la 039 |
 | 58 | **A 1024×768, el renglón de detalle de una línea del ticket («50 lb · Q5.50 c/u») se parte en cuatro renglones.** | Visto en las capturas de `verify:pantallas:mayorista`. La columna del nombre es angosta al lado del subtotal. Es anterior a la spec 002, que no tocó ese renglón; se lee, pero se ve mal en la pantalla de la tienda. | Abierto — cosmético |
+| 59 | **¿Las cuentas de servicio nuevas siguen usando el dominio `.invalid`?** | Supabase no les manda ningún correo, así que no tienen recuperación desde el panel. Lo que no depende del correo es el inicio de sesión ni la renovación del token: leído en GoTrue v2.197.0 y medido (§4.69). La recomendación es seguir con `.invalid`, porque así nadie puede quedarse con la cuenta por correo. La alternativa es un buzón real que controle la tienda. | Abierto — decisión de Julio |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
 
