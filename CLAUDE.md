@@ -570,6 +570,21 @@ de §6.2. Esto se midió en macOS; Windows no.
 
 ### 4.4 Estado del proyecto en Supabase
 
+> **ESTADO AL 2026-09-19, leído del catálogo de los dos proyectos a las 14:21 UTC
+> (spec 003, §4.70):**
+>
+> | | `pos-jimmy-cano` | `pos-pruebas-descartable` |
+> |---|---|---|
+> | Migraciones | **30**, la última `20260919041539 0039_productos_precio_mayorista` | **31**, la última `20260919120622 0040_anulacion_autorizacion_remota` |
+> | CHECK `anulaciones_de_venta_solo_presencial` | **existe** | **no existe** (lo quitó la 0040) |
+> | Versión de contrato | 1 | 1 |
+>
+> **La 0039 del real la aplicó alguien fuera de esta sesión**, a las 04:15:39 UTC
+> del 2026-09-19, y hasta este bloque esta sección no lo decía. **La 0040 está
+> solo en el descartable**, aplicada por esta sesión con la aprobación de Julio;
+> en el real va con un pedido aparte, **antes** de instalar la versión que trae la
+> 040 local (§4.70).
+
 El esquema espejo **ya está aplicado** contra el proyecto real.
 
 | Dato | Valor |
@@ -578,8 +593,8 @@ El esquema espejo **ya está aplicado** contra el proyecto real.
 | Referencia | `zgsdaelmbxufgcsideep` |
 | Región | us-east-2 |
 | Postgres | 17 |
-| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos`<br>`0027_sincronizar_asiento`<br>`0028_limites_descuento_id_determinista`<br>`0029_restauracion_ventas_por_mes`<br>`0031_productos_precio_compra`<br>`0032_venta_detalle_costo_unitario_snap`<br>`0033_anulaciones_de_venta`<br>`0035_sincronizar_anulacion_de_venta`<br>`0038_anulacion_solo_presencial` |
-| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) **2026-09-12 (la `0023` y la `0024`)** y **2026-09-13 (la `0025` y la `0026`, con lo que la fase 2.c queda aplicada entera)** y **2026-09-14 (la `0027`, la `0028` y, después de la 030 local y en ese orden, la `0029`)** y **2026-09-15 (la `0031` y la `0032`)** y **2026-09-17, 21:51–21:54 UTC (la `0033`, la `0035` y la `0038`, aplicadas por Julio desde otra sesión; el registro de la `0038` se corrigió ese mismo día, ver abajo)** |
+| Migraciones aplicadas | `20260905143642_esquema_inicial`<br>`20260905171724_fijar_search_path_auditoria_log_es_inmutable`<br>`20260907002143_denominaciones_y_desglose`<br>`20260907002154_pin_remoto`<br>`20260907002212_autorizacion_de_diferencia`<br>`20260907002231_autorizacion_solo_con_diferencia`<br>`20260908121557_categorias_activo`<br>`20260910040514_una_caja_por_sistema`<br>`20260910040526_caja_cerrada_por`<br>`20260911113517_boleta_solo_con_tarjeta`<br>`20260911113531_cantidad_vendida`<br>`20260911145855_configuracion_negocio`<br>`20260911182553_descuento_autorizado_via`<br>`0019_recibido_en`<br>`0020_quitar_estado_sincronizacion`<br>`0021_quitar_hashes_de_pin`<br>`0022_fijar_search_path_auditoria`<br>`0023_funciones_de_sincronizacion`<br>`0024_privilegios_de_tabla`<br>`0025_politicas_de_restauracion`<br>`0026_storage_de_archivos`<br>`0027_sincronizar_asiento`<br>`0028_limites_descuento_id_determinista`<br>`0029_restauracion_ventas_por_mes`<br>`0031_productos_precio_compra`<br>`0032_venta_detalle_costo_unitario_snap`<br>`0033_anulaciones_de_venta`<br>`0035_sincronizar_anulacion_de_venta`<br>`0038_anulacion_solo_presencial`<br>`0039_productos_precio_mayorista` |
+| Aplicadas el | 2026-09-05 (las dos primeras), 2026-09-06 (las cuatro del corte de caja), 2026-09-08 (`categorias.activo`), 2026-09-09 (las dos de la caja única), 2026-09-11 (las dos del módulo de venta, la de `configuracion_negocio`, la de `descuento_autorizado_via` y las cuatro de la fase 2.a) **2026-09-12 (la `0023` y la `0024`)** y **2026-09-13 (la `0025` y la `0026`, con lo que la fase 2.c queda aplicada entera)** y **2026-09-14 (la `0027`, la `0028` y, después de la 030 local y en ese orden, la `0029`)** y **2026-09-15 (la `0031` y la `0032`)** y **2026-09-17, 21:51–21:54 UTC (la `0033`, la `0035` y la `0038`, aplicadas por Julio desde otra sesión; el registro de la `0038` se corrigió ese mismo día, ver abajo)** y **2026-09-19, 04:15:39 UTC (la `0039`, aplicada fuera de esta sesión; se leyó del catálogo ese mismo día a las 14:21 UTC, ver abajo)** |
 | Plan | gratuito |
 
 Estado verificado contra el catálogo del proyecto, no contra el script, el
@@ -1471,7 +1486,7 @@ validación que vive en la interfaz se salta llamando al canal directamente.
 | `descuento_excedente` | **Sí**, desde el 2026-09-11 | Decisión explícita de Julio. Ver §4.13. |
 | `salida_controlada` | **Sí**, desde el 2026-09-15 — **ampliada por decisión explícita el 2026-09-15** | Hasta ese día **No**, con esta razón, que no estaba equivocada: el PIN remoto se pidió para una sola cosa, autorizar diferencias de caja por teléfono, y dárselo además a cerrar la aplicación lo ampliaba más allá de lo pedido. Julio decidió ampliarlo: Jimmy tiene que poder autorizar que se apague el punto de venta al final del día cuando no hay ningún administrador en la tienda. **Se evaluó separar el PIN remoto por superficie y se decidió NO hacerlo** (Julio, 2026-09-15): cambiar el PIN remoto desde «PIN de autorización remota» ya es el control real si cambia a quién se le dicta, y un PIN por superficie duplicaría ese mecanismo. Ver §4.41. |
 | `cierre_de_caja_ajena` | **No** | Misma razón de alcance. Además, quien cierra una caja ajena está parado frente a ella. |
-| `anulacion_de_venta` | **No**, desde que existe (2026-09-15) | El fraude que este PIN frena —cobrar en efectivo, anular y quedarse con el dinero— es el que un teléfono no puede verificar. Ver `docs/ANULACION-DE-VENTA.md` §4.2 y §4.45. **Desde la 038/0038 (2026-09-17) la base también rechaza una anulación con vía `remoto`, y una prueba exige que esta fila y la base digan lo mismo** (§4.54). |
+| `anulacion_de_venta` | **Sí**, desde el 2026-09-19 — **tercera ampliación por decisión explícita, a pedido del cliente, y la primera que deshace una defensa de seguridad** | ~~**No**, desde que existe (2026-09-15). El fraude que este PIN frena —cobrar en efectivo, anular y quedarse con el dinero— es el que un teléfono no puede verificar. Ver `docs/ANULACION-DE-VENTA.md` §4.2 y §4.45. Desde la 038/0038 (2026-09-17) la base también rechaza una anulación con vía `remoto`, y una prueba exige que esta fila y la base digan lo mismo (§4.54).~~ Jimmy lo pidió informado del riesgo y Julio lo aprobó (spec 003). La 040/0040 quitan el CHECK de la 038/0038, y la prueba de acoplamiento ahora exige que las dos digan «sí». Lo que queda contra el fraude es lo que se registra: la vía y el contador de anulaciones a distancia del resumen. Ver §4.70. |
 
 **LA POLÍTICA VIVE EN LA TABLA, NO EN QUIEN LLAMA.** Antes era un parámetro
 (`aceptaPinRemoto`) que cada uno de los cuatro lugares de autorización escribía
@@ -7359,7 +7374,7 @@ solo el núcleo local, que se usa de punta a punta por el canal
 | Migración 033: `anulaciones_de_venta` y sus dos disparadores (§1.1) | **Hecho** |
 | Migración 034: superficie `anulacion_de_venta` (§4.1) | **Hecho** |
 | Servicio: los ocho pasos de §2.2, la unidad (§2.3) y el voucher (§3.3) antes del PIN | **Hecho** |
-| PIN: superficie propia, sin remoto, con `autorizarComoAdministrador` tal como estaba | **Hecho** |
+| PIN: superficie propia, ~~sin remoto,~~ con `autorizarComoAdministrador` tal como estaba | **Hecho**. *Desde el 2026-09-19 acepta también el código remoto (spec 003, §4.70).* |
 | Efectivo esperado y reportes: la anulada se excluye por su fila (§3.1, §1.3) | **Hecho** |
 | Los cuatro asientos de §6.1, con el contenido de §6.2 | **Hecho** |
 | Canal `venta:anular`, en la prueba de clonado de todos los canales (§4.42) | **Hecho** |
@@ -9001,6 +9016,11 @@ punto 40 de §6.2.**
 
 ### 4.54 La base rechaza una anulación autorizada a distancia (migraciones 038 / 0038, 2026-09-17)
 
+> **DESHECHO EL 2026-09-19 por la 040 / 0040, a pedido del cliente (spec 003,
+> §4.70).** Esta sección describe lo que hizo la 038, y se conserva como
+> historia: las dos migraciones siguen aplicadas y no se editan, y la 040/0040
+> quitan la restricción. La 0040 está en el descartable; en el real, todavía no.
+
 **Decisión de Julio.** La superficie `anulacion_de_venta` no acepta el código
 remoto, y desde estas migraciones la base tampoco acepta una fila que diga lo
 contrario. Revierte la fila de `docs/ANULACION-DE-VENTA.md` §1.1 que dejaba el
@@ -9471,8 +9491,10 @@ dice cuándo, quién y por qué— que con un control apagado.
    abrió la caja, el motivo escrito, y **qué producto y cuánto vuelven al
    inventario**, con los desactivados avisados. **No muestra el teórico de la
    caja** (§3.4).
-3. **PIN** — de un administrador, siempre. La superficie no acepta el código
-   remoto, y el teclado usa el largo de siempre: cuatro dígitos.
+3. **PIN** — de un administrador, siempre. ~~La superficie no acepta el código
+   remoto, y el teclado usa el largo de siempre: cuatro dígitos.~~ **Desde el
+   2026-09-19 (spec 003, §4.70):** el PIN en persona, o el código de seis dígitos
+   de la app dictado por teléfono; el teclado acepta los dos largos.
 4. **Confirmación** — con los montos ya ajustados: el total anulado, lo que deja
    de contar la caja y el saldo de cada producto, de antes y de ahora.
 
@@ -10926,6 +10948,10 @@ como no-borrador, pero solo los descarga quien tiene acceso al repositorio.
 117, de `2` a `3`, mismo largo (1901 bytes), BOM y 39 CRLF intactos. La huella
 aprobada pasa de `4935c4bc…f30a45` a `6bff38ea…33145e`.
 
+> **ACTUALIZADO EL 2026-09-19:** la 0039 está en `pos-jimmy-cano` desde las
+> 04:15:39 UTC de ese día, aplicada fuera de esta sesión (leído del catálogo,
+> §4.4). Lo que sigue describe el estado al publicar la 1.3.0.
+
 **El instalador de producción 1.3.0 NO sincroniza todavía contra
 `pos-jimmy-cano`.** Leído en solo lectura el 2026-09-18: el real tiene 29
 migraciones y **0** columnas mayoristas (y 0 filas de negocio); el descartable
@@ -11135,6 +11161,253 @@ venza. El costo es lo que pasó hoy: no hay recuperación desde el panel, y hace
 falta un administrador con uno de los dos caminos. Si se prefiere recuperación
 por correo, tiene que ser un buzón real que controle la tienda. `example.com`,
 `.test` y `.local` están bloqueados igual.
+
+### 4.70 La anulación de una venta se puede autorizar a distancia (spec 003, 2026-09-19)
+
+> ### EL ORDEN DE DESPLIEGUE — LO MÁS IMPORTANTE DE ESTE CAMBIO
+>
+> **La `0040` va en la nube ANTES de instalar en una tienda la versión que trae
+> la `040` local.** No hace falta que sea el mismo día.
+>
+> | Orden | Qué pasa | Cómo se sabe |
+> |---|---|---|
+> | **0040 primero, versión nueva después** (el correcto) | Nada se traba. La versión vieja sigue subiendo igual, y la nueva sube sus anulaciones a distancia | La 0040 no cambia la forma del payload ni la versión de contrato: **medido en el catálogo del descartable** antes y después (huellas de columnas y de funciones iguales, contrato en 1, `verify:nube` sin diferencias). Una versión 1.3.1 solo escribe `'presencial'` (leído en los tags `v1.3.1-prueba` y `v1.3.1-produccion`) |
+> | **Versión nueva primero, 0040 después** (el que traba) | La primera anulación autorizada a distancia se rechaza con `23514`. El lote queda **bloqueante**, la barra dice «Nube: DETENIDA» y **nada detrás sube**. No se destraba sola: hay que aplicar la 0040 y tocar «Reintentar ahora». No se pierde nada | **Leído en el código, NO medido**: el CHECK de la 0038 rechaza `'remoto'`, PostgREST devuelve el `23514` como 4xx, `reintentos.ts` lo clasifica como determinístico y el estado de la barra es `detenida` |
+>
+> **Una precaución que Julio pidió y que no hace daño:** dejar que la cola de la
+> tienda suba completa antes de aplicar la 0040. **Por el análisis no hace
+> falta** —la 0040 no detiene la cola de ninguna versión—, pero tampoco cuesta
+> nada.
+>
+> **CORREGIDO EL MISMO DÍA:** el pedido de esta spec decía que la cola tenía que
+> subir «con el contrato 12» antes de la 0040, «o se detiene», y un pedido
+> posterior decía que la 0040 subía el contrato «de 12 a 13». **No existe ningún
+> contrato 12.** La versión de contrato es **1** en el código
+> (`VERSION_DEL_CONTRATO_DE_SINCRONIZACION = 1`), en la foto
+> `esquema-nube.json` y en los dos proyectos (leído del catálogo el 2026-09-19),
+> y la 0040 no la toca. Julio lo confirmó como un error suyo.
+
+**Qué se pidió.** Jimmy pidió poder autorizar una anulación de venta a distancia,
+dictando por teléfono el código de seis dígitos de su app de autenticación (TOTP,
+§4.47). Julio le explicó qué protección se pierde, lo pidió igual, y Julio lo
+aprobó el 2026-09-19. **Revierte una decisión de seguridad deliberada, a pedido
+explícito del cliente.** Spec, plan y tareas:
+`spec/features/003-anulacion-autorizacion-remota/`.
+
+**La razón original, que sigue siendo cierta:** ~~la anulación no acepta el
+código remoto porque anular una venta afirma un hecho físico —que el cliente
+devolvió la mercadería y que el dinero salió del cajón— que un administrador a
+distancia no puede verificar. Por teléfono lo que se autoriza es un relato, y
+cobrar, anular y quedarse con el dinero es el fraude más común en un punto de
+venta (`docs/ANULACION-DE-VENTA.md` §4.2).~~ Se tacha porque ya no rige, no
+porque fuera falsa. **Lo que queda contra ese fraude es lo que se registra**: la
+vía en la fila y en el asiento, y el contador de abajo.
+
+#### Qué cambió, capa por capa
+
+| Capa | Antes | Desde la spec 003 |
+|---|---|---|
+| `ACEPTA_PIN_REMOTO.anulacion_de_venta` (`autenticacion.ts`) | `false` | **`true`**, con la razón anterior citada en el comentario de la entrada y una sección nueva en la cabecera |
+| SQLite | CHECK `anulaciones_de_venta_solo_presencial` (038) | **La `040` lo quita.** El CHECK de la columna (033) sigue aceptando solo `'presencial'` o `'remoto'`, y `NOT NULL` sigue |
+| Postgres | El mismo CHECK (0038) | **La `0040` lo quita**, con la misma sentencia |
+| El teclado del diálogo | Solo 4 dígitos | **4 o 6** (`LARGOS_DE_AUTORIZACION`, como el cobro y el cierre de caja) |
+| El texto del paso | «Un administrador debe autorizar con su PIN, en persona. El código de autorización remota no sirve para anular una venta.» | «Un administrador debe autorizar la anulación con su PIN en persona, o dictando por teléfono el código de seis dígitos de su aplicación.» |
+| El botón | «Anular con PIN de administrador» | «Pedir la autorización de un administrador» |
+| La vía | Siempre `'presencial'` | `'presencial'` o `'remoto'`, según el largo; en la fila, en el asiento `venta_anulada` y en la confirmación («En persona» / «A distancia») |
+| El resumen de ventas | — | **Renglón nuevo: «Anulaciones autorizadas a distancia»**, por la fecha de la anulación, a la vista aunque el período no tenga ventas |
+
+`cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` **siguen sin aceptar el
+código remoto**, y hay pruebas que lo comprueban en el mismo archivo. Que esta
+superficie se haya ampliado no es precedente para la próxima.
+
+**Todo lo demás del candado sigue igual:** un código equivocado de seis dígitos
+cuenta como intento y deja su asiento `anulacion_de_venta_rechazada` con
+`PIN_INCORRECTO`; tres bloquean la superficie 30 s; un código ya usado se rechaza
+con `CODIGO_YA_USADO` y **también cuenta**; un acierto libera el candado.
+
+#### La 038 y la 0038 no se editaron
+
+Están aplicadas y el migrador guarda su checksum. Sus cabeceras quedan como
+historia. La 038 ya anticipaba la vuelta atrás, con esta misma sentencia.
+
+#### La 040 sobre una COPIA de la base de trabajo de esta Mac
+
+La base de trabajo estaba en la 038, así que la misma apertura aplicó la 039 y la
+040. Salida cruda:
+
+```
+[copia] sha256 del ORIGINAL antes: "3ed72e5f5758b64e"
+[copia] ¿hay -wal o -shm junto al original?: [false,false]
+[copia] ANTES: filas: {"usuarios":2,"productos":6,"ventas":4,"venta_detalle":10,"anulaciones":0,"auditoria_log":55,"sync_cola":63}
+[copia] ANTES: ¿la restricción de la 038 está en el esquema guardado?: true
+[copia] migraciones al abrir: {"aplicadasAhora":["039_productos_precio_mayorista","040_anulacion_autorizacion_remota"],…,"totalConocidas":30,"ultimaAplicada":"040_anulacion_autorizacion_remota"}
+[copia] integrity_check: [{"integrity_check":"ok"}]
+[copia] foreign_key_check: []
+[copia] DESPUÉS: filas: {"usuarios":2,"productos":6,"ventas":4,"venta_detalle":10,"anulaciones":0,"auditoria_log":55,"sync_cola":63}
+[copia] DESPUÉS: ¿la restricción de la 038 está en el esquema guardado?: false
+[copia] DESPUÉS: ¿el CHECK de la columna sigue?: true
+[copia] INSERT con vía 'remoto' sobre la copia: "ENTRÓ"
+[copia] INSERT con vía 'telefono' sobre la copia: "SQLITE_CONSTRAINT_CHECK CHECK constraint failed: autorizada_via IN ('presencial', 'remoto')"
+[copia] anulaciones después de los ROLLBACK: {"n":0}
+[copia] SEGUNDA apertura: {"aplicadasAhora":[],…,"totalConocidas":30,…}
+[copia] sha256 del ORIGINAL después: "3ed72e5f5758b64e"
+```
+
+El md5 de `sync_cola` cambió en esa apertura. Se aisló aplicando la 039 sola y
+después la 040, sobre otra copia: **el cambio es de la 039** (agrega las claves
+mayoristas a los payloads pendientes, §4.66); la 040 no toca nada.
+
+```
+[copia-b] md5 sync_cola después de la 039: "5c0fccc6f731441ac69902da4bc41f4d"
+[copia-b] md5 sync_cola después de la 040: "5c0fccc6f731441ac69902da4bc41f4d"
+[copia-b] ¿la 040 no tocó sync_cola ni las filas?: true
+```
+
+**La base de trabajo real NO se migró**: sigue en la 038.
+
+#### La 0040 en `pos-pruebas-descartable` (`ztidrshifrblhfraiowg`), 2026-09-19 12:06:22 UTC
+
+Aplicada con la aprobación de Julio para ese proyecto, con el texto exacto del
+archivo. Leído del catálogo antes (12:05:44) y después (12:06:41):
+
+| Qué | Antes | Después |
+|---|---|---|
+| Migraciones | 30, la última `0039_productos_precio_mayorista` | **31**, la última `20260919120622 0040_anulacion_autorizacion_remota` |
+| `anulaciones_de_venta_solo_presencial` | existe | **no existe** |
+| md5 del registro contra el archivo sin el salto final | — | `46ace139c0ef2d0243fb41ef51cc8565` los dos, 3066 bytes, termina en `;` |
+| Versión de contrato | 1 | **1** |
+| Restricciones de `public` | 102; sin contar la de la 0038, huella `bdc5793fdc3275ecdd901b05793819c3` | 101, huella **`bdc5793fdc3275ecdd901b05793819c3`** |
+| Funciones | 17, huella `1f9f52cb399381149ebc130a2e35aab1` | la misma |
+| Columnas de `public` | huella `cdf5e09428fe7fe37076314fd3469970` | la misma |
+| Filas de negocio | usuarios 1, categorías 1, productos 1, cajas 1, ventas 2, líneas 2, recibos 2, anulaciones 0, auditoría 8 | las mismas |
+
+`npm run verify:nube`: «contrato v1: 14 tablas, 17 funciones», coincide con la
+foto, 0 diferencias.
+
+**`pos-jimmy-cano` no se tocó.** Leído del catálogo el 2026-09-19 a las 14:21
+UTC: **30** migraciones —**la `0039` está registrada a las
+`20260919041539`, aplicada fuera de esta sesión**, y hasta hoy §4.4 no lo
+decía—, el CHECK de la 0038 **sigue**, y el contrato es 1.
+
+#### Pruebas nuevas y adaptadas
+
+- `anulacion-autorizacion-remota.test.ts` (11): la 040 deja entrar `'remoto'`,
+  quita la restricción del esquema guardado, deja el CHECK de la columna y el
+  `NOT NULL`, deja iguales las anulaciones presenciales de una base en la 039, y
+  **falla con ruido si la restricción faltara** (va sin `IF EXISTS`). Y el espejo
+  0040: la misma sentencia, sin agregar restricciones, sin tocar el CHECK de la
+  columna ni el contrato.
+- `servicio-de-anulacion.test.ts`: el código de la app autoriza en efectivo y con
+  tarjeta; la fila, el asiento y el DTO dicen `'remoto'`; un código equivocado
+  cuenta; tres bloquean; un código repetido da `CODIGO_YA_USADO` y cuenta; con la
+  caja cerrada el código no se consume; y la única venta del día anulada a
+  distancia da 0 ventas y 1 anulación a distancia en el resumen.
+- `reportes.test.ts` (5): el contador cuenta solo las remotas, ayer no cuenta hoy,
+  **el día es el de Guatemala** (23:30 del 11 cuenta en el 11; 00:30 del 12, no), y
+  cuenta por la fecha de la anulación, no de la venta.
+- `pantalla-de-recibos-anulacion.test.ts` (+5) y `pantalla-de-reportes.test.ts`
+  (3, nueva): seis dígitos confirman, cinco no, siete no entran, «A distancia» y
+  «En persona»; y el renglón del contador se ve **aunque no haya ventas**.
+- **Adaptadas, con un comentario que dice qué exigían antes:** la tabla de
+  `autenticacion.test.ts` (las cuatro que aceptan el remoto y las dos que no),
+  `anulacion-solo-presencial.test.ts` (sus pruebas de la 038 corren sobre una base
+  hasta la 038; el acoplamiento con `ACEPTA_PIN_REMOTO` sigue y ahora exige que
+  las dos digan «sí»), el `describe` de autorización de `servicio-de-anulacion`
+  y `productos-precio-mayorista.test.ts` (migra hasta la 039).
+
+`npm run verify`: **126 archivos, 2972 pruebas**, 0 errores de lint.
+
+#### Falsificado, una mutación por vez, restaurando desde una copia y comparando el sha256
+
+| # | Mutación | Qué cayó |
+|---|---|---|
+| F1 | `anulacion_de_venta: false` con la 040 puesta | 9, entre ellas el acoplamiento base–tabla (`expected true to be false`) |
+| F2 | Sacar la 040 del migrador | 10, entre ellas el acoplamiento y la de la base en la 039 (`expected [] to deeply equal [ '040_anulacion_autorizacion_remota' ]`) |
+| F3 | El teclado sin los seis dígitos | 2 en jsdom (`expected [ '2870' ] to deeply equal [ '287082' ]`), y **en la app real**: «EL TECLADO DEJA TECLEAR LOS SEIS DÍGITOS…» con `se apagó en el dígito 5 («5»)` |
+| F4 | El flujo pasa `via: 'presencial'` fijo | 4 en Vitest (`expected 'presencial' to be 'remoto'`), y **5 en la app real**: la confirmación dice «En persona», la fila y el asiento `presencial`, y el resumen `0` |
+| F5 | La 0040 con otra restricción, o quitando además el CHECK de la columna | 2 cada una, las del espejo |
+| F6 | El contador cuenta todas las anulaciones | 1: `expected 2 to be 1` |
+| F7 | El contador dentro de la condición «hay ventas» | 1: `expected undefined to be '1'` |
+
+La primera versión de F3 en la app hizo fallar la compilación (import sin usar) y
+no midió nada; se repitió con una mutación que compila. Y la segunda hizo fallar
+el arnés **por un clic que esperaba 30 s**, no por una comprobación con nombre: el
+arnés ahora mira que cada tecla siga habilitada y lo dice.
+
+#### En la app real, a 1024×768: `npm run verify:pantallas:anulacion`, 54 de 54
+
+El arnés pasó de 1100×900 a **1024×768 exactos por CDP**, fijados antes de cada
+medición y de cada captura. Jimmy se inscribe con la app **por la pantalla**, y el
+arnés hace de teléfono con su propio TOTP (`totp-de-arnes.cjs`). Salida cruda del
+camino a distancia:
+
+```
+2026-09-19T14:18:21.287Z  ventana fijada por CDP: 1024×768
+2026-09-19T14:18:21.689Z  OK    JIMMY QUEDÓ INSCRIPTO con la app: la pantalla lo confirma y el secreto está cifrado en la base
+2026-09-19T14:18:29.665Z  texto del paso del PIN: "Un administrador debe autorizar la anulación con su PIN en persona, o dictando por teléfono el código de seis dígitos de su aplicación."
+2026-09-19T14:18:30.175Z  OK    A 1024×768, TODAS las teclas y los botones del paso del PIN entran enteros en la ventana
+2026-09-19T14:18:31.074Z  OK    EL TECLADO DEJA TECLEAR LOS SEIS DÍGITOS del código de la app y confirmarlos
+2026-09-19T14:18:31.135Z  código equivocado: mensaje="PIN incorrecto." · asiento={"ventaId":"69575cb5-…","codigo":"PIN_INCORRECTO"} · candado 0 → 1
+2026-09-19T14:18:31.975Z  OK    EL CÓDIGO CORRECTO ANULA y la confirmación dice «A distancia»
+2026-09-19T14:18:31.975Z  OK    A 1024×768 la confirmación entra entera: la vía, el total y «Listo»
+2026-09-19T14:18:32.688Z  fila de la anulación a distancia: [{"autorizada_via":"remoto","autorizada_por":"8cf9d3ce-…","solicitada_por":"098f01f0-…","motivo":"Jimmy autorizó por teléfono: el cliente devolvió el saco"}]
+2026-09-19T14:18:32.689Z  OK    el acierto libera el candado de la superficie
+2026-09-19T14:18:33.104Z  código reusado: mensaje="Ese código ya se usó para otra autorización. Esperá a que la aplicación muestre el siguiente." · asiento={"ventaId":"a536b429-…","codigo":"CODIGO_YA_USADO"}
+2026-09-19T14:18:33.892Z  cierre de la caja: {"cerrada":true,"codigo":"CIERRE_CORRECTO",…,"montoEsperado":"508.50","montoReal":"508.50",…}
+2026-09-19T14:18:34.712Z  OK    quedaron TRES anulaciones: dos en persona y una a distancia, en ese orden
+2026-09-19T14:18:35.158Z  resumen de hoy en pantalla: ventas=2 total=Q8.50 anulaciones a distancia=1
+54 comprobaciones, 0 fallidas.
+```
+
+El camino en persona (cancelar sin rastro, PIN equivocado, PIN correcto, el PDF
+marcado en el disco, el voucher) **sigue igual y pasa entero** en la misma corrida.
+
+> **Una observación de la pantalla, no un defecto de esta spec:** el teclado
+> arranca con cuatro círculos y crece a seis mientras se teclea. Es el mismo
+> teclado del cobro y del cierre de caja. Si Jimmy se confunde al dictar el
+> código, es un cambio del componente, para todas las superficies a la vez.
+
+#### Un defecto de patrón que encontró este arnés: seis arneses mandaban el contrato viejo
+
+El arnés de anulación no llegó ni a abrir el historial: crear el producto por el
+canal devolvía «Los datos enviados desde la interfaz no cumplen el contrato
+esperado». **Desde la spec 002 (2026-09-18) el payload de producto exige
+`precioMayorista` y `cantidadMinimaMayorista`, y seis arneses creaban productos
+sin esas dos claves.** Estaban rotos desde ese día y nada lo avisó, porque los
+arneses no corren en `npm test`.
+
+**La auditoría**, con un recorrido del árbol sintáctico de todos los `.cjs` de
+`scripts/`: 7 llamadas en 6 arneses (anulación, cobro sin esperar la impresora,
+copias del recibo, historial de recibos, impresora, pantallas 1024 —dos—). Las
+demás llamadas con objeto literal (caja, usuarios, venta, límites, historial de
+cajas, `editarProducto`) cumplían.
+
+**El arreglo es estructural:** `arneses-mandan-el-contrato-vigente.test.ts`
+recorre cada arnés, encuentra `window.pos.<módulo>.<método>({ … })` y compara sus
+claves con el esquema Zod de ese argumento. Falla con archivo y línea si falta una
+clave obligatoria o sobra una, y **falla si aparece un método nuevo sin su esquema
+en el mapa**. Tiene cuatro controles. Contra los arneses sin arreglar nombró las
+siete llamadas; arreglados, pasa.
+
+**Y los cinco arneses que estaban rotos se volvieron a correr:** impresora 14/14,
+cobro sin esperar la impresora 7/7, historial de recibos 24/24, pantallas 1024
+22/22, copias del recibo 19/19.
+
+#### Lo que NO se verificó
+
+- **Windows**, como siempre.
+- **El orden inverso** (versión nueva contra una nube sin la 0040) está **leído
+  en el código, no medido**. El ensayo en un Postgres local con la terminal real
+  (T10 de la spec) no se hizo: lo reemplazó la aplicación real de la 0040 en el
+  descartable para el orden correcto, y el orden inverso lo va a ver Julio en su
+  VM si lo ensaya.
+- **Una anulación a distancia subida de verdad a Supabase.** El descartable ya
+  tiene la 0040; no se subió ninguna desde esta sesión.
+- **Un teléfono real** con Google o Microsoft Authenticator: el arnés calcula el
+  código con un TOTP escrito aparte, contra los vectores del RFC (§4.47).
+- **Restaurar con una versión ≤ 1.3.1** desde una nube que ya tiene anulaciones a
+  distancia: la base local de esa versión tiene el CHECK de la 038 y rechazaría
+  esas filas. Punto 61 de §6.2.
 
 ## 5. Registro de decisiones técnicas
 
@@ -11450,7 +11723,7 @@ por correo, tiene que ser un buzón real que controle la tienda. `example.com`,
 | **La foto tiene que declarar EXACTAMENTE `FUNCIONES_DEL_CONTRATO`, y la lista de funciones de `verificacion-de-nube.cjs` tiene que ser igual a `FUNCIONES_DE_ESCRITURA`; las dos cosas las exigen pruebas.** | Seguir exigiendo solo las funciones de escritura, una por una | Una función fuera de la lista del contrato no aparece en la foto, y una prueba que itera la lista de la terminal no ve funciones de más. La copia del `.cjs` se había quedado sin `sincronizar_asiento` desde la 0027. §4.53. | 2026-09-17 (número de prompt por confirmar) |
 | **Un Postgres local con Supabase simulado sirve para ensayar el SQL ANTES de proponerlo, nunca en lugar del descartable.** | Proponer el SQL sin ejecutarlo | Encontró antes de la propuesta lo que antes aparecía en la nube: el orden de la foto, la forma exacta de los mensajes, que el todo o nada de verdad no deja la fila escrita primero. No prueba lo que es de Supabase: GoTrue, PostgREST, Storage, el linter. | 2026-09-17 (número de prompt por confirmar) |
 | **Restauración: `anulaciones_de_venta` va después de `recibos` y antes de `auditoria_log`, es de solo inserción, y aceptar una venta excluida NO trae su anulación.** | Traer la anulación junto con la venta | Es §8 del diseño: la anulación es otro hecho, con otro autor. Se acepta aparte y exige la venta restaurada. §4.53. | 2026-09-17 (número de prompt por confirmar) |
-| **La base rechaza una anulación con vía distinta de `'presencial'`: CHECK con nombre `anulaciones_de_venta_solo_presencial` en la 038 local y en la 0038 de la nube, que convive con el CHECK amplio de la columna en los dos lados. La 0038 va en la misma ronda que la 0033 y la 0035.** **REVIERTE la fila de `docs/ANULACION-DE-VENTA.md` §1.1.** | Dejar el CHECK amplio, como decía el diseño; estrechar la 0033 antes de su primera aplicación; en la nube, quitar el CHECK de la columna | Decisión de Julio. El «segundo lugar» que §4.9 eliminó podía ampliar un permiso en silencio; este falla cerrado, y una prueba exige que `ACEPTA_PIN_REMOTO` y la base digan lo mismo. Estrechar la 0033 dejaría la local y la nube distintas hasta la 038. En la nube se deja el CHECK amplio para que el espejo sea exacto y ampliar algún día sea la misma sentencia en los dos lados. Aplicarla junto con la 0033 no rompe a nadie: ninguna versión publicada escribe `'remoto'` (medido en los tags). §4.54. | 2026-09-17 (número de prompt por confirmar) |
+| ~~**La base rechaza una anulación con vía distinta de `'presencial'`**~~ **REVERTIDA EL 2026-09-19 por la 040/0040 (spec 003, §4.70), a pedido del cliente.** **La base rechazaba una anulación con vía distinta de `'presencial'`: CHECK con nombre `anulaciones_de_venta_solo_presencial` en la 038 local y en la 0038 de la nube, que convive con el CHECK amplio de la columna en los dos lados. La 0038 va en la misma ronda que la 0033 y la 0035.** **REVIERTE la fila de `docs/ANULACION-DE-VENTA.md` §1.1.** | Dejar el CHECK amplio, como decía el diseño; estrechar la 0033 antes de su primera aplicación; en la nube, quitar el CHECK de la columna | Decisión de Julio. El «segundo lugar» que §4.9 eliminó podía ampliar un permiso en silencio; este falla cerrado, y una prueba exige que `ACEPTA_PIN_REMOTO` y la base digan lo mismo. Estrechar la 0033 dejaría la local y la nube distintas hasta la 038. En la nube se deja el CHECK amplio para que el espejo sea exacto y ampliar algún día sea la misma sentencia en los dos lados. Aplicarla junto con la 0033 no rompe a nadie: ninguna versión publicada escribe `'remoto'` (medido en los tags). §4.54. | 2026-09-17 (número de prompt por confirmar) |
 | **Dos sesiones de Claude Code no trabajan sobre el mismo proyecto de nube sin avisarse, y el estado de un proyecto se afirma releyendo su catálogo, nunca repitiendo lo que dice CLAUDE.md.** | Confiar en que la documentación esté al día; coordinar solo las migraciones y no el resto de las escrituras | El 2026-09-17 esta sesión documentó, con evidencia, que `pos-jimmy-cano` no tenía la `0033`, la `0035` ni la `0038`; tres horas y media después Julio las aplicó desde otra sesión, sin avisar. CLAUDE.md quedó afirmando algo falso sobre producción, la sesión siguiente partió de ahí, y el registro de la `0038` quedó sin su `;` final, lo que obligó a una corrección aparte sobre el proyecto real. Es §4.55 otra vez —dos escritores sobre una nube, cada uno creyendo que es el único— con el agravante de que acá el segundo escritor documenta en su propia sesión y la otra no se entera. §4.4 y el recuadro de §4. | 2026-09-17 (número de prompt por confirmar) |
 | **El PDF del recibo se regenera EN EL MOMENTO de confirmar la anulación, reusando la misma `producir` de la reimpresión, sin imprimir y sin marcarlo como reimpresión.** Cierra el punto 46. | Dejarlo como estaba —la marca al ver o reimprimir—; llamar a `reimprimir()`, que además saca un ticket; una segunda función de regeneración; dispararlo sin esperar | Decisión de Julio: el archivo del disco **nunca** debe quedar desactualizado, ni un momento, y es lo que §5.2 del diseño decía desde el principio. Llamar a `reimprimir()` habría sacado un ticket por la térmica que nadie pidió, contra lo que §5.2 dice con todas las letras, y habría marcado el papel como reimpresión cuando nadie lo reimprimió; por eso `producir` recibe `imprimir`, que vale `true` salvo que se diga lo contrario, y emitir y reimprimir no cambiaron en nada. Una segunda función de regeneración terminaría dibujando dos papeles distintos. **Se espera a que termine antes de contestarle a la ventana**: disparado sin esperar, quien mirara el archivo justo después de ver la confirmación podría encontrarlo sin marcar. Va en el flujo y no en el manejador, por la razón por la que el flujo existe (§4.45), y eso obligó a que `pedir` fuera asincrónica —con sus 64 llamadas en las pruebas—: **una sola puerta**, porque un segundo método «pedir y además dejar el recibo al día» devolvería el defecto el día que alguien llamara al primero. Nunca lanza: una anulación confirmada no se cae porque el disco esté lleno. §4.59. | 2026-09-17 (número de prompt por confirmar) |
 | **La anulación se pide desde el HISTORIAL DE RECIBOS, y el botón «Anular» solo se dibuja en las ventas de la caja que sigue abierta y sin anular. En las demás NO se dibuja nada, ni un botón deshabilitado.** | Un botón apagado con su explicación; un botón siempre visible que falle al tocarlo; una pantalla propia de anulaciones | El historial es donde el cajero ya busca la venta por su número cuando el cliente vuelve al mostrador (§4.3 del diseño), así que no hace falta una pantalla más ni enseñarle otro camino. **El botón apagado se descartó a propósito:** una venta de una caja ya cerrada no se va a poder anular NUNCA MÁS —el alcance del diseño es solo caja abierta—, así que un control gris prometería algo que no existe; y una venta ya anulada se explica mejor con su etiqueta, que dice cuándo, quién autorizó y por qué. Un botón que siempre se ve y falla al tocarlo es peor: convierte una regla del negocio en un error que aparece después de decidir. §4.58. | 2026-09-17 (número de prompt por confirmar) |
@@ -11491,6 +11764,10 @@ por correo, tiene que ser un buzón real que controle la tienda. `example.com`,
 | **El release que sigue a la 1.2.0 es la 1.3.0, publicado como no-borrador en el repositorio PRIVADO; la licencia cambia solo en su línea «Versión:».** | Numerarlo 1.4.0, como decía el pedido; hacer público el repositorio | No había ninguna 1.3.0 y un hueco no significaría nada; el repositorio es privado y hacerlo público expondría todo el historial, no solo dos instaladores. Las dos cosas las decidió Julio. §4.67. | 2026-09-18 |
 | **El título de la ventana es «POS Jimmy Cano», y `verify:paquete` lo lee del asar y detiene el empaquetado si no. NO se agregan `app.setName()` ni `app.setAppUserModelId()`, y no se tocan los accesos directos.** | `app.setName('POS Jimmy Cano')`, que era la causa supuesta; alinear el AppUserModelID del proceso con el de los accesos directos; fijar `title` en la ventana | En la tienda, el Administrador de tareas mostraba «POS Agrícola», y salía del `<title>`. En el instalador, Electron ya usa `productName`: leído en el `.exe`, así que `setName` no cambiaba nada. En desarrollo, en cambio, movía la carpeta de datos (medido). El alcance lo fijó Julio: solo el título. §4.68. | 2026-09-18 |
 | **Si la sesión no tiene la service_role, la contraseña de una cuenta de servicio se restablece con un `UPDATE` de `encrypted_password` por el conector, con el hash bcrypt calculado en la Mac, y se prueba con un ingreso real cerrado con `logout?scope=local`.** | Pedirle a Julio la service_role por el chat; mandar la contraseña en claro dentro del SQL (`extensions.crypt`); crear un usuario nuevo | Julio estaba en la tienda sin poder conectar, y una llave que ignora RLS no tiene por qué pasar por la conversación. Con el hash hecho afuera, la contraseña no viaja en el SQL y no puede terminar en un log de Postgres. Un usuario nuevo sería una segunda terminal activa (§4.55). Precedente: §4.21. §4.69. | 2026-09-18 |
+| **REVIERTE UNA DECISIÓN DE SEGURIDAD, A PEDIDO EXPLÍCITO DEL CLIENTE: la anulación de una venta acepta el código de seis dígitos de la app (TOTP) dictado por teléfono.** `ACEPTA_PIN_REMOTO.anulacion_de_venta = true`, la 040/0040 quitan el CHECK de la 038/0038, y el teclado acepta 4 o 6 dígitos. | Dejarla solo en persona, como desde el 2026-09-15; aceptarla sin registrar la vía | Jimmy lo pidió informado del riesgo y Julio lo aprobó el 2026-09-19. **La razón original sigue siendo cierta y queda escrita, tachada, en §4.70 y en la cabecera de `autenticacion.ts`**: a distancia no se verifica que la mercadería volvió ni que el dinero salió del cajón. Lo que queda contra el fraude es lo que se registra: la vía en la fila y en el asiento, y el contador del resumen. `cierre_de_caja_ajena` y `saltar_lote_de_sincronizacion` siguen sin aceptarlo: la ampliación no es precedente. §4.70. | Spec 003 — 2026-09-19 |
+| **La 040/0040 QUITAN la restricción de la 038/0038, sin editar la 038 ni la 0038, sin `IF EXISTS`, y la de la nube va ANTES de instalar la versión que trae la 040, no necesariamente el mismo día.** | Editar la 038; quitar también el CHECK de la columna; aplicar la 0040 junto con la versión nueva, como la 0039 | Una migración aplicada no se edita (checksum). El CHECK de la columna se deja para que el espejo siga exacto. Sin `IF EXISTS`, porque si la restricción faltara hay algo raro que tiene que verse. **La 0040 es una relajación pura: no cambia la forma del payload ni el contrato** (medido en el catálogo del descartable), así que no detiene la cola de ninguna versión y puede ir antes. Al revés sí traba: la primera anulación a distancia daría `23514` (leído en el código). §4.70. | Spec 003 — 2026-09-19 |
+| **El resumen de ventas cuenta las anulaciones autorizadas a distancia del período, por la fecha de la anulación, a la vista aunque no haya ventas.** | No contarlas; contarlas en el historial de recibos | Pedido de Julio al aprobar la spec: es lo único que queda para revisar después el fraude que la autorización a distancia ya no impide. Por la fecha de la anulación, porque es cuándo se autorizó. Fuera de la condición «hay ventas», porque el caso que importa es justo la única venta del día anulada por teléfono. Contar en SQL está bien: es un entero, y §4.15 solo prohíbe agregar columnas decimales. §4.70. | Spec 003 — 2026-09-19 |
+| **Una prueba recorre los arneses de `scripts/` y exige que cada objeto que mandan a un canal tenga EXACTAMENTE las claves del esquema Zod de ese argumento** (`arneses-mandan-el-contrato-vigente.test.ts`). | Arreglar los seis arneses a mano y seguir; correr todos los arneses en cada `npm test` | Desde la spec 002, seis arneses creaban productos sin `precioMayorista` ni `cantidadMinimaMayorista` y fallaban antes de medir nada, sin que nada lo avisara. Arreglar a mano deja el hueco para el próximo cambio de contrato. Correr los arneses en `npm test` lo haría lento y dependiente de Electron. La prueba es estática, rápida, y falla también si un arnés empieza a llamar un método que nadie vigila. §4.70. | Spec 003 — 2026-09-19 |
 
 ## 6. Pendiente de confirmación con el cliente / auditor
 
@@ -11568,11 +11845,15 @@ cerró preguntándole al cliente y no asumiendo un criterio.
 | 54 | **DECISIÓN 1 de la spec 002: ¿bajar el precio de lista por debajo de un precio mayorista se RECHAZA (A, lo construido) o se ACEPTA (B)?** | Con A, R3 es un CHECK que se evalúa en cada escritura: el día que Jimmy quiera bajar la lista de un producto con mayorista, el formulario le va a pedir que baje o quite el mayorista antes de guardar (medido en la aplicación real, §4.66). Con B, la lista baja y el mayorista queda sin efecto, porque la regla de precio cobra la lista como piso; exige un disparador en lugar del CHECK. Las dos migraciones todavía no están aplicadas en ninguna base que importe, así que cambiar a B es acotado (plan de la spec, §11). | **RESUELTO EL 2026-09-18: A, tal como está.** §4.66 |
 | 55 | ~~**¿Se permite un precio mayorista de Q0.00?**~~ | ~~Hoy sí, como el precio de lista (R2 solo exige que no sea negativo).~~ | **RESUELTO EL 2026-09-18: NO.** Mayor que cero en las tres capas. §4.66 |
 | 56 | ~~**Cambiar la unidad de un producto cambia lo que significa su cantidad mínima mayorista**~~ | ~~No se agregó ningún aviso.~~ | **RESUELTO EL 2026-09-18: se limpia solo**, en la misma edición, con `mayoristaQuitadoPor: 'cambio_de_unidad'` en el asiento. §4.66 |
-| 57 | **La 0039 se aplica en el MISMO momento en que se instala la versión que trae la 039.** | Medido en un Postgres 17 local (§4.66): una terminal con la 039 contra una nube sin la 0039 detiene su cola en el primer lote de productos, con `CONTRATO: el payload de public.productos trae columnas que la tabla no tiene`, y al revés también. Hoy ninguna de las dos nubes la tiene (leído el 2026-09-18) y el 1.2.0 de la tienda no trae la 039. Se aplica con la aprobación de Julio, proyecto por proyecto, y después de la decisión del punto 54. **Aplicada en `pos-pruebas-descartable` el 2026-09-18, 19:03 UTC (§4.66).** | Abierto — **falta `pos-jimmy-cano`**, con un pedido aparte, el día que se instale la versión con la 039 |
+| 57 | **La 0039 se aplica en el MISMO momento en que se instala la versión que trae la 039.** | Medido en un Postgres 17 local (§4.66): una terminal con la 039 contra una nube sin la 0039 detiene su cola en el primer lote de productos, con `CONTRATO: el payload de public.productos trae columnas que la tabla no tiene`, y al revés también. Hoy ninguna de las dos nubes la tiene (leído el 2026-09-18) y el 1.2.0 de la tienda no trae la 039. Se aplica con la aprobación de Julio, proyecto por proyecto, y después de la decisión del punto 54. **Aplicada en `pos-pruebas-descartable` el 2026-09-18, 19:03 UTC (§4.66).** | ~~Abierto — falta `pos-jimmy-cano`~~ **Aplicada en `pos-jimmy-cano` el 2026-09-19 a las 04:15:39 UTC, fuera de esta sesión** (leído del catálogo, §4.4). La evidencia de esa aplicación no está en este archivo |
 | 58 | **A 1024×768, el renglón de detalle de una línea del ticket («50 lb · Q5.50 c/u») se parte en cuatro renglones.** | Visto en las capturas de `verify:pantallas:mayorista`. La columna del nombre es angosta al lado del subtotal. Es anterior a la spec 002, que no tocó ese renglón; se lee, pero se ve mal en la pantalla de la tienda. | Abierto — cosmético |
 | 59 | **¿Las cuentas de servicio nuevas siguen usando el dominio `.invalid`?** | Supabase no les manda ningún correo, así que no tienen recuperación desde el panel. Lo que no depende del correo es el inicio de sesión ni la renovación del token: leído en GoTrue v2.197.0 y medido (§4.69). La recomendación es seguir con `.invalid`, porque así nadie puede quedarse con la cuenta por correo. La alternativa es un buzón real que controle la tienda. | Abierto — decisión de Julio |
 | 11 | ¿Cada cuánto y hacia dónde se respalda la base de datos local? | El archivo SQLite contiene todas las ventas; hoy no hay política de respaldo. | Abierto |
 | 12 | **Falta la verificación completa en una máquina Windows real** con teclado latinoamericano: el atajo `Ctrl+Shift+Alt+Q`, la intercepción de `Alt+F4`, que el Administrador de tareas (`Ctrl+Shift+Esc`) y `Ctrl+Alt+Supr` sigan funcionando, la ventana a pantalla completa sin marco, y más adelante impresión y touch. **Desde la fase 3.a se suma `npm run diagnostico:credencial`** **desde la 3.c también `npm run diagnostico:imagen`**, **desde el 2026-09-15 el teclado en pantalla con el dedo: que tocar una fecha abra un calendario usable, que `inputMode="none"` impida el teclado táctil de Windows encima del nuestro, y que el diálogo de salida se use sin teclado físico (§4.46)**, que comprueba que `nativeImage` reduzca la foto de verdad en esa máquina (§4.33). Y el primero, que comprueba que el `safeStorage` de esa máquina cifre de verdad el token de refresco: en Windows el respaldo es DPAPI y en macOS el llavero, así que la medición hecha en macOS no dice nada del caso real (§4.23). | Windows es la plataforma de producción y el criterio de aceptación final (ver el principio de la sección 4). Todo lo anterior está verificado en macOS y cubierto por pruebas que simulan la entrada de Windows, pero **eso no cuenta como verificado**. **Desde la fase 4.c hay además una lista concreta de NÚMEROS que medir en el i3 de la tienda** —riesgo 8.8 del diseño, tabla en §4.36—: la poda sobre una cola grande, el hueco del bucle de eventos durante un ciclo, una página de 1 000 filas al restaurar, la reducción de una foto, y el arranque del trabajador. Ninguno de esos números es falso; todos son de otra máquina. | Abierto — **es la prioridad de verificación del proyecto** en cuanto haya una máquina Windows |
+| 60 | **La 0040 en `pos-jimmy-cano`, ANTES de instalar en la tienda la versión que trae la 040.** | Sin ella, la primera anulación autorizada a distancia en la tienda daría `23514` y detendría la cola hasta aplicarla (leído en el código, §4.70). No hace falta que sea el mismo día que la instalación: la 0040 no detiene la cola de la 1.3.1. Está aplicada en el descartable desde el 2026-09-19 12:06 UTC. | Abierto — **pedido aparte de Julio** para el real |
+| 61 | **Restaurar con una versión ≤ 1.3.1 desde una nube que ya tiene anulaciones autorizadas a distancia.** | La base local de esas versiones tiene el CHECK de la 038, así que rechazaría esas filas al restaurar. Leído, no medido. Mientras la tienda restaure con la misma versión que escribe, no pasa. | Abierto — de bajo riesgo |
+| 62 | **¿Jimmy ya inscribió su app de autenticación en la terminal de la tienda?** | Sin la inscripción, el código de seis dígitos no autoriza nada: la anulación sigue pidiendo un PIN en persona. La inscripción se hace en la terminal, con la sesión de un administrador (§4.47). | Abierto — pregunta para Julio |
+| 63 | **¿La anulación a distancia se muestra también en el historial de recibos y en la copia de la tienda?** | Hoy la vía queda en la fila, en el asiento, en la confirmación y en el contador del resumen; el historial y el papel dicen quién autorizó, no cómo. Pregunta 2 de la spec 003. | Abierto — decisión de Julio |
 
 ## 7. Qué NO existe todavía (y no hay que inventar)
 
@@ -11774,7 +12055,10 @@ npm run verify:pantallas:anulacion  # la app real: tres ventas (efectivo, tarjet
                          # confirmación con los montos ajustados, el recibo marcado, el voucher equivocado que
                          # no llega al PIN, y la caja cerrada que quita el botón (§4.58). Y ABRE EL PDF
                          # del disco antes y después de anular, para comprobar que la marca queda escrita
-                         # sin que nadie reimprima nada (§4.59).
+                         # sin que nadie reimprima nada (§4.59). Desde la spec 003 (§4.70), a 1024×768
+                         # por CDP: Jimmy se inscribe con la app por la pantalla, y se anula A DISTANCIA
+                         # con el código de seis dígitos (uno equivocado, el bueno y uno repetido); el
+                         # resumen de ventas cuenta la anulación a distancia.
 npm run verify:pantallas:historial-de-cajas  # la app real: cinco cajas armadas por los canales reales
                          # (diferencia autorizada, exacta por denominación, cerrada por otra persona,
                          # recuento corregido, abierta); la cajera no llega; filtros y detalle (§4.44).

@@ -271,7 +271,7 @@ Tres detalles del esquema:
 | Detalle | Por qué |
 |---|---|
 | **No copia** el total, la forma de pago, quién vendió ni la caja | Todo eso está en `ventas`, que no cambia nunca. Una copia sería un segundo lugar que puede discrepar. La nube encuentra la caja leyendo la venta. |
-| ~~`autorizada_via` admite `'remoto'` aunque la sección 4.2 recomienda no aceptarlo~~ **SUPERADO EL 2026-09-17: la base solo acepta `'presencial'`** | ~~Qué superficie acepta el PIN remoto vive en **una sola tabla**, `ACEPTA_PIN_REMOTO` (§4.9). Repetir esa política en un CHECK crearía el segundo lugar que el proyecto ya eliminó. Guardar la vía deja la fila leíble sola, y ampliar la política un día no exigiría migración.~~ **Decisión de Julio: migraciones `038` (local) y `0038` (nube), CHECK `anulaciones_de_venta_solo_presencial`**, que convive con el de la columna. El «segundo lugar» de §4.9 podía ampliar un permiso sin que nada fallara; este falla cerrado, y una prueba exige que la tabla y la base digan lo mismo. La columna se conserva: la fila sigue leyéndose sola. Ver CLAUDE.md §4.54. |
+| ~~`autorizada_via` admite `'remoto'` aunque la sección 4.2 recomienda no aceptarlo~~ **SUPERADO EL 2026-09-17: la base solo acepta `'presencial'`** | ~~Qué superficie acepta el PIN remoto vive en **una sola tabla**, `ACEPTA_PIN_REMOTO` (§4.9). Repetir esa política en un CHECK crearía el segundo lugar que el proyecto ya eliminó. Guardar la vía deja la fila leíble sola, y ampliar la política un día no exigiría migración.~~ **Decisión de Julio: migraciones `038` (local) y `0038` (nube), CHECK `anulaciones_de_venta_solo_presencial`**, que convive con el de la columna. El «segundo lugar» de §4.9 podía ampliar un permiso sin que nada fallara; este falla cerrado, y una prueba exige que la tabla y la base digan lo mismo. La columna se conserva: la fila sigue leyéndose sola. Ver CLAUDE.md §4.54. **DESHECHO EL 2026-09-19** por la `040`/`0040`, a pedido del cliente: la base vuelve a aceptar `'remoto'` (spec 003, CLAUDE.md §4.70). Por eso se conservó la columna. |
 | Motivo obligatorio, hasta 200 caracteres | Es el mismo tope del motivo del ajuste de inventario (`servicio-de-productos.ts:73`). La diferencia es que acá no puede ir vacío: una anulación sin motivo no se puede revisar. |
 
 ### 1.2 Las tres formas posibles, y por qué esta
@@ -648,6 +648,13 @@ candado que las demás: **3 intentos y 30 segundos**.
   contestar si acepta el remoto.
 
 ### 4.2 PIN remoto: recomiendo que NO
+
+> **REVERTIDO EL 2026-09-19, A PEDIDO EXPLÍCITO DEL CLIENTE (spec 003, CLAUDE.md
+> §4.70).** Jimmy pidió autorizar anulaciones a distancia con el código de su
+> app, informado del riesgo, y Julio lo aprobó. **Las cuatro razones de abajo
+> siguen siendo ciertas** y se dejan como estaban: son lo que se pierde. Lo que
+> queda contra el fraude es lo que se registra —la vía en la fila y en el
+> asiento, y un contador de anulaciones a distancia en el resumen de ventas—.
 
 Rige el valor por omisión del proyecto, y acá hay razones concretas para
 mantenerlo:
@@ -1085,7 +1092,8 @@ antes de darlas por hechas, y «aplicada» se afirma leyendo
 - el disparador rechaza editar o borrar una anulación.
 
 **Autorización:**
-- el PIN remoto se rechaza en esta superficie;
+- ~~el PIN remoto se rechaza en esta superficie;~~ desde la spec 003, el código
+  remoto AUTORIZA y queda como `'remoto'` en la fila y en el asiento;
 - cada PIN equivocado deja su asiento;
 - el candado es independiente de las otras cinco superficies y del ingreso, en
   los dos sentidos.
@@ -1131,7 +1139,8 @@ en «Tarjeta» en vez de en una pantalla aparte.
 - comparar el voucher contra cualquier venta con tarjeta y no contra la de ese
   `venta_id`;
 - que el reporte lea `ventas.estado` en vez de `anulaciones_de_venta`;
-- aceptar el PIN remoto;
+- ~~aceptar el PIN remoto;~~ desde la spec 003, rechazar el código remoto o
+  guardarlo como `'presencial'` (F1 y F4 de la spec 003);
 - encolar la fila de `ventas`.
 
 ### 10.2 En la aplicación real (macOS; Windows sigue pendiente)
@@ -1204,7 +1213,7 @@ fecha del robo.
 | # | Decisión | Lo que recomiendo |
 |---|---|---|
 | 1 | Cómo se guarda la anulación | **Tabla nueva `anulaciones_de_venta`; la fila de `ventas` no se toca y `ventas.estado` queda en `completada`** (sección 1) |
-| 2 | Si la superficie acepta el PIN remoto | **No** (4.2) |
+| 2 | Si la superficie acepta el PIN remoto | ~~**No** (4.2)~~ **Sí, desde el 2026-09-19**, a pedido del cliente (spec 003, CLAUDE.md §4.70) |
 | 3 | Si bajan `cantidad_vendida` y `contador_ventas` | **Sí, los dos, en un `UPDATE`**, aunque la 015 diga «nunca baja» (2.4) |
 | 4 | Qué pasa con la unidad cambiada desde la venta | **Rechazar la anulación entera, sin convertir** (2.3) |
 | 5 | El recibo | **Sin documento nuevo: el original se marca como anulado al reimprimirse** (sección 5) |

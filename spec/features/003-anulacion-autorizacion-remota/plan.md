@@ -288,7 +288,7 @@ Queda como tarea opcional (T-opt) y se hace solo si Julio la pide.
 - **CA-6:** un código equivocado de 6 dígitos da `PIN_INCORRECTO`, suma un
   intento y deja su asiento con el código. Tres equivocados dan
   `AUTORIZACION_BLOQUEADA` por 30 segundos.
-- **CA-7:** con el mismo código, la segunda anulación no se autoriza.
+- **CA-7:** con el mismo código, la segunda anulación no se autoriza. *(Al construir: `CODIGO_YA_USADO`, que cuenta como intento; lo fija la prueba y el arnés.)*
 - **CA-8:** con la caja de la venta cerrada, un código correcto recibe
   `CAJA_DE_LA_VENTA_CERRADA`, sin consumir intento ni el paso del código. El paso
   se comprueba así: el mismo código sirve después para otra venta de la caja

@@ -4,10 +4,16 @@
 > está construido y qué queda por hacer. **No es un changelog**: el detalle de
 > cada funcionalidad construida sigue en `CLAUDE.md` §4 y en `docs/`, hasta que
 > se retome y se migre a su propio `spec/features/NNN-<slug>/`.
-> Estado al 2026-09-18, versión 1.3.1.
+> Estado al 2026-09-19, versión 1.3.1 (la spec 003 está en `develop`, sin publicar).
 
 ## 1. Dónde está hoy
 
+- **En `develop`, sin publicar (2026-09-19): la anulación de una venta se puede
+  autorizar a distancia** con el código de seis dígitos de la app de Jimmy
+  (spec 003), a pedido explícito suyo. Revierte una decisión de seguridad; la
+  razón original queda escrita en CLAUDE.md §4.70. **La `0040` está aplicada
+  solo en `pos-pruebas-descartable`**, y en el real va con un pedido aparte,
+  **antes** de instalar la versión que la trae.
 - **Versión 1.3.1** (2026-09-18): la 1.3.0 con el título de la ventana
   corregido a «POS Jimmy Cano», que en el Administrador de tareas de la tienda
   decía «POS Agrícola» (CLAUDE.md §4.68).
@@ -19,11 +25,12 @@
   datos y del primer arranque real con Jimmy.
 - **El proyecto de nube real (`pos-jimmy-cano`)** tiene aplicado el esquema
   completo —las mismas migraciones que el descartable— y cero filas de negocio.
-  **La `0039` del precio mayorista está aplicada en `pos-pruebas-descartable`
+  ~~**La `0039` del precio mayorista está aplicada en `pos-pruebas-descartable`
   (30 migraciones) y NO en `pos-jimmy-cano` (29)**, leído del catálogo el
-  2026-09-18 (el real, otra vez a las 21:59 UTC). Los instaladores de
-  producción 1.3.0 y 1.3.1 no sincronizan contra el real hasta que se aplique
-  allá, con un pedido aparte (CLAUDE.md §4.66, §4.67, §4.68).
+  2026-09-18.~~ **Desde el 2026-09-19 a las 04:15 UTC la `0039` está también en
+  el real (30 migraciones)**, aplicada fuera de la sesión que escribió esto;
+  leído del catálogo ese día (CLAUDE.md §4.4). El descartable tiene 31, con la
+  `0040`.
 - **Publicado en la 1.3.0:** el precio mayorista por cantidad mínima
   (spec 002). El 1.2.0 instalado en la tienda no lo tiene.
 - **La verificación en el hardware real de la tienda está en curso**, no
@@ -40,15 +47,15 @@ cuenta con su evidencia.
 |---|---|---|
 | **Aplicación y kiosko** | Pantalla completa táctil, salida controlada con PIN por tres vías, instancia única, teclado en pantalla en todo campo de texto, pantalla verificada a 1024×768 | §4.1, §4.5, §4.46, §4.62 |
 | **Usuarios y seguridad** | Primer administrador, alta y gestión de usuarios con dos roles, PIN con scrypt, bloqueo por intentos, candados separados por superficie, PIN único entre usuarios activos | §4.7, §4.8 |
-| **Autorización a distancia** | Código TOTP de seis dígitos de una app de autenticación, para diferencias de caja, descuentos y la salida | §4.47, §4.41 |
+| **Autorización a distancia** | Código TOTP de seis dígitos de una app de autenticación, para diferencias de caja, descuentos, la salida y, desde la spec 003, la anulación de una venta | §4.47, §4.41 |
 | **Caja** | Una caja en todo el sistema, conteo simple o por denominaciones, cierre descuadrado con autorización, cierre de caja ajena con PIN, **conteos sellados** que impiden probar números hasta cuadrar, teórico oculto a quien cuenta, confirmación del cierre | §4.9, §4.10, §4.39, §4.40 |
 | **Historial de cajas** | Todas las sesiones, con quién abrió y cerró, diferencias y recuentos autorizados, filtros y desglose | §4.44 |
 | **Catálogo e inventario** | Categorías (ordenadas solas por ventas), productos por peso o por unidad, fotos reducidas, ajuste de inventario que solo suma, precio de compra | §4.11, §4.63, §4.39 |
 | **Venta** | Ticket táctil, precio especial vigente, descuento con tope por rol y autorización, efectivo o tarjeta con boleta, registro atómico, costo congelado por línea | §4.12, §4.13, §4.40 |
-| **Anulación de venta** | Desde el historial de recibos, solo con la caja abierta, con PIN presencial de administrador y voucher si fue con tarjeta; repone inventario y marca el recibo | §4.45, §4.58, §4.59 |
+| **Anulación de venta** | Desde el historial de recibos, solo con la caja abierta, con ~~PIN presencial de administrador~~ el PIN de un administrador en persona **o, desde la spec 003 (en `develop`), el código de su app dictado por teléfono**, y voucher si fue con tarjeta; repone inventario y marca el recibo. El resumen de ventas cuenta las anulaciones autorizadas a distancia. Spec `spec/features/003-anulacion-autorizacion-remota/` | §4.45, §4.58, §4.59, §4.70 |
 | **Recibos** | Datos del negocio, PDF siempre, impresión térmica ESC/POS por la cola de Windows con pantalla para elegir y probar la impresora, historial, reimpresión, filtro por método de pago con voucher y estado | §4.14, §4.43, §4.60 |
 | **Recibo en dos copias** | Cada venta y cada reimpresión sacan por la térmica, en un solo trabajo, la copia del cliente y la de la tienda. La del cliente no lleva quién autorizó un descuento, el número de boleta ni quién autorizó una anulación; la de la tienda lleva todo; el PDF y la pantalla siguen siendo la versión completa. Siempre dos, no configurable por ahora. Spec `spec/features/001-recibo-copia-tienda-cliente/` | §4.65 |
-| **Precio mayorista por cantidad** *(desde la 1.3.0)* | Un producto puede tener un precio mayorista desde una cantidad mínima. La línea se cobra al MENOR de lista, precio especial vigente y mayorista si la cantidad de esa línea llega al umbral; el precio de lista participa siempre, como piso. Se recalcula en vivo al cambiar la cantidad y se congela en `precio_unitario_snap`. La base no deja guardar un mayorista que no sea menor que la lista. **El espejo `0039` está aplicado solo en `pos-pruebas-descartable`.** Spec `spec/features/002-precio-mayorista/` | §4.66 |
+| **Precio mayorista por cantidad** *(desde la 1.3.0)* | Un producto puede tener un precio mayorista desde una cantidad mínima. La línea se cobra al MENOR de lista, precio especial vigente y mayorista si la cantidad de esa línea llega al umbral; el precio de lista participa siempre, como piso. Se recalcula en vivo al cambiar la cantidad y se congela en `precio_unitario_snap`. La base no deja guardar un mayorista que no sea menor que la lista. ~~El espejo `0039` está aplicado solo en `pos-pruebas-descartable`.~~ **El espejo `0039` está en los dos proyectos desde el 2026-09-19.** Spec `spec/features/002-precio-mayorista/` | §4.66 |
 | **Reportes** | Resumen de ventas, ventas por producto con margen, inventario; en hora de Guatemala y sin sumar en SQL | §4.15, §4.39 |
 | **Topes de descuento** | Configurables desde la aplicación, con auditoría | §4.16 |
 | **Auditoría** | Bitácora inmutable de todo hecho sensible, que también se respalda | §4.26 |
